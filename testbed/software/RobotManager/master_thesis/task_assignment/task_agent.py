@@ -8,7 +8,6 @@ from master_thesis.task_assignment.task_objects import Task
 from master_thesis.general.general_agents import FRODOGeneralAgent
 
 
-
 class AssignmentAgentModule():
     """Interface for assignment agents. Handles decentralized assignments"""
     agent_id: str   # Unique identifier for the agent

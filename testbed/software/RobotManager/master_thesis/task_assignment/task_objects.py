@@ -1,7 +1,6 @@
 from scipy.optimize import linear_sum_assignment
 import numpy as np
 from extensions.simulation.src.core.environment import Object
-from extensions.simulation.examples.frodo.example_frodo import FRODO_TestAgent
 import extensions.simulation.src.core as core
 from extensions.simulation.src.core.spaces import Space, State 
 from typing import Tuple, cast
