@@ -40,7 +40,6 @@ class AssignmentSimulationModule():
     def _agents(self) -> tuple[FRODO_AssignmentAgent, ...]:  
         agents = []
         objs = self.env.objects.items()
-        print('those are the objects: ', objs)
         for _, obj in objs:
             if isinstance(obj, FRODO_AssignmentAgent):
                 agents.append(obj)
@@ -81,7 +80,7 @@ class AssignmentSimulationModule():
         
         # spawn the agents
         for i in range(n):
-            self._new_agent_fun(agent_id=f"task_agent_{current_number_agents}", agent_class= agent_class, start_config = configurations[i])
+            self._new_agent_fun(agent_id=f"vfrodo{current_number_agents}", agent_class= agent_class, start_config = configurations[i])
             current_number_agents += 1
 
     def spawn_tasks(self, n: int, configurations: list[tuple[float, float, float]] | None = None):
@@ -121,6 +120,7 @@ class AssignmentSimulationModule():
         method: type[StrategyABC] = HungarianStrategy,
         *,
         mode: StrategyABC.RunningMode | str | None = None,
+        verbose = False
     ) -> AssignmentResult:
         """Assign tasks to agents using the assignment manager."""
         agents = self._agents
@@ -134,17 +134,14 @@ class AssignmentSimulationModule():
             agent.asi.add_tasks(tasks)
 
         strategy = method()
-        return strategy.run(agents, tasks, self.logger, mode=mode)
 
-    def get_agent_positions(self) -> list[tuple[float, float]]:
-        """Get the positions of all agents in the environment."""
-        agents = self._agents
-        return [agent.position for agent in agents]
+        result = strategy.run(agents, tasks, self.logger, mode=mode)
 
-    def get_task_positions(self) -> list[tuple[float, float]]:
-        """Get the positions of all tasks in the environment."""
-        tasks = self._tasks
-        return [task.position for task in tasks]
+        if verbose: 
+            print(result.assignment_matrix)
+
+        return result
+
 
     def clear_objects(self):
         """Clear all objects in the environment."""
@@ -171,11 +168,10 @@ def assignment_example():
     # spawn tasks
     sim.asi.spawn_tasks(3)
     sim.asi.spawn_tasks(n = 2)
-
-    print('')
     
     # do assignments
     random_result = sim.asi.assign_tasks(method=RandomStrategy)
+    # print(random_result.assignment_matrix)
     # print(random_result.assignment_matrix)
 
     hungarian_result = sim.asi.assign_tasks(method= HungarianStrategy)
