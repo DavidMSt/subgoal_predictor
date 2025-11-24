@@ -1,5 +1,5 @@
 import gymnasium as gym 
-from universal.universal_simulation import UniversalSimulation
+from universal.universal_simulation import FRODO_universal_Simulation
 
 import numpy as np
 from typing import Any
@@ -29,7 +29,7 @@ class Range4D:
         object.__setattr__(self, "max", np.concatenate([self.range2d_1.max, self.range2d_2.max], dtype = np.float32))
 
 class FrodoGymWrapper(gym.Env): 
-    def __init__(self, sim: UniversalSimulation, max_steps: int = 200) -> None:
+    def __init__(self, sim: FRODO_universal_Simulation, max_steps: int = 200) -> None:
         ...
 
     def reset(self, *, seed=None, options=None):

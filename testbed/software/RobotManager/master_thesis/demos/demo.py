@@ -30,14 +30,17 @@ from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Co
 from extensions.joystick.joystick_manager import JoystickManager, Joystick
 
 # thesis imports
-from master_thesis.general.general_simulation import FRODO_general_Simulation
-from master_thesis.general.general_agents import FRODOGeneralAgent
+# from master_thesis.general.general_simulation import FRODO_general_Simulation
+# from master_thesis.general.general_agents import FRODOGeneralAgent
+from master_thesis.universal.universal_simulation import FRODO_universal_Simulation
+from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
+
 
 @dataclasses.dataclass
 class RobotContainer:
     babylon: BabylonFrodo
-    sim_agent: FRODOGeneralAgent
+    sim_agent: FRODOUniversalAgent
 
 @dataclasses.dataclass
 class ObstacleContainer:
@@ -46,7 +49,7 @@ class ObstacleContainer:
 
 
 # === BILBO INTERACTIVE EXAMPLE ========================================================================================
-class HHI_demo:
+class ThesisDemo:
     joystick_manager: JoystickManager
     babylon_visualization: BabylonVisualization
     robots: dict[str, RobotContainer]
@@ -301,7 +304,7 @@ class HHI_demo:
 # === BILBO INTERACTIVE CLI ============================================================================================
 class BILBO_Interactive_CommandSet(CommandSet):
 
-    def __init__(self, example: HHI_demo):
+    def __init__(self, example: ThesisDemo):
         super().__init__('example_david')
         self.example = example
 
@@ -334,7 +337,7 @@ class BILBO_Interactive_CommandSet(CommandSet):
 
 
 def main():
-    example = HHI_demo()
+    example = ThesisDemo()
 
     example.init()
     example.start()
