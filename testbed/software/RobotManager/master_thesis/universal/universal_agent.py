@@ -1,7 +1,7 @@
 from typing import List
-from general.general_agents import FRODOGeneralAgent
-from motion_planning.mp_agent import MPAgentModule
-from task_assignment.task_agent import AssignmentAgentModule
+from master_thesis.general.general_agents import FRODOGeneralAgent
+from master_thesis.motion_planning.mp_agent import MPAgentModule
+from master_thesis.task_assignment.task_agent import AssignmentAgentModule
 
 class FRODOUniversalAgent(FRODOGeneralAgent):
     def __init__(self, start_config: List[float], fov_deg=360, view_range=1.5, runner: bool = True, *args, **kwargs) -> None:

@@ -1,9 +1,12 @@
 import numpy as np
-from task_assignment.helper.task_objects import Task
-from general.general_agents import FRODOGeneralAgent
-from bilbolab.extensions.simulation.src import core as core
 from typing import List, Type, Callable
 from numpy.typing import NDArray
+
+from extensions.simulation.src import core as core
+
+from master_thesis.task_assignment.task_objects import Task
+from master_thesis.general.general_agents import FRODOGeneralAgent
+
 
 
 class AssignmentAgentModule():

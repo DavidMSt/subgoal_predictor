@@ -1,7 +1,7 @@
-from general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
-from universal.universal_agent import FRODOUniversalAgent
-from motion_planning.mp_simulation import MPSimulationModule
-from task_assignment.task_simulation import AssignmentSimulationModule
+from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
+from master_thesis.universal.universal_agent import FRODOUniversalAgent
+from master_thesis.motion_planning.mp_simulation import MPSimulationModule
+from master_thesis.task_assignment.task_simulation import AssignmentSimulationModule
 
 class FRODO_universal_Simulation(FRODO_general_Simulation):
     def __init__(self, Ts=0.1, limits=((-3,3),(-3,3)), env=FrodoGeneralEnvironment):

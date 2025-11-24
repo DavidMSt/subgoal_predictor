@@ -24,7 +24,7 @@ from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.objects.python.buttons import Button
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
-from extensions.simulation.src.objects.base_environment import BaseEnvironment
+# from extensions.simulation.src.objects.base_environment import BaseEnvironment
 from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Control_Mode, DEFAULT_BILBO_MODEL, \
     BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES, BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS
 from extensions.joystick.joystick_manager import JoystickManager, Joystick
@@ -35,6 +35,8 @@ from extensions.joystick.joystick_manager import JoystickManager, Joystick
 from master_thesis.universal.universal_simulation import FRODO_universal_Simulation
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
+from master_thesis.general.general_simulation import FrodoGeneralEnvironment
+
 
 
 @dataclasses.dataclass
@@ -77,8 +79,8 @@ class ThesisDemo:
             'title': 'HHI demo'})
 
         # Simulation Environment 
-        self.env = BaseEnvironment(Ts=0.01, run_mode='rt') # TODO: put here my adjusted environment? 
-        self.sim = FRODO_general_Simulation(Ts=0.01)
+        self.env = FrodoGeneralEnvironment(Ts=0.01, run_mode='rt') # TODO: put here my adjusted environment? 
+        self.sim = FRODO_universal_Simulation(Ts=0.01)
 
 
         self.env.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT].addAction(self._simulationOutputStep)
