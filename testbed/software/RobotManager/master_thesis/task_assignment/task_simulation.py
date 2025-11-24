@@ -20,7 +20,7 @@ import logging
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
 from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.task_assignment.task_agent import FRODO_AssignmentAgent
-from master_thesis.task_assignment.helper.task_objects import Task
+from master_thesis.task_assignment.task_objects import Task
 
 from abc import ABC, abstractmethod
 from typing import Any, Tuple
@@ -171,7 +171,7 @@ class HungarianStrategy(StrategyABC):
             cost_matrix[i, :] = cost_vector_i
 
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
-        # TODO: Returns trivial solution row_ind and col_ind are not correct
+        
         assignment = np.zeros((n_agents, n_tasks), dtype=np.bool_)
         assignment[row_ind, col_ind] = True
 
