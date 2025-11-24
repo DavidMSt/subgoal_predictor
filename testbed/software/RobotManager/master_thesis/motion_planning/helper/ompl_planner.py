@@ -29,21 +29,7 @@ from typing import List
 
 import numpy as np
 import argparse
-import yaml
 
-class ArgParser():
-    @staticmethod
-    def parse_arguments():
-        parser = argparse.ArgumentParser()
-        parser.add_argument('env', help='input YAML file with environment')
-        parser.add_argument('output', default=None, help='output file')
-        parser.add_argument('--export-planner-data', dest='planner_data_out_path', default=None, help='Export planner data (nodes, edges) to output file')
-        args = parser.parse_args()
-        
-        with open(args.env, "r") as stream:
-            env = yaml.safe_load(stream)
-        
-        return args.output, env, args.planner_data_out_path
 
 class SamplerType(Enum):
     UNIFORM = ob.UniformValidStateSampler # type: ignore[attr-defined]
@@ -62,65 +48,6 @@ class SamplerType(Enum):
     def __call__(self, si: ob.SpaceInformation) -> ob.ValidStateSampler: # type: ignore[attr-defined]
         return self.value(si)
 
-class SolutionExporter():
-    def __init__(self, motion_type = None, path_out_yaml: str| None = None, path_out_tree: str| None = None):
-        self.motion_type = motion_type
-        self.path_out_yaml = path_out_yaml
-        self.path_out_tree = path_out_tree
-
-    def export_dict(self, planner_data)-> dict:
-        """_summary_ Simply return found solution
-
-        Args:
-            planner_data (_type_): _description_
-
-        Returns:
-            _type_: _description_
-        """
-        return planner_data
-    
-    def export_data_tree(self, planner_data: Any):
-        """_summary_ Export data consisting of vertices and edges that can be visualized with some visualization tool
-
-        Args:
-            planner_data (Any): States of solution path 
-        """
-        print("Exporting tree data for visualization to : ", self.path_out_tree)
-        assert self.path_out_tree is not None
-
-        data = {
-            "planner_data": {
-                "states": [],
-                "edges": []
-            }
-        }
-
-        num_vertices = planner_data.numVertices()
-
-        # extract all states from the planner data
-        for v in range(num_vertices):
-            state = planner_data.getVertex(v).getState()
-            # Only handle SE2 (car) case
-            data["planner_data"]["states"].append([state.getX(), state.getY(), state.getYaw()])
-
-        for v in range(planner_data.numVertices()):
-            for u in range(planner_data.numVertices()):
-                if planner_data.edgeExists(v, u):
-                    data["planner_data"]["edges"].append({
-                        "source": v,
-                        "target": u
-                    })
-
-  
-        with open(self.path_out_tree, 'w') as f:
-            yaml.dump(data, f)
-    
-    def export_data_yaml(self, path_dict: dict):
-        assert self.path_out_yaml is not None, "Output path for YAML is not set."
-
-        with open(self.path_out_yaml, 'w') as f:
-            yaml.dump(path_dict, f, default_flow_style=None, sort_keys=False)
-    
     
 class OMPLPlannerBase(ABC):
     def __init__(self, planning_config, sampler: SamplerType = SamplerType.UNIFORM, path_out_yaml = None, path_out_tree = None):
@@ -128,7 +55,7 @@ class OMPLPlannerBase(ABC):
         self.agent_type = self.config.type
         self.sampler = sampler
 
-        self._solution_exporter = SolutionExporter(self.agent_type, path_out_yaml, path_out_tree)
+        # self._solution_exporter = SolutionExporter(self.agent_type, path_out_yaml, path_out_tree)
         self._collision_checker = self._create_checker()
         self.ompl_setup()
     
@@ -261,25 +188,6 @@ class OMPLPlannerBase(ABC):
             extracted_state = self._extract_ompl_state(ompl_state)
             path_states.append(extracted_state)
         return tuple(path_states)
-    
-    def export_solution_yaml(self) -> None:
-        if self._solution_path is None:
-            print("No solution path available to export.")
-            return
-        
-        path_dict = self._create_solution_dict()
-
-        self._solution_exporter.export_data_yaml(path_dict)
-
-    def export_solution_tree(self):
-        if self._planner is None:
-            print("No planner available to export data.")
-            return
-        
-        planner_data = ob.PlannerData(self._si) # type: ignore[attr-defined]
-        self._planner.getPlannerData(planner_data)
-
-        self._solution_exporter.export_data_tree(planner_data)
 
     def export_solution_dict(self) -> dict[str, tuple[np.ndarray, ...]]:
         return self._create_solution_dict()

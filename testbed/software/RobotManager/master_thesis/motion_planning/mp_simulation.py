@@ -53,11 +53,13 @@ def mp_task_example1():
     app = FRODO_MP_Simulation()
     app.init()
 
+    # define start and goal
     ag1_start = (2.0, 0.0, np.pi)
     ag1_goal = (-1.0, 0.0, np.pi)
     ag2_start = (2, 0, np.pi)
     ag2_goal = (3.0, 0, 0)
 
+    
     ag1 = FRODO_MotionPlanning_Agent(
         env=app.environment,
         agent_id="frodo1_v",

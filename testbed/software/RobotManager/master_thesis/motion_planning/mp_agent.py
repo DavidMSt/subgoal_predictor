@@ -22,11 +22,7 @@ from master_thesis.general.general_agents import InputPhaseRunner, InputPhase
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)
 
 
-
-
-
-# TODO: Make this frozen
-@dataclass
+@dataclass(frozen = True)
 class MotionPlanningConfig:
     # timestep duration
     dt: float
@@ -70,16 +66,19 @@ class MPAgentModule():
     id: str # mainly used for optional plotting of start/ goal configurations in the GUi
 
     # physical dimensions for all FRODOs # TODO: Use the general agent config to extract this in the future
-    length: float = 0.157
-    width: float = 0.115
-    height: float = 0.052  
+    # length: float = 0.157
+    # width: float = 0.115
+    # height: float = 0.052  
 
-    def __init__(self, env: FrodoGeneralEnvironment, runner: InputPhaseRunner, id: str, logger: Logger, plotting_group = None) -> None:
+    def __init__(self,robot_config, env: FrodoGeneralEnvironment, runner: InputPhaseRunner, id: str, logger: Logger, plotting_group = None) -> None:
         self.env = env
         self.runner = runner
         self.id = id
         self.plotting_group = plotting_group
         self.logger = logger
+        self.length = robot_config.length
+        self.width = robot_config.width
+        self.heigth = robot_config.height
 
 
         # runner: "PhaseRunner | None" = None
@@ -121,8 +120,6 @@ class MPAgentModule():
             )
 
             
-            # (PhaseRunner.add_phase already checks duplicates)
-            
             self.runner.add_phase(phase_key, phase)
 
 
@@ -146,7 +143,7 @@ class MPAgentModule():
             dt=self.env.Ts,
             L=self.length,
             W=self.width,
-            H=self.height,
+            H=self.heigth,
             start=start_config,
             goal=goal_config,
             env_limits = self.env.limits,
@@ -161,6 +158,7 @@ class FRODO_MotionPlanning_Agent(FRODOGeneralAgent):
 
         # motion_planning interface for OMPL configuration
         self.mpi = MPAgentModule(
+            robot_config= self.agent_config,
             env=env,
             id=self.agent_id,
             runner=self.runner,
@@ -168,60 +166,6 @@ class FRODO_MotionPlanning_Agent(FRODOGeneralAgent):
             logger=self.logger
         )
 
-    # def plan_motion(self, phase_key):
-    #     self.mp_interface.plan_motion(phase_key)
-
-    #     if self.mp_interface.runner is None:
-    #         if self.mp_interface.dt is None: 
-    #             raise RuntimeError("Environment dt is None, first bind an environment to the MPI before trying to plan motion")
-
-
-
-    # def set_goal_config(self, goal_config: np.ndarray):
-    #     self.mp_interface.plot_goal_config(goal_config )
-
-    # def _execute_next_input_action(self):
-    #     # idle or no active phase? send zero input
-    #     if self.mp_interface.runner is None or self._execution_phase == 'idle' or self.mp_interface.active_phase() is None:
-    #         self.setInput(0.0, 0.0)
-    #         return
-
-    #     u = self.mp_interface.step_active()
-    #     if u is None:
-    #         # phase finished this tick
-    #         self.setInput(0.0, 0.0)
-    #         self._execution_phase = 'idle'
-    #         self.logger.debug("Phase completed; switching to idle.")
-    #     else:
-    #         self.setInput(float(u[0]), float(u[1]))
-
-    # def setInput(self, v: float=0.0, psi_dot:float =0):
-    #     self.input = [v, psi_dot]
-    
-    # def set_phase(self, phase: str):
-    #     if self.mp_interface.has_phase(phase):
-    #         self.mp_interface.start_phase(phase, reset=True)
-    #         self._execution_phase = phase
-    #         self.logger.info(f"Setting execution phase to '{phase}'")
-    #     else:
-    #         self.logger.warning(f"Phase '{phase}' not found")
-
-    # def getPhaseInputs(self, phase: str) -> np.ndarray:
-    #     try:
-    #         ph = self.mp_interface.runner.get_phase(phase)  # type: ignore[union-attr]
-    #         return np.array(ph.inputs, dtype=float)
-    #     except Exception:
-    #         return np.empty((0, 2), dtype=float)
-
-    
-    # def getPhaseStates(self, phase: str) -> np.ndarray:
-    #     states = self.mp_interface.get_phase_states(phase)
-    #     if states is None:
-    #         return np.empty((0, 3), dtype=float)
-    #     if states.size == 0:
-    #         return states
-    #     states[:, 2] += np.pi
-    #     return states
 
 if __name__ == '__main__':
     sim = FRODO_general_Simulation(Ts=0.1, env=FrodoGeneralEnvironment)
