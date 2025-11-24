@@ -1,8 +1,10 @@
 import torch
-from task_assignment.task_simulation import AssignmentSimulationModule
-from task_assignment.task_agent import FRODO_AssignmentAgent
-from task_assignment.task_objects import Task
-from task_assignment.helper.assignment_policies.optimization_based import 
+from master_thesis.task_assignment.task_simulation import AssignmentSimulationModule, FRODO_AssignmentSimulation
+from master_thesis.task_assignment.assignment_strategies import RandomStrategy, HungarianStrategy
+from master_thesis.task_assignment.task_agent import FRODO_AssignmentAgent
+from master_thesis.task_assignment.task_objects import Task
+from master_thesis.task_assignment.assignment_strategies import HungarianStrategy
+from torch.utils.data import Dataset, DataLoader as TorchDataLoader
 
 class DataSetGenerator:
 
@@ -150,3 +152,25 @@ class DataSetGenerator:
                     "matches": [it["matches"] for it in items],
                 }
         return TorchDataLoader(ds, batch_size=batch_size, shuffle=shuffle, collate_fn=collate_fn)
+
+if __name__ == "__main__": 
+        # create simulation (no web gui)
+    sim = FRODO_AssignmentSimulation(Ts=0.1, limits=((-3,3), (3,3)))
+    
+    # spawn agents
+    sim.asi.spawn_agents(3)
+    sim.asi.spawn_agents(n = 2, configurations = [(0.1,2.2,np.pi),(0.2,0.3,0.0)])
+
+    # spawn tasks
+    sim.asi.spawn_tasks(3)
+    sim.asi.spawn_tasks(n = 2)
+    
+    # do assignments
+    random_result = sim.asi.assign_tasks(method=RandomStrategy)
+    # print(random_result.assignment_matrix)
+
+    hungarian_result = sim.asi.assign_tasks(method= HungarianStrategy)
+    # print(hungarian_result.assignment_matrix)
+
+    data_generator = DataSetGenerator(sim.asi)
+    data = data_generator.create_dataset(specs = [(3,200), (5,200)], out_path = 'applications/master_david/task_assignment/helper/training_dataset.pt')

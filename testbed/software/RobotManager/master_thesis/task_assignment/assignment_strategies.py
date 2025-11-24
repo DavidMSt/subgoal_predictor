@@ -6,14 +6,23 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import numpy as np
 from logging import Logger
+from numpy.typing import NDArray
 
-from task_assignment.task_agent import FRODO_AssignmentAgent
-from task_assignment.task_objects import Task
-from task_assignment.task_simulation import AssignmentResult
+import extensions.simulation.src.core as core
+
+from master_thesis.task_assignment.task_agent import FRODO_AssignmentAgent
+from master_thesis.task_assignment.task_objects import Task
 
 
 
-
+@dataclass(frozen=True)
+class AssignmentResult:
+    agent_configurations: list[core.spaces.State]
+    task_configurations: list[core.spaces.State]
+    strategy: "StrategyABC"
+    assignment_matrix: NDArray[np.bool_] | None      # shape: (n_agents, n_tasks)
+    matches: list[tuple[int, int]] | None             # (agent_idx, task_idx)
+    # total_cost: float                           # sum of chosen costs
 
 class StrategyABC(ABC):
     default_mode = "central"

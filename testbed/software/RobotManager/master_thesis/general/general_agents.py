@@ -279,6 +279,9 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         phase = InputPhase(inputs, states, durations, delta_t)
         self.runner.add_phase(name, phase)
 
+    def _get_state(self):
+        return self.state
+
     # ----------------------------------------------------------------------
     # def compute_states(self, inputs, durations, initial_state, delta_t):
     #     ratio = delta_t / self.Ts

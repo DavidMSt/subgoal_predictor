@@ -1,36 +1,19 @@
 
-from __future__ import annotations
+
 
 import time
 from typing import Type, Dict, Protocol, Callable, Sequence, Literal
 
 
 import numpy as np
-from numpy.typing import NDArray
 
-import extensions.simulation.src.core as core
-from dataclasses import dataclass
 
 from logging import Logger
-import logging
 
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
 from master_thesis.task_assignment.task_agent import FRODO_AssignmentAgent
 from master_thesis.task_assignment.task_objects import Task
-from master_thesis.task_assignment.assignment_strategies import StrategyABC, HungarianStrategy, RandomStrategy
-from master_thesis.task_assignment.helper.dataset_generator import DataSetGenerator
-
-
-from torch.utils.data import Dataset, DataLoader as TorchDataLoader
-
-@dataclass(frozen=True)
-class AssignmentResult:
-    agent_configurations: list[core.spaces.State]
-    task_configurations: list[core.spaces.State]
-    strategy: StrategyABC
-    assignment_matrix: NDArray[np.bool_] | None      # shape: (n_agents, n_tasks)
-    matches: list[tuple[int, int]] | None             # (agent_idx, task_idx)
-    # total_cost: float                           # sum of chosen costs
+from master_thesis.task_assignment.assignment_strategies import StrategyABC, HungarianStrategy, RandomStrategy, AssignmentResult
 
 class AgentFactory(Protocol):
     """Class with callable, provides needed structure (in and output) for agent creation methods used by the sim
@@ -43,7 +26,6 @@ class AgentFactory(Protocol):
         agent_id: str,
         agent_class: Type[FRODO_AssignmentAgent],
         start_config: Sequence[float],
-        dt: float
     ) -> FRODO_AssignmentAgent: ...
 
 class AssignmentSimulationModule():
@@ -52,15 +34,29 @@ class AssignmentSimulationModule():
         super().__init__(*args, **kwargs)
         self.env = env
         self.logger = logger
-        self._new_agent = new_agent_fun
+        self._new_agent_fun = new_agent_fun
 
     @property
-    def _agents(self) -> tuple[FRODO_AssignmentAgent, ...]: # TODO: Remove since unnecessary? 
-        return tuple([obj for obj in self.env.objects.values() if isinstance(obj, FRODO_AssignmentAgent)])
+    def _agents(self) -> tuple[FRODO_AssignmentAgent, ...]:  
+        agents = []
+        objs = self.env.objects.items()
+        print('those are the objects: ', objs)
+        for _, obj in objs:
+            if isinstance(obj, FRODO_AssignmentAgent):
+                agents.append(obj)
+
+        return tuple(agents)
 
     @property
     def _tasks(self) -> tuple[Task, ...]:
-        return tuple([obj for obj in self.env.objects.values() if isinstance(obj, Task)])
+        tasks = []
+        objs = self.env.objects.items()
+        for _, obj in objs:
+            if isinstance(obj, Task):
+                tasks.append(obj)
+
+        return tuple(tasks)
+        # return tuple([obj for obj in self.env.objects.values() if isinstance(obj, Task)])
 
     def spawn_agents(self, n: int, configurations:list[tuple[float, float, float]] | None = None, agent_class: Type[FRODO_AssignmentAgent] = FRODO_AssignmentAgent):
         
@@ -85,7 +81,7 @@ class AssignmentSimulationModule():
         
         # spawn the agents
         for i in range(n):
-            self._new_agent(f"task_agent_{current_number_agents}", agent_class= agent_class, start_config = configurations[i], dt = self.env.Ts)
+            self._new_agent_fun(agent_id=f"task_agent_{current_number_agents}", agent_class= agent_class, start_config = configurations[i])
             current_number_agents += 1
 
     def spawn_tasks(self, n: int, configurations: list[tuple[float, float, float]] | None = None):
@@ -161,12 +157,12 @@ class FRODO_AssignmentSimulation(FRODO_general_Simulation):
     def __init__(self, Ts=0.1, limits: tuple[tuple[int, int], ...] = ((-3,3), (3,3)), env=FrodoGeneralEnvironment):
         super().__init__(Ts, limits, env)
 
-        self.asi = AssignmentSimulationModule(self.env, self.logger, self.addVirtualAgent)
+        self.asi = AssignmentSimulationModule(self.environment, self.logger, self.new_agent)
 
 
 def assignment_example():
     # create simulation (no web gui)
-    sim = FRODO_AssignmentSimulation(Ts=0.1, use_web_interface=False, min_values= [-3, -3], max_values=[3,3])
+    sim = FRODO_AssignmentSimulation(Ts=0.1, limits=((-3,3), (3,3)))
     
     # spawn agents
     sim.asi.spawn_agents(3)
@@ -175,6 +171,8 @@ def assignment_example():
     # spawn tasks
     sim.asi.spawn_tasks(3)
     sim.asi.spawn_tasks(n = 2)
+
+    print('')
     
     # do assignments
     random_result = sim.asi.assign_tasks(method=RandomStrategy)
@@ -182,9 +180,6 @@ def assignment_example():
 
     hungarian_result = sim.asi.assign_tasks(method= HungarianStrategy)
     # print(hungarian_result.assignment_matrix)
-
-    data_generator = DataSetGenerator(sim.asi)
-    data = data_generator.create_dataset(specs = [(3,200), (5,200)], out_path = 'applications/master_david/task_assignment/helper/training_dataset.pt')
 
 
     while True:

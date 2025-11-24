@@ -26,7 +26,7 @@ SIMULATED_STATICS: dict[str, FRODO_Static] = {}
 SIMULATED_OBSTACLES: dict[str, GeneralObstacle] = {}
 
 # ======================================================================================================================
-USE_AGENT_DEFINITIONS = True
+USE_AGENT_DEFINITIONS = False
 USE_OBSTACLE_DEFINITIONS = True
 
 class FRODO_General_CommandSet(CommandSet):
@@ -399,8 +399,8 @@ def main():
     inputs_2 = tuple([np.array([-1.0, 0.0]) for _ in range(2)])
     durations = tuple([1] * len(inputs_1))
 
-
-    assert agent_a, FRODOGeneralAgent
+    
+    assert agent_a, FRODOGeneralAgent # keep Pylance quiet
     assert agent_b, FRODOGeneralAgent
     agent_a.add_input_phase("forward", inputs=inputs_1, durations=durations, delta_t=0.4)
     agent_b.add_input_phase("forward", inputs=inputs_1, durations=durations, delta_t=0.4)

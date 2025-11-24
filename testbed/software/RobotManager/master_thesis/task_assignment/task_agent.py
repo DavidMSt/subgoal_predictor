@@ -12,13 +12,13 @@ class AssignmentAgentModule():
     """Interface for assignment agents. Handles decentralized assignments"""
     agent_id: str   # Unique identifier for the agent
 
-    def __init__(self, Ts, agent_id, logger, get_configuration: Callable[[], core.spaces.State]):
+    def __init__(self, agent_id, logger, get_state_fun: Callable[[], core.spaces.State]):
         
         self.agent_id = agent_id
         self._available_tasks = []
         self._assigned_tasks = []
         self.logger = logger
-        self._get_configuration = get_configuration 
+        self._get_state_fun = get_state_fun 
         # TODO: Use metric, e.g. dubins distance which accounts for turning radius
         self.cost_function = self.euclidean_distance_cost_2d  # set the cost function
 
@@ -26,10 +26,11 @@ class AssignmentAgentModule():
 
         return self.cost_function(task_configuration=task_configuration)
     
+    # TODO: Implement dubins cost!
     def euclidean_distance_cost_2d(self, task_configuration) -> np.floating: # TODO: implement dubins cost
         # extract x and y from the agent
-        agent_configuration = self._get_configuration()
-        agent_position = np.array([agent_configuration[0]["x"], agent_configuration[0]["y"]])
+        agent_state = self._get_state_fun()
+        agent_position = np.array((agent_state.x, agent_state.y))
 
         # extract x and y from the task
         task_position = np.array([task_configuration[0]["x"], task_configuration[0]["y"]])
@@ -42,8 +43,8 @@ class AssignmentAgentModule():
     def add_tasks(self, tasks: tuple[Task,...]) -> None:
         # Add only tasks with unique IDs to the available_tasks list
         existing_ids = {task.id for task in self._available_tasks}
-        new_tasks = [task for task in tasks if task.id not in existing_ids]
-        duplicated_ids = [task.id for task in tasks if task.id in existing_ids]
+        new_tasks = [task for task in tasks if task.object_id not in existing_ids]
+        duplicated_ids = [task.object_id for task in tasks if task.object_id in existing_ids]
         if duplicated_ids:
             self.logger.warning(f'Detected duplicated tasks with IDs: {duplicated_ids}, keeping only one instance')
         self._available_tasks += new_tasks
@@ -75,9 +76,30 @@ class AssignmentAgentModule():
 
 
 class FRODO_AssignmentAgent(FRODOGeneralAgent):
-    def __init__(self, start_config: List[float], fov_deg=360, view_range=1.5, runner: bool = True, *args, **kwargs) -> None:
-        super().__init__(start_config, fov_deg, view_range, runner, *args, **kwargs)
-        self.asi = AssignmentAgentModule(self.Ts, self.id, self.logger, self.getConfiguration)
 
+    def __init__(
+        self,
+        agent_id: str,
+        start_config: tuple[float, float, float],
+        agent_config=None,
+        runner=None,
+        Ts=None,
+        **kwargs
+    ):
+        super().__init__(
+            agent_id=agent_id,
+            start_config=start_config,
+            agent_config=agent_config,
+            Ts=Ts,
+        )
 
+        self.runner = runner
 
+        print(self.state)
+
+        # add assignment module
+        self.asi = AssignmentAgentModule(
+            agent_id=agent_id,
+            logger=self.logger,
+            get_state_fun=self._get_state
+        )
