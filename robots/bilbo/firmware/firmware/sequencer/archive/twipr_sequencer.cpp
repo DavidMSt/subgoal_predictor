@@ -92,8 +92,6 @@ void TWIPR_Sequencer::update() {
 		this->config.control->_setBalancingInput(balancing_input);
 	}
 
-
-
 	this->sequence_tick++;
 }
 /* =============================================================== */

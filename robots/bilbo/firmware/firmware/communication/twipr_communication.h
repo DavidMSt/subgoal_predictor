@@ -23,7 +23,7 @@
 #include "twipr_spi_communication.h"
 #include "firmware_defs.h"
 #include "twipr_control.h"
-#include "twipr_sequencer.h"
+#include "bilbo_sequencer.h"
 
 // Define error flag macros for communication error responses.
 #define TWIPR_COMM_ERROR_FLAG_UNKNOWN         0x01  ///< Unknown error flag.

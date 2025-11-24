@@ -82,7 +82,7 @@ class BILBO_TestbedManager:
             self.logger.warning(f"Tracker is not running, cannot get optitrack data for robot {robot.id}")
             tracked_object = None
         else:
-        # Check if there is a tracked object for this robot
+            # Check if there is a tracked object for this robot
             tracked_object = self.tracker.add_robot(robot.id, robot.config)
 
             if tracked_object is None:
@@ -125,7 +125,6 @@ class BILBO_TestbedManager:
             self.tracker.add_origin(origin_config.id, origin_config)
         else:
             return
-
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_new_tracker_sample(self, *args, **kwargs):

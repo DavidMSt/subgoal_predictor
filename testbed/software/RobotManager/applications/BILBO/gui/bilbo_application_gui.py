@@ -35,7 +35,7 @@ from robots.bilbo.robot.bilbo import BILBO
 from robots.bilbo.robot.bilbo_data import BILBO_Sample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandler_Status, BILBO_Experiment_Status
-from robots.bilbo.robot.experiment.definitions import BILBO_InputTrajectory
+from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory
 from robots.bilbo.robot.experiment.experiments import DILC_Experiment
 
 # === GLOBAL VARIABLES =================================================================================================

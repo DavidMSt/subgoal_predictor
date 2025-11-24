@@ -1,5 +1,4 @@
 import ctypes
-import dataclasses
 import enum
 import time
 from datetime import datetime
@@ -9,16 +8,17 @@ import numpy as np
 from dacite import Config
 from numpy.core.defchararray import isnumeric
 
-from robot.bilbo_common import BILBO_Common
 # ======================================================================================================================
+from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.communication.serial.bilbo_serial_messages import BILBO_Sequencer_Event_Message
 from robot.control.bilbo_control import BILBO_Control
 from robot.control.bilbo_control_data import BILBO_Control_Mode
 from robot.core import get_logging_provider
-from robot.experiment.definitions import BILBO_InputTrajectory, BILBO_InputTrajectoryStep, BILBO_ExperimentHandler_Mode, \
-    BILBO_LL_Sequencer_Event_Type, BILBO_TrajectoryExperimentData, BILBO_StateTrajectory, BILBO_TrajectoryExperiment, \
-    BILBO_TrajectoryExperimentMeta
+from robot.experiment.definitions import BILBO_InputTrajectory, BILBO_InputTrajectoryStep, \
+    BILBO_LL_Sequencer_Event_Type, BILBO_StateTrajectory, BILBO_TrajectoryData, BILBO_ExperimentData, \
+    BILBO_ExperimentMeta
+
 from robot.experiment.helpers import get_state_trajectory_from_logging_samples
 from robot.lowlevel.stm32_general import MAX_STEPS_TRAJECTORY, LOOP_TIME_CONTROL
 from robot.lowlevel.stm32_sequencer import bilbo_sequence_input_t, bilbo_sequence_description_t, BILBO_Sequence_LL
@@ -73,10 +73,16 @@ class BILBO_ExperimentHandler_Events:
     error: Event
 
 
+class BILBO_ExperimentHandler_Mode(enum.StrEnum):
+    IDLE = 'IDLE'
+    RUNNING = 'RUNNING'
+    ERROR = 'ERROR'
+
+
 # === BILBO_ExperimentHandler ==========================================================================================
 class BILBO_ExperimentHandler:
     communication: BILBO_Communication
-    core: BILBO_Common
+    common: BILBO_Common
     utils: BILBO_Utilities
     control: BILBO_Control
 
@@ -89,11 +95,11 @@ class BILBO_ExperimentHandler:
 
     # === INIT =========================================================================================================
     def __init__(self,
-                 core: BILBO_Common,
+                 common: BILBO_Common,
                  communication: BILBO_Communication,
                  utils: BILBO_Utilities,
                  control: BILBO_Control):
-        self.core = core
+        self.common = common
         self.communication = communication
         self.utils = utils
         self.control = control
@@ -209,7 +215,7 @@ class BILBO_ExperimentHandler:
             return None
 
         # 5) Let the logger catch up a little beyond end_tick
-        while self.core.tick < (end_tick + 100):
+        while self.common.tick < (end_tick + 100):
             time.sleep(0.1)
 
         # 6) Read signals from the logging provider
@@ -219,24 +225,22 @@ class BILBO_ExperimentHandler:
             end_index=end_tick
         )
 
-        output_data = BILBO_TrajectoryExperimentData(
+        output_data = BILBO_TrajectoryData(
             input_trajectory=trajectory,
             state_trajectory=BILBO_StateTrajectory(
-                time_vector=trajectory.time_vector,
                 states=get_state_trajectory_from_logging_samples(output_signals)
             )
         )
 
-        experiment = BILBO_TrajectoryExperiment(
+        experiment = BILBO_ExperimentData(
             id=str(trajectory.id),
             data=output_data,
-            meta=BILBO_TrajectoryExperimentMeta(
-                robot_id=self.core._get_id(),
-                robot_information=self.core.information,
+            meta=BILBO_ExperimentMeta(
+                robot_id=self.common.id,
                 control_config=self.control.config,
                 description='',
-                software_revision='',
-                timestamp=start_time_stamp
+                date=datetime.now().strftime('%Y-%m-%d-%H-%M-%S'),
+                robot_config=self.common.config
             )
         )
 
@@ -318,8 +322,8 @@ class BILBO_ExperimentHandler:
             require_control_mode=False,
             wait_time_beginning=1,
             wait_time_end=1,
-            control_mode=trajectory.control_mode.value,
-            control_mode_end=trajectory.control_mode.value,
+            control_mode=BILBO_Control_Mode.BALANCING.value,
+            control_mode_end=BILBO_Control_Mode.BALANCING.value,
             loaded=False
         )
 
@@ -471,9 +475,9 @@ class BILBO_ExperimentHandler:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _sequencer_event_callback(self, message: BILBO_Sequencer_Event_Message, *args, **kwargs):
-        event = BILBO_LL_Sequencer_Event_Type(message.data['event']).name
-        trajectory_id = message.data['sequence_id']
-        tick = message.data['tick']
+        event = BILBO_LL_Sequencer_Event_Type(message.data['event']).name  # type: ignore
+        trajectory_id = message.data['sequence_id']  # type: ignore
+        tick = message.data['tick']  # type: ignore
 
         if event == 'STARTED':
             # self.utils.speak(f"Trajectory {trajectory_id} started")

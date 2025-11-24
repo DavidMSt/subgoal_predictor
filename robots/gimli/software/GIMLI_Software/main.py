@@ -24,7 +24,7 @@ class GIMLI_App:
         self.robot = UGV02()
 
         self.logger = Logger("GIMLI", "DEBUG")
-        self.joystick_manager = JoystickManager()
+        self.joystick_manager = JoystickManager(accept_unmapped_joysticks=True)
         self.joystick_manager.callbacks.new_joystick.register(self._on_new_joystick)
         self.joystick_manager.callbacks.joystick_disconnected.register(self._on_joystick_disconnected)
 

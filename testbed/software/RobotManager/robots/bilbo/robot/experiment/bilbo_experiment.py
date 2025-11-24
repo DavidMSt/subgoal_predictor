@@ -18,7 +18,8 @@ from robots.bilbo.robot.bilbo_control import BILBO_Control
 # === CUSTOM PACKAGES ==================================================================================================
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 from robots.bilbo.robot.bilbo_definitions import MAX_STEPS_TRAJECTORY
-from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory, BILBO_TrajectoryData
+from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory, BILBO_TrajectoryData, \
+    BILBO_ExperimentData
 from robots.bilbo.robot.experiment.experiment_helpers import generate_random_input_trajectory
 
 
@@ -229,15 +230,12 @@ class BILBO_ExperimentHandler:
         if output_data_dict is None:
             self.logger.error(f"Trajectory \"{trajectory.name}\" failed due to missing data")
             return None
-
         experiment_data = self.getTrajectoryExperimentDataFromDict(output_data_dict)
 
-        # plotTrajectoryExperimentData(experiment_data, show_figure=True)
-
-        self.events.trajectory_finished.set(data=experiment_data, flags={'trajectory_id': trajectory.id})
+        self.events.trajectory_finished.set(data=experiment_data.data, flags={'trajectory_id': trajectory.id})
 
         self.logger.important(f"Trajectory \"{trajectory.name}\" finished.")
-        return experiment_data
+        return experiment_data.data
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_random_trajectory(self, time_s, frequency=2, gain=0.25):
@@ -258,29 +256,27 @@ class BILBO_ExperimentHandler:
 
         # Plot the input and output data
 
-
-        fig, (ax1, ax2) = new_figure_agg(nrows=2, figsize=(10, 10))
-# time_vector = data.input_trajectory.time_vector
-#
-# # Plot input trajectory
-# ax1.plot(time_vector, data.input_trajectory.inputs)
-# ax1.set_xlabel('Time [s]')
-# ax1.set_ylabel('Input')
-# ax1.set_title('Input Trajectory')
-# ax1.grid(True)
-#
-# # Plot states
-# ax2.plot(time_vector, data.states)
-# ax2.set_xlabel('Time [s]')
-# ax2.set_ylabel('States')
-# ax2.set_title('System States')
-# ax2.grid(True)
-#
-# fig.tight_layout()
-#
+        # time_vector = data.input_trajectory.time_vector
+        #
+        # # Plot input trajectory
+        # ax1.plot(time_vector, data.input_trajectory.inputs)
+        # ax1.set_xlabel('Time [s]')
+        # ax1.set_ylabel('Input')
+        # ax1.set_title('Input Trajectory')
+        # ax1.grid(True)
+        #
+        # # Plot states
+        # ax2.plot(time_vector, data.states)
+        # ax2.set_xlabel('Time [s]')
+        # ax2.set_ylabel('States')
+        # ax2.set_title('System States')
+        # ax2.grid(True)
+        #
+        # fig.tight_layout()
+        #
 
 
-# return self.run_trajectory(trajectory=trajectory)
+        # return self.run_trajectory(trajectory=trajectory)
 
     # ------------------------------------------------------------------------------------------------------------------
     def start_trajectory(self):
@@ -340,9 +336,9 @@ class BILBO_ExperimentHandler:
 
     # ------------------------------------------------------------------------------------------------------------------
     @staticmethod
-    def getTrajectoryExperimentDataFromDict(data: dict) -> BILBO_TrajectoryData:
+    def getTrajectoryExperimentDataFromDict(data: dict) -> BILBO_ExperimentData:
         config = Config(
             cast=[int, float],  # allow casting numbers where JSON gives str/float
             strict=False,  # ignore unknown fields if the device returns extra data
         )
-        return from_dict_auto(BILBO_TrajectoryData, data)
+        return from_dict_auto(BILBO_ExperimentData, data)

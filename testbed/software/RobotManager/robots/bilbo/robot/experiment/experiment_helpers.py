@@ -45,8 +45,8 @@ def trajectory_inputs_to_list(trajectory_inputs: list[BILBO_InputTrajectoryStep]
     return out
 
 
-def trajectory_inputs_to_vector(trajectory_inputs: list[BILBO_InputTrajectoryStep]) -> np.ndarray:
-    return np.array(trajectory_inputs_to_list(trajectory_inputs))
+def trajectory_inputs_to_vector(trajectory_inputs: list[BILBO_InputTrajectoryStep], single_input: bool = False) -> np.ndarray:
+    return np.array(trajectory_inputs_to_list(trajectory_inputs, single_input=single_input))
 
 
 def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain) -> BILBO_InputTrajectory | None:

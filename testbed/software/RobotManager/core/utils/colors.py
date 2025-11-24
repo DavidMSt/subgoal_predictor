@@ -73,9 +73,6 @@ def _rgb01_to_hex(rgb: Sequence[float]) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-
-
-
 # ---------- small helpers ----------
 def _hex_to_rgb01(hex_str: str) -> Tuple[float, float, float]:
     s = hex_str.lstrip("#")

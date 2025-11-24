@@ -6,7 +6,7 @@ from extensions.gui.src.lib.objects.python.directory import DirectoryWidget
 from extensions.gui.src.lib.objects.python.popup import Popup
 from extensions.gui.src.lib.objects.python.popup_application import GUI_Popup_Application
 from extensions.gui.src.lib.plot.lineplot.lineplot_widget import LinePlot, LinePlotWidget
-from robots.bilbo.robot.experiment.files import readInputFile
+from robots.bilbo.robot.experiment.experiment_definitions import read_input_file
 
 
 # === INPUT VIEWER APPLICATION =========================================================================================
@@ -83,7 +83,7 @@ class InputViewerApplication(GUI_Popup_Application):
             return
 
         # 2. Load the file
-        file_data = readInputFile(file_path)
+        file_data = read_input_file(file_path)
 
         trajectory_name = file_data.name
         time_vector = file_data.trajectory.time_vector

@@ -119,22 +119,22 @@ core_utils_RegisterEntry<twipr_control_configuration_t, void> reg_get_ctrl_conf(
 /* Load Sequence Function Register Entry */
 core_utils_RegisterEntry<bool, twipr_sequencer_sequence_data_t> reg_load_seq(
 		&register_map, REG_ADDRESS_F_SEQUENCE_LOAD, &twipr_firmware.sequencer,
-		&TWIPR_Sequencer::loadSequence);
+		&BILBO_Sequencer::loadSequence);
 
 /* Read Sequence Data Register Entry */
 core_utils_RegisterEntry<twipr_sequencer_sequence_data_t, void> reg_read_seq(
 		&register_map, REG_ADDRESS_F_SEQUENCE_READ, &twipr_firmware.sequencer,
-		&TWIPR_Sequencer::readSequence);
+		&BILBO_Sequencer::readSequence);
 
 /* Start Sequence Function Register Entry */
 core_utils_RegisterEntry<bool, uint16_t> reg_start_seq(&register_map,
 REG_ADDRESS_F_SEQUENCE_START, &twipr_firmware.sequencer,
-		&TWIPR_Sequencer::startSequence);
+		&BILBO_Sequencer::startSequence);
 
 /* Abort Sequence Function Register Entry */
 core_utils_RegisterEntry<void, void> reg_abort_seq(&register_map,
 REG_ADDRESS_F_SEQUENCE_STOP, &twipr_firmware.sequencer,
-		&TWIPR_Sequencer::abortSequence);
+		&BILBO_Sequencer::abortSequence);
 
 core_utils_RegisterEntry<bool, twipr_control_configuration_t> reg_set_control_config(
 		&register_map,

@@ -119,7 +119,7 @@ class BILBO(MainProvider):
         self.supervisor = TWIPR_Supervisor(comm=self.communication)
 
         self.utilities = BILBO_Utilities(core=self.common, communication=self.communication, board=self.board)
-        self.experiment_handler = BILBO_ExperimentHandler(core=self.common,
+        self.experiment_handler = BILBO_ExperimentHandler(common=self.common,
                                                           communication=self.communication,
                                                           utils=self.utilities,
                                                           control=self.control, )

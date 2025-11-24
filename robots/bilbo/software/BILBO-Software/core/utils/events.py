@@ -1,23 +1,53 @@
 from __future__ import annotations
 
+import enum
 import queue
 import threading
 from copy import deepcopy
 import time
 from dataclasses import is_dataclass, dataclass
-from typing import Callable, Any, Optional, Union
+from functools import partial
+from typing import Callable, Any, Optional, Union, Literal, TypeAlias, Iterator
 from collections import deque
 import weakref
+import fnmatch
 
 # === CUSTOM MODULES ===================================================================================================
 from core.utils.callbacks import callback_definition, CallbackContainer, Callback
 from core.utils.dataclass_utils import deepcopy_dataclass
 from core.utils.dict_utils import optimized_deepcopy
+from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
+from core.utils.signature import check_signature
 from core.utils.singleton import _SingletonMeta
+from core.utils.time import setTimeout, setInterval
+from core.utils.uuid_utils import generate_uuid
 
 # === GLOBAL VARIABLES =================================================================================================
+LOG_LEVEL = 'INFO'
+
 logger = Logger('events')
+
+
+class _TimeoutSentinel:
+    __slots__ = ()
+
+    def __repr__(self) -> str: return "TIMEOUT"
+
+
+TIMEOUT: _TimeoutSentinel = _TimeoutSentinel()
+
+
+# === HELPERS ==========================================================================================================
+def _check_id(id: str):
+    # Check that the id does not contain any special characters except for "_"
+    if not isinstance(id, str):
+        raise TypeError("Event ID must be a string")
+    if not id:
+        raise ValueError("Event ID cannot be empty")
+    if not all(c.isalnum() or c == '_' for c in id):
+        raise ValueError("Event ID can only contain alphanumeric characters and underscores")
+    return True
 
 
 # === EVENT FLAG =======================================================================================================
@@ -55,7 +85,7 @@ def pred_flag_in(key, values) -> Predicate:
 
 
 def pred_data_in(key, values) -> Predicate:
-    return lambda f, d: d.get(key) in values
+    return lambda f, d: isinstance(d, dict) and d.get(key) in values
 
 
 def pred_data_dict_key_equals(key, expected) -> Predicate:
@@ -96,27 +126,35 @@ class EventCallbacks:
 
 
 class Event:
-    flags: dict[str, EventFlag]
+    id: str
 
+    data_type: type | None
+    flags: dict[str, EventFlag]
+    copy_data_on_set = True
+    data_is_static_dict: bool
+    custom_data_copy_function = None
+    max_history_time: float = 10.0  # Seconds
+
+    parent: EventContainer | None = None
     data: Any
     callbacks: EventCallbacks
-    data_type: type | None
     history: deque[tuple[float, dict[str, Any], Any]]
-
-    copy_data_on_set = True
-
-    copy_fn = None
-
-    max_history_time: float = 2.0
-
     dict_copy_cache = None
 
     # === INIT =========================================================================================================
     def __init__(self,
+                 id: str = None,
                  data_type: type | None = None,
                  flags: EventFlag | list[EventFlag] = None,
                  copy_data_on_set: bool = True,
                  data_is_static_dict: bool = False, ):
+
+        if id is None:
+            id = generate_uuid()
+
+        _check_id(id)
+
+        self.id = id
 
         if flags is None:
             flags = []
@@ -127,6 +165,8 @@ class Event:
         self.flags = {}
 
         for flag in flags:
+            if flag.id in self.flags:
+                raise Exception(f"Flag {flag.id} already exists in {self.flags}")
             self.flags[flag.id] = flag
 
         self.callbacks = EventCallbacks()
@@ -139,7 +179,18 @@ class Event:
         self.history: deque[tuple[float, dict[str, Any], Any]] = deque()
         self._history_lock = threading.Lock()
 
-        active_event_loop.addEvent(self)
+        active_event_loop.add_event(self)
+
+    # === PROPERTIES ===================================================================================================
+    @property
+    def uid(self) -> str:
+        if self.parent is None:
+            return self.id
+        else:
+            if hasattr(self.parent, 'id') and self.parent.id is not None:
+                return f"{self.parent.id}:{self.id}"
+            else:
+                return self.id
 
     # === METHODS ======================================================================================================
     def on(self,
@@ -147,34 +198,46 @@ class Event:
            predicate: Predicate = None,
            once: bool = False,
            stale_event_time=None,
+           discard_data: bool = False,
+           discard_match_data: bool = True,
            timeout=None,
-           input_data=True,
-           max_rate=None) -> EventListener | OneShotHandle:
+           spawn_new_threads=True,
+           max_rate=None) -> SubscriberListener:
+        """
+        Always return a SubscriberListener as the handle.
+        If once=True, the underlying Subscriber is once=True and the listener will
+        auto-stop after the first delivery.
+        """
+        sub = Subscriber(
+            id=f"{self.uid}_subscriber",
+            events=(self, predicate) if predicate else self,
+            once=once,
+            stale_event_time=stale_event_time,
+        )
 
-        # One-shot special case: keep using a thread that waits and fires once.
-        if once and stale_event_time is not None:
-            return self._spawnOneShotListener(callback, predicate, stale_event_time, input_data, timeout)
-
-        # Continuous (or one-shot without stale) listener backed by queue waiter
-        listener = EventListener(event=self,
-                                 predicate=predicate,
-                                 callback=callback,
-                                 once=once,
-                                 spawn_thread=False,
-                                 max_rate=max_rate,
-                                 input_data=input_data,
-                                 stale_event_time=stale_event_time)
+        listener = SubscriberListener(
+            subscriber=sub,
+            callback=callback,
+            max_rate=max_rate,
+            spawn_new_threads=spawn_new_threads,
+            auto_stop_on_first=once,  # NEW: stop listener after first emit when once=True
+            timeout=timeout,
+            discard_data=discard_data,
+            discard_match_data=discard_match_data,
+        )
         listener.start()
         return listener
 
     # ------------------------------------------------------------------------------------------------------------------
-    def wait(self, predicate: Predicate = None, timeout: float = None, stale_event_time: float = None) -> bool:
-        waiter = EventWaiter(events=self,
-                             predicates=predicate,
-                             timeout=timeout,
-                             stale_event_time=stale_event_time,
-                             wait_for_all=False, )
-        return waiter.wait()
+    def wait(self, predicate: Predicate = None, timeout: float = None,
+             stale_event_time: float = None) -> tuple[Any | _TimeoutSentinel, SubscriberMatch | None]:
+        subscriber = Subscriber(
+            events=(self, predicate) if predicate is not None else self,
+            timeout=timeout,
+            stale_event_time=stale_event_time,
+            once=True,
+        )
+        return subscriber.wait(timeout=timeout, stale_event_time=stale_event_time)
 
     # ------------------------------------------------------------------------------------------------------------------
     def set(self, data=None, flags: dict = None) -> None:
@@ -223,9 +286,9 @@ class Event:
         self.callbacks.set.call(data=payload, flags=flags)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def getData(self, copy: bool = True) -> Any:
+    def get_data(self, copy: bool = True) -> Any:
         if copy:
-            return deepcopy(self.data)
+            return self._copy_payload(self.data)
         else:
             return self.data
 
@@ -261,35 +324,6 @@ class Event:
                     return flags, data
         return None
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _spawnOneShotListener(self,
-                              callback: Callback | Callable,
-                              predicate: Predicate,
-                              stale_event_time: float,
-                              input_data: bool,
-                              timeout: float) -> OneShotHandle:
-
-        waiter = EventWaiter(events=self, predicates=predicate, timeout=timeout, stale_event_time=stale_event_time)
-
-        def listener_thread():
-            if waiter.wait():
-                if input_data:
-                    if len(waiter.matched_payloads) == 1:
-                        _, d = waiter.matched_payloads[0]
-                        callback(d)
-                    else:
-                        assembled = {}
-                        for i, ev in enumerate(waiter.events):
-                            _, d = waiter.matched_payloads[i]
-                            assembled[ev] = d
-                        callback(assembled)
-                else:
-                    callback()
-
-        t = threading.Thread(target=listener_thread, daemon=True)
-        t.start()
-        return OneShotHandle(waiter, t)
-
     # === PRIVATE METHODS ==============================================================================================
     def _prune_history(self, now: float | None = None) -> None:
         if now is None:
@@ -301,13 +335,6 @@ class Event:
 
     # ------------------------------------------------------------------------------------------------------------------`
     def _copy_payload(self, data) -> Any:
-        # if data is None:
-        #     return None
-        # if self.copy_fn is not None:
-        #     return self.copy_fn(data)
-        # if self.copy_data_on_set:
-        #     return deepcopy(data)
-        # return data
         try:
             if self.data_is_static_dict and self.data_type is dict:
                 payload, self.dict_copy_cache = optimized_deepcopy(data, self.dict_copy_cache)
@@ -318,356 +345,999 @@ class Event:
         except Exception as e:
             payload = data
             self.copy_data_on_set = False
-            logger.warning(f"Could not copy data for event {self}: {e}")
+            logger.warning(f"Could not copy data for event {self}: {e}. Subsequent set() calls will not copy.")
 
         return payload
 
+    # ------------------------------------------------------------------------------------------------------------------`
+    def __repr__(self):
+        return f"<Event {self.uid}>"
 
-# === EVENT WAITER =====================================================================================================
-class EventWaiter:
-    """
-    Queue-backed waiter.
-    - Maintains per-waiter queue of matched snapshots.
-    - Supports once (auto-remove after first match) or continuous modes.
-    - Preserves stale-event precheck and exact (flags, data) snapshots per position.
-    """
-    events: list[Event]
-    predicates: list[Predicate] | None
+
+# === SUBSCRIBER =======================================================================================================
+
+
+@dataclass
+class _EventPayload:
+    # event_id: str | None = None
+    data: Any | None = None
+    trace_data: Any | None = None
+    flags: dict[str, Any] | None = None
+
+
+@dataclass
+class SubscriberMatch:
+    time: float
+    match: Event | Subscriber | list[Event | Subscriber]
+    match_id: str | list[str]
+    # Pass-through from children / original payloads
+    trace_data: Any | dict[Event | Subscriber, Any]
+    data: Any | dict[str, Any]
+    flags: Any | dict[str, Any]
+
+    def __repr__(self):
+        return f"SubscriberMatch(time={self.time:.3f}, match={self.match!r})"
+        # return f"SubscriberMatch(time={self.time:.3f}, match={self.match!r}, trace_keys={list(self.trace_data)[:3] if self.trace_data else []}...)"
+
+    def _resolve_node_payload(self, node) -> tuple[Optional[dict], Optional[Any], Optional[Any]]:
+        """
+        Return (flags_for_node, data_for_node, trace_for_node) for the given node
+        from *this* match's shapes, tolerating all combinations your _fire() produces:
+          - self.flags/data may be scalars or dicts keyed by node (Event or Subscriber)
+          - self.trace_data may be:
+              * dict keyed by child node, or
+              * a SubscriberMatch directly (single-child case)
+              * None (for Event leaves)
+        """
+        flags = None
+        data = None
+        trace = None
+
+        # flags/data may be dicts keyed by the exact node object (Event or Subscriber)
+        if isinstance(self.flags, dict):
+            flags = self.flags.get(node)
+        else:
+            flags = self.flags
+
+        if isinstance(self.data, dict):
+            data = self.data.get(node)
+        else:
+            data = self.data
+
+        # trace_data logic:
+        if isinstance(self.trace_data, dict):
+            trace = self.trace_data.get(node)
+        else:
+            # single-child Subscriber case: parent.trace_data is directly the child's SubscriberMatch
+            if isinstance(node, Subscriber) and isinstance(self.trace_data, SubscriberMatch):
+                trace = self.trace_data
+            else:
+                trace = self.trace_data  # usually None for Event leaves
+
+        return flags, data, trace
+
+    def _iter_leaf_causes(self) -> Iterator[tuple[Event, Optional[dict], Any]]:
+        """
+        Yield (event, flags, data) for leaf Event(s) that ultimately satisfied this match.
+        """
+        # Normalize to a list of nodes
+        nodes = self.match if isinstance(self.match, list) else [self.match]
+
+        for node in nodes:
+            if isinstance(node, Event):
+                node_flags, node_data, _ = self._resolve_node_payload(node)
+                # Only yield if we actually have a payload (defensive; still allow None data)
+                yield (node, node_flags, node_data)
+                continue
+
+            if isinstance(node, Subscriber):
+                _, _, child_trace = self._resolve_node_payload(node)
+
+                if isinstance(child_trace, SubscriberMatch):
+                    # Recurse into the child's match
+                    yield from child_trace._iter_leaf_causes()
+                else:
+                    # Defensive: try to fall back to the node’s own data/flags if trace missing
+                    node_flags, node_data, _ = self._resolve_node_payload(node)
+                    # If the child subscriber bubbled up raw leaf data, it will look like that here.
+                    if isinstance(node_data, dict):
+                        # try to find Event-keys with data
+                        for k, v in node_data.items():
+                            if isinstance(k, Event):
+                                # flags may also be dict keyed by the same event
+                                ev_flags = None
+                                if isinstance(self.flags, dict):
+                                    ev_flags = self.flags.get(k)
+                                yield (k, ev_flags, v)
+                    # Otherwise we have nothing else to descend into (no yield)
+
+    def causal_events(self) -> list[tuple[Event, Optional[dict], Any]]:
+        return list(self._iter_leaf_causes())
+
+    def first_cause(self) -> Optional[tuple[Event, Optional[dict], Any]]:
+        for item in self._iter_leaf_causes():
+            return item
+        return None
+
+    def cause_ids(self) -> list[str]:
+        return [ev.uid for (ev, _, _) in self._iter_leaf_causes()]
+
+    def caused_by(self, what: str | Event | Callable[[Event], bool]) -> bool:
+        for ev, _, _ in self._iter_leaf_causes():
+            if isinstance(what, str):
+                if fnmatch.fnmatchcase(ev.uid, what):
+                    return True
+            elif callable(what):
+                try:
+                    if bool(what(ev)):
+                        return True
+                except Exception:
+                    pass
+            elif isinstance(what, Event):
+                if ev is what:
+                    return True
+        return False
+
+    # --- inside SubscriberMatch ---
+
+    def _iter_nodes(self):
+        """
+        Yield all nodes (Event or Subscriber) that lie on the satisfied path(s)
+        of this match, recursively.
+        """
+        nodes = self.match if isinstance(self.match, list) else [self.match]
+        for node in nodes:
+            yield node
+            # For a Subscriber node, descend into its child match if we have it
+            child = None
+            if isinstance(self.trace_data, dict):
+                child = self.trace_data.get(node)
+            elif isinstance(self.trace_data, SubscriberMatch) and isinstance(node, Subscriber):
+                child = self.trace_data  # single-child case
+            if isinstance(child, SubscriberMatch):
+                yield from child._iter_nodes()
+
+    def contains_node(self, node: Event | Subscriber) -> bool:
+        """True if the given Event/Subscriber is present anywhere in the satisfied path."""
+        return any(n is node for n in self._iter_nodes())
+
+    def caused_by_group(self, group: Subscriber) -> bool:
+        """
+        True if this match involved `group` (useful for 'did the AND side win?').
+        Works whether `group` is the root, a child in an OR branch, or nested deeper.
+        """
+        return self.contains_node(group)
+
+    def group_match(self, group: Subscriber) -> "SubscriberMatch | None":
+        """
+        Return the nested SubscriberMatch that corresponds to `group`, if present.
+        This is the object you'd inspect for the group's internal data/flags/trace.
+        """
+        # If THIS match is the group's own match
+        if self.match is group or (isinstance(self.match, list) and group in self.match):
+            # For a Subscriber node, its child match is stored in trace_data
+            if isinstance(self.trace_data, dict):
+                cm = self.trace_data.get(group)
+                return cm if isinstance(cm, SubscriberMatch) else None
+            if isinstance(self.trace_data, SubscriberMatch):
+                # single-child case where parent == group
+                return self.trace_data
+            return None
+
+        # Otherwise search recursively in children
+        if isinstance(self.trace_data, dict):
+            for child in self.trace_data.values():
+                if isinstance(child, SubscriberMatch):
+                    found = child.group_match(group)
+                    if found is not None:
+                        return found
+        elif isinstance(self.trace_data, SubscriberMatch):
+            return self.trace_data.group_match(group)
+        return None
+
+    def group_causal_events(self, group: Subscriber):
+        """
+        Return leaf (event, flags, data) that belong to `group` specifically.
+        """
+        gm = self.group_match(group)
+        if gm is None:
+            return []
+        # Reuse your existing leaf helper on the group's own match
+        return gm.causal_events() if hasattr(gm, "causal_events") else []
+
+
+class SubscriberType(enum.StrEnum):
+    AND = "AND"
+    OR = "OR"
+
+
+# Type definition for event specifications
+EventSpec: TypeAlias = Union[
+    str,  # Event ID
+    Event,  # Single event
+    tuple[str, Predicate],
+    tuple[Event, Predicate],  # Event with predicate
+    'Subscriber',  # Nested subscriber
+    list[Union[  # List of any combination
+        str,
+        Event,
+        tuple[Event, Predicate],
+        tuple[str, Predicate],
+        'Subscriber'
+    ]]
+]
+
+
+@callback_definition
+class SubscriberCallbacks:
+    finished: CallbackContainer = CallbackContainer(inputs=['data', ('match', SubscriberMatch)])
+    timeout: CallbackContainer
+
+
+@dataclass
+class _SubscriberEventContainer:
+    event: Event | Subscriber
+    predicate: Predicate | None = None
+    finished: bool = False
+    payload: _EventPayload | None = None
+
+    def __post_init__(self):
+        if self.payload is None:
+            self.payload = _EventPayload()
+
+    def reset(self):
+        self.finished = False
+        self.payload = _EventPayload()
+
+
+class Subscriber:
+    id: str
+
+    events: list[_SubscriberEventContainer]
+
     timeout: float | None
     stale_event_time: float | None
-    wait_for_all: bool
     once: bool
+    type: SubscriberType
 
-    events_finished: list[bool]
-    matched_payloads: list[tuple[dict[str, Any] | None, Any | None]]
+    # finished_events: dict[str, bool]
+    # payloads: dict[str, _EventPayload | None]
 
+    matches: list[SubscriberMatch]  # Previous matches (recent, pruned)
+
+    attach_time: float | None = None
+
+    _save_matches: bool
+    _match_save_time: float
     _abort: bool
-    _queue: queue.Queue  # holds snapshots of matched_payloads
 
-    data: Any = None  # convenience for single-event waits
+    # fan-out support
+    _wait_queues: set[queue.Queue]
+    _wait_queue_maxsize: int
+    _wq_lock: threading.RLock
 
+    _event_loop: EventLoop | None = None
     _SENTINEL = object()
 
     def __init__(self,
-                 events: Event | list[Event],
-                 predicates: Predicate | list[Predicate] | None = None,
+                 events: EventSpec,
+                 id: str | None = None,
+                 type: SubscriberType | None = SubscriberType.AND,
                  timeout: float | None = None,
                  stale_event_time: float | None = None,
-                 wait_for_all: bool = False,
-                 once: bool = True,
-                 queue_maxsize: int = 0):
-        """
-        queue_maxsize: 0 => unbounded; else bounded with drop-oldest policy on overflow.
-        """
+
+                 once: bool = False,
+                 callback: Callable | Callback | None = None,
+                 execute_callback_in_thread: bool = True,
+
+                 save_matches: bool = True,
+                 match_save_time: float | None = 10,
+                 queue_maxsize: int = 1,
+                 event_loop: EventLoop | None = None):
+
+        if id is None:
+            id = generate_uuid(prefix="subscriber_")
+
+        self.id = id
+
+        self.callbacks = SubscriberCallbacks()
+
         if not isinstance(events, list):
             events = [events]
-        if predicates is not None and not isinstance(predicates, list):
-            predicates = [predicates]
 
-        self.events = events
-        self.predicates = predicates
+        self.events = []
+        self.predicates = []
+
+        for eventspec in events:
+            if isinstance(eventspec, str):
+                pattern_subscriber = PatternSubscriber(id=eventspec, pattern=eventspec)
+                # self.events.append(pattern_subscriber)
+                # self.predicates.append(None)
+                self.events.append(_SubscriberEventContainer(event=pattern_subscriber, predicate=None))
+
+                pattern_subscriber.callbacks.finished.register(self._child_subscriber_callback,
+                                                               inputs={'subscriber': pattern_subscriber})
+            elif isinstance(eventspec, tuple) and len(eventspec) == 2 and isinstance(eventspec[0], str) and callable(
+                    eventspec[1]):
+                pattern: str = eventspec[0]  # type: ignore
+                predicate: Callable = eventspec[1]
+                pattern_subscriber = PatternSubscriber(pattern=pattern,
+                                                       predicate=predicate,
+                                                       stale_event_time=stale_event_time)
+                self.events.append(_SubscriberEventContainer(event=pattern_subscriber, predicate=None))
+                pattern_subscriber.callbacks.finished.register(self._child_subscriber_callback,
+                                                               inputs={'subscriber': pattern_subscriber})
+            elif isinstance(eventspec, Event):
+                self.events.append(_SubscriberEventContainer(event=eventspec, predicate=None))
+            elif isinstance(eventspec, tuple) and len(eventspec) == 2 and isinstance(eventspec[0], Event) and callable(
+                    eventspec[1]):
+                ev, pr = eventspec
+                self.events.append(_SubscriberEventContainer(event=ev, predicate=pr))
+            elif isinstance(eventspec, Subscriber):
+                self.events.append(_SubscriberEventContainer(event=eventspec, predicate=None))
+                eventspec.callbacks.finished.register(self._child_subscriber_callback,
+                                                      inputs={'subscriber': eventspec})
+
         self.timeout = timeout
         self.stale_event_time = stale_event_time
-        self.wait_for_all = wait_for_all
+        self.type = type
         self.once = once
 
-        n = len(self.events)
-        self.events_finished = [False] * n
-        self.matched_payloads = [(None, None)] * n
+        self.logger = Logger(f"Subscriber ({[event.event.uid for event in self.events]})", LOG_LEVEL)
 
         self._abort = False
-        self._queue = queue.Queue(maxsize=queue_maxsize)
+        self._wait_queues = set()
+        self._wait_queue_maxsize = max(0, queue_maxsize)
+        self._wq_lock = threading.RLock()
 
-        # Register with the active loop immediately (not in wait())
-        active_event_loop.addWaiter(self)
+        if event_loop is None:
+            event_loop = active_event_loop
+        self._event_loop = event_loop
 
-    # --- Public API ------------------------------------------------------------
-    def wait(self, timeout: float | None = None) -> bool:
+        if callback is not None:
+            self.callbacks.finished.register(callback)
+
+        self._save_matches = save_matches
+        self._match_save_time = match_save_time
+        self.execute_callback_in_thread = execute_callback_in_thread
+        self.matches = []
+
+        self.logger.debug("Add to event loop")
+
+        self._event_loop.add_subscriber(self)
+        self._check_child_subscribers()
+
+    # === PROPERTIES ===================================================================================================
+    @property
+    def uid(self):
+        return self.id
+
+    # === METHODS ======================================================================================================
+    def wait(self,
+             timeout: float | None = None,
+             stale_event_time: float | None = None) -> tuple[Any | _TimeoutSentinel, SubscriberMatch | None]:
         """
-        Block until a matched snapshot is available or timed out/aborted.
-        Returns True if a snapshot was delivered into matched_payloads; False otherwise.
+        Block until a new match arrives (fan-out via per-waiter queue).
+        If a recent match exists within the provided or configured stale window,
+        return it immediately without blocking.
+
+        Returns:
+            SubscriberMatch if available, else None on timeout/stop.
         """
+        self.logger.debug("Wait")
         if timeout is None:
             timeout = self.timeout
 
-        # If already aborted and nothing to consume, return immediately
-        if self._abort and self._queue.empty():
-            return False
+        # 1) Fast path: return a recent match within the stale window (if requested)
+        window = stale_event_time if stale_event_time is not None else self.stale_event_time
+        if window and window > 0:
+            now = time.monotonic()
+            cutoff = now - window
+            # Read-mostly; fine to snapshot without a separate lock
+            recent = None
+            for m in reversed(self.matches):
+                if m.time >= cutoff:
+                    recent = m
+                    break
+                # matches are time-ordered; we can break once older than cutoff
+                # but only if we know they are sorted; they are appended in _fire() -> yes
+            if recent is not None:
+                return recent.data, recent
+
+        # 2) Slow path: set up a one-off queue and block until push or timeout
+        q = queue.Queue(maxsize=self._wait_queue_maxsize)
+        with self._wq_lock:
+            # if stop() already called, don't register / return None
+            if self._abort:
+                return None, None
+            self._wait_queues.add(q)
 
         try:
-            snap = self._queue.get(timeout=timeout) if timeout is not None else self._queue.get()
-        except queue.Empty:
-            return False
+            try:
+                match = q.get(timeout=timeout) if timeout is not None else q.get()
+            except queue.Empty:
+                self.callbacks.timeout.call()
+                return TIMEOUT, None
 
-        # Wake-up sentinel injected by stop()
-        if snap is self._SENTINEL:
-            return False
+            if match is self._SENTINEL:
+                return TIMEOUT, None
+            return match
+        finally:
+            with self._wq_lock:
+                self._wait_queues.discard(q)
 
-        # Snap is a list of (flags, data) matching positions
-        self.matched_payloads = snap
+    # ------------------------------------------------------------------------------------------------------------------
+    def on(self,
+           callback: Callback | Callable,
+           once: bool = False,
+           timeout=None,
+           max_rate=None,
+           discard_match_data: bool = True,
+           **kwargs) -> SubscriberListener:
+        """
+        Always return a SubscriberListener as the handle.
+        If once=True, the underlying Subscriber is once=True and the listener will
+        auto-stop after the first delivery.
+        """
 
-        # Convenience for single-event case
-        if len(snap) == 1:
-            _, d = snap[0]
-            self.data = d
-        else:
-            self.data = None
+        callback = Callback(function=callback, **kwargs)
 
-        return True
+        listener = SubscriberListener(
+            subscriber=self,
+            callback=callback,
+            max_rate=max_rate,
+            spawn_new_threads=False,  # mimic old default; flip if you want
+            auto_stop_on_first=once,  # NEW: stop listener after first emit when once=True
+            discard_match_data=discard_match_data,
+            timeout=timeout,
+        )
+        listener.start()
+        return listener
 
+    # ------------------------------------------------------------------------------------------------------------------
     def stop(self):
         """Abort future waiting, deregister from loop, and wake any blocking wait()."""
         self._abort = True
-        active_event_loop.removeWaiter(self)
+        self._unsubscribe()
+        # Broadcast sentinel to all registered wait queues
+        with self._wq_lock:
+            for q in list(self._wait_queues):
+                self._nonblocking_push(q, self._SENTINEL)
 
-        # Push sentinel to wake any blocking .wait()
-        try:
-            self._queue.put_nowait(self._SENTINEL)
-        except queue.Full:
-            try:
-                _ = self._queue.get_nowait()  # drop oldest to make room
-            except queue.Empty:
-                pass
-            self._queue.put_nowait(self._SENTINEL)
+    # === PRIVATE METHODS ==============================================================================================
+    def set_match(self, event: Event | Subscriber, flags: dict[str, Any] | None, data: Any):
 
-    # --- Called by EventLoop under lock ---------------------------------------
-    def _set_match(self, pos: int, flags: dict[str, Any], data: Any):
-        self.matched_payloads[pos] = (flags, data)
+        container = self._get_event_container_by_event(event)
 
-    def _enqueue_snapshot_and_prepare_next(self):
-        """Enqueue a snapshot of current matches; reset or finish based on 'once'."""
-        # Snapshot current matched payloads
-        snap = list(self.matched_payloads)
+        if container is None:
+            raise ValueError(f"Event {event} is not known.")
 
-        # Non-blocking put with drop-oldest policy if bounded and full
-        try:
-            self._queue.put_nowait(snap)
-        except queue.Full:
-            try:
-                _ = self._queue.get_nowait()  # drop oldest
-            except queue.Empty:
-                pass
-            self._queue.put_nowait(snap)
+        event_uid = event.uid
 
-        if self.once:
-            # Mark for removal; EventLoop will remove us after returning from dispatch
-            self._abort = True
-            return "finish"
+        if isinstance(event, Subscriber):
+            event_data = data.data
+            trace_data = data
         else:
-            # Reset for next round
-            self.events_finished = [False] * len(self.events)
-            self.matched_payloads = [(None, None)] * len(self.events)
-            return "continue"
+            event_data = data
+            trace_data = None
 
+        container.finished = True
+        container.payload = _EventPayload(data=event_data, trace_data=trace_data, flags=flags)
 
-# === EVENT LISTENER ===================================================================================================
-class OneShotHandle:
-    def __init__(self, waiter: EventWaiter, thread: threading.Thread):
-        self._waiter = waiter
-        self._thread = thread
+        self.logger.debug(f"Match: {event_uid}, flags: {flags}, data: {data}")
 
-    def cancel(self):
-        self._waiter.stop()
+        if self._is_satisfied():
+            self._fire()
 
-    def join(self, timeout=None):
-        self._thread.join(timeout)
+    # ------------------------------------------------------------------------------------------------------------------
+    def _fire(self):
 
+        self.logger.debug("Subscriber satisfied. Gathering data and flags.")
 
-# === EVENT LISTENER ===================================================================================================
-class EventListener:
-    """
-    Continuous listener built on a single queue-backed EventWaiter.
-    """
-    events: list[Event]
-    predicate: list[Predicate] | None
-    callback: Callback | Callable
-    once: bool
-    wait_for_all: bool
-    max_rate: float | None
-    input_data: bool
-    spawn_thread: bool
-    stale_event_time: float | None
-
-    _waiter: EventWaiter | None
-    _exit: bool
-    thread: threading.Thread
-
-    def __init__(self, event: Event | list[Event],
-                 predicate: Predicate | list[Predicate] | None = None,
-                 callback: Callback | Callable | None = None,
-                 once: bool = False,
-                 wait_for_all: bool = False,
-                 max_rate: float | None = None,
-                 spawn_thread: bool = False,
-                 input_data: bool = True,
-                 stale_event_time: float | None = 0.05,
-                 queue_maxsize: int = 0):
-        if not isinstance(event, list):
-            event = [event]
-        if predicate is not None and not isinstance(predicate, list):
-            predicate = [predicate]
-
-        self.events = event
-        self.predicate = predicate
-        self.callback = callback
-        self.input_data = input_data
-        self.max_rate = max_rate
-        self.wait_for_all = wait_for_all
-        self.once = once
-        self.spawn_thread = spawn_thread
-        self.stale_event_time = stale_event_time
-
-        self._waiter = EventWaiter(
-            events=self.events,
-            predicates=self.predicate,
-            timeout=None,
-            stale_event_time=self.stale_event_time,
-            wait_for_all=self.wait_for_all,
-            once=self.once is True,  # one-shot listener → one-shot waiter
-            queue_maxsize=queue_maxsize,
-        )
-        self._exit = False
-        self.thread = threading.Thread(target=self._task, daemon=True)
-
-    def start(self):
-        self.thread.start()
-
-    def stop(self):
-        self._exit = True
-        if self._waiter is not None:
-            self._waiter.stop()
-        if self.thread.is_alive():
-            self.thread.join()
-
-    # --- Private ---------------------------------------------------------------
-    def _deliver_callback(self):
-        """Assemble data from the waiter's matched payloads and invoke callback."""
+        # Gather matched data/flags
         if len(self.events) == 1:
-            _, data = self._waiter.matched_payloads[0]
-            payload = data if self.input_data else None
+            matched_event = self.events[0].event
+            match_id = self.events[0].event.uid
+            data = self.events[0].payload.data
+            trace_data = self.events[0].payload.trace_data
+            flags = self.events[0].payload.flags
         else:
-            assembled = {}
-            for i, ev in enumerate(self.events):
-                _, d = self._waiter.matched_payloads[i]
-                assembled[ev] = d
-            payload = assembled if self.input_data else None
+            if self.type == SubscriberType.AND:
+                matched_event = [event.event for event in self.events]
+                match_id = [event.event.uid for event in self.events]
+                data = {container.event: container.payload.data for container in self.events}
+            else:
+                matched_event = next((event.event for event in self.events if event.finished))
+                match_id = next((event.event.uid for event in self.events if event.finished))
+                data = next((container.payload.data for container in self.events if container.finished), None)
 
-        if self.spawn_thread:
-            th = threading.Thread(
-                target=self.callback, args=(() if payload is None else (payload,)), daemon=True
-            )
-            th.start()
-        else:
-            self.callback() if payload is None else self.callback(payload)
+            trace_data = {container.event: container.payload.trace_data for container in self.events}
+            flags = {container.event: container.payload.flags for container in self.events}
 
-    def _task(self):
-        while not self._exit:
-            ok = self._waiter.wait(timeout=None)
-            if not ok:
-                break
-            self._deliver_callback()
-            if self.once:
-                break
+        match = SubscriberMatch(
+            time=time.monotonic(),
+            match=matched_event,
+            match_id=match_id,
+            data=data,
+            trace_data=trace_data,
+            flags=flags
+        )
+        self.logger.debug(f"Match: {matched_event}. Data: {match}")
 
+        # Once semantics: prevent future matches and unsubscribe from loop
+        if self.once:
+            self._abort = True
+            self._unsubscribe()
 
-# === FUNCTIONS ========================================================================================================
-@dataclass(frozen=True)
-class EventMatch:
-    """Snapshot describing which event matched and with what payload."""
-    event: Event
-    index: int  # position in the input 'events' list
-    flags: dict[str, Any]
-    data: Any  # deep-copied snapshot captured by the waiter
+        # Save for stale-window replay and prune old ones
+        if self._save_matches:
+            self.matches.append(match)
+            self._prune_matches()
 
+        # Reset state for continuous subscribers
+        if not self.once:
+            for container in self.events:
+                container.reset()
 
-@dataclass(frozen=True)
-class WaitResult:
-    """High-level result of waiting on one or more events."""
-    ok: bool  # True if condition satisfied (any or all)
-    timeout: bool  # True if we timed out
-    finished: list[bool]  # per-position matched booleans (like before)
-    matches: list[EventMatch]  # snapshots for all matched positions
-    first: Optional[EventMatch]  # convenience: first matched position or None
+        # Broadcast to all current waiters (non-blocking, drop-oldest)
+        with self._wq_lock:
+            for q in list(self._wait_queues):
+                self._nonblocking_push(q, (data, match))
 
-    def matched(self, event: "Event") -> Optional[EventMatch]:
-        """Find the match for a specific Event (first occurrence) if present."""
-        for m in self.matches:
-            if m.event is event:
-                return m
+        self.logger.debug("Subscriber satisfied. Fire callback(s)")
+        self._execute_callback(data,
+                               match,
+                               execute_callback_in_thread=self.execute_callback_in_thread,
+                               input_match_data=True)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _nonblocking_push(q: queue.Queue, item):
+        try:
+            q.put_nowait(item)
+        except queue.Full:
+            # drop oldest item to make room
+            try:
+                _ = q.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                q.put_nowait(item)
+            except queue.Full:
+                # still full -> give up; likely abandoned waiter
+                pass
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _execute_callback(self, data, match_data, input_match_data: bool = True,
+                          execute_callback_in_thread: bool = True):
+        for callback in self.callbacks.finished.callbacks:
+            if execute_callback_in_thread:
+                if input_match_data:
+                    threading.Thread(target=callback,
+                                     kwargs={'data': data, 'match': match_data},
+                                     daemon=True).start()
+                else:
+                    threading.Thread(target=callback, args=(), daemon=True).start()
+            else:
+                if input_match_data:
+                    callback(data, match_data)
+                else:
+                    callback()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _unsubscribe(self):
+        if self._event_loop is not None:
+            self._event_loop.remove_subscriber(self)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _child_subscriber_callback(self, data, match, subscriber: Subscriber = None):
+        self.logger.debug(f"Child subscriber callback. Child: {subscriber.__repr__()}")
+        self.set_match(subscriber, None, match)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _prune_matches(self):
+        """Remove matches older than match_save_time from the current time"""
+        if not self._match_save_time:
+            return
+
+        now = time.monotonic()
+        cutoff = now - self._match_save_time
+        # matches are appended in chronological order; prune from the front
+        self.matches = [match for match in self.matches if match.time >= cutoff]
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _check_child_subscribers(self):
+        if not self.stale_event_time:
+            return
+
+        child_subscribers = [c.event for c in self.events if isinstance(c.event, Subscriber)]
+        now = time.monotonic()
+        cutoff = now - self.stale_event_time
+
+        for child_subscriber in child_subscribers:
+            recent_matches = [m for m in child_subscriber.matches if m.time >= cutoff]
+            if recent_matches:
+                latest_match = max(recent_matches, key=lambda m: m.time)
+                self.set_match(child_subscriber, latest_match.flags, latest_match)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _get_event_container_by_event(self, event: Event | Subscriber) -> _SubscriberEventContainer | None:
+        for container in self.events:
+            if container.event == event:
+                return container
         return None
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def _is_satisfied(self):
+        if self.type == SubscriberType.AND:
+            return all(container.finished for container in self.events)
+        else:
+            return any(container.finished for container in self.events)
 
-def waitForEvents(
-    events: Event | list[Event],
-    predicates: Predicate | list[Predicate] = None,
-    *,
-    timeout: Optional[float] = None,
-    wait_for_all: bool = False,
-    stale_event_time: Optional[float] = None,
-) -> WaitResult:
+    # ------------------------------------------------------------------------------------------------------------------
+    def __repr__(self):
+        return f"<Subscriber {self.id} {[event.__repr__() for event in self.events]}>"
+
+
+# === Pattern Subscriber ===============================================================================================
+class PatternSubscriber(Subscriber):
+    pattern: str
+    global_predicate: Predicate | None = None
+
+    def __init__(self, pattern: str, *, predicate: Predicate | None | Callable = None,
+                 id: str | None = None, **kwargs):
+        if 'type' in kwargs and kwargs['type'] != SubscriberType.OR:
+            raise ValueError("PatternSubscriber always uses OR semantics.")
+        kwargs['type'] = SubscriberType.OR
+        if id is None:
+            id = f"pattern:{pattern}"
+
+        self.pattern = pattern
+        self.global_predicate = predicate
+        super().__init__(events=[], id=id, **kwargs)
+
+    def add_event(self, event: Event):
+        # already attached?
+        if any(c.event is event for c in self.events):
+            return
+
+        self.logger.debug(f"Add event: {event.uid} to pattern {self.pattern}")
+        self.events.append(_SubscriberEventContainer(event=event, predicate=self.global_predicate))
+
+        # ensure event -> subscriber dispatch
+        active_event_loop.register_pattern_binding(self, event)
+
+        # stale-window replay
+        if self.stale_event_time and self.stale_event_time > 0:
+            now = time.monotonic()
+            if getattr(event, "max_history_time", 0) < self.stale_event_time:
+                event.max_history_time = self.stale_event_time
+            match = event.first_match_in_window(self.global_predicate, self.stale_event_time, now=now)
+            if match is not None:
+                flags, data = match
+                self.set_match(event, flags, data)
+
+    def remove_event(self, event: Event):
+        idx = next((i for i, c in enumerate(self.events) if c.event is event), None)
+        if idx is None:
+            return
+        self.events.pop(idx)
+
+        loop = active_event_loop
+        subs = loop.subscribers_by_event.get(event)
+        if subs:
+            subs.discard(self)
+            if not subs:
+                loop.subscribers_by_event.pop(event, None)
+
+    def __repr__(self):
+        return f"<PatternSubscriber {self.id} pattern={self.pattern} events={[c.event.uid for c in self.events]}>"
+
+
+# === SUBSCRIBER LISTENER ==============================================================================================
+@callback_definition
+class SubscriberListenerCallbacks:
+    timeout: CallbackContainer
+
+
+class SubscriberListener:
+    _max_rate: float | None
+    _spawn_new_threads: bool
+    _timeout: float | None
+    _exit: bool = False
+    _thread: threading.Thread | None = None
+
+    _auto_stop_on_first: bool = False
+
+    _last_callback_time: float | None = None
+
+    _stop_event: Event
+
+    _discard_match_data: bool
+    _discard_data: bool
+
+    def __init__(self,
+                 subscriber: Subscriber,
+                 callback: Callable | Callback,
+                 max_rate: float | None = None,
+                 spawn_new_threads: bool = False,
+                 auto_stop_on_first: bool = False,
+                 timeout: float | None = None,
+                 discard_data: bool = False,
+                 discard_match_data: bool = True):
+
+        # Check if the callback does accept the correct arguments
+        # check_signature(callback, kwarg_names=["data", "match"])
+        self.SENTINEL = object()
+        self.callbacks = SubscriberListenerCallbacks()
+        self.subscriber = subscriber
+        self.callback = callback
+
+        if max_rate is not None and max_rate <= 0:
+            raise ValueError("max_rate must be > 0")
+        self._max_rate = max_rate
+        self._spawn_new_threads = spawn_new_threads
+        self._auto_stop_on_first = auto_stop_on_first
+        self._discard_match_data = discard_match_data
+        self._discard_data = discard_data
+        self._timeout = timeout
+
+        self.logger = Logger(f"Subscriber {self.subscriber.id} listener", "DEBUG")
+
+        self.queue = queue.Queue()
+
+        register_exit_callback(self.stop)
+
+    # === METHODS ======================================================================================================
+    def start(self):
+        self.subscriber.callbacks.finished.register(self._subscriber_callback)
+        self._thread = threading.Thread(target=self._task, daemon=True)
+        self._thread.start()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def stop(self, *args, **kwargs):
+        """Public stop: signal + join if called from another thread."""
+        self._request_stop()
+        # Only join if we're NOT on the worker thread
+        if self._thread is not None and self._thread.is_alive() and threading.current_thread() is not self._thread:
+            self._thread.join()
+
+    # === PRIVATE METHODS ==============================================================================================
+    def _task(self):
+        while not self._exit:
+            try:
+                if self._timeout is not None:
+                    data, trace = self.queue.get(timeout=self._timeout)
+                else:
+                    data, trace = self.queue.get()
+            except queue.Empty:
+                # listener-level timeout
+                self.logger.warning("SubscriberListener wait timeout.")
+                self.callbacks.timeout.call()
+                self.stop()
+                continue
+
+            if self._exit:
+                break
+
+            if data is self.SENTINEL:
+                break
+
+            if self._max_rate:
+                now = time.monotonic()
+                min_interval = 1.0 / self._max_rate
+                if self._last_callback_time is not None and (now - self._last_callback_time) < min_interval:
+                    continue
+                self._last_callback_time = now
+
+            self._execute_callback(data, trace, spawn_thread=self._spawn_new_threads)
+
+            if self._auto_stop_on_first:
+                self._request_stop()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _subscriber_callback(self, data: Any, match: SubscriberMatch):
+        self.queue.put((data, match))
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _execute_callback(self, data, result, spawn_thread: bool):
+        # Build call signature once
+        args = [] if self._discard_data else [data]
+        kwargs = {} if self._discard_match_data else {"match": result}
+
+        func = partial(self.callback, *args, **kwargs)
+
+        if spawn_thread:
+            threading.Thread(target=func, daemon=True).start()
+        else:
+            func()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _request_stop(self):
+        """Signal the thread to exit, without joining (safe to call from worker)."""
+        self._exit = True
+        self.queue.put((self.SENTINEL, None))
+        self.subscriber.callbacks.finished.remove(self._subscriber_callback)
+
+
+class _EventExpr:  # not exported
+    __slots__ = ("children",)
+
+    def __init__(self, *children): self.children = list(children)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+class _AndExpr(_EventExpr): pass
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+class _OrExpr(_EventExpr): pass
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+def AND(*ops, stale_event_time: float | None = None,
+        event_loop: EventLoop | None = None,
+        id: str | None = None) -> Subscriber:
     """
-    Like waitForEvents, but:
-      - supports stale_event_time (catch events that fired just before waiting)
-      - returns a WaitResult with exact matched snapshots.
-
-    NOTE: Doesn't spawn threads; uses a one-shot EventWaiter internally.
+    Factory: returns a Subscriber whose children are compiled from ops with AND semantics.
+    Usable anywhere, including as an operand to another Subscriber.
     """
-    if not isinstance(events, list):
-        events = [events]
-    if predicates is not None and not isinstance(predicates, list):
-        predicates = [predicates]
+    return _compile_expr_to_subscriber(_AndExpr(*ops), stale_event_time=stale_event_time,
+                                       event_loop=event_loop, id=id)
 
-    waiter = EventWaiter(
-        events=events,
-        predicates=predicates,               # may be None or fewer than events
-        timeout=timeout,
-        stale_event_time=stale_event_time,   # <-- new goodness
-        wait_for_all=wait_for_all,
-        once=True,
-        queue_maxsize=0,
-    )
+
+# ----------------------------------------------------------------------------------------------------------------------
+def OR(*ops, stale_event_time: float | None = None,
+       event_loop: EventLoop | None = None,
+       id: str | None = None) -> Subscriber:
+    """Factory: returns a Subscriber with OR semantics."""
+    return _compile_expr_to_subscriber(_OrExpr(*ops), stale_event_time=stale_event_time,
+                                       event_loop=event_loop, id=id)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+def _compile_operand_to_leaf(op, *, stale_event_time: float | None, once: bool = False):
+    """
+    Turn a single operand into something Subscriber(events=[...]) accepts.
+    Propagates stale window into PatternSubscriber leaves.
+    """
+    if isinstance(op, Event) or isinstance(op, Subscriber):
+        return op
+    if isinstance(op, tuple) and len(op) == 2:
+        a, b = op
+        if isinstance(a, Event) and callable(b):
+            return op  # (Event, Predicate)
+        if isinstance(a, str) and callable(b):
+            return PatternSubscriber(pattern=a, predicate=b, stale_event_time=stale_event_time,
+                                     once=once)  # type: ignore
+    if isinstance(op, str):
+        return PatternSubscriber(pattern=op, stale_event_time=stale_event_time, once=once)
+    # Defer expr handling to caller
+    return op
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+def _compile_expr_to_subscriber(expr_or_leaf,
+                                *,
+                                stale_event_time: float | None,
+                                once: bool = False,
+                                event_loop: EventLoop | None,
+                                id: str | None = None) -> Subscriber:
+    """
+    Recursively build a Subscriber tree from _AndExpr/_OrExpr or a leaf.
+    Attaches a private attribute `_compiled_children` listing immediate child Subscribers,
+    so we can later stop the whole tree.
+    """
+    # Leaf: wrap in a 1-child subscriber (type is irrelevant for single child)
+    if not isinstance(expr_or_leaf, _EventExpr):
+        leaf = _compile_operand_to_leaf(expr_or_leaf, stale_event_time=stale_event_time)
+        sub = Subscriber(events=leaf,
+                         type=SubscriberType.AND,
+                         stale_event_time=stale_event_time,
+                         event_loop=event_loop,
+                         once=once,
+                         id=id)
+
+        sub._compiled_children = []  # for uniformity
+        return sub
+
+    # Expr: compile children
+    compiled_children = []
+    events_list = []
+    if hasattr(expr_or_leaf, "children"):
+        for ch in expr_or_leaf.children:
+            if isinstance(ch, _EventExpr):
+                cs = _compile_expr_to_subscriber(ch, stale_event_time=stale_event_time, once=once,
+                                                 event_loop=event_loop, id=None)
+                compiled_children.append(cs)
+                events_list.append(cs)  # a child Subscriber is a valid event
+            else:
+                leaf = _compile_operand_to_leaf(ch, stale_event_time=stale_event_time, once=once)
+                # Only actual Subscribers are children we must manage
+                if isinstance(leaf, Subscriber):
+                    compiled_children.append(leaf)
+                events_list.append(leaf)
+
+    stype = SubscriberType.AND if isinstance(expr_or_leaf, _AndExpr) else SubscriberType.OR
+    sub = Subscriber(events=events_list,
+                     type=stype,
+                     stale_event_time=stale_event_time,
+                     event_loop=event_loop,
+                     once=once,
+                     id=id)
+    sub._compiled_children = [c for c in compiled_children if isinstance(c, Subscriber)]
+    return sub
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+def _stop_subscriber_tree(root: Subscriber):
+    """Stop root and all recursively compiled children (DFS)."""
+    seen = set()
+
+    def _dfs(s: Subscriber):
+        if s in seen:
+            return
+        seen.add(s)
+        for ch in getattr(s, "_compiled_children", []):
+            _dfs(ch)
+        try:
+            s.stop()
+        except Exception:
+            pass
+
+    _dfs(root)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+def wait_for_events(events,
+                    *,
+                    timeout: float | None = None,
+                    stale_event_time: float | None = None,
+                    event_loop: EventLoop | None = None) -> tuple[Any | _TimeoutSentinel, SubscriberMatch | None]:
+    """
+    Compile events into a Subscriber tree, wait once, and stop the entire tree (root + descendants).
+    `events` may be:
+      - Event / Subscriber / pattern str / (Event, Predicate) / (str, Predicate)
+      - OR(…) / AND(…) expressions
+    """
+    root = _compile_expr_to_subscriber(events,
+                                       stale_event_time=stale_event_time,
+                                       event_loop=event_loop,
+                                       once=True,
+                                       id=None)
+    # Ensure single-shot behavior at the root
+    root.once = True
     try:
-        ok = waiter.wait(timeout=None)  # waiter has its own timeout
-        finished = list(waiter.events_finished)
-        timeout_hit = not ok
-
-        matches: list[EventMatch] = []
-        if ok:
-            for idx, done in enumerate(finished):
-                if done:
-                    flags, data = waiter.matched_payloads[idx]
-                    matches.append(EventMatch(
-                        event=events[idx], index=idx, flags=flags or {}, data=data
-                    ))
-
-        return WaitResult(
-            ok=ok,
-            timeout=timeout_hit,
-            finished=finished,
-            matches=matches,
-            first=(matches[0] if matches else None),
-        )
+        return root.wait(timeout=timeout, stale_event_time=stale_event_time)
     finally:
-        waiter.stop()
+        # In case of timeout or external cancel, make sure the tree is fully torn down.
+        _stop_subscriber_tree(root)
 
-# === EVENT LOOP =================================================================================================
+
+# === EVENT LOOP =======================================================================================================
 class EventLoop(metaclass=_SingletonMeta):
     """
     Scalable event dispatcher with:
       - per-waiter queues (push on match)
-      - stale-window precheck on registration
+      - stale-window precheck on registration (events + child-subscriber snapshots)
       - exact snapshot delivery
     """
+    subscribers: list[Subscriber]
+    events: weakref.WeakSet
 
     def __init__(self):
         self.events = weakref.WeakSet()
-        self.waiters: list[EventWaiter] = []
-        self.waiters_by_event: dict[Event, set[EventWaiter]] = {}
-        self._waiters_lock = threading.RLock()
+        self.subscribers: list[Subscriber] = []
 
-    # -- Event registration -----------------------------------------------------
-    def addEvent(self, event: Event):
-        with self._waiters_lock:
+        self.logger = Logger(f"EventLoop", "DEBUG")
+
+        self.subscribers_by_event: dict[Event, set[Subscriber]] = {}
+        self._subscribers_lock = threading.RLock()
+        self._pattern_subscribers: set[PatternSubscriber] = set()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def add_event(self, event: Event):
+        with self._subscribers_lock:
             if event in self.events:
                 return
             self.events.add(event)
@@ -676,109 +1346,318 @@ class EventLoop(metaclass=_SingletonMeta):
                 inputs={'event': event}
             ))
 
-    # -- Waiter registration/removal -------------------------------------------
-    def addWaiter(self, waiter: EventWaiter):
-        to_finish = []
-        with self._waiters_lock:
-            self.waiters.append(waiter)
-            for ev in waiter.events:
-                self.waiters_by_event.setdefault(ev, set()).add(waiter)
+            # attach to any pattern subscribers that match this event's UID
+            for ps in list(self._pattern_subscribers):
+                self._attach_pattern_if_match(ps, event)
 
-            # Ensure history covers stale window
-            if waiter.stale_event_time and waiter.stale_event_time > 0:
-                for ev in waiter.events:
-                    if getattr(ev, "max_history_time", 0) < waiter.stale_event_time:
-                        ev.max_history_time = waiter.stale_event_time
+    # ------------------------------------------------------------------------------------------------------------------
+    def add_subscriber(self, subscriber: Subscriber):
+        with self._subscribers_lock:
+            self.subscribers.append(subscriber)
+            subscriber.attach_time = time.monotonic()
 
-                # Pre-check recent history and enqueue immediately if satisfied
+            if isinstance(subscriber, PatternSubscriber):
+                # Track pattern subscribers for future events & attach all current matches
+                self._pattern_subscribers.add(subscriber)
+                for ev in list(self.events):
+                    self._attach_pattern_if_match(subscriber, ev)
+            else:
+                # Wire explicit events for non-pattern subscribers
+                for cont in subscriber.events:
+                    ev = cont.event
+                    if isinstance(ev, Event):
+                        self.subscribers_by_event.setdefault(ev, set()).add(subscriber)
+
+            # --- Stale prefill for this subscriber ---
+            if subscriber.stale_event_time and subscriber.stale_event_time > 0:
                 now = time.monotonic()
-                for i, ev in enumerate(waiter.events):
-                    pred = waiter.predicates[i] if (waiter.predicates and i < len(waiter.predicates)) else None
-                    match = ev.first_match_in_window(pred, waiter.stale_event_time, now=now)
+
+                # Prefill from Event leaves (respect per-position predicate)
+                for cont in subscriber.events:
+                    ev = cont.event
+                    if isinstance(ev, Subscriber):
+                        continue
+                    # extend history window on the Event if needed
+                    if getattr(ev, "max_history_time", 0) < subscriber.stale_event_time:
+                        ev.max_history_time = subscriber.stale_event_time
+                    pred = cont.predicate
+                    match = ev.first_match_in_window(pred, subscriber.stale_event_time, now=now)
                     if match is not None:
                         flags, data = match
-                        waiter.events_finished[i] = True
-                        waiter._set_match(i, flags, data)
+                        subscriber.set_match(ev, flags, data)
 
-                satisfied = all(waiter.events_finished) if waiter.wait_for_all else any(waiter.events_finished)
-                if satisfied:
-                    state = waiter._enqueue_snapshot_and_prepare_next()
-                    if state == "finish":
-                        to_finish.append(waiter)
+                # Prefill from nested Subscriber children (without mutating them):
+                cutoff = now - subscriber.stale_event_time
+                for cont in subscriber.events:
+                    child = cont.event
+                    if not isinstance(child, Subscriber):
+                        continue
 
-        # Clean-up for one-shot satisfied during precheck
-        if to_finish:
-            with self._waiters_lock:
-                for w in to_finish:
-                    self._unsafe_removeWaiter(w)
+                    # Only snapshot child if the child was attached "recently" relative to our window.
+                    child_recent = (getattr(child, "attach_time", None) or 0) >= cutoff
+                    if child_recent:
+                        snap = self._snapshot_match_for_subscriber(child,
+                                                                   window=subscriber.stale_event_time,
+                                                                   now=now)
+                        if snap is not None:
+                            self.logger.debug(f"Prefill stale-window snapshot for {child.id}")
+                            # At this parent edge we don't have a distinct flag dict; keep None
+                            subscriber.set_match(child, None, snap)
 
-    def removeWaiter(self, waiter: EventWaiter):
-        with self._waiters_lock:
+    # ------------------------------------------------------------------------------------------------------------------
+    def remove_subscriber(self, waiter: Subscriber):
+        with self._subscribers_lock:
             self._unsafe_removeWaiter(waiter)
 
-    def _unsafe_removeWaiter(self, waiter: EventWaiter):
-        if waiter in self.waiters:
-            self.waiters.remove(waiter)
-        for ev in getattr(waiter, "events", ()):
-            s = self.waiters_by_event.get(ev)
+    # ------------------------------------------------------------------------------------------------------------------
+    def register_pattern_binding(self, ps: PatternSubscriber, ev: Event):
+        with self._subscribers_lock:
+            self.subscribers_by_event.setdefault(ev, set()).add(ps)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _unsafe_removeWaiter(self, waiter: Subscriber):
+        if waiter in self.subscribers:
+            self.subscribers.remove(waiter)
+        for cont in getattr(waiter, "events", ()):
+            ev = cont.event
+            s = self.subscribers_by_event.get(ev)
             if s is not None:
                 s.discard(waiter)
                 if not s:
-                    self.waiters_by_event.pop(ev, None)
+                    self.subscribers_by_event.pop(ev, None)
+        if isinstance(waiter, PatternSubscriber):
+            self._pattern_subscribers.discard(waiter)
 
-    # -- Dispatch ---------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
     def _event_set(self, data, event: Event, flags, *args, **kwargs):
-        to_finish = []
-        with self._waiters_lock:
-            watchers = list(self.waiters_by_event.get(event, ()))
+        with self._subscribers_lock:
+            watchers = list(self.subscribers_by_event.get(event, ()))
             for waiter in watchers:
                 if waiter._abort:
                     continue
 
                 matched_any_pos = False
-                for pos, ev in enumerate(waiter.events):
-                    if ev is not event:
+
+                for cont in waiter.events:
+                    if cont.event is not event:
                         continue
-                    pred = (waiter.predicates[pos]
-                            if (waiter.predicates and pos < len(waiter.predicates))
-                            else None)
-                    ok = pred(flags, data) if pred is not None else True
+                    pred = cont.predicate
+
+                    if pred is None:
+                        ok = True
+                    else:
+                        # IMPORTANT: predicate signature is (flags, data)
+                        ok = pred(flags, data)  # type: ignore
+
                     if ok:
                         matched_any_pos = True
-                        if not waiter.events_finished[pos]:
-                            waiter.events_finished[pos] = True
-                            waiter._set_match(pos, flags, data)
+                        if not cont.finished:
+                            waiter.set_match(event, flags, data)
 
                 if not matched_any_pos:
                     continue
 
-                satisfied = all(waiter.events_finished) if waiter.wait_for_all else any(waiter.events_finished)
-                if satisfied:
-                    state = waiter._enqueue_snapshot_and_prepare_next()
-                    if state == "finish":
-                        to_finish.append(waiter)
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _check_pattern(event_uid: str, pattern: str) -> bool:
+        # Support glob wildcards against full UID. Exact match if no wildcards.
+        return fnmatch.fnmatchcase(event_uid, pattern)
 
-            # Remove any finished one-shot waiters from indices
-            if to_finish:
-                for w in to_finish:
-                    self._unsafe_removeWaiter(w)
+    # ------------------------------------------------------------------------------------------------------------------
+    def _attach_pattern_if_match(self, ps: PatternSubscriber, ev: Event):
+        if self._check_pattern(ev.uid, ps.pattern):
+            # Let the PatternSubscriber attach and sync its internal state
+            ps.add_event(ev)
+            # And also register it in the reverse index so it gets _event_set callbacks
+            self.subscribers_by_event.setdefault(ev, set()).add(ps)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _snapshot_match_for_subscriber(
+            self,
+            sub: Subscriber,
+            window: float,
+            now: float | None = None
+    ) -> Optional[SubscriberMatch]:
+        """
+        Compute a synthetic SubscriberMatch for `sub` within `window` seconds, *without*
+        mutating `sub` or firing callbacks. Returns None if not satisfiable.
+        Mirrors the runtime data/flags/trace shapes used in Subscriber._fire().
+        """
+        if not window or window <= 0:
+            return None
+        if now is None:
+            now = time.monotonic()
+        cutoff = now - window
+
+        # Helper to snapshot a single event-position (by index in sub.events)
+        def _event_pos_match(i: int) -> Optional[tuple[dict | None, Any, Event | Subscriber]]:
+            cont = sub.events[i]
+            ev = cont.event
+            pred = cont.predicate
+
+            if isinstance(ev, Event):
+                m = ev.first_match_in_window(pred, window, now=now)
+                if m is None:
+                    return None
+                fl, d = m
+                return fl, d, ev
+
+            # child Subscriber
+            child: Subscriber = ev  # type: ignore
+            # Prefer already-produced child matches within the window (no mutation)
+            for cm in reversed(child.matches):
+                if cm.time < cutoff:
+                    break
+                # parent edge doesn't have a distinct flag dict -> use None
+                return None, cm, child
+            # Otherwise, see if a snapshot of the child is satisfiable from history
+            cm = self._snapshot_match_for_subscriber(child, window, now)
+            if cm is not None:
+                return None, cm, child
+            return None
+
+        # --- AND semantics: all positions must match ---
+        if sub.type == SubscriberType.AND:
+            pos_results: list[tuple[dict | None, Any, Event | Subscriber]] = []
+            for i in range(len(sub.events)):
+                r = _event_pos_match(i)
+                if r is None:
+                    return None
+                pos_results.append(r)
+
+            # Build a synthetic SubscriberMatch mirroring Subscriber._fire()
+            matched_events = [c.event for c in sub.events]
+            match_ids = [e.uid for e in matched_events]
+
+            data: dict[Any, Any] = {}
+            flags: dict[Any, Any] = {}
+            trace_data: dict[Any, Any] = {}
+
+            for (fl, d, ev) in pos_results:
+                if isinstance(ev, Subscriber):
+                    # d is the child's SubscriberMatch
+                    child_match: SubscriberMatch = d  # type: ignore
+                    data[ev] = child_match.data
+                    flags[ev] = child_match.flags
+                    trace_data[ev] = child_match
+                else:
+                    data[ev] = d
+                    flags[ev] = fl
+                    trace_data[ev] = None
+
+            return SubscriberMatch(
+                time=now,
+                match=matched_events,
+                match_id=match_ids,
+                data=data,
+                flags=flags,
+                trace_data=trace_data,
+            )
+
+        # --- OR semantics: newest single position is enough ---
+        best: tuple[float, int, tuple[dict | None, Any, Event | Subscriber]] | None = None
+        for i in range(len(sub.events)):
+            cont = sub.events[i]
+            ev = cont.event
+
+            if isinstance(ev, Subscriber):
+                # Prefer real child matches in window
+                for cm in reversed(ev.matches):
+                    if cm.time < cutoff:
+                        break
+                    cand = (cm.time, i, (None, cm, ev))
+                    if best is None or cand[0] > best[0]:
+                        best = cand
+                if best:
+                    continue
+                # Else recurse/snapshot
+                cm = self._snapshot_match_for_subscriber(ev, window, now)
+                if cm:
+                    cand = (now, i, (None, cm, ev))
+                    if best is None or cand[0] > best[0]:
+                        best = cand
+            else:
+                m = ev.first_match_in_window(cont.predicate, window, now=now)
+                if m:
+                    fl, d = m
+                    # We don't have the true timestamp from history; snapshot at 'now'
+                    cand = (now, i, (fl, d, ev))
+                    if best is None or cand[0] > best[0]:
+                        best = cand
+
+        if best is None:
+            return None
+
+        _, i, (fl, d, ev) = best
+        if isinstance(ev, Subscriber):
+            child_match: SubscriberMatch = d  # type: ignore
+            matched_event = ev
+            match_id = ev.uid
+            data = child_match.data
+            flags = child_match.flags
+            trace_data = {ev: child_match}
+        else:
+            matched_event = ev
+            match_id = ev.uid
+            data = d
+            flags = fl
+            trace_data = {ev: None}
+
+        return SubscriberMatch(
+            time=now,
+            match=matched_event,
+            match_id=match_id,
+            data=data,
+            flags=flags,
+            trace_data=trace_data,
+        )
 
 
+# === EVENT CONTAINER AND DECORATOR ====================================================================================
+class EventContainer:
+    id: str | None = None
+    events: dict[str, Event]
+
+    def __init__(self, id: str = None):
+        if id is not None:
+            _check_id(id)
+        self.id = id
+        self.events = {}
+
+    def add_event(self, event: Event):
+        if event.id in self.events:
+            raise ValueError(f"Event {event.id} already exists.")
+        if event.parent is not None:
+            raise ValueError(f"Event {event.id} already has a parent.")
+        self.events[event.id] = event
+        event.parent = self
+
+
+# === EVENT CONTAINER DECORATOR ========================================================================================
 def event_definition(cls):
     """
-    Decorator to make Event fields independent per instance.
+    Per-instance Event fields that are automatically added as children of the container.
 
-    - If an attribute is annotated as `Event` (or Optional[Event]/Union[..., Event, ...])
-      and the instance doesn't set it in __init__, create a fresh Event for the instance.
-    - If a class-level default value is an Event, clone it per instance, preserving flags.
+    Usage:
+        @event_definition
+        class RobotEvents(EventContainer):
+            ready: Event = Event(flags=[EventFlag('level', str)])
+            moved: Event
+
+    Notes:
+      - If the class does not subclass EventContainer, this decorator will still create
+        `self.events` and inject a compatible `add_event` method on the instance.
+      - Each instance receives fresh Event objects.
+      - Each Event's `id` defaults to the attribute name (even when cloning a class-level template).
     """
     import sys
+    import types as _types
     import typing
     from typing import get_origin, get_args
 
     original_init = getattr(cls, "__init__", None)
 
-    # Resolve annotations, supporting `from __future__ import annotations`
+    # --- Resolve annotations (supports `from __future__ import annotations`) ---
     try:
         module_globals = sys.modules[cls.__module__].__dict__
         hints = typing.get_type_hints(cls, globalns=module_globals, localns=dict(vars(cls)))
@@ -791,9 +1670,8 @@ def event_definition(cls):
         if isinstance(t, str):
             return t == "Event" or t.endswith(".Event")
         origin = get_origin(t)
-        # typing.Union (Py3.8/3.9) and PEP 604 unions (a | b) use different origins
+        # Union handling (typing.Union or PEP 604)
         try:
-            import types as _types
             is_union = (origin is typing.Union) or (origin is _types.UnionType)
         except Exception:
             is_union = (origin is typing.Union)
@@ -803,476 +1681,224 @@ def event_definition(cls):
             return False
         return False
 
-    def _clone_event_template(template: Event) -> Event:
-        # Preserve declared flag schema
+    def _clone_event_template(template: Event, new_id: str) -> Event:
+        # Rebuild flags schema
         flags = [EventFlag(ef.id, ef.types) for ef in template.flags.values()]
         clone = Event(
+            id=new_id,
             data_type=template.data_type,
             flags=flags,
             copy_data_on_set=template.copy_data_on_set,
+            data_is_static_dict=template.data_is_static_dict,
         )
-        # Copy non-ctor attrs too
-        clone.copy_fn = template.copy_fn
+        # Copy non-ctor attributes
+        clone.custom_data_copy_function = template.custom_data_copy_function
         clone.max_history_time = template.max_history_time
         return clone
 
+    def _ensure_container_bits(self):
+        # Ensure this instance has a place to register events
+        if not hasattr(self, "events") or not isinstance(getattr(self, "events"), dict):
+            self.events = {}
+
+        # Provide add_event if missing (mirror EventContainer.add_event semantics)
+        if not hasattr(self, "add_event") or not callable(getattr(self, "add_event")):
+            def _add_event(_self, event: Event):
+                if event.id in _self.events:
+                    raise ValueError(f"Event {event.id} already exists.")
+                if event.parent is not None:
+                    raise ValueError(f"Event {event.id} already has a parent.")
+                _self.events[event.id] = event
+                event.parent = _self
+
+            # Bind as a method on the instance
+            setattr(self, "add_event", _add_event.__get__(self, self.__class__))
+
     def new_init(self, *args, **kwargs):
+        # Run any user-defined __init__ first
         if original_init:
             original_init(self, *args, **kwargs)
 
-        # Annotated attributes
+        # Ensure container plumbing exists
+        _ensure_container_bits(self)
+
+        # 1) Process annotated attributes
         if isinstance(hints, dict):
             for attr_name, anno in hints.items():
                 default_val = getattr(cls, attr_name, None)
-                if isinstance(default_val, Event):
-                    # Replace class-level Event with a per-instance clone
-                    setattr(self, attr_name, _clone_event_template(default_val))
-                    continue
-                if _is_event_type(anno) and attr_name not in self.__dict__:
-                    # No default provided; create a fresh Event
-                    setattr(self, attr_name, Event())
 
-        # Unannotated class-level Event defaults
+                # If class-level default is an Event → clone it per instance and rename to attr_name
+                if isinstance(default_val, Event):
+                    ev = _clone_event_template(default_val, new_id=attr_name)
+                    setattr(self, attr_name, ev)
+                    # Register as child
+                    self.add_event(ev)
+                    continue
+
+                # If annotated as Event (or Optional/Union including Event) and not set in instance → create fresh
+                if _is_event_type(anno) and attr_name not in self.__dict__:
+                    ev = Event(id=attr_name)
+                    setattr(self, attr_name, ev)
+                    self.add_event(ev)
+
+        # 2) Pick up any unannotated class-level Event defaults
         for attr_name, value in vars(cls).items():
             if isinstance(value, Event) and attr_name not in self.__dict__:
-                setattr(self, attr_name, _clone_event_template(value))
+                ev = _clone_event_template(value, new_id=attr_name)
+                setattr(self, attr_name, ev)
+                self.add_event(ev)
 
     cls.__init__ = new_init
     return cls
 
 
+# ======================================================================================================================
 active_event_loop = EventLoop()
 
 
-# === EXAMPLES =========================================================================================================
-def test_wait_for_flag_predicate():
-    e = Event(flags=[EventFlag(id="level", data_type=str)])
-    fired = []
+# === EXAMPLEScale =====================================================================================================
+def example_1():
+    logger = Logger("example_1", "DEBUG")
+    event1 = Event(id="event1", flags=[EventFlag("level1", str)])
+    event2 = Event(id="event2", flags=[EventFlag("level2", str)])
+    event23 = Event(id="event23", flags=[EventFlag("level23", str)])
 
-    def setter():
-        time.sleep(0.1)
-        e.set(data={"v": 1}, flags={"level": "high"})
+    def subscriber_callback(data, **kwargs):
+        logger.info(f"Subscriber callback: {data}")
 
-    threading.Thread(target=setter, daemon=True).start()
-    ok = e.wait(predicate=pred_flag_equals("level", "high"), timeout=1.0)
-    assert ok is True, "Event.wait with flag predicate should succeed"
-    assert e.getData() == {"v": 1}, "Event data should be set"
-
+    subscriber = Subscriber(events=[event1], type=SubscriberType.OR)
+    subscriber.on(subscriber_callback)
 
-def test_wait_for_data_predicate():
-    e = Event()
-
-    def setter():
-        time.sleep(0.1)
-        e.set(data={"state": "ready"})
-
-    threading.Thread(target=setter, daemon=True).start()
-    ok = e.wait(predicate=pred_data_dict_key_equals("state", "ready"), timeout=1.0)
-    assert ok is True, "Event.wait with data predicate should succeed"
-
-
-def test_stale_event_wait_success():
-    e = Event(flags=[EventFlag(id="level", data_type=str)])
-    e.set(data={"x": 1}, flags={"level": "high"})
-    time.sleep(0.2)  # event happened in the recent past
-    ok = e.wait(predicate=pred_flag_equals("level", "high"),
-                stale_event_time=1.0, timeout=5)
-    assert ok is True, "Stale-window wait should immediately succeed for recent event"
-
-
-def test_stale_event_wait_timeout():
-    e = Event(flags=[EventFlag(id="level", data_type=str)])
-    e.set(data={"x": 1}, flags={"level": "high"})
-    time.sleep(0.3)
-    ok = e.wait(predicate=pred_flag_equals("level", "high"),
-                stale_event_time=0.05, timeout=0.2)
-    assert ok is False, "Stale-window wait should fail if event is outside window"
-
-
-def test_multiple_events_wait_for_all():
-    e1 = Event(flags=[EventFlag(id="level", data_type=str)])
-    e2 = Event()
-
-    def setter():
-        time.sleep(0.05)
-        e1.set(data=1, flags={"level": "high"})
-        time.sleep(0.05)
-        e2.set(data=2)
-
-    threading.Thread(target=setter, daemon=True).start()
-
-    w = EventWaiter(events=[e1, e2],
-                    predicates=[pred_flag_equals("level", "high"), None],
-                    timeout=1.0, wait_for_all=True)
-    ok = w.wait()
-    assert ok is True, "Waiter across two events (wait_for_all) should succeed"
-    assert w.events_finished == [True, True]
-
-
-def test_event_listener_basic_once():
-    e = Event(flags=[EventFlag(id="level", data_type=str)])
-    hit = threading.Event()
-    seen = []
-
-    def cb(data):
-        seen.append(data)
-        hit.set()
-
-    listener = e.on(callback=cb,
-                    predicate=pred_flag_equals("level", "high"),
-                    once=True,
-                    input_data=True)
-
-    time.sleep(0.05)
-    e.set(data=42, flags={"level": "high"})
-    assert hit.wait(1.0) is True, "Listener should fire once"
-    # assert seen == [42], "Listener callback should receive event data"
-
-
-def test_one_shot_listener_with_stale():
-    e = Event(flags=[EventFlag(id="level", data_type=str)])
-    # Fire in the past
-    e.set(data=99, flags={"level": "high"})
-    time.sleep(0.1)
-
-    hit = threading.Event()
-
-    def cb(data):
-        assert data == 99
-        hit.set()
-
-    # Should trigger immediately thanks to stale_event_time
-    e.on(callback=cb, predicate=pred_flag_equals("level", "high"),
-         once=True, stale_event_time=1.0, timeout=0.5)
-    assert hit.wait(0.2) is True, "One-shot listener should trigger immediately from stale window"
-
-
-def test_duplicate_event_entries_different_predicates_wait_for_all():
-    # Same Event watched twice with different predicates
-    e = Event(flags=[EventFlag(id="a", data_type=str),
-                     EventFlag(id="b", data_type=str)])
-
-    # waiter waits for both conditions on the SAME event
-    w = EventWaiter(events=[e, e],
-                    predicates=[pred_flag_equals("a", "x"),
-                                pred_flag_equals("b", "y")],
-                    timeout=1.0, wait_for_all=True)
-
-    def setter():
-        # First satisfies only position 0
-        time.sleep(0.05)
-        e.set(flags={"a": "x"})
-        # Then satisfies only position 1
-        time.sleep(0.05)
-        e.set(flags={"b": "y"})
-
-    threading.Thread(target=setter, daemon=True).start()
-    ok = w.wait()
-    assert ok is True, "Waiter should satisfy after both predicates matched on same Event"
-    assert w.events_finished == [True, True]
-
-
-def test_immediate_notify_stale_precheck_with_predicate():
-    e = Event(flags=[EventFlag(id="mode", data_type=str)])
-    e.set(flags={"mode": "auto"})
-    time.sleep(0.05)  # still within stale window
-
-    start = time.monotonic()
-    w = EventWaiter(events=e,
-                    predicates=pred_flag_equals("mode", "auto"),
-                    stale_event_time=0.5, timeout=1.0)
-    ok = w.wait()
-    elapsed = time.monotonic() - start
-    assert ok is True, "Immediate notify via stale precheck should succeed"
-    assert elapsed < 0.1, "Wait should return almost immediately when satisfied by history"
-
-
-def test_event_definition_decorator():
-    @event_definition
-    class MyEvents:
-        event1: Event = Event(flags=EventFlag(id="level", data_type=str))
-        event2: Event
-
-    a = MyEvents()
-    b = MyEvents()
-    # Each instance gets distinct Event objects
-    assert a.event1 is not b.event1, "event1 should be unique per instance"
-    assert a.event2 is not b.event2, "event2 should be unique per instance"
-    # Flag schema preserved
-    assert "level" in a.event1.flags
-
-
-def test_invalid_flag_type_raises():
-    e = Event(flags=[EventFlag(id="level", data_type=str)])
-    try:
-        e.set(flags={"level": 123})  # wrong type
-        assert False, "TypeError expected for wrong flag type"
-    except TypeError:
-        pass
-
-
-def test_history_pruning():
-    e = Event()
-    e.max_history_time = 0.01
-    e.set()
-    assert len(e.history) >= 1
-    # Force prune as-if lots of time passed
-    now_future = time.monotonic() + 10.0
-    e._prune_history(now=now_future)
-    assert len(e.history) == 0, "History should be pruned when outside max_history_time window"
-
-
-def test_wait_for_data_equals():
-    e = Event()
-    expected_payload = {"state": "ready", "count": 2}
-
-    def setter():
-        time.sleep(0.05)
-        # Use a fresh dict to ensure we're testing equality, not identity
-        e.set(data=dict(expected_payload))
-
-    threading.Thread(target=setter, daemon=True).start()
-    ok = e.wait(predicate=pred_data_equals(expected_payload), timeout=1.0)
-    assert ok is True, "Event.wait with pred_data_equals should succeed when entire data matches"
-    assert e.getData() == expected_payload, "Event data should equal the expected payload"
-
-
-def test_counting_event_waits_for_value():
-    e = Event()
-    target_value = 7
-
-    def counter():
-        # Count up to the target, emitting an event at each step
-        for i in range(target_value + 1):
-            time.sleep(0.02)
-            e.set(data=i)
-
-    threading.Thread(target=counter, daemon=True).start()
-    ok = e.wait(predicate=pred_data_equals(target_value), timeout=1.0)
-    assert ok is True, "Waiter should trigger when the counter reaches the target value"
-    assert e.getData() == target_value, "Event data should equal the target count when unblocked"
-
-
-def test_listener_sees_snapshot_under_back_to_back_sets():
-    """
-    Repro the original race: emit val1 then val2 quickly.
-    Listener predicate matches val1; it must receive the val1 payload,
-    not the later overwritten value.
-    """
-    e = Event(flags=[EventFlag(id="level", data_type=str)])
-    seen = []
-    hit = threading.Event()
-
-    def cb(data):
-        seen.append(data)
-        hit.set()
-
-    # Listener waits for level == "val1"
-    listener = e.on(callback=cb,
-                    predicate=pred_flag_equals("level", "val1"),
-                    once=True,
-                    input_data=True)
-
-    def producer():
-        e.set(data={"k": "v1"}, flags={"level": "val1"})
-        # Immediately overwrite with another event
-        e.set(data={"k": "v2"}, flags={"level": "val2"})
-
-    threading.Thread(target=producer, daemon=True).start()
-
-    assert hit.wait(1.0) is True, "Listener should fire"
-    assert seen == [{"k": "v1"}], "Listener must receive the snapshot that matched (val1), not the overwrite"
-    listener.stop()
-
-
-def test_stale_precheck_returns_exact_snapshot_single_event():
-    """
-    Fire an event, then attach a waiter with stale_event_time.
-    The waiter should trigger immediately and its snapshot should equal the payload at emit time.
-    """
-    e = Event(flags=[EventFlag(id="tag", data_type=str)])
-    payload = {"x": 42}
-    e.set(data=payload, flags={"tag": "past"})
-    time.sleep(0.05)  # within the stale window below
-
-    w = EventWaiter(events=e,
-                    predicates=pred_flag_equals("tag", "past"),
-                    stale_event_time=0.5,
-                    timeout=0.5)
-
-    start = time.monotonic()
-    ok = w.wait()
-    elapsed = time.monotonic() - start
-
-    assert ok is True, "Stale precheck waiter should trigger immediately"
-    assert elapsed < 0.1, "Should be nearly instantaneous"
-    # matched snapshot should be present
-    (flags, data) = w.matched_payloads[0]
-    assert flags == {"tag": "past"}
-    assert data == payload
-
-
-def test_stale_precheck_multi_events_positions_filled_correctly():
-    """
-    Two events; we emit only one first, then attach a waiter for both with wait_for_all=True.
-    Then we emit the second. Ensure each matched position contains its own snapshot.
-    """
-    e1 = Event(flags=[EventFlag(id="a", data_type=str)])
-    e2 = Event(flags=[EventFlag(id="b", data_type=str)])
-
-    p1 = {"p": 1}
-    p2 = {"p": 2}
-
-    # Fire e1 in the past
-    e1.set(data=p1, flags={"a": "x"})
-    time.sleep(0.05)  # inside stale window
-
-    w = EventWaiter(events=[e1, e2],
-                    predicates=[pred_flag_equals("a", "x"), pred_flag_equals("b", "y")],
-                    wait_for_all=True,
-                    stale_event_time=0.5,
-                    timeout=0.5)
-
-    # The stale precheck should mark position 0 true, position 1 false (until e2 fires)
-    # Now fire e2 live
-    def later():
-        time.sleep(0.05)
-        e2.set(data=p2, flags={"b": "y"})
-
-    threading.Thread(target=later, daemon=True).start()
-
-    ok = w.wait()
-    assert ok is True
-    assert w.events_finished == [True, True], "Both positions should be satisfied"
-
-    (f1, d1) = w.matched_payloads[0]
-    (f2, d2) = w.matched_payloads[1]
-    assert f1 == {"a": "x"} and d1 == p1, "Position 0 should come from stale snapshot of e1"
-    assert f2 == {"b": "y"} and d2 == p2, "Position 1 should come from live e2 dispatch"
-
-
-def test_same_event_twice_different_predicates_snapshots_preserved():
-    """
-    Watch the SAME event twice, different predicates. Emit two distinct payloads;
-    ensure each position captures the snapshot that matched its own predicate.
-    """
-    e = Event(flags=[EventFlag(id="mode", data_type=str)])
-    p_auto = {"src": "first"}
-    p_manual = {"src": "second"}
-
-    w = EventWaiter(events=[e, e],
-                    predicates=[pred_flag_equals("mode", "auto"),
-                                pred_flag_equals("mode", "manual")],
-                    wait_for_all=True,
-                    timeout=1.0)
+    def fire_events():
+        logger.info("Firing events")
+        event1.set(data='data1', flags={'level1': 'a'})
+
+    setInterval(fire_events, 1)
+
+    while True:
+        time.sleep(1)
+
+
+def example_wait():
+    event1 = Event(id="event1", flags=EventFlag("level1", str))
+
+    subscriber = Subscriber(events=[event1])
+
+    def fire_events():
+        event1.set(data='data1', flags={'level1': 'a'})
+
+    setTimeout(fire_events, 1)
+
+    data, result = subscriber.wait(timeout=10)
+    print(result)
+
+
+def example_wait_for_events():
+    event1 = Event(id='event1', flags=[EventFlag('level1', str)])
+    event2 = Event(id='event2', flags=[EventFlag('level2', str)])
+    event23 = Event(id='event23', flags=[EventFlag('level23', str)])
+
+    def fire_events():
+        ...
+        # event1.set(data='data1', flags={'level1': 'a'})
+        # event2.set(data='data2', flags={'level2': 'b'})
+        event23.set(data='data23', flags={'level23': 'c'})
+
+    setTimeout(fire_events, 1)
+
+    data, trace = wait_for_events(OR((event1, pred_flag_equals('level1', 'a')), event2, "event2*"), timeout=4)
+    print(data)
+    print(trace)
+
+    while True:
+        time.sleep(1)
+
+
+def example_nested_ands_2():
+    logger = Logger("example_nested_ands", "DEBUG")
+    event1 = Event(id="event1", flags=[EventFlag("level1", str)])
+    event2 = Event(id="event2", flags=None)
+    events = [event1, event2]
+
+    def fire_events():
+        event1.set(data='data1', flags={'level1': 'a'})
+        event2.set(data='data2')
+
+    fire_events()
+
+    time.sleep(3)
+
+    data, trace = wait_for_events(
+        events=[
+            AND(*events)
+        ],
+        stale_event_time=1,
+        timeout=4,
+    )
+
+    if data == TIMEOUT:
+        print("TIMEOUT")
+    else:
+        print("OK")
+
+
+def example_pattern_matches():
+    event1 = Event(id='event1')
+    event2 = Event(id='event2')
+    event23 = Event(id='event23')
 
     def emit():
-        time.sleep(0.02)
-        e.set(data=p_auto, flags={"mode": "auto"})
-        time.sleep(0.02)
-        e.set(data=p_manual, flags={"mode": "manual"})
+        event23.set(data='data23')
 
-    threading.Thread(target=emit, daemon=True).start()
-    ok = w.wait()
-    assert ok is True
-    (f0, d0) = w.matched_payloads[0]
-    (f1, d1) = w.matched_payloads[1]
-    assert f0 == {"mode": "auto"} and d0 == p_auto
-    assert f1 == {"mode": "manual"} and d1 == p_manual
+    def subscriber_callback(data, match, **kwargs):
+        print(f"Subscriber callback: {data}, match: {match.match_id}")
 
+    subscriber = Subscriber(events="event2*")
+    listener = subscriber.on(subscriber_callback)
 
-def test_listener_builds_from_matched_payloads_multi_event():
-    """
-    Listener over two events should deliver a dict mapping each Event -> its matched payload snapshot.
-    """
-    e1 = Event(flags=[EventFlag(id="kind", data_type=str)])
-    e2 = Event()
+    setTimeout(emit, 1)
 
-    delivered = []
-    hit = threading.Event()
-
-    def cb(data):
-        # data: {e1: payload1, e2: payload2}
-        delivered.append(data)
-        hit.set()
-
-    listener = EventListener(event=[e1, e2],
-                             predicate=[pred_flag_equals("kind", "alpha"), None],
-                             callback=cb,
-                             once=True,
-                             input_data=True,
-                             wait_for_all=True)
-
-    listener.start()
-
-    def emitter():
-        e1.set(data={"v": "A"}, flags={"kind": "alpha"})
-        e2.set(data={"v": "B"})
-
-    threading.Thread(target=emitter, daemon=True).start()
-    assert hit.wait(1.0) is True
-    assert len(delivered) == 1
-    out = delivered[0]
-    assert out[e1] == {"v": "A"}
-    assert out[e2] == {"v": "B"}
-    listener.stop()
+    while True:
+        time.sleep(1)
 
 
-def test_copy_data_on_set_true_isolation_from_mutation():
-    """
-    With copy_data_on_set=True (default), mutating the producer's dict after set()
-    must NOT affect the stored payload nor the snapshot seen by listeners.
-    """
-    e = Event(copy_data_on_set=True)
-    src = {"k": ["a", "b"]}
-    e.set(data=src)
-    src["k"].append("c")  # mutate after set
+def test_pattern_subscriber_attaches_and_receives_events():
+    e1 = Event(id="sensor_temp")
+    e2 = Event(id="sensor_humid")
+    e3 = Event(id="actor_motor")
 
-    # Access via getData(copy=False) to inspect stored payload
-    stored = e.getData(copy=False)
-    assert stored == {"k": ["a", "b"]}, "Stored payload should be isolated by deepcopy"
+    hits = []
 
+    def subscriber_callback(data, match, **kwargs):
+        print(f"Subscriber callback: {data}, match: {match.match_id}")
+        hits.append(match.match_id)
 
-def test_copy_data_on_set_false_allows_aliasing():
-    """
-    With copy_data_on_set=False, we alias the input. Mutating after set() will reflect
-    in the stored payload. (Useful test so behavior is explicit.)
-    """
-    e = Event(copy_data_on_set=False)
-    src = {"k": ["a"]}
-    e.set(data=src)
-    src["k"].append("b")
-    stored = e.getData(copy=False)
-    assert stored == {"k": ["a", "b"]}, "Aliasing expected when copy_data_on_set=False"
+    # ps = Subscriber(events="sensor*")
+    # ps = PatternSubscriber(pattern="sensor_*", predicate=None, stale_event_time=0.5)
+    # ps_listener = ps.on(subscriber_callback, once=False)
 
+    normal_subscriber = Subscriber(events=[e1, e2, e3], type=SubscriberType.OR)
+    normal_listener = normal_subscriber.on(subscriber_callback)
 
-def test_history_used_in_has_match_in_window_uses_stored_data_not_latest():
-    """
-    Ensure has_match_in_window evaluates predicate against the data from history,
-    not the latest event.data.
-    """
-    e = Event(flags=[EventFlag(id="lvl", data_type=str)])
-    e.set(data={"n": 1}, flags={"lvl": "x"})
-    time.sleep(0.02)
-    # overwrite with non-matching data
-    e.set(data={"n": 2}, flags={"lvl": "z"})
+    # Emit from both sensors, but not the actor
+    e1.set(data={"t": 21})
+    # e2.set(data={"h": 55})
+    # e3.set(data={"rpm": 1000})
 
-    # Ask for a stale window covering the first event; predicate checks for n == 1
-    pred = lambda f, d: d.get("n") == 1 and f.get("lvl") == "x"
-    ok = e.has_match_in_window(pred, window=0.5)
-    assert ok is True, "Should match against stored snapshot in history even if latest is different"
+    # ok = wait_true(lambda: len(hits) >= 2, timeout=1.0)
+    # assert ok
+    # # Ensure only sensor_* matched
+    # ids = [mid for (mid, _) in hits]
+    # assert "sensor_temp" in ids and "sensor_humid" in ids
+    # assert "actor_motor" not in ids
+    #
+    # ps_listener.stop()
+    # ps.stop()
+
+    while True:
+        time.sleep(1)
 
 
 if __name__ == '__main__':
-    # Execute all test functions from above here
-    test_wait_for_data_equals()
-    test_counting_event_waits_for_value()
-    test_listener_sees_snapshot_under_back_to_back_sets()
-    test_stale_precheck_returns_exact_snapshot_single_event()
-    test_stale_precheck_multi_events_positions_filled_correctly()
-    test_same_event_twice_different_predicates_snapshots_preserved()
-    test_listener_builds_from_matched_payloads_multi_event()
-    test_copy_data_on_set_true_isolation_from_mutation()
-    test_copy_data_on_set_false_allows_aliasing()
-    test_history_used_in_has_match_in_window_uses_stored_data_not_latest()
-    test_event_definition_decorator()
+    test_pattern_subscriber_attaches_and_receives_events()
+    # test_pattern_subscriber_attach_and_fire()

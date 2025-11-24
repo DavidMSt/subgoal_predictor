@@ -33,9 +33,8 @@ class BILBO_InputTrajectory:
         return np.arange(0, self.length) * self.dt
 
     def to_vector(self, single_input: bool = False) -> np.ndarray:
-        from robots.bilbo.robot.experiment.helpers import trajectoryInputToVector
-
-        return trajectoryInputToVector(self.inputs, single_input=single_input)
+        from robots.bilbo.robot.experiment.experiment_helpers import trajectory_inputs_to_vector
+        return trajectory_inputs_to_vector(self.inputs, single_input=single_input)
 
 
 @dataclasses.dataclass

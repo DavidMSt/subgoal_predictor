@@ -37,3 +37,4 @@ class BILBO_Sample:
     drive: TWIPR_Drive_Sample = dataclasses.field(default_factory=TWIPR_Drive_Sample)
     sensors: TWIPR_Sensors_Sample = dataclasses.field(default_factory=TWIPR_Sensors_Sample)
     lowlevel: BILBO_LL_Sample = dataclasses.field(default_factory=BILBO_LL_Sample)
+    experiment: BILBO_ExperimentHandler_Sample = dataclasses.field(default_factory=BILBO_ExperimentHandler_Sample)
