@@ -164,7 +164,7 @@ class OMPLPlannerFRODOBase(ABC):
     def _solution_path_states(self) -> tuple[np.ndarray, ...]:
         path_states = []
         for i in range(self._solution_path.getStateCount()): # type: ignore[attr-defined]
-            assert self._solution_path is not None, "No solution path available"
+            assert self._solution_path is not None, "No solution path currently available, must be computed first!"
             ompl_state = self._solution_path.getState(i)
             self._si.enforceBounds(ompl_state)
             extracted_state = self._extract_ompl_state(ompl_state)
@@ -452,7 +452,10 @@ class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
 
         if solved:
             self._solution_path = self._pdef.getSolutionPath()
-            print('this is the solution path! ', self._solution_path)
+
+            print('this is the solution path! ', self._solution_path_states)
+            print(len(self._solution_path_states))
+            start_config,  = self._solution_path_states
             raise NotImplementedError
             path_length = self._solution_path.length()
             return True, path_length
