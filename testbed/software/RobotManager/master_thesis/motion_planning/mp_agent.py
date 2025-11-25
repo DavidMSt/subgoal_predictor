@@ -16,7 +16,7 @@ from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
 
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_General_Config
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
-from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerBase
+from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo
 from master_thesis.general.general_agents import InputPhaseRunner, InputPhase
 
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)
@@ -54,7 +54,7 @@ class MotionPlanningConfig:
     # size of the goal region
     goal_eps: float = 0.1
     # weight of so2 relative to r2 in distance metric
-    so_r2_weight: float = 1.0
+    so_r2_weight: float = 0.1
 
     # control bounds
     theta_dot_bounds: tuple = (-np.pi/3, np.pi/3)
@@ -85,29 +85,29 @@ class MPAgentModule():
         # algorithm: str = 'kinodynamic_rrt'
         # motion_planner: OMPLPlannerBase| None = None
 
-    def plot_goal_config(self, goal_config: np.ndarray):
-        """Plots a given goal config inside the GUI
+    # def plot_goal_config(self, goal_config: np.ndarray):
+    #     """Plots a given goal config inside the GUI
 
-        Args:
-            goal_config (np.ndarray): _description_
-        """
-        # self.goal_config = goal_config
-        if self.plotting_group: #TODO: Move this again to the simulation, since it will decide which agent to assign which goal? 
-            self.plotting_group.add_point(
-                id=f"goal_{self.id}",
-                x=goal_config[0],
-                y=goal_config[1],
-                color=[0, 1, 0],  
-                size=0.7         
-            )
+    #     Args:
+    #         goal_config (np.ndarray): _description_
+    #     """
+    #     # self.goal_config = goal_config
+    #     if self.plotting_group: #TODO: Move this again to the simulation, since it will decide which agent to assign which goal? 
+    #         self.plotting_group.add_point(
+    #             id=f"goal_{self.id}",
+    #             x=goal_config[0],
+    #             y=goal_config[1],
+    #             color=[0, 1, 0],  
+    #             size=0.7         
+    #         )
 
-    def plan_motion(self, phase_key: str, start_config, goal_config, motion_planner = OMPLPlannerFRODOKino):
+    def plan_motion(self, phase_key: str, start_config, goal_config, motion_planner = OMPLPlannerFRODOGeo):
         if self.runner is None:
             self.logger.warning("Runner not initialized, Solution is not added as executable phase")
 
         if isinstance(motion_planner, str):
             raise NotImplementedError
-        self.motion_planner = motion_planner(self.export_config(start_config, goal_config))# TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
+        self.motion_planner = motion_planner(self.create_planner_config(start_config, goal_config))# TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
         solved, path_length = self.motion_planner.solve_problem()
 
         if solved:
@@ -128,9 +128,9 @@ class MPAgentModule():
                 f"total length {path_length}, end config: {phase.states[-1]}"
             )
         else:
-            self.logger.warning(f"No solution found! timeout after {self.export_config().timelimit} s")
+            self.logger.warning(f"No solution found! timeout after {self.create_planner_config().timelimit} s")
     
-    def export_config(self, start_config, goal_config) -> MotionPlanningConfig:
+    def create_planner_config(self, start_config, goal_config) -> MotionPlanningConfig:
         # if self.env is None:
         #     error_message = "The Motion Planning Interface needs the environment instance used in the simulation to plan a path! Provide during initializaion or use bin_environment method."
 

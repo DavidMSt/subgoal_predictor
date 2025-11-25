@@ -49,8 +49,8 @@ class SamplerType(Enum):
         return self.value(si)
 
     
-class OMPLPlannerBase(ABC):
-    def __init__(self, planning_config, sampler: SamplerType = SamplerType.UNIFORM, path_out_yaml = None, path_out_tree = None):
+class OMPLPlannerFRODOBase(ABC):
+    def __init__(self, planning_config, sampler: SamplerType = SamplerType.UNIFORM):
         self.config = planning_config
         self.agent_type = self.config.type
         self.sampler = sampler
@@ -155,28 +155,10 @@ class OMPLPlannerBase(ABC):
         if not self._si.isValid(self._goal):
             raise ValueError("Invalid ProblemDefinition: Goal state is invalid.")
 
+    @abstractmethod
     def solve_problem(self, verbose = False) -> tuple[bool, float]:
 
-        self.check_pdef_validity()
-        self._solution_path = None
-
-        solved = self._planner.solve(self.config.timelimit)
-        exact = self._pdef.hasExactSolution() # type: ignore[attr-defined]
-        approx = self._pdef.hasApproximateSolution() # type: ignore[attr-defined]
-
-        if verbose:
-            print(f"Solved: {solved}, Exact: {exact}, Approx: {approx}")
-
-        if solved:
-            self._solution_path = self._pdef.getSolutionPath()
-            path_length = self._solution_path.length()
-            return True, path_length
-            # Print a concise summary instead of the full path details
-            # num_states = self._solution_path.getStateCount()  # type: ignore[attr-defined]
-            # path_length = self._solution_path.length()       # type: ignore[attr-defined]
-            # print(f"Found solution with {num_states} states, total length {path_length:.3f}") # TODO: Put this into logger
-        
-        return False, 0
+        ...
 
     @property
     def _solution_path_states(self) -> tuple[np.ndarray, ...]:
@@ -200,56 +182,6 @@ class OMPLPlannerBase(ABC):
     def _create_checker(self) -> CollisionChecker:
         ...
 
-    @abstractmethod
-    def _create_space(self)-> tuple[ob.SpaceInformation, ob.StateSpace]: # type: ignore[attr-defined]
-        ...
-
-    @abstractmethod
-    def _extract_ompl_state(self, ompl_state) -> list:
-        ...
-
-    @abstractmethod
-    def _create_solution_dict(self) -> dict[str, tuple[np.ndarray, ...]| float]:
-        ...
-
-    def getCost(self, si: ob.SpaceInformation) -> ob.OptimizationObjective: # type: ignore[attr-defined]
-        """
-        Return the optimization objective to minimize path length.
-        Called by the benchmark setup.
-        """
-        return PathLengthOptimizationObjective(si)
-    
-class OMPLPlannerFRODOGeo(OMPLPlannerBase): #TODO: Implement in combination with flatness
-    ...
-    
-class OMPLPlannerFRODOKino(OMPLPlannerBase):
-    def __init__(self, planning_config, sampler: SamplerType = SamplerType.UNIFORM):
-        self._dt: float = planning_config.dt
-        super().__init__(planning_config, sampler)
-    
-    def _create_checker(self):
-        L, W, H = self.config.L, self.config.W, self.config.H
-        if L is None or W is None or H is None or L <= 0 or W <= 0 or H <= 0:
-            raise ValueError("Dimensions L, W, H must be provided for car collision checking and must be valid positive numbers.")
-
-        checker = CollisionChecker(self.config, type=self.agent_type)
-        checker.set_dimensions(self.config.L, self.config.W, self.config.H)
-        checker.initialize_env(self.config)
-        return checker
-    
-    def select_planner_type(self, si) -> Any:
-        try:
-            self.planner_type = self.config.planner
-            if self.planner_type == "rrt":
-                return oc.RRT(si) # type: ignore[attr-defined]
-            elif self.planner_type == "sst":
-                return oc.SST(si) # type: ignore[attr-defined]
-            else:
-                raise ValueError(f"Unsupported planner type for the motion problem: {self.planner_type}")
-        except AttributeError:
-            print("No planner type specified, using default RRT")
-            return oc.RRT(si) # type: ignore[attr-defined]
-
     def _create_space(self):
         # extract limits of the environment
         env_min = []
@@ -271,8 +203,54 @@ class OMPLPlannerFRODOKino(OMPLPlannerBase):
         space.setBounds(bounds)
 
         space.setSubspaceWeight(0, 1.0)  # set R2 weight to 1.0
-        space.setSubspaceWeight(1, 0.1)  # set SO(2) (yaw) weight to 0.0, For now we don't care about exact orientation
+        space.setSubspaceWeight(1, self.config.so_r2_weight)
         return space
+
+    def _extract_ompl_state(self, ompl_state) -> list:
+        x = ompl_state.getX()
+        y = ompl_state.getY()
+        yaw = ompl_state.getYaw()
+        return [float(x), float(y), float(yaw)]
+
+    @abstractmethod
+    def _create_solution_dict(self) -> dict[str, tuple[np.ndarray, ...]| float]:
+        ...
+
+    def getCost(self, si: ob.SpaceInformation) -> ob.OptimizationObjective: # type: ignore[attr-defined]
+        """
+        Return the optimization objective to minimize path length.
+        Called by the benchmark setup.
+        """
+        return PathLengthOptimizationObjective(si)
+    
+
+class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
+    def __init__(self, planning_config, sampler: SamplerType = SamplerType.UNIFORM):
+        self._dt: float = planning_config.dt
+        super().__init__(planning_config, sampler)
+    
+    def _create_checker(self):
+        L, W, H = self.config.L, self.config.W, self.config.H
+        if L is None or W is None or H is None or L <= 0 or W <= 0 or H <= 0:
+            raise ValueError("Dimensions L, W, H must be provided for FRODO collision checking and must be valid positive numbers.")
+
+        checker = CollisionChecker(self.config, type=self.agent_type)
+        checker.set_dimensions(self.config.L, self.config.W, self.config.H)
+        checker.initialize_env(self.config)
+        return checker
+    
+    def select_planner_type(self, si) -> Any:
+        try:
+            self.planner_type = self.config.planner
+            if self.planner_type == "rrt":
+                return oc.RRT(si) # type: ignore[attr-defined]
+            elif self.planner_type == "sst":
+                return oc.SST(si) # type: ignore[attr-defined]
+            else:
+                raise ValueError(f"Unsupported planner type for the motion problem: {self.planner_type}")
+        except AttributeError:
+            print("No planner type specified, using default RRT")
+            return oc.RRT(si) # type: ignore[attr-defined]
     
     def _state_propagator(self, start, control, duration, target):
         # extract individual controls
@@ -344,11 +322,11 @@ class OMPLPlannerFRODOKino(OMPLPlannerBase):
 
         return tuple(inputs), tuple(durations)
     
-    def _extract_ompl_state(self, ompl_state) -> list:
-        x = ompl_state.getX()
-        y = ompl_state.getY()
-        yaw = ompl_state.getYaw()
-        return [float(x), float(y), float(yaw)]
+    # def _extract_ompl_state(self, ompl_state) -> list:
+    #     x = ompl_state.getX()
+    #     y = ompl_state.getY()
+    #     yaw = ompl_state.getYaw()
+    #     return [float(x), float(y), float(yaw)]
     
     def _create_solution_dict(self)-> dict[str, tuple[np.ndarray, ...]| float]:
         path_states = self._solution_path_states
@@ -362,79 +340,128 @@ class OMPLPlannerFRODOKino(OMPLPlannerBase):
             "delta_t": self._dt
         }
         return solution_dict
-
-# class OMPLPlannerArm(OMPLPlannerBase):
-
-#     def __init__(self, env, path_out_yaml=None, path_out_tree=None, sampler: SamplerType = SamplerType.UNIFORM):
-#         super().__init__(env, path_out_yaml, path_out_tree, sampler)
-
-#     def select_planner_type(self, si) -> Any:
-#         try:
-#                 self.planner_type = self.hyperparameters["planner"]
-#                 if self.planner_type == "rrt": # car and arm
-#                     return og.RRT(si) # type: ignore[attr-defined]
-#                 elif self.planner_type == "rrt*":
-#                     return og.RRTStar(si) # type: ignore[attr-defined]
-#                 elif self.planner_type == "rrt-connect": # car and arm
-#                     return og.RRTConnect(si) # type: ignore[attr-defined]
-#                 elif self.planner_type == "sst": # Only car case
-#                     return og.SST(si) # type: ignore[attr-defined]
-#                 else:
-#                     raise ValueError(f"Unsupported planner type the motion problem: {self.planner_type}")
-
-#         except KeyError:
-#             print("No planner type specified, using default RRT")
-#             return og.RRT(si) # type: ignore[attr-defined]
-
-#     def _create_checker(self):
-#         link_lengths = self.mp["L"]
-#         if not link_lengths or not isinstance(link_lengths, list):
-#             raise ValueError("Link length L must be provided for arm collision checking. Expected a list of numerical values representing the lengths of the arm links.")
-#         checker = CollisionChecker(env=self.env, type = self.type)
-#         checker.set_dimensions(link_lengths)
-#         checker.initialize_env(self.env)
-#         return checker
     
-#     def _create_space(self):
-#         n = len(self.mp["L"])
-#         space = ob.RealVectorStateSpace(n) # type: ignore[attr-defined]
-#         bounds = ob.RealVectorBounds(n) # type: ignore[attr-defined]
-#         for i in range(n):
-#             bounds.setLow(i, 0.0)
-#             bounds.setHigh(i, 2*np.pi)  # Assuming angles in radians, adjust as necessary
-#         space.setBounds(bounds)
-#         # space = ob.CompoundStateSpace() # type: ignore[attr-defined]
+    def solve_problem(self, verbose = False) -> tuple[bool, float]:
 
-#         # for link in self.mp["L"]:
-#         #     space.addSubspace(ob.SO2StateSpace(), 1)  # One rotation per link # type: ignore[attr-defined]
+        self.check_pdef_validity()
+        self._solution_path = None
 
-#         return space
-    
-#     def _create_space_info(self) -> ob.SpaceInformation: # type: ignore[attr-defined]
-#         # Space information for (collision checking, interpolation, etc.)
-#         si = ob.SpaceInformation(self._space) # type: ignore[attr-defined]
-#         # set state validity checking for this space
-#         si.setStateValidityChecker(ob.StateValidityCheckerFn(self._collision_checker.check_state_ompl)) # type: ignore[attr-defined]
-#         # set the state sampler for this space
-#         sampler = self._get_state_sampler(si)
-#         si.setValidStateSamplerAllocator(ob.ValidStateSamplerAllocator(self.sampler)) # type: ignore[attr-defined]
+        solved = self._planner.solve(self.config.timelimit)
+        exact = self._pdef.hasExactSolution() # type: ignore[attr-defined]
+        approx = self._pdef.hasApproximateSolution() # type: ignore[attr-defined]
 
-#         return si
+        if verbose:
+            print(f"Solved: {solved}, Exact: {exact}, Approx: {approx}")
+
+        if solved:
+            self._solution_path = self._pdef.getSolutionPath()
+            path_length = self._solution_path.length()
+            return True, path_length
+            # Print a concise summary instead of the full path details
+            # num_states = self._solution_path.getStateCount()  # type: ignore[attr-defined]
+            # path_length = self._solution_path.length()       # type: ignore[attr-defined]
+            # print(f"Found solution with {num_states} states, total length {path_length:.3f}") # TODO: Put this into logger
+        
+        return False, 0
+
+class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
+
+    def __init__(self, planning_config, sampler: SamplerType = SamplerType.UNIFORM):
+        super().__init__(planning_config, sampler)
+
+    def select_planner_type(self, si) -> Any:
+        L, W, H = self.config.L, self.config.W, self.config.H
+        if L is None or W is None or H is None or L <= 0 or W <= 0 or H <= 0:
+            raise ValueError("Dimensions L, W, H must be provided for FRODO collision checking and must be v")
+                             
+        try:
+                self.planner_type = self.config.planner
+                if self.planner_type == "rrt": # car and arm
+                    return og.RRT(si) # type: ignore[attr-defined]
+                elif self.planner_type == "rrt*":
+                    return og.RRTStar(si) # type: ignore[attr-defined]
+                elif self.planner_type == "rrt-connect": # car and arm
+                    return og.RRTConnect(si) # type: ignore[attr-defined]
+                elif self.planner_type == "sst": # Only car case
+                    return og.SST(si) # type: ignore[attr-defined]
+                else:
+                    raise ValueError(f"Unsupported planner type the motion problem: {self.planner_type}")
+
+        except KeyError:
+            print("No planner type specified, using default RRT")
+            return og.RRT(si) # type: ignore[attr-defined]
+
+    def _create_checker(self):
+        checker = CollisionChecker(self.config, type = self.agent_type)
+        checker.set_dimensions(self.config.L, self.config.W, self.config.H)
+        checker.initialize_env(self.config)
+        return checker
     
-#     def _extract_ompl_state(self, ompl_state) -> list:
-#         # Extract joint angles from flat RealVectorStateSpace
-#         return [float(ompl_state[i]) for i in range(len(self.mp["L"]))]
+    # def _create_space(self):
+
+    #     space = ob.SE2StateSpace() # type: ignore[attr-defined]
+    #     # only for the car, we need the bounds since SE2 is already bounded 0,2pi
+    #     bounds = ob.RealVectorBounds(2) # type: ignore[attr-defined]
+    #     for i in range(2):
+    #         bounds.setLow(i, 0.0)
+    #         bounds.setHigh(i, 2*np.pi)  # Assuming angles in radians, adjust as necessary
+    #     space.setBounds(bounds)
+    #     # space = ob.CompoundStateSpace() # type: ignore[attr-defined]
+
+    #     # for link in self.mp["L"]:
+    #     #     space.addSubspace(ob.SO2StateSpace(), 1)  # One rotation per link # type: ignore[attr-defined]
+
+    #     return space
     
-#     def _create_solution_dict(self)-> dict:
-#         path_states = self._solution_path_states
-#         solution_dict = {
-#             "plan": {
-#                 "type": self.env["motionplanning"]["type"],
-#                 "L": self.mp["L"],
-#                 "states": path_states
-#             }
-#         }
-#         return solution_dict
+    def _create_space_info(self) -> ob.SpaceInformation: # type: ignore[attr-defined]
+        # Space information for (collision checking, interpolation, etc.)
+        si = ob.SpaceInformation(self._space) # type: ignore[attr-defined]
+        # set state validity checking for this space
+        si.setStateValidityChecker(ob.StateValidityCheckerFn(self._collision_checker.check_state_ompl)) # type: ignore[attr-defined]
+        # set the state sampler for this space
+        sampler = self._get_state_sampler(si)
+        si.setValidStateSamplerAllocator(ob.ValidStateSamplerAllocator(self.sampler)) # type: ignore[attr-defined]
+
+        return si
+    
+    # def _extract_ompl_state(self, ompl_state) -> list:
+    #     # Extract joint angles from flat RealVectorStateSpace
+    #     return [float(ompl_state[i]) for i in range(len(self.mp["L"]))]
+    
+    def _create_solution_dict(self)-> dict:
+        path_states = self._solution_path_states
+        solution_dict = {
+            "plan": {
+                "type": self.config["motionplanning"]["type"],
+                "states": path_states
+            }
+        }
+        return solution_dict
+    
+    def solve_problem(self, verbose = False) -> tuple[bool, float]:
+
+        self.check_pdef_validity()
+        self._solution_path = None
+
+        solved = self._planner.solve(self.config.timelimit)
+        exact = self._pdef.hasExactSolution() # type: ignore[attr-defined]
+        approx = self._pdef.hasApproximateSolution() # type: ignore[attr-defined]
+
+        if verbose:
+            print(f"Solved: {solved}, Exact: {exact}, Approx: {approx}")
+
+        if solved:
+            self._solution_path = self._pdef.getSolutionPath()
+            print('this is the solution path! ', self._solution_path)
+            raise NotImplementedError
+            path_length = self._solution_path.length()
+            return True, path_length
+            # Print a concise summary instead of the full path details
+            # num_states = self._solution_path.getStateCount()  # type: ignore[attr-defined]
+            # path_length = self._solution_path.length()       # type: ignore[attr-defined]
+            # print(f"Found solution with {num_states} states, total length {path_length:.3f}") # TODO: Put this into logger
+        
+        return False, 0
     
 
 if __name__ == "__main__":
