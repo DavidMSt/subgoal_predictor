@@ -62,7 +62,7 @@ def mp_task_example1():
 
 
     ag1 = FRODO_MotionPlanning_Agent(
-        env=app.environment,
+        env_config=app.environment,
         agent_id="frodo1_v",
         Ts=app.Ts,
         start_config=ag1_start
@@ -71,7 +71,7 @@ def mp_task_example1():
     app.mpi.agent_motion_planning(ag1, solution_phase_name="goal", start_config=ag1_start, goal_config= ag1_goal)
 
     ag2 = FRODO_MotionPlanning_Agent(
-        env=app.environment,
+        env_config=app.environment,
         agent_id="frodo2_v",
         Ts=app.Ts,
         start_config=ag2_start

@@ -19,6 +19,7 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_General_Config, FRODO_GeneralAgent_CommandSet
 from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
 from master_thesis.motion_planning.helper.collisions_fcl import EnvironmentCollisionChecker
+from master_thesis.general.configurations import EnvironmentConfig
 
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
@@ -188,6 +189,14 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
     @property
     def obstacles(self):
         return self._obstacles
+    
+    @property
+    def environment_configuration(self) -> EnvironmentConfig:
+        return EnvironmentConfig(
+            limits= self.limits.copy(),
+            obstacles = self.obstacles,
+            Ts = self.Ts
+        )
 
 class FRODO_general_Simulation(FRODO_Simulation):
 

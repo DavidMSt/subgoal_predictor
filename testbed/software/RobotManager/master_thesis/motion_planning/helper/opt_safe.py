@@ -1,10 +1,8 @@
 from dataclasses import dataclass
 import cvxpy as cp
 import numpy as np
-import sys
 import math
 import yaml
-import argparse
 from abc import abstractmethod, ABC
 
 
@@ -147,7 +145,7 @@ class BezierCalculator():
             
             t_current += T_i
 
-        return np.vstack(z_vals), np.vstack(dot_z_vals), np.vstack(ddot_z_vals)
+        return np.vstack(z_vals), np.  vstack(dot_z_vals), np.vstack(ddot_z_vals)
 
 
 @dataclass
@@ -244,15 +242,14 @@ class Plotter:
 
 class OptSafeBase:
 
-    def __init__(self, env_path: str, out_path: str, yaml_export_path = None) -> None:
-        self.setup = OptimizerSetup(env_path, out_path)
+    def __init__(self, env_path: str,) -> None:
+        self.setup = OptimizerSetup(env_path)
         self.variables = []
         self.constraints = []
         self.feasible = True
         self.hyperplanes = []
         self.curve_function_segments = [] # individual bezier curves for piecewise path
         self.control_points = [] # just for computing derivatives in case flat output used
-        self.yaml_export_path = yaml_export_path # Only for arm and car case 
 
     def find_hyperplanes(self):
         """_summary_ Use SVM to get hyperplanes (safe regions) for each curve segment
@@ -419,8 +416,8 @@ class OptSafeBase:
         print('exported yaml file')
 
 class FlatOutputOpt(OptSafeBase, ABC):
-    def __init__(self, env_path: str, out_path: str, dt = 0.1, yaml_export_path= None, T_guess = 10) -> None:
-        super().__init__(env_path, out_path, yaml_export_path)
+    def __init__(self, env_path: str, dt = 0.1, yaml_export_path= None, T_guess = 10) -> None:
+        super().__init__(env_path, yaml_export_path)
         self.dt = dt
         self.actions = None
         self.states = None
@@ -483,8 +480,8 @@ class FlatOutputOpt(OptSafeBase, ABC):
 
 class CarOpt(FlatOutputOpt):
 
-    def __init__(self, env_path: str, out_path: str, dt =0.1, yaml_export_path = None, T_guess = 10) -> None:
-        super().__init__(env_path, out_path, dt = dt, yaml_export_path=yaml_export_path, T_guess=T_guess)
+    def __init__(self, env_path: str, dt =0.1, yaml_export_path = None, T_guess = 10) -> None:
+        super().__init__(env_path, dt = dt, yaml_export_path=yaml_export_path, T_guess=T_guess)
         self.set_car_params()
 
     
@@ -565,65 +562,6 @@ class CarOpt(FlatOutputOpt):
 
         return np.stack((s, phi), axis=1)
 
-# class ArmOpt(OptSafeBase):
-#     def __init__(self, env_path: str, out_path: str, yaml_export_path = None, dt = 0.1, T = 1) -> None:
-#         super().__init__(env_path, out_path, yaml_export_path)
-#         self.set_arm_params()
-#         self.type = 'arm'
-#         self.dt = dt
-#         self.T = T
-
-#     def set_arm_params(self):
-#         link_length = 1.5
-#         self.L  = [link_length, link_length, link_length] 
-    
-#     def bezier_to_configurations(self):
-#         discrete_time_horizon = np.arange(0, self.T, self.dt)
-#         z, _, _ = BezierCalculator.z_dz_ddz_discrete(discrete_time_horizon, self.control_points)
-
-#         link_length = self.L[0]  # Assuming all links are of the same length
-
-#         target_x = np.array(z[:, 0])  # x-coordinates of the target points
-#         target_y = np.array(z[:, 1])  # y-coordinates of the target points
-
-#         theta_target = np.arctan2(target_y, target_x)  # angle to target
-
-#         # Step back by one link length, computing the second joint
-#         p2x = target_x - link_length * np.cos(theta_target)
-#         p2y = target_y - link_length * np.sin(theta_target)
-
-#         # Distance from base to p3
-#         a = np.sqrt(p2x**2 + p2y**2)
-
-#         # angle between l1 and l2
-#         cos_b = np.clip((2 * link_length**2 - a**2) / (2 * link_length**2), -1.0, 1.0)
-#         b = np.arccos(cos_b)  # angle at elbow (joint 2)
-
-#         # Internal angle at base
-#         cos_c = np.clip(a / (2 * link_length), -1.0, 1.0)
-#         c = np.arccos(cos_c)
-
-#         # Compute joint angles
-#         q1 = np.arctan2(p2y, p2x) - c
-#         q2 = np.pi - b
-#         q3 = theta_target - q1 - q2
-
-#         # Stack and convert to plain list of lists
-#         states = np.stack([q1, q2, q3], axis=-1)
-#         states = [list(map(float, q)) for q in states]
-#         self.states = states
-
-#     def create_plan_content(self):
-#         output = {
-#             "plan": {
-#                 "type": "arm",
-#                 "L": self.L,
-#                 "states": self.states
-#             }
-#         }
-#         return output
-
-
 def main():
     """
     Standalone execution for OptSafe without OMPL.
@@ -647,7 +585,6 @@ def main():
             ]
         },
         "motionplanning": {
-            "type": "car",
             "start": [1.0, 1.0, 0.0],
             "goal":  [9.0, 9.0, 0.0],
             "solutionpath": [

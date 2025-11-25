@@ -50,10 +50,11 @@ class SamplerType(Enum):
 
     
 class OMPLPlannerFRODOBase(ABC):
-    def __init__(self, planning_config, sampler: SamplerType = SamplerType.UNIFORM):
-        self.config = planning_config
-        self.agent_type = self.config.type
+    def __init__(self, mp_config, agent_config, env, sampler: SamplerType = SamplerType.UNIFORM):
+        self.mp_config = mp_config
+        self.agent_config = agent_config
         self.sampler = sampler
+        self.env = env
 
         # self._solution_exporter = SolutionExporter(self.agent_type, path_out_yaml, path_out_tree)
         self._collision_checker = self._create_checker()
@@ -61,7 +62,7 @@ class OMPLPlannerFRODOBase(ABC):
     
     def _get_state_sampler(self, si):
         try:
-            sampler = SamplerType.from_string(self.config.sampler)
+            sampler = SamplerType.from_string(self.mp_config.sampler)
         except AttributeError:
             print("No sampler type specified, using default UniformValidStateSampler")
             sampler = SamplerType.UNIFORM.value(si)
@@ -84,7 +85,7 @@ class OMPLPlannerFRODOBase(ABC):
         planner.setProblemDefinition(self._pdef)
 
         if hasattr(planner, "setGoalBias"):
-            planner.setGoalBias(self.config.goal_bias)
+            planner.setGoalBias(self.mp_config.goal_bias)
         else:
             print("Planner does not support goal bias, skipping setting it.")
         # surpress OMPL log outputs
@@ -98,26 +99,16 @@ class OMPLPlannerFRODOBase(ABC):
         self._start = self._space.allocState() # type: ignore[attr-defined]
         self._goal  = self._space.allocState() # type: ignore[attr-defined]
 
-        # Assign start/goal values depending on the type
-        if self.agent_type == "frodo":
-            # SE2StateSpace: must use setters
-            start_x, start_y, s_psi = self.config.start
-            goal_x, goal_y, goal_psi = self.config.goal
-            self._start.setX(float(start_x))
-            self._start.setY(float(start_y))
-            self._start.setYaw(float(s_psi))
-            self._goal.setX(float(goal_x))
-            self._goal.setY(float(goal_y))
-            self._goal.setYaw(float(goal_psi))
 
-        # elif self.type == "arm":
-        #     # flat RealVectorStateSpace: indexing works
-        #     for i, val in enumerate(self.planning_config.start):
-        #         self._start[i] = float(val)
-        #         self._goal[i]  = float(self.planning_config.goal[i])
-
-        else:
-            raise ValueError(f"Unknown motion type: {self.agent_type}")
+        # SE2StateSpace: must use setters
+        start_x, start_y, s_psi = self.mp_config.start
+        goal_x, goal_y, goal_psi = self.mp_config.goal
+        self._start.setX(float(start_x))
+        self._start.setY(float(start_y))
+        self._start.setYaw(float(s_psi))
+        self._goal.setX(float(goal_x))
+        self._goal.setY(float(goal_y))
+        self._goal.setYaw(float(goal_psi))
 
         # Build the ProblemDefinition
         pdef = ob.ProblemDefinition(self._si)  # type: ignore[attr-defined]
@@ -127,7 +118,7 @@ class OMPLPlannerFRODOBase(ABC):
         #                            self.planning_config.goal_eps)
   
         pdef.setStartAndGoalStates(self._start, self._goal,
-                                   self.config.goal_eps)
+                                   self.mp_config.goal_eps)
         pdef.setOptimizationObjective(
             ob.PathLengthOptimizationObjective(self._si)  # type: ignore[attr-defined]
         )
@@ -187,7 +178,7 @@ class OMPLPlannerFRODOBase(ABC):
         env_min = []
         env_max = []
 
-        for limit in self.config.env_limits:
+        for limit in self.env.limits:
             env_min.append(limit[0])
             env_max.append(limit[1])
 
@@ -203,7 +194,7 @@ class OMPLPlannerFRODOBase(ABC):
         space.setBounds(bounds)
 
         space.setSubspaceWeight(0, 1.0)  # set R2 weight to 1.0
-        space.setSubspaceWeight(1, self.config.so_r2_weight)
+        space.setSubspaceWeight(1, self.mp_config.so_r2_weight)
         return space
 
     def _extract_ompl_state(self, ompl_state) -> list:
@@ -223,25 +214,24 @@ class OMPLPlannerFRODOBase(ABC):
         """
         return PathLengthOptimizationObjective(si)
     
-
-class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
-    def __init__(self, planning_config, sampler: SamplerType = SamplerType.UNIFORM):
-        self._dt: float = planning_config.dt
-        super().__init__(planning_config, sampler)
-    
     def _create_checker(self):
-        L, W, H = self.config.L, self.config.W, self.config.H
+        L, W, H = self.agent_config.length, self.agent_config.width, self.agent_config.height
         if L is None or W is None or H is None or L <= 0 or W <= 0 or H <= 0:
             raise ValueError("Dimensions L, W, H must be provided for FRODO collision checking and must be valid positive numbers.")
 
-        checker = CollisionChecker(self.config, type=self.agent_type)
-        checker.set_dimensions(self.config.L, self.config.W, self.config.H)
-        checker.initialize_env(self.config)
+        checker = CollisionChecker(self.mp_config)
+        checker.set_dimensions(self.agent_config.length, self.agent_config.width, self.agent_config.height)
+        checker.initialize_env(self.env)
         return checker
+    
+
+class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
+    def __init__(self, mp_config, agent_config, env, sampler: SamplerType = SamplerType.UNIFORM):
+        super().__init__(mp_config, agent_config, env, sampler)
     
     def select_planner_type(self, si) -> Any:
         try:
-            self.planner_type = self.config.planner
+            self.planner_type = self.mp_config.planner
             if self.planner_type == "rrt":
                 return oc.RRT(si) # type: ignore[attr-defined]
             elif self.planner_type == "sst":
@@ -291,7 +281,7 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
         si.setValidStateSamplerAllocator(ob.ValidStateSamplerAllocator(self._get_state_sampler)) # type: ignore[attr-defined]
         si.setStatePropagator(oc.StatePropagatorFn(self._state_propagator))  # type: ignore[attr-defined]
         si.setMinMaxControlDuration(1, 1)
-        si.setPropagationStepSize(self._dt)
+        si.setPropagationStepSize(self.agent_config.dt)
 
         return si
 
@@ -337,7 +327,7 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
             "states": path_states,
             "actions": path_actions,
             "durations": path_durations,
-            "delta_t": self._dt
+            "delta_t": self.agent_config.dt
         }
         return solution_dict
     
@@ -346,7 +336,7 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
         self.check_pdef_validity()
         self._solution_path = None
 
-        solved = self._planner.solve(self.config.timelimit)
+        solved = self._planner.solve(self.mp_config.timelimit)
         exact = self._pdef.hasExactSolution() # type: ignore[attr-defined]
         approx = self._pdef.hasApproximateSolution() # type: ignore[attr-defined]
 
@@ -366,16 +356,16 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
 
 class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
 
-    def __init__(self, planning_config, sampler: SamplerType = SamplerType.UNIFORM):
-        super().__init__(planning_config, sampler)
+    def __init__(self, mp_config, agent_config, env, sampler: SamplerType = SamplerType.UNIFORM):
+        super().__init__(mp_config = mp_config, agent_config=agent_config, env = env, sampler= sampler)
 
     def select_planner_type(self, si) -> Any:
-        L, W, H = self.config.L, self.config.W, self.config.H
+        L, W, H = self.agent_config.length, self.agent_config.width, self.agent_config.height
         if L is None or W is None or H is None or L <= 0 or W <= 0 or H <= 0:
             raise ValueError("Dimensions L, W, H must be provided for FRODO collision checking and must be v")
                              
         try:
-                self.planner_type = self.config.planner
+                self.planner_type = self.mp_config.planner
                 if self.planner_type == "rrt": # car and arm
                     return og.RRT(si) # type: ignore[attr-defined]
                 elif self.planner_type == "rrt*":
@@ -390,12 +380,6 @@ class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
         except KeyError:
             print("No planner type specified, using default RRT")
             return og.RRT(si) # type: ignore[attr-defined]
-
-    def _create_checker(self):
-        checker = CollisionChecker(self.config, type = self.agent_type)
-        checker.set_dimensions(self.config.L, self.config.W, self.config.H)
-        checker.initialize_env(self.config)
-        return checker
     
     # def _create_space(self):
 
@@ -432,7 +416,6 @@ class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
         path_states = self._solution_path_states
         solution_dict = {
             "plan": {
-                "type": self.config["motionplanning"]["type"],
                 "states": path_states
             }
         }
@@ -443,7 +426,7 @@ class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
         self.check_pdef_validity()
         self._solution_path = None
 
-        solved = self._planner.solve(self.config.timelimit)
+        solved = self._planner.solve(self.mp_config.timelimit)
         exact = self._pdef.hasExactSolution() # type: ignore[attr-defined]
         approx = self._pdef.hasApproximateSolution() # type: ignore[attr-defined]
 

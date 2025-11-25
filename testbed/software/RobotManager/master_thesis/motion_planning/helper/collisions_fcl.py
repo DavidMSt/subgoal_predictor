@@ -8,11 +8,9 @@ class CollisionChecker():
     # _env: dict # environment in which agent is
     # _plan: dict # plan of configurations we want to check for collisions
 
-    def __init__(self, planning_config, type = None):
-        self._env = None  # Ensure _env is always defined
+    def __init__(self, env):
+        self.env = env  # Ensure _env is always defined
         self.collisions_list = [] # initialize dynamic collison list
-        self._planning_config = planning_config
-        self._type = type
 
     def run_from_yaml(self):
         # load data from yaml
@@ -28,35 +26,17 @@ class CollisionChecker():
 
     def set_plan(self, plan):
         # self._plan = plan
-        self._type = plan["plan"]["type"]
         self.states = plan["plan"]["states"]
-        if self._type == "arm":
-            self.set_dimensions(plan["plan"]["L"])
-
-        elif self._type == "car":
-            self.set_dimensions(plan["plan"]["L"], plan["plan"]["W"], plan["plan"]["H"])
     
     def set_dimensions(self, L, W= None, H= None):
-        if self._type == 'arm':
-            self.dimensions = {
-                "L": L
-            }
-        elif self._type == 'car':
-            self.dimensions = {
-                "L": L,
-                "W": W,
-                "H": H
-            }
-        elif self._type == "frodo":
-            self.dimensions = {
-                "L": L,
-                "W": W,
-                "H": H
-            }
-        self.dimensions
+        self.dimensions = {
+            "L": L,
+            "W": W,
+            "H": H
+        }
 
     def initialize_env(self, env= None):
-        self._env = env
+        self.env = env
         # Defensive programming: check for 'obstacles' attribute
         if not hasattr(env, "obstacles"):
             raise AttributeError("Provided env has no 'obstacles' attribute")
@@ -91,16 +71,11 @@ class CollisionChecker():
         return data.result.is_collision
     
     def check_state_ompl(self, state):
-        if self._type == "frodo":
-            x = state.getX()
-            y = state.getY()
-            theta = state.getYaw()
-            config = [x, y, theta]
-        # elif self._type == "arm":
-        #     # extract joint angles from flat real-vector state
-        #     config = [float(state[i]) for i in range(len(self.dimensions["L"]))]
-        else:
-            raise NotImplementedError("Collision checker can't handle type: {}".format(self._type))
+        x = state.getX()
+        y = state.getY()
+        theta = state.getYaw()
+        config = [x, y, theta]
+
 
         valid = self.check_state(config)
 
@@ -114,20 +89,13 @@ class CollisionChecker():
         self.collisions_list = [self.check_state(state) for state in states]
 
     def create_agent_objects(self, state):
-        if self._type == "frodo":
-            objs = self.create_objects_frodo(state)
-
-        elif self._type == "arm":
-            objs = self.create_objects_arm(state)
-
-        else:
-            raise NotImplementedError(f"Unknown plan type: {self._plan['plan']['type']}")
+        objs = self.create_objects_frodo(state)
 
         return objs
 
     def create_environment_objects(self):
         obstacle_list = []
-        for obstacle in self._planning_config.obstacles:
+        for obstacle in self.env.obstacles:
             _obs = self.create_env_collision_object(obstacle)
             obstacle_list.append(_obs)
         return obstacle_list
