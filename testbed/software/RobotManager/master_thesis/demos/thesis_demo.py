@@ -93,7 +93,7 @@ class ThesisDemo:
     # === METHODS ======================================================================================================
     def init(self):
         self._buildGUI()
-        self._buildBabylon()
+        # self._buildBabylon()
         self.babylon_visualization.init()
         self.env.init()
         self.env.initialize()
@@ -246,30 +246,6 @@ class ThesisDemo:
             discard_inputs=True,
         ))
         page1.addWidget(bilbo1_button, height=2, width=4)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _buildBabylon(self):
-
-        floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
-        self.babylon_visualization.addObject(floor)
-
-        wall1 = WallFancy('wall1', length=5, texture='wood4.png', include_end_caps=True)
-        wall1.setPosition(y=2.5)
-        self.babylon_visualization.addObject(wall1)
-
-        wall2 = WallFancy('wall2', length=5, texture='wood4.png', include_end_caps=True)
-        self.babylon_visualization.addObject(wall2)
-        wall2.setPosition(y=-2.5)
-
-        wall3 = WallFancy('wall3', length=5, texture='wood4.png')
-        wall3.setPosition(x=2.5)
-        wall3.setAngle(np.pi / 2)
-        self.babylon_visualization.addObject(wall3)
-
-        wall4 = WallFancy('wall4', length=5, texture='wood4.png')
-        wall4.setPosition(x=-2.5)
-        wall4.setAngle(np.pi / 2)
-        self.babylon_visualization.addObject(wall4)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _logRedirection(self, log_entry, log, logger, level):
