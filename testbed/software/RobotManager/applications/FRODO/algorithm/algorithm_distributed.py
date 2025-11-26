@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import enum
 import numpy as np
 import qmt
@@ -14,6 +15,16 @@ from core.utils.logging_utils import Logger
 class DistributedUpdateType(enum.StrEnum):
     EKF = "EKF"
     CI = "CI"
+
+
+@dataclasses.dataclass(frozen=True)
+class DistributedAgent_Sample:
+    id: str
+    state: AlgorithmAgentState
+    covariance: np.ndarray
+    input: np.ndarray
+    measurements: list[AlgorithmAgentMeasurement]
+    is_anchor: bool
 
 
 class DistributedAgent(AlgorithmAgent):
@@ -99,6 +110,15 @@ class DistributedAgent(AlgorithmAgent):
         self.covariance = new_covariance
         self.covariance = 0.5 * (self.covariance + self.covariance.T)
 
+    # ----------------------------------------------------------------------------------------------------------------------
+    def get_sample(self):
+        return DistributedAgent_Sample(id=self.id,
+                                       state=self.state,
+                                       covariance=self.covariance,
+                                       input=self.input.as_array(),
+                                       measurements=self.measurements,
+                                       is_anchor=self.is_anchor)
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 def get_estimated_state(agent, measurement: AlgorithmAgentMeasurement) -> tuple[np.ndarray, np.ndarray]:
@@ -127,6 +147,13 @@ def get_estimated_state(agent, measurement: AlgorithmAgentMeasurement) -> tuple[
 
 
 # ======================================================================================================================
+
+@dataclasses.dataclass
+class DistributedAlgorithm_Sample:
+    step: int
+    agents: dict[str, DistributedAgent_Sample]
+
+
 class DistributedAlgorithm(LocalizationAlgorithm):
     agents: dict[str, DistributedAgent]
 
@@ -146,6 +173,8 @@ class DistributedAlgorithm(LocalizationAlgorithm):
         self.logger.info(
             f"Initialized distributed algorithm with {len(agents)} agents: "
             f"{[agent.id for agent in self.agents.values()]}")
+
+        self.step = 0
 
     # ------------------------------------------------------------------------------------------------------------------
     def prediction(self):
@@ -179,3 +208,10 @@ class DistributedAlgorithm(LocalizationAlgorithm):
                 agent.update_from_estimated_state(estimated_state=meas[0],
                                                   covariance=meas[1],
                                                   update_method=self.update_method, )
+
+        self.step += 1
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_sample(self) -> DistributedAlgorithm_Sample:
+        return DistributedAlgorithm_Sample(step=self.step,
+                                           agents={agent.id: agent.get_sample() for agent in self.agents.values()})

@@ -7,14 +7,15 @@ from typing import Optional
 import numpy as np
 import qmt
 
-from applications.FRODO.tracker.definitions import TrackedStatic, TrackedFRODO
-from applications.FRODO.tracker.frodo_tracker import FRODO_Tracker, FRODO_Tracker_State
+from applications.FRODO.testbed.tracker.definitions import TrackedStatic, TrackedFRODO
+from applications.FRODO.testbed.tracker.frodo_tracker import FRODO_Tracker, FRODO_Tracker_State
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.events import event_definition, Event, EventFlag
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
 from core.utils.network.network import getHostIP
 from core.utils.sound.sound import speak
+from core.utils.states import State
 from core.utils.time import TimeoutTimer, IntervalTimer
 from robots.frodo.frodo import FRODO
 from robots.frodo.frodo_definitions import FRODO_DynamicState, FRODO_ArucoMeasurement, getObjectFromArucoId
@@ -32,7 +33,7 @@ FUSE_FACTOR = 0.75
 
 # ======================================================================================================================
 @dataclasses.dataclass
-class TestbedObjectState:
+class TestbedObjectState(State):
     x: float
     y: float
     psi: float

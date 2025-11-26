@@ -78,13 +78,13 @@ class BILBO_Utilities:
         self.core.events.joystick_connected.on(callback=Callback(self.speak,
                                                                  inputs={'message': 'Joystick connected'},
                                                                  discard_inputs=True),
-                                               input_data=False,
+                                               discard_data=True,
                                                )
 
         self.core.events.joystick_disconnected.on(callback=Callback(self.speak,
                                                                     inputs={'message': 'Joystick disconnected'},
                                                                     discard_inputs=True),
-                                                  input_data=False, )
+                                                  discard_data=True, )
 
         # ------------------------------------------------------------------------------------------------------------------
 

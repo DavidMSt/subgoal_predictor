@@ -7,7 +7,7 @@ from core.utils.logging_utils import Logger
 from core.utils.time import delayed_execution, setTimeout
 from robots.frodo.frodo_control import FRODO_Control
 from robots.frodo.frodo_core import FRODO_Core
-from robots.frodo.frodo_definitions import FRODO_Information, FRODO_ControlMode
+from robots.frodo.frodo_definitions import FRODO_Config, FRODO_ControlMode
 from robots.frodo.frodo_interfaces import FRODO_Interfaces
 
 
@@ -31,12 +31,12 @@ class FRODO:
     events: FRODO_Events
 
     # === INIT =========================================================================================================
-    def __init__(self, device: Device, information: FRODO_Information):
+    def __init__(self, device: Device, config: FRODO_Config):
         self.device = device
-        self.information = information
+        self.config = config
         self.logger = Logger(f"{self.id}")
-        self.core = FRODO_Core(robot_id=self.id, device=self.device, information=information)
-        self.control = FRODO_Control(device=self.device, information=information)
+        self.core = FRODO_Core(robot_id=self.id, device=self.device, config=config)
+        self.control = FRODO_Control(device=self.device, information=config)
         self.interfaces = FRODO_Interfaces(core=self.core, control=self.control)
         self.callbacks = FRODO_Callbacks()
         self.events = FRODO_Events()
@@ -44,7 +44,7 @@ class FRODO:
     # === PROPERTIES ===================================================================================================
     @property
     def id(self):
-        return self.information.id
+        return self.config.id
 
     # === METHODS ======================================================================================================
     def setLEDs(self, red, green, blue):

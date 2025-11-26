@@ -9,7 +9,7 @@ from core.utils.logging_utils import Logger
 from core.utils.network.network import getHostIP
 from extensions.cli.cli import CommandSet
 from robots.frodo.frodo import FRODO
-from robots.frodo.frodo_definitions import FRODO_Information
+from robots.frodo.frodo_definitions import FRODO_Config
 
 
 @callback_definition
@@ -111,32 +111,32 @@ class FRODO_Manager:
         # Check if the event is a BILBO handshake. Only then do we accept it as a BILBO
         if event_message.event == 'frodo_handshake':
             try:
-                frodo_information = from_dict_auto(FRODO_Information, event_message.data)
+                frodo_config = from_dict_auto(FRODO_Config, event_message.data)
             except Exception as e:
                 self.logger.error(f"Error in frodo handshake: {e}. Message: {event_message}")
                 return
 
             # Check if this device is already registered
-            if frodo_information.id in self.robots:
-                self.logger.warning(f"Device with ID {frodo_information.id} already registered")
+            if frodo_config.id in self.robots:
+                self.logger.warning(f"Device with ID {frodo_config.id} already registered")
                 return
 
-            self._addNewFrodo(device, frodo_information)
+            self._addNewFrodo(device, frodo_config)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _addNewFrodo(self, device: Device, information: FRODO_Information):
+    def _addNewFrodo(self, device: Device, config: FRODO_Config):
 
         # Remove the callback for the event
         device.callbacks.event.remove(self._deviceEvent_callback)
 
         # Create a new BILBO robot
-        new_robot = FRODO(device, information)
-        self.robots[information.id] = new_robot
+        new_robot = FRODO(device, config)
+        self.robots[config.id] = new_robot
 
         # Add the robot's CLI command set
         self.cli.addChild(new_robot.interfaces.cli_command_set)
 
-        self.logger.info(f"New FRODO \"{information.id}\" connected")
+        self.logger.info(f"New FRODO \"{config.id}\" connected")
 
         # Call the callbacks and events for a new robot
         self.callbacks.new_robot.call(new_robot)

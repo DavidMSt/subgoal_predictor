@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from RPi import GPIO
 
+from robot.config import get_bilbo_config
+
 top_level_module = os.path.expanduser("~/robot/software")
 
 if top_level_module not in sys.path:
@@ -20,7 +22,6 @@ from robot.utilities.display.display import Display
 from robot.utilities.display.pages import StatusPage
 from core.utils.singletonlock.singletonlock import terminate, check_for_running_lock_holder, get_lock_mode
 from core.utils.sound.sound import SoundSystem
-from robot.hardware import get_hardware_definition
 
 
 def get_full_path(relative_path):
@@ -74,22 +75,25 @@ class Startup:
 
     def __init__(self):
         self.display = Display()
-        self.config = getBoardConfig()
-        self.hardware = get_hardware_definition()
+        self.board_config = getBoardConfig()
+        self.config = get_bilbo_config()
 
         self.program_running = False
         self.joystick_connected = False
         self.long_press_detected = False
 
-        self.LED_PIN = self.hardware['electronics']['buttons']['primary']['led']['pin']
-        self.BUTTON_PIN = self.hardware['electronics']['buttons']['primary']['pin']
+        # self.LED_PIN = self.hardware['electronics']['buttons']['primary']['led']['pin']
+        # self.BUTTON_PIN = self.hardware['electronics']['buttons']['primary']['pin']
+
+        # self.LED_PIN = self.config.electronics.buttons.primary
+        self.BUTTON_PIN = self.config.electronics.buttons.primary.pin
 
         print(self.BUTTON_PIN)
 
         GPIO.setmode(GPIO.BCM)
         GPIO.setwarnings(False)
-        GPIO.setup(self.LED_PIN, GPIO.OUT)
-        GPIO.output(self.LED_PIN, False)
+        # GPIO.setup(self.LED_PIN, GPIO.OUT)
+        # GPIO.output(self.LED_PIN, False)
 
         self.button = Button(self.BUTTON_PIN,
                              short_press_callback=self.button_short_press_callback,
@@ -193,12 +197,13 @@ class Startup:
 
     # ------------------------------------------------------------------------------------------------------------------
     def setLED(self, state):
-        if state == 1:
-            GPIO.output(self.LED_PIN, GPIO.HIGH)
-        elif state == 0:
-            GPIO.output(self.LED_PIN, GPIO.LOW)
-        elif state == -1:
-            GPIO.output(self.LED_PIN, not GPIO.input(self.LED_PIN))
+        ...
+        # if state == 1:
+        #     GPIO.output(self.LED_PIN, GPIO.HIGH)
+        # elif state == 0:
+        #     GPIO.output(self.LED_PIN, GPIO.LOW)
+        # elif state == -1:
+        #     GPIO.output(self.LED_PIN, not GPIO.input(self.LED_PIN))
 
     # ------------------------------------------------------------------------------------------------------------------
     def button_short_press_callback(self, *args, **kwargs):

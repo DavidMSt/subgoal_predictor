@@ -9,7 +9,7 @@ from core.utils.colors import random_color_from_palette
 from core.utils.dataclass_utils import asdict_optimized
 from core.utils.events import Event, event_definition
 from core.utils.exit import register_exit_callback
-from core.utils.files import relativeToFullPath
+from core.utils.files import get_absolute_path
 from core.utils.js.vite import run_vite_app
 from core.utils.logging_utils import Logger
 from core.utils.network.network import getHostIP
@@ -716,7 +716,7 @@ class App:
 
     # ------------------------------------------------------------------------------------------------------------------
     def runJSApp(self):
-        js_app_path = relativeToFullPath("../")
+        js_app_path = get_absolute_path("../")
 
         self.js_process = run_vite_app(js_app_path, host=self.server.host, port=self.js_port, env_vars={
             'WS_PORT': str(self.server.port),

@@ -443,11 +443,11 @@ class DeviceServer:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _deviceDisconnected_callback(self, device):
-        self.devices.pop(device.information.device_id)
+        self.devices.pop(device.config.device_id)
         self.callbacks.device_disconnected.call(device)
-        self.events.device_disconnected.set(resource=device, flags={'type': device.information.device_type})
+        self.events.device_disconnected.set(resource=device, flags={'type': device.config.device_type})
 
     # ------------------------------------------------------------------------------------------------------------------
     def _deviceStream_callback(self, stream, device):
         self.callbacks.stream.call(stream, device)
-        self.events.stream.set(resource=stream, flags={'type': stream.type, 'device_id': device.information.device_id})
+        self.events.stream.set(resource=stream, flags={'type': stream.type, 'device_id': device.config.device_id})

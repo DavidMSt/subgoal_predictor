@@ -5,7 +5,7 @@ from core.communication.protocol import JSON_Message
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.logging_utils import Logger, LOG_LEVELS
 from core.utils.sound.sound import speak
-from robots.frodo.frodo_definitions import FRODO_Sample, FRODO_ControlMode, FRODO_Information
+from robots.frodo.frodo_definitions import FRODO_Sample, FRODO_ControlMode, FRODO_Config
 from core.utils.events import pred_flag_equals, event_definition, Event, EventFlag
 
 
@@ -26,16 +26,16 @@ class FRODO_Core:
     tick: int | None = None
     data: FRODO_Sample | None = None
     events: FRODO_Core_Events
-    information: FRODO_Information | None
+    config: FRODO_Config | None
 
     # === INIT =========================================================================================================
-    def __init__(self, robot_id: str, device: Device, information: FRODO_Information | None = None):
+    def __init__(self, robot_id: str, device: Device, config: FRODO_Config | None = None):
         self.device = device
         self.id = robot_id
         self.logger = Logger(f"{self.id}")
         self.logger.setLevel('DEBUG')
 
-        self.information = information
+        self.config = config
         self.events = FRODO_Core_Events()
 
         self.device.events.event.on(self._handleLogMessage,

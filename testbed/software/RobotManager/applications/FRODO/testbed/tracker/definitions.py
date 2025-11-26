@@ -13,8 +13,9 @@ from core.utils.orientation.orientation_2d import calculate_projection, calculat
 from core.utils.states import State
 from core.utils.time import setInterval
 from extensions.optitrack.optitrack import RigidBodySample
-from robots.frodo.frodo_definitions import TrackedOrigin_Definition, FRODO_DEFINITIONS, STATIC_DEFINITIONS, \
-    ORIGIN_FRODO_DEFINITION
+from robots.frodo.frodo_definitions import TrackedOrigin_Definition, STATIC_DEFINITIONS, \
+    ORIGIN_FRODO_DEFINITION, FRODO1_OPTITRACK_SETTINGS, FRODO2_OPTITRACK_SETTINGS, FRODO3_OPTITRACK_SETTINGS, \
+    FRODO4_OPTITRACK_SETTINGS
 
 
 @dataclasses.dataclass
@@ -361,6 +362,26 @@ class TrackedFRODO:
         return float(v_filt), float(psi_dot_filt)
 
 
+TRACKED_FRODO_DEFINITIONS = {
+    'frodo1': TrackedFRODO_Definition(points=[1, 2, 3, 4, 5],
+                                      point_x_axis_start=FRODO1_OPTITRACK_SETTINGS.x_start,
+                                      point_y_axis_start=FRODO1_OPTITRACK_SETTINGS.y_start,
+                                      point_y_axis_end=FRODO1_OPTITRACK_SETTINGS.y_end, ),
+    'frodo2': TrackedFRODO_Definition(points=[1, 2, 3, 4, 5],
+                                      point_x_axis_start=FRODO2_OPTITRACK_SETTINGS.x_start,
+                                      point_y_axis_start=FRODO2_OPTITRACK_SETTINGS.y_start,
+                                      point_y_axis_end=FRODO2_OPTITRACK_SETTINGS.y_end, ),
+    'frodo3': TrackedFRODO_Definition(points=[1, 2, 3, 4, 5],
+                                      point_x_axis_start=FRODO3_OPTITRACK_SETTINGS.x_start,
+                                      point_y_axis_start=FRODO3_OPTITRACK_SETTINGS.y_start,
+                                      point_y_axis_end=FRODO3_OPTITRACK_SETTINGS.y_end, ),
+    'frodo4': TrackedFRODO_Definition(points=[1, 2, 3, 4, 5],
+                                      point_x_axis_start=FRODO4_OPTITRACK_SETTINGS.x_start,
+                                      point_y_axis_start=FRODO4_OPTITRACK_SETTINGS.y_start,
+                                      point_y_axis_end=FRODO4_OPTITRACK_SETTINGS.y_end, )
+}
+
+
 # ======================================================================================================================
 @dataclasses.dataclass
 class TrackedStatic_Definition:
@@ -466,56 +487,6 @@ class TrackedStatic:
         if self.tracking_valid:
             self.callbacks.update.call(self.state, self.tracking_valid)
             self.events.update.set(self.state)
-
-
-# ======================================================================================================================
-
-FRODO1_TRACKED_OBJECT = TrackedFRODO(id='frodo1',
-                                     definition=TrackedFRODO_Definition(points=[1, 2, 3, 4, 5],
-                                                                        point_x_axis_start=FRODO_DEFINITIONS[
-                                                                            'frodo1'].optitrack.x_start,
-                                                                        point_y_axis_start=FRODO_DEFINITIONS[
-                                                                            'frodo1'].optitrack.y_start,
-                                                                        point_y_axis_end=FRODO_DEFINITIONS[
-                                                                            'frodo1'].optitrack.y_end,
-                                                                        ))
-
-FRODO2_TRACKED_OBJECT = TrackedFRODO(id='frodo2',
-                                     definition=TrackedFRODO_Definition(points=[1, 2, 3, 4, 5],
-                                                                        point_x_axis_start=FRODO_DEFINITIONS[
-                                                                            'frodo2'].optitrack.x_start,
-                                                                        point_y_axis_start=FRODO_DEFINITIONS[
-                                                                            'frodo2'].optitrack.y_start,
-                                                                        point_y_axis_end=FRODO_DEFINITIONS[
-                                                                            'frodo2'].optitrack.y_end,
-                                                                        ))
-
-FRODO3_TRACKED_OBJECT = TrackedFRODO(id='frodo3',
-                                     definition=TrackedFRODO_Definition(points=[1, 2, 3, 4, 5],
-                                                                        point_x_axis_start=FRODO_DEFINITIONS[
-                                                                            'frodo3'].optitrack.x_start,
-                                                                        point_y_axis_start=FRODO_DEFINITIONS[
-                                                                            'frodo3'].optitrack.y_start,
-                                                                        point_y_axis_end=FRODO_DEFINITIONS[
-                                                                            'frodo3'].optitrack.y_end,
-                                                                        ))
-
-FRODO4_TRACKED_OBJECT = TrackedFRODO(id='frodo4',
-                                     definition=TrackedFRODO_Definition(points=[1, 2, 3, 4, 5],
-                                                                        point_x_axis_start=FRODO_DEFINITIONS[
-                                                                            'frodo4'].optitrack.x_start,
-                                                                        point_y_axis_start=FRODO_DEFINITIONS[
-                                                                            'frodo4'].optitrack.y_start,
-                                                                        point_y_axis_end=FRODO_DEFINITIONS[
-                                                                            'frodo4'].optitrack.y_end,
-                                                                        ))
-
-FRODO_TRACKED_OBJECTS = {
-    'frodo1': FRODO1_TRACKED_OBJECT,
-    'frodo2': FRODO2_TRACKED_OBJECT,
-    'frodo3': FRODO3_TRACKED_OBJECT,
-    'frodo4': FRODO4_TRACKED_OBJECT,
-}
 
 ORIGIN_FRODO = TrackedOrigin(id='origin_frodo',
                              definition=ORIGIN_FRODO_DEFINITION)

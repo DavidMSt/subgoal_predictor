@@ -2,7 +2,7 @@ from core.communication.device_server import Device
 from core.utils.archives.events import pred_flag_equals
 from core.utils.events import event_definition, Event, EventFlag
 from core.utils.logging_utils import Logger
-from robots.frodo.frodo_definitions import FRODO_ControlMode, FRODO_Information
+from robots.frodo.frodo_definitions import FRODO_ControlMode, FRODO_Config
 
 
 class FRODO_Control_Events:
@@ -25,7 +25,7 @@ class FRODO_Control:
     navigation_events: FRODO_Navigation_Events
 
     # === INIT =========================================================================================================
-    def __init__(self, device: Device, information: FRODO_Information):
+    def __init__(self, device: Device, information: FRODO_Config):
         self.device = device
         self.information = information
         self.logger = Logger(f"{self.information.id} Control")

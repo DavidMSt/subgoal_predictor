@@ -8,6 +8,9 @@ from typing import List, Tuple, Dict
 import cv2
 import numpy as np
 
+from applications.FRODO.utilities.measurement_model import FRODO_MeasurementModel, measurement_model_from_file
+from core.utils.files import get_absolute_path
+
 FRODO_ID = ['frodo1', 'frodo2', 'frodo3', 'frodo4']
 FRODO_USER_NAME = 'admin'
 FRODO_PASSWORD = 'beutlin'
@@ -174,6 +177,15 @@ Contents
 # ======================================================================================================================
 # === DATACLASS DEFINITIONS (Documented) ===============================================================================
 # ======================================================================================================================
+@dataclasses.dataclass
+class FRODO_Network_Settings:
+    address: str
+    data_stream_port: int
+    gui_port: int
+    ssid: str
+    username: str
+    password: str
+
 
 @dataclasses.dataclass
 class FRODO_Physical_Model:
@@ -288,7 +300,7 @@ class FRODO_Aruco_Settings:
 
 
 @dataclasses.dataclass
-class FRODO_Definition:
+class FRODO_Config:
     """
     Complete FRODO robot definition.
 
@@ -309,10 +321,12 @@ class FRODO_Definition:
     """
     id: str
     color: List[float]
+    network: FRODO_Network_Settings
     camera: FRODO_Camera_Settings
     aruco: FRODO_Aruco_Settings
     optitrack: FRODO_Optitrack_Settings
     physical_model: FRODO_Physical_Model
+    measurement_model: FRODO_MeasurementModel
 
 
 # --- Statics (non-robot tracked targets) ------------------------------------------------------------------------------
@@ -477,7 +491,7 @@ FRODO2_OPTITRACK_SETTINGS = FRODO_Optitrack_Settings(
     y_start=1,
     y_end=5,
     x_start=4,
-) # DONE
+)  # DONE
 
 FRODO3_OPTITRACK_SETTINGS = FRODO_Optitrack_Settings(
     points=[1, 2, 3, 4, 5],
@@ -491,7 +505,7 @@ FRODO4_OPTITRACK_SETTINGS = FRODO_Optitrack_Settings(
     y_start=2,
     y_end=4,
     x_start=5,
-) # DONE
+)  # DONE
 
 OPTITRACK_SETTINGS: Dict[str, FRODO_Optitrack_Settings] = {
     "frodo1": FRODO1_OPTITRACK_SETTINGS,
@@ -541,20 +555,24 @@ ARUCO_SETTINGS: Dict[str, FRODO_Aruco_Settings] = {
     "frodo4": ARUCO_SETTINGS_FRODO4,
 }
 
+# ======================================================================================================================
+
+
 # === FRODO: Aggregated per-robot definitions ==========================================================================
 # Builds a complete FRODO_Definition for each robot from the pieces above.
-
-FRODO_DEFINITIONS: Dict[str, FRODO_Definition] = {
-    rid: FRODO_Definition(
-        id=rid,
-        color=FRODO_COLORS[rid],
-        camera=CAMERA_SETTINGS[rid],
-        aruco=ARUCO_SETTINGS[rid],
-        optitrack=OPTITRACK_SETTINGS[rid],
-        physical_model=FRODO_MODEL_GENERAL,
-    )
-    for rid in ("frodo1", "frodo2", "frodo3", "frodo4")
-}
+#
+# FRODO_DEFINITIONS: Dict[str, FRODO_Config] = {
+#     rid: FRODO_Config(
+#         id=rid,
+#         color=FRODO_COLORS[rid],
+#         camera=CAMERA_SETTINGS[rid],
+#         aruco=ARUCO_SETTINGS[rid],
+#         optitrack=OPTITRACK_SETTINGS[rid],
+#         physical_model=FRODO_MODEL_GENERAL,
+#         measurement_model=measurement_model_from_file(relativeToFullPath("./measurement_model.yaml"))
+#     )
+#     for rid in ("frodo1", "frodo2", "frodo3", "frodo4")
+# }
 
 # === Statics ==========================================================================================================
 
@@ -586,6 +604,13 @@ STATIC_DEFINITIONS: Dict[str, Static_Definition] = {
 }
 
 
+FRODO_ARUCO_DEFINITIONS = {
+    'frodo1': ARUCO_SETTINGS_FRODO1,
+    'frodo2': ARUCO_SETTINGS_FRODO2,
+    'frodo3': ARUCO_SETTINGS_FRODO3,
+    'frodo4': ARUCO_SETTINGS_FRODO4,
+}
+
 # ======================================================================================================================
 # === UTILITIES ========================================================================================================
 # ======================================================================================================================
@@ -614,25 +639,11 @@ def get_all_aruco_ids() -> List[int]:
 
 
 # ======================================================================================================================
-@dataclasses.dataclass
-class FRODO_Information:
-    id: str = ''
-    color: list | None = None
-    address: str = ''
-    data_stream_port: int = ''
-    gui_port: int = ''
-    ssid: str = ''
-    username: str = ''
-    password: str = ''
-    definition: FRODO_Definition | None = None
-
-
-# ======================================================================================================================
 def getObjectFromArucoId(aruco_id):
-    for key, obj in FRODO_DEFINITIONS.items():
-        if obj.aruco.marker_front == aruco_id:
+    for key, obj in FRODO_ARUCO_DEFINITIONS.items():
+        if obj.marker_front == aruco_id:
             return 'frodo', key, math.pi
-        elif obj.aruco.marker_back == aruco_id:
+        elif obj.marker_back == aruco_id:
             return 'frodo', key, 0.0
 
     for key, obj in STATIC_DEFINITIONS.items():

@@ -125,7 +125,7 @@ class Command:
                  function: Callback | Callable = None,
                  description='',
                  arguments: list[CommandArgument] = None,
-                 allow_positionals=False,
+                 allow_positionals=True,
                  execute_in_thread=False):
         self.name = name
         self.execute_in_thread = execute_in_thread

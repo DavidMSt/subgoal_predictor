@@ -65,7 +65,9 @@ def agent_is_in_fov(agent_from_state: FRODO_State | np.ndarray,
 
 
 def generate_ideal_measurement(agent_from_state: FRODO_State | np.ndarray,
-                               agent_to_state: FRODO_State | np.ndarray) -> np.ndarray:
+                               agent_to_state: FRODO_State | np.ndarray,
+                               measurement_model: FRODO_MeasurementModel | None = None) -> tuple[
+    np.ndarray, np.ndarray]:
     if isinstance(agent_from_state, np.ndarray):
         agent_from_state = FRODO_State.fromarray(agent_from_state)
 
@@ -79,13 +81,45 @@ def generate_ideal_measurement(agent_from_state: FRODO_State | np.ndarray,
     position_relative_local = vector2LocalFrame(position_relative_global, agent_from_state.psi)
     psi_local = qmt.wrapToPi(agent_to_state.psi - agent_from_state.psi)
 
-    return np.array([position_relative_local[0], position_relative_local[1], psi_local])
+    if measurement_model is not None:
+        covariance = measurement_model.get_covariance(position_relative_local, agent_from_state.v,
+                                                      agent_from_state.psi_dot)
+    else:
+        covariance = 1e-7 * np.eye(3)
+
+    return np.array([position_relative_local[0], position_relative_local[1], psi_local]), covariance
 
 
 def generate_noisy_measurement(agent_from_state: FRODO_State | np.ndarray,
                                agent_to_state: FRODO_State | np.ndarray,
-                               measurement_model: FRODO_MeasurementModel) -> tuple[np.ndarray, np.ndarray]:
-    ideal_measurement = generate_ideal_measurement(agent_from_state, agent_to_state)
+                               measurement_model: FRODO_MeasurementModel,
+                               fuse_factor: float = 0.0) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Generates a noisy and potentially fused measurement between two agent states using
+    a given measurement model and a fusion factor.
+
+    The function calculates an ideal measurement between two agent states and
+    adds noise and bias derived from the provided measurement model. It also allows
+    combining the noisy measurement with the ideal one based on the provided fuse factor.
+
+    Args:
+        agent_from_state (FRODO_State | np.ndarray): The state of the "from" agent
+            in the measurement process. This represents the reference state.
+        agent_to_state (FRODO_State | np.ndarray): The state of the "to" agent in
+            the measurement process. This represents the observed state.
+        measurement_model (FRODO_MeasurementModel): The model describing how
+            measurements are generated, including covariances and biases.
+        fuse_factor (float): A value between 0.0 and 1.0 that determines the
+            amount of fusion applied between the noisy measurement and the ideal
+            measurement. Defaults to 0.0 (no fusion of any ideal measurement).
+            0: only the noisy measurement is returned. 1: only the ideal measurement is returned.
+
+    Returns:
+        tuple[np.ndarray, np.ndarray]: A tuple containing the following:
+            - The fused noisy measurement as a NumPy array.
+            - The covariance matrix associated with the measurement noise.
+    """
+    ideal_measurement, _ = generate_ideal_measurement(agent_from_state, agent_to_state)
 
     covariance = measurement_model.get_covariance(ideal_measurement, agent_from_state.v, agent_from_state.psi_dot)
     bias_x = measurement_model.bias_x
@@ -98,4 +132,7 @@ def generate_noisy_measurement(agent_from_state: FRODO_State | np.ndarray,
     # Add noise
     measurement += np.random.multivariate_normal(np.zeros(3), covariance)
 
-    return measurement, covariance
+    # Fuse both measurements
+    measurement_out = (1-fuse_factor) * measurement + fuse_factor * ideal_measurement
+
+    return measurement_out, covariance

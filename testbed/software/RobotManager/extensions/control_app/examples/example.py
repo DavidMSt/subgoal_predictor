@@ -7,7 +7,7 @@ from _tests.app.control_app import ControlApp, WidgetGroup, MultiStateButton, Mu
     SliderWidget, StatusWidget, GraphWidget, DigitalNumberWidget, JoystickWidget, Button, RootGroup, \
     IframeWidget, TextWidget, EditableValueWidget, RotaryDialWidget, TextStatusBarWidget, CircleStatusBarWidget, \
     BatteryLevelStatusBarWidget, ImageStatusBarWidget, ConnectionStrengthStatusBarWidget, InternetStatusBarWidget
-from core.utils.files import relativeToFullPath
+from core.utils.files import get_absolute_path
 from core.utils.images import load_image_base64
 
 
@@ -438,7 +438,7 @@ def example():
             else:
                 return
 
-        image = relativeToFullPath('../static/cutecat.png')
+        image = get_absolute_path('../static/cutecat.png')
         app_instance.popup(text="Is this cat cute?", buttons=popup_buttons,
                            image_base64=load_image_base64(image),
                            callback=popup_callback)

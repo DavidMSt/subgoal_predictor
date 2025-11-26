@@ -142,10 +142,10 @@ class AlgorithmAgentInput:
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class AlgorithmAgentMeasurement:
-    agent_from: AlgorithmAgent
-    agent_to: AlgorithmAgent
+    agent_from: str
+    agent_to: str
     measurement: np.ndarray
     covariance: np.ndarray
 
@@ -186,6 +186,7 @@ def augment_state(state: AlgorithmAgentState) -> np.ndarray:
         np.cos(state.psi),
     ])
 
+
 # ----------------------------------------------------------------------------------------------------------------------
 def augment_state_array(state: np.ndarray) -> np.ndarray:
     return np.array([
@@ -194,6 +195,7 @@ def augment_state_array(state: np.ndarray) -> np.ndarray:
         np.sin(state[2]),
         np.cos(state[2]),
     ])
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 def augment_covariance(covariance: np.ndarray, psi: float) -> np.ndarray:
@@ -303,6 +305,7 @@ class AlgorithmAgent:
 class LocalizationAlgorithm(abc.ABC):
     agents: dict[str, AlgorithmAgent]
     Ts: float
+    step: int = 0
 
     def __init__(self, Ts: float):
         self.Ts = Ts

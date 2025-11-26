@@ -1,3 +1,4 @@
+import dataclasses
 from typing import Optional
 
 import numpy as np
@@ -5,7 +6,7 @@ import numpy as np
 from applications.FRODO.algorithm.algorithm import LocalizationAlgorithm, AlgorithmAgent, augment_state, \
     augment_covariance, INDEX_COS, INDEX_SIN, INDEX_X, INDEX_Y, AlgorithmAgentMeasurement, \
     augment_measurement_covariance, augment_measurement, get_state_from_augmented, get_covariance_from_augmented, \
-    augment_state_array
+    augment_state_array, AlgorithmAgentState
 from core.utils.logging_utils import Logger
 
 AUGMENTED_STATE_DIM = 4
@@ -14,6 +15,16 @@ DEBUG = False
 
 
 # === CENTRALIZED AGENT ================================================================================================
+@dataclasses.dataclass
+class CentralizedAgent_Sample:
+    id: str
+    state: AlgorithmAgentState
+    covariance: np.ndarray
+    input: np.ndarray
+    measurements: list[AlgorithmAgentMeasurement]
+    is_anchor: bool
+
+
 class CentralizedAgent(AlgorithmAgent):
     index: int | None = None
 
@@ -98,6 +109,23 @@ class CentralizedAgent(AlgorithmAgent):
         ])
         return jacobian
 
+    # ----------------------------------------------------------------------------------------------------------------------
+    def get_sample(self) -> CentralizedAgent_Sample:
+        return CentralizedAgent_Sample(
+            id=self.id,
+            state=get_state_from_augmented(self.state.as_array()),
+            input=self.input.as_array(),
+            measurements=self.measurements,
+            covariance=get_covariance_from_augmented(self.covariance, self.state.psi),
+            is_anchor=self.is_anchor
+        )
+
+
+@dataclasses.dataclass
+class CentralizedAlgorithm_Sample:
+    step: int
+    agents: dict[str, CentralizedAgent_Sample]
+
 
 class CentralizedAlgorithm(LocalizationAlgorithm):
     state: Optional[np.ndarray]
@@ -116,7 +144,7 @@ class CentralizedAlgorithm(LocalizationAlgorithm):
         self.covariance = None
         self.state_prediction = None
         self.covariance_prediction = None
-
+        self.agents = {}
         self.logger = Logger('CentralizedAlgorithm', 'INFO')
 
     # === METHODS ======================================================================================================
@@ -143,7 +171,12 @@ class CentralizedAlgorithm(LocalizationAlgorithm):
         self.logger.info(
             f"Algorithm initialized with {len(agents)} agents: {[agent.id for agent in self.agents.values()]}")
 
-        self.step = 1
+        self.step = 0
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_sample(self) -> CentralizedAlgorithm_Sample:
+        return CentralizedAlgorithm_Sample(step=self.step,
+                                           agents={agent.id: agent.get_sample() for agent in self.agents.values()})
 
     # ------------------------------------------------------------------------------------------------------------------
     def prediction(self):

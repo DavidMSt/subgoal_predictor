@@ -14,7 +14,7 @@ from robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
 from robot.interfaces.bilbo_interfaces import BILBO_Interfaces
 from robot.utilities.bilbo_utilities import BILBO_Utilities
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.events import EventListener, Event, event_definition
+from core.utils.events import Event, event_definition, SubscriberListener
 from core.utils.singletonlock.singletonlock import SingletonLock, terminate
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control_data import BILBO_Control_Mode
@@ -74,7 +74,7 @@ class BILBO(MainProvider):
     _initialized: bool = False
     _last_update_time: float = 0
     _first_sample_user_message_sent: bool = False
-    _eventListener: EventListener
+    _eventListener: SubscriberListener
 
     # === INIT =========================================================================================================
     def __init__(self, reset_stm32: bool = False):
@@ -121,7 +121,7 @@ class BILBO(MainProvider):
         self.utilities = BILBO_Utilities(core=self.common, communication=self.communication, board=self.board)
         self.experiment_handler = BILBO_ExperimentHandler(common=self.common,
                                                           communication=self.communication,
-                                                          utils=self.utilities,
+                                                          utilities=self.utilities,
                                                           control=self.control, )
 
         self.logging = BILBO_Logging(core=self.common,
@@ -145,8 +145,6 @@ class BILBO(MainProvider):
 
         self.events = BILBO_Events()
         self.callbacks = BILBO_Callbacks()
-
-        self._eventListener = EventListener(event=self.communication.events.rx_stm32_sample, callback=self.update)
 
         register_exit_callback(self._shutdown, priority=0)
         register_exit_callback(self._shutdownInit, priority=2)
@@ -195,7 +193,7 @@ class BILBO(MainProvider):
         self.utilities.speak(f'Start {self.id}')
 
         self.communication.startSampleListener()
-        self._eventListener.start()
+        self._eventListener = self.communication.events.rx_stm32_sample.on(self.update)
         self.interfaces.start()
 
         delayed_execution(lambda: setattr(self, '_startup_phase', False), 1)

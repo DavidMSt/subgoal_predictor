@@ -21,10 +21,10 @@ from robot.lowlevel.stm32_sample import BILBO_LL_Sample, SAMPLE_BUFFER_LL_SIZE
 from robot.sensors.bilbo_sensors import BILBO_Sensors
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.dict_utils import copy_dict, optimized_deepcopy, optimized_generate_empty_copies
-from core.utils.events import EventListener, event_definition, Event
+from core.utils.events import event_definition, Event
 from core.utils.csv_utils import CSVLogger
 from core.utils.dataclass_utils import from_dict, asdict_optimized
-from core.utils.time import PerformanceTimer, TimeoutTimer
+from core.utils.time import TimeoutTimer
 from core.utils.logging_utils import Logger
 from core.utils.h5 import H5PyDictLogger
 from core.utils.exit import register_exit_callback
@@ -62,7 +62,7 @@ class BILBO_Logging(LoggingProvider):
     callbacks: BILBO_Logging_Callbacks
     events: BILBO_Logging_Events
 
-    sample: BILBO_Sample
+    sample: BILBO_Sample | None
 
     # -- Private Variables --
     _h5Logger: H5PyDictLogger
@@ -118,6 +118,8 @@ class BILBO_Logging(LoggingProvider):
         self._h5Logger = H5PyDictLogger(filename='log.h5')
         self._initialize_caches()
         self._lock = threading.Lock()
+
+        self.sample = None
 
         # --- Sample Timeout Timer ---
         self._sample_timeout_timer = TimeoutTimer(timeout_time=SAMPLE_TIMEOUT_TIME,
@@ -182,6 +184,7 @@ class BILBO_Logging(LoggingProvider):
     """
 
     def update(self) -> None:
+
         # Reset timeout early
         self._sample_timeout_timer.reset()
 
@@ -202,9 +205,7 @@ class BILBO_Logging(LoggingProvider):
             except queue.Empty:
                 break
 
-            performance_timer = PerformanceTimer(name='Update', print_output=False)
             n = len(batch)
-
             # 1) Copy HL leaves into each preallocated out-sample
             #    Use HL-only cache (faster) or _copy_cache_full (safe).
             cache_for_hl = getattr(self, "_copy_cache_hl", self._copy_cache_full)
@@ -241,13 +242,8 @@ class BILBO_Logging(LoggingProvider):
             if self.num_samples % 2000 == 0:
                 self.logger.debug(f"Samples collected: {self.num_samples}")
 
-            elapsed_time = performance_timer.stop()
-            if elapsed_time > 0.1:
-                self.logger.debug(f"Logging took {elapsed_time:.2f}s")
-
             # 7) Extract the most recent sample
             self.sample = from_dict(BILBO_Sample, self._out_samples[0])
-
             # 8) Send events
             self.events.sample.set(data=self.sample)
             self.core.events.sample.set(data=self.sample)

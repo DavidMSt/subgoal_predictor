@@ -6,7 +6,7 @@ from applications.BILBO.settings import AUTOSTOP_ROBOTS, AUTOSTART_ROBOTS
 from applications.BILBO.tracker.bilbo_tracker import BILBO_Tracker, TrackedBILBO, BILBO_Tracker_Status
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.events import event_definition, Event, EventFlag
-from core.utils.files import fileExists, relativeToFullPath
+from core.utils.files import fileExists, get_absolute_path
 from core.utils.logging_utils import Logger
 from core.utils.sound.sound import speak
 from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
@@ -111,7 +111,7 @@ class BILBO_TestbedManager:
     # ------------------------------------------------------------------------------------------------------------------
     def _on_tracker_initialized(self, *args, **kwargs):
         # 1. Load the testbed config
-        testbed_config_file = relativeToFullPath('./configs/testbed.yaml')
+        testbed_config_file = get_absolute_path('./configs/testbed.yaml')
 
         if not fileExists(testbed_config_file):
             self.logger.warning(f"Testbed config file '{testbed_config_file}' does not exist.")
