@@ -1,6 +1,6 @@
 import numpy as np
 import fcl
-from master_thesis.general.configurations import EnvironmentConfig, FRODO_Agent_Config
+from master_thesis.general.configuration_containers import EnvironmentConfig, FRODO_Agent_Config
 from master_thesis.general.general_obstacles import GeneralObstacle
 # import meshcat.transformations as tf
 

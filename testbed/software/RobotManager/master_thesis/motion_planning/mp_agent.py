@@ -15,22 +15,23 @@ from core.utils.logging_utils import Logger
 from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
 
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config
+from master_thesis.general.configuration_containers import EnvironmentConfig
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
 from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo, OMPLPlannerFRODOBase
 from master_thesis.general.general_agents import InputPhaseRunner, InputPhase
-from master_thesis.general.configurations import MotionPlanningConfig
+from master_thesis.general.configuration_containers import MotionPlanningConfig
 
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)
 
 class MPAgentModule():
-    dt: float  | None # delta_t timestep used during sampling
-    env: FrodoGeneralEnvironment
+    env_config: EnvironmentConfig
+    agent_config: FRODO_Agent_Config
 
-    def __init__(self,agent_config, env_config: FrodoGeneralEnvironment, runner: InputPhaseRunner, id: str, logger: Logger) -> None:
-        self.env = env_config
+    def __init__(self,agent_config: FRODO_Agent_Config, env_config: EnvironmentConfig, runner: InputPhaseRunner, logger: Logger) -> None:
+        self.agent_config = agent_config
+        self.env_config = env_config
         self.runner = runner
         self.logger = logger
-        self.agent_config = agent_config
 
     def plan_motion(self, phase_key: str, start_config, goal_config, motion_planner: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino):
         if self.runner is None:
@@ -44,7 +45,7 @@ class MPAgentModule():
             goal=goal_config,
         )
 
-        self.motion_planner = motion_planner(mp_config=mp_config, agent_config= self.agent_config, env= self.env)# TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
+        self.motion_planner = motion_planner(mp_config=mp_config, agent_config= self.agent_config, env= self.env_config)# TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
         solved, path_length = self.motion_planner.solve_problem()
 
         if solved:
@@ -65,23 +66,18 @@ class MPAgentModule():
                 f"total length {path_length}, end config: {phase.states[-1]}"
             )
         else:
-            self.logger.warning(f"No solution found! timeout after {self.create_planner_config().timelimit} s")
-    
-    # def create_planner_config(self, start_config, goal_config) -> MotionPlanningConfig:
-
-    #     return 
+            self.logger.warning(f"No solution found! timeout reached")
 
 class FRODO_MotionPlanning_Agent(FRODOGeneralAgent):
-    mp_interface: MPAgentModule
+    mpi: MPAgentModule
  
-    def __init__(self, env_config, agent_id: str, Ts=None, config: FRODO_Agent_Config | None = None, start_config=[0,0,0], *args, **kwargs) -> None:
-        super().__init__(agent_id=agent_id, Ts=Ts, agent_config=config, start_config=start_config, *args, **kwargs)
+    def __init__(self, env_config, agent_id: str, Ts=None, agent_config: FRODO_Agent_Config | None = None, start_config=(0.0,0.0,0.0), *args, **kwargs) -> None:
+        super().__init__(agent_id=agent_id, Ts=Ts, agent_config=agent_config, start_config=start_config, *args, **kwargs)
 
         # motion_planning interface for OMPL configuration
         self.mpi = MPAgentModule(
-            agent_config= self.agent_config, #TODO: extend the agent config to also be a property like the env config, that way the current state can be received
+            agent_config= self.agent_config,
             env_config=env_config,
-            id=self.agent_id,
             runner=self.runner,
             logger=self.logger
         )

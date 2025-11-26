@@ -19,7 +19,7 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
 from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
 from master_thesis.motion_planning.helper.collisions_fcl import EnvironmentCollisionChecker
-from master_thesis.general.configurations import EnvironmentConfig
+from master_thesis.general.configuration_containers import EnvironmentConfig
 
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
@@ -170,7 +170,8 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         self.logger.debug(f"{self.scheduling.tick}: Action Frodo Input")
 
     def _collision_checking(self):
-        assert self.collision_checker is not None
+        if self.collision_checker is None:
+            return
 
         # dynamic, up-to-date dictionaries:
         agents = {k: v for k, v in self.objects.items() if isinstance(v, FRODOGeneralAgent)}

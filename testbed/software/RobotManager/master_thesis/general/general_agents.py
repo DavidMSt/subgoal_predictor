@@ -13,7 +13,54 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.cli.cli import CommandSet, Command, CommandArgument
 import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
-from master_thesis.general.configurations import FRODO_Agent_Config
+from master_thesis.general.containers.agent_containers import FRODOAgentContainer
+from master_thesis.general.containers.environment_containers import EnvironmentContainer
+
+@dataclass(slots=True)
+class LocalWorldRepresentation:
+    """
+    Local, non-learned representation of what the agent knows.
+    """
+    # required
+    self_agent: FRODOAgentContainer
+
+    # dynamic
+    neighbors: dict[str, FRODOAgentContainer] = field(default_factory=dict)
+
+    # static
+    env_config: EnvironmentContainer | None = None
+
+    # ---- update interface ----
+    def update_self(self):
+        pass
+
+    def update_neighbor(self, agent_id: str, container: FRODOAgentContainer):
+        self.neighbors[agent_id] = container
+
+    def remove_neighbor(self, agent_id: str):
+        self.neighbors.pop(agent_id, None)
+
+    # ---- extraction for RL / GNN ----
+    def as_observation(self):
+        own = [
+            self.self_agent.state.x,
+            self.self_agent.state.y,
+            self.self_agent.state.psi
+        ]
+
+        neigh = []
+        for nb in self.neighbors.values():
+            neigh.append([nb.state.x, nb.state.y, nb.state.psi])
+
+        limits = self.env_config.limits if self.env_config else None
+
+        return {
+            "self": own,
+            "neighbors": neigh,
+            "limits": limits
+        }
+
+
 
 @dataclass
 class InputPhaseState():

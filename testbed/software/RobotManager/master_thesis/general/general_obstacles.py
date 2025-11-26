@@ -1,20 +1,7 @@
 from extensions.simulation.src.core.environment import Object
 import extensions.simulation.src.core.spaces as spaces
-from core.utils.states import State
 from dataclasses import dataclass
 from applications.FRODO.simulation.frodo_simulation import FRODO_SimulationObject
-
-@dataclass(frozen=True, slots=True)
-class Obstacle_Config:
-    length: float = 2.0
-    width: float = 0.5
-    height: float = 1.0
-
-@dataclass
-class Obstacle_State(State):
-    x: float
-    y: float
-    psi: float
 
 class GeneralObstacle(FRODO_SimulationObject):
     object_type = "obstacle"

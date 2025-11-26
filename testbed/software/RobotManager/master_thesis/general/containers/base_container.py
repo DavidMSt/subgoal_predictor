@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from abc import abstractmethod
 from typing import Any
 
 @dataclass
@@ -15,6 +16,7 @@ class OverarchingContainer:
             return getattr(self.config, name)
 
         raise AttributeError(name)
+
 
 
 

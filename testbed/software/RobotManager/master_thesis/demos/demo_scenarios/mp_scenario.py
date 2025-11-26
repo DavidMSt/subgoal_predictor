@@ -30,3 +30,7 @@ class DemoCorridor(ScenarioBase):
 
         # give it a goal
         self.demo.sim.assign_goal("frodo", x=2.0, y=0.0)
+
+if __name__ == "__main__":
+    demo = DemoCorridor()
+    demo.setup()

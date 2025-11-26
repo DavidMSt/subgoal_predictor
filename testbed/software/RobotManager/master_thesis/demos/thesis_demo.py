@@ -93,7 +93,7 @@ class ThesisDemo:
     # === METHODS ======================================================================================================
     def init(self):
         self._buildGUI()
-        # self._buildBabylon()
+        self._buildBabylonFloor()
         self.babylon_visualization.init()
         self.env.init()
         self.env.initialize()
@@ -246,6 +246,11 @@ class ThesisDemo:
             discard_inputs=True,
         ))
         page1.addWidget(bilbo1_button, height=2, width=4)
+
+    def _buildBabylonFloor(self):
+
+        floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
+        self.babylon_visualization.addObject(floor)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _logRedirection(self, log_entry, log, logger, level):
