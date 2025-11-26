@@ -5,7 +5,6 @@ from typing import Any
 @dataclass
 class OverarchingContainer:
     config: ...
-    state: ...
     
     # expose attributes of the sub-containers directly
     def __getattr__(self, name: str) -> Any:

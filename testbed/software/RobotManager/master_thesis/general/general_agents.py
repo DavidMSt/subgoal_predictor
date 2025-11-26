@@ -13,7 +13,7 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.cli.cli import CommandSet, Command, CommandArgument
 import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
-from master_thesis.general.containers.agent_containers import FRODOAgentContainer
+from master_thesis.general.containers.agent_containers import FRODOAgentContainer, FRODO_Agent_Config
 from master_thesis.general.containers.environment_containers import EnvironmentContainer
 
 @dataclass(slots=True)
@@ -59,8 +59,6 @@ class LocalWorldRepresentation:
             "neighbors": neigh,
             "limits": limits
         }
-
-
 
 @dataclass
 class InputPhaseState():
@@ -237,44 +235,41 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     """
 
     def __init__(
-        self, 
-        agent_id: str,
-        Ts = None,
-        agent_config: FRODO_Agent_Config | None = None,
-        start_config: tuple[float, ...] = (0.0, 0.0, 0.0)
+    self, 
+    agent_id: str,
+    Ts=None,
+    agent_config: FRODO_Agent_Config | None = None,
+    start_config: tuple[float, ...] = (0.0, 0.0, 0.0)
     ):
-        
+        if Ts is None:
+            Ts = 0.1
+
         if agent_config is None:
-            agent_config = FRODO_Agent_Config()
+            agent_config = FRODO_Agent_Config(Ts = Ts)
 
-        self.agent_config = agent_config
+        # ─────────────────────────────────────────────
+        # CONTAINER + LOCAL WORLD REPRESENTATION
+        # ─────────────────────────────────────────────
+        self.container = FRODOAgentContainer(
+            config=agent_config,
+            state_getter=lambda: self.state
+        )
+        self.lwr = LocalWorldRepresentation(self_agent=self.container)
+        # ─────────────────────────────────────────────
 
-        # Set FRODO_SimulationObject attributes
         self.agent_id = agent_id
-        # self.agent_config = agent_config
         self.color = agent_config.color
         self.size = getattr(agent_config, "size", 0.2)
         self.logger = Logger(agent_id)
 
-
-        # Store Ts before parent init
-        if Ts is None:
-            Ts = 0.1
-        self.Ts = Ts
-        self.agent_config.Ts = Ts
-
-        super().__init__(agent_id= agent_id, Ts= Ts)
+        super().__init__(agent_id=agent_id, Ts=Ts)
 
         self.cli = FRODO_GeneralAgent_CommandSet(self)
-
-        # Runner (use stored Ts)
-        self.runner = InputPhaseRunner(simulation_dt=self.Ts, logger=self.logger)
-
+        self.runner = InputPhaseRunner(simulation_dt=self.container.Ts, logger=self.logger)
         self.setup_scheduling()
 
-        # Apply initial start configuration
+        # Apply initial configuration
         x0, y0, psi0 = start_config
-
         self.state.x = float(x0)
         self.state.y = float(y0)
         self.state.psi = float(psi0)
