@@ -1,20 +1,5 @@
 from dataclasses import dataclass
 import numpy as np
-from extensions.simulation.src.objects.frodo.frodo import FRODO_State
-
-@dataclass(frozen=False, slots = False)
-class FRODO_Agent_Config:
-    color: tuple[float, float, float] = (1.0, 1.0, 1.0)
-    length: float = 0.157
-    width: float = 0.115
-    height: float = 0.11
-    Ts: float | None = None # gets overwritten with sim dt once agent is created
-
-@dataclass(frozen= False, slots= False) # must be dynamically changeable since env can change
-class EnvironmentConfig:
-    limits: list[list[float]]
-    obstacles: list[dict]
-    Ts: float
 
 @dataclass(frozen = True, slots = True)
 class MotionPlanningConfig:
