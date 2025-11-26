@@ -14,9 +14,9 @@ import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
 from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
 
-from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_General_Config
+from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
-from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo
+from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo, OMPLPlannerFRODOBase
 from master_thesis.general.general_agents import InputPhaseRunner, InputPhase
 from master_thesis.general.configurations import MotionPlanningConfig
 
@@ -32,7 +32,7 @@ class MPAgentModule():
         self.logger = logger
         self.agent_config = agent_config
 
-    def plan_motion(self, phase_key: str, start_config, goal_config, motion_planner = OMPLPlannerFRODOKino):
+    def plan_motion(self, phase_key: str, start_config, goal_config, motion_planner: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino):
         if self.runner is None:
             self.logger.warning("Runner not initialized, Solution is not added as executable phase")
 
@@ -74,12 +74,12 @@ class MPAgentModule():
 class FRODO_MotionPlanning_Agent(FRODOGeneralAgent):
     mp_interface: MPAgentModule
  
-    def __init__(self, env_config, agent_id: str, Ts=None, config: FRODO_General_Config | None = None, start_config=[0,0,0], *args, **kwargs) -> None:
+    def __init__(self, env_config, agent_id: str, Ts=None, config: FRODO_Agent_Config | None = None, start_config=[0,0,0], *args, **kwargs) -> None:
         super().__init__(agent_id=agent_id, Ts=Ts, agent_config=config, start_config=start_config, *args, **kwargs)
 
         # motion_planning interface for OMPL configuration
         self.mpi = MPAgentModule(
-            agent_config= self.agent_config,
+            agent_config= self.agent_config, #TODO: extend the agent config to also be a property like the env config, that way the current state can be received
             env_config=env_config,
             id=self.agent_id,
             runner=self.runner,

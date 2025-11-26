@@ -169,10 +169,6 @@ class OMPLPlannerFRODOBase(ABC):
     def _create_space_info(self) -> ob.SpaceInformation: # type: ignore[attr-defined]
         ...
 
-    @abstractmethod
-    def _create_checker(self) -> CollisionChecker:
-        ...
-
     def _create_space(self):
         # extract limits of the environment
         env_min = []
@@ -219,9 +215,9 @@ class OMPLPlannerFRODOBase(ABC):
         if L is None or W is None or H is None or L <= 0 or W <= 0 or H <= 0:
             raise ValueError("Dimensions L, W, H must be provided for FRODO collision checking and must be valid positive numbers.")
 
-        checker = CollisionChecker(self.mp_config)
+        checker = CollisionChecker(env_config = self.env, agent_config=self.agent_config)
         checker.set_dimensions(self.agent_config.length, self.agent_config.width, self.agent_config.height)
-        checker.initialize_env(self.env)
+        checker.initialize_env_manager(self.env)
         return checker
     
 
@@ -281,7 +277,7 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
         si.setValidStateSamplerAllocator(ob.ValidStateSamplerAllocator(self._get_state_sampler)) # type: ignore[attr-defined]
         si.setStatePropagator(oc.StatePropagatorFn(self._state_propagator))  # type: ignore[attr-defined]
         si.setMinMaxControlDuration(1, 1)
-        si.setPropagationStepSize(self.agent_config.dt)
+        si.setPropagationStepSize(self.agent_config.Ts)
 
         return si
 
@@ -327,7 +323,7 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
             "states": path_states,
             "actions": path_actions,
             "durations": path_durations,
-            "delta_t": self.agent_config.dt
+            "delta_t": self.agent_config.Ts
         }
         return solution_dict
     

@@ -13,6 +13,7 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.cli.cli import CommandSet, Command, CommandArgument
 import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
+from master_thesis.general.configurations import FRODO_Agent_Config
 
 @dataclass
 class InputPhaseState():
@@ -180,15 +181,6 @@ class InputPhaseRunner:
             self.change_phase(phase_name)
 
 
-@dataclass
-class FRODO_General_Config:
-    color: tuple[float, float, float] = (1.0, 1.0, 1.0)
-    length: float = 0.157
-    width: float = 0.115
-    height: float = 0.11
-    dt: float | None = None # gets overwritten with sim dt once agent is created 
-
-
 class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     """
     Lightweight general agent:
@@ -201,16 +193,18 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self, 
         agent_id: str,
         Ts = None,
-        agent_config: FRODO_General_Config | None = None,
+        agent_config: FRODO_Agent_Config | None = None,
         start_config: tuple[float, ...] = (0.0, 0.0, 0.0)
     ):
         
         if agent_config is None:
-            agent_config = FRODO_General_Config()
+            agent_config = FRODO_Agent_Config()
+
+        self.agent_config = agent_config
 
         # Set FRODO_SimulationObject attributes
         self.agent_id = agent_id
-        self.agent_config = agent_config
+        # self.agent_config = agent_config
         self.color = agent_config.color
         self.size = getattr(agent_config, "size", 0.2)
         self.logger = Logger(agent_id)
@@ -220,7 +214,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         if Ts is None:
             Ts = 0.1
         self.Ts = Ts
-        self.agent_config.dt = Ts
+        self.agent_config.Ts = Ts
 
         super().__init__(agent_id= agent_id, Ts= Ts)
 
@@ -398,7 +392,7 @@ if __name__ == '__main__':
     sim = FRODO_Simulation()
     sim.init()
 
-    cfg = FRODO_General_Config(
+    cfg = FRODO_Agent_Config(
         color = (1, 0, 0), 
     )
 

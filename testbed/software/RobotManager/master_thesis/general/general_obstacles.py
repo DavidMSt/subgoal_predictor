@@ -7,8 +7,8 @@ from applications.FRODO.simulation.frodo_simulation import FRODO_SimulationObjec
 @dataclass(frozen=True, slots=True)
 class Obstacle_Config:
     length: float = 2.0
-    height: float = 1.0
     width: float = 0.5
+    height: float = 1.0
 
 @dataclass
 class Obstacle_State(State):

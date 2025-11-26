@@ -1,73 +1,75 @@
 import numpy as np
-import yaml
 import fcl
-import argparse
+from master_thesis.general.configurations import EnvironmentConfig, FRODO_Agent_Config
+from master_thesis.general.general_obstacles import GeneralObstacle
 # import meshcat.transformations as tf
 
 class CollisionChecker():
     # _env: dict # environment in which agent is
     # _plan: dict # plan of configurations we want to check for collisions
 
-    def __init__(self, env):
-        self.env = env  # Ensure _env is always defined
+    def __init__(self, agent_config, env_config):
+        self.env_config: EnvironmentConfig = env_config  
+        self.agent_config: FRODO_Agent_Config = agent_config
         self.collisions_list = [] # initialize dynamic collison list
+        self.initialize_collision_manager(env_config, agent_config)
 
-    def run_from_yaml(self):
-        # load data from yaml
-        self.args = self.parse_arguments()
-        # extract env and configuration plan
-        env, plan = self.load_data()
-        # initialize the environment
-        self.initialize_env(env)
-        # set configuration plan to be checke
-        self.set_plan(plan)
-        # run the collision checking for each state of the plan
-        self.broadphase_collision_checking(self.states)
-
-    def set_plan(self, plan):
+    def set_plan(self, plan): # TODO: Remove? 
         # self._plan = plan
         self.states = plan["plan"]["states"]
     
-    def set_dimensions(self, L, W= None, H= None):
+    def set_dimensions(self, L, W= None, H= None): # TODO: Remove? 
         self.dimensions = {
             "L": L,
             "W": W,
             "H": H
         }
 
-    def initialize_env(self, env= None):
-        self.env = env
-        # Defensive programming: check for 'obstacles' attribute
-        if not hasattr(env, "obstacles"):
-            raise AttributeError("Provided env has no 'obstacles' attribute")
-        obstacle_list = self.create_environment_objects()
-        self.env_manager = self.create_collision_manager(obstacle_list)
+    def initialize_collision_manager(self, env_config, agent_config):
+        self.initialize_env_manager(env_config)
+        self.initialize_agent_manager(agent_config)
 
-    @staticmethod
-    def parse_arguments():
-        parser = argparse.ArgumentParser()
-        parser.add_argument('env', help='input YAML file with environment')
-        parser.add_argument('plan', help='input YAML file with plan')
-        parser.add_argument('output', help='output yaml-file')
-        args = parser.parse_args()
-        return args
+    def initialize_agent_manager(self, agent_config):
+        # py-fcl does not expose the objects in a manager for update, therefore they must be accesible here
+        self.agent_objs = self.create_agent_objects(agent_config)
+
+        self.agent_manager = self.create_collision_manager(self.agent_objs)
+
+
+    def initialize_env_manager(self, env_config: EnvironmentConfig):
+        # Defensive programming: check for 'obstacles' attribute
+        if not hasattr(env_config, "obstacles"):
+            raise AttributeError("Provided env has no 'obstacles' attribute")
+        obstacle_objects_list = self.create_environment_objects()
+        self.env_manager = self.create_collision_manager(obstacle_objects_list)
     
-    def load_data(self):
-        # load environment
-        with open(self.args.env, "r") as stream:
-            env = yaml.safe_load(stream)
-        # load plan
-        with open(self.args.plan, "r") as stream:
-            plan = yaml.safe_load(stream)
-        return env, plan
-    
-    def check_state(self, state):
-        """Check a single configuration for collision"""
+    def check_state(self, testing_state):  # state = [x, y, psi]
+        """Check a single configuration for collision."""
+
+        x, y, psi = testing_state
+
+        # ----------------------------------------------------
+        # 1) Update the transform of the single agent object
+        # ----------------------------------------------------
+        q = [np.cos(psi / 2), 0, 0, np.sin(psi / 2)]
+        pos = [x, y, 0.0]
+
+        tf = fcl.Transform(q, pos)
+
+        
+        agent_obj = self.agent_objs[0]
+        agent_obj.setTransform(tf)
+        self.agent_manager.update()
+
+
+        # ----------------------------------------------------
+        # 2) Perform the actual collision check
+        # ----------------------------------------------------
         req = fcl.CollisionRequest(num_max_contacts=1, enable_contact=False)
         data = fcl.CollisionData(request=req)
-        agent_objs = self.create_agent_objects(state)
-        agent_manager = self.create_collision_manager(agent_objs)
-        agent_manager.collide(self.env_manager, data, fcl.defaultCollisionCallback)
+
+        self.agent_manager.collide(self.env_manager, data, fcl.defaultCollisionCallback)
+
         return data.result.is_collision
     
     def check_state_ompl(self, state):
@@ -88,59 +90,62 @@ class CollisionChecker():
     def broadphase_collision_checking(self, states):
         self.collisions_list = [self.check_state(state) for state in states]
 
-    def create_agent_objects(self, state):
-        objs = self.create_objects_frodo(state)
+    # def create_agent_objects(self, state):
+    #     objs = self.create_objects_frodo(state)
 
-        return objs
+    #     return objs
 
     def create_environment_objects(self):
         obstacle_list = []
-        for obstacle in self.env.obstacles:
+        for obstacle in self.env_config.obstacles:
             _obs = self.create_env_collision_object(obstacle)
             obstacle_list.append(_obs)
         return obstacle_list
     
+    def create_agent_objects(self, agent_config):
+        """
+        Create the initial FCL collision object for the FRODO agent.
+        The agent is initialized at state (0,0,0) and its transform
+        will be updated later inside check_state().
+        """
+        # --- create a zero state for initialization ---
+        class _ZeroState:
+            def __init__(self):
+                self.x = 0.0
+                self.y = 0.0
+                self.psi = 0.0
+
+        zero_state = _ZeroState()
+
+
+        obj = self.create_collision_box(agent_config, zero_state)
+        return [obj]
+    
     def create_env_collision_object(self, obstacle):
-        if obstacle["type"] == "box":
-            _obs = self.create_collision_box(obstacle["pos"], obstacle["size"])
-        elif obstacle["type"] == "cylinder":
-            _obs = self.create_collision_cylinder(obstacle["pos"], obstacle["q"], obstacle["r"], obstacle["lz"])
+        if isinstance(obstacle, GeneralObstacle):
+            _obs = self.create_collision_box(config = obstacle.config, state = obstacle.state)
         else:
             raise ValueError
         return _obs
-  
-
-    def create_objects_frodo(self, state):
-        x, y, theta = state
-
-        # Use .get to avoid KeyError if values are missing
-        L = self.dimensions.get("L")
-        W = self.dimensions.get("W")
-        H = self.dimensions.get("H")
-
-        pos = [x, y, 0]
-        q = [np.cos(theta / 2), 0, 0, np.sin(theta / 2)]  # Z-rotation quaternion
-
-        obj = self.create_collision_box(pos, [L, W, H], q)
-        objs = [obj]
-        return objs
 
     @staticmethod
-    def create_collision_box(pos, size, q = None):
-        geometry = fcl.Box(*size)
-        if q:
-            transformation = fcl.Transform(q, pos)
-        else: 
-            transformation = fcl.Transform(pos)
-        obj = fcl.CollisionObject(geometry, transformation)
-        return obj
+    def create_collision_box(config, state, q=None):
+        # FCL box expects (x_size, y_size, z_size)
+        geometry = fcl.Box(config.length, config.width, config.height)
 
-    @staticmethod
-    def create_collision_cylinder(pos, q, radius, lz):
-        geometry = fcl.Cylinder(radius, lz)
-        transformation = fcl.Transform(q, pos)
-        obj = fcl.CollisionObject(geometry, transformation)
-        return obj
+        # position
+        pos = [state.x, state.y, 0.0]
+
+        # orientation
+        if q is None:
+            # default rotation: yaw = state.psi
+            yaw = state.psi
+            q = [np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
+
+        # create transform
+        transform = fcl.Transform(q, pos)
+
+        return fcl.CollisionObject(geometry, transform)
 
     @staticmethod
     def create_collision_manager(objects: list):
@@ -149,18 +154,7 @@ class CollisionChecker():
         manager.setup()
         return manager
 
-    def dump_collisions_to_yaml(self):
-        """Dump the plan to a yaml file with the given target path"""
-        print(self.args.output)
-
-        collision_content = {
-            'collisions': self.collisions_list
-        }
-
-        with open(self.args.output, 'w') as file:
-            yaml.dump(collision_content, file, default_flow_style=False)
-
-
+# TODO: make all this a single checker? 
 class EnvironmentCollisionChecker:
 
     def __init__(self, compute_closest_distance = False):

@@ -23,7 +23,7 @@ class MPSimulationModule():
 
     def agent_motion_planning(self, agent: str | FRODOGeneralAgent, 
                               solution_phase_name: str, *, goal_config: tuple[float, ...], 
-                              start_config: tuple[float, ...] | None = None, motion_planner = OMPLPlannerFRODOGeo): # TODO: specify planner on this level already
+                              start_config: tuple[float, ...] | None = None, motion_planner = OMPLPlannerFRODOKino): # TODO: specify planner on this level already
         if isinstance(agent, str):
             agent = self.agents[agent]
         

@@ -16,7 +16,7 @@ from extensions.cli.cli import CommandSet, Command, CommandArgument
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 
 # master thesis
-from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_General_Config, FRODO_GeneralAgent_CommandSet
+from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
 from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
 from master_thesis.motion_planning.helper.collisions_fcl import EnvironmentCollisionChecker
 from master_thesis.general.configurations import EnvironmentConfig
@@ -94,7 +94,7 @@ class FRODO_General_CommandSet(CommandSet):
 
     # === private ---------------------------------------------------------
     def _add_general_agent(self, agent_id, x=0.0, y=0.0, psi=0.0, color=None):
-        config = FRODO_General_Config(color=color)
+        config = FRODO_Agent_Config(color=color)
         return self.sim.new_agent(
             agent_id=agent_id,
             agent_config=config,
@@ -297,7 +297,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
     def new_agent(self,
                   agent_id: str,
-                  agent_config: FRODO_General_Config | None = None,
+                  agent_config: FRODO_Agent_Config | None = None,
                   agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent,
                   start_config: tuple[float, ...] | None = None,
                   *args,
@@ -316,10 +316,10 @@ class FRODO_general_Simulation(FRODO_Simulation):
                     f"or define the agent definition in the definitions.py file.")
                 return None
 
-            agent_config = FRODO_General_Config()
+            agent_config = FRODO_Agent_Config()
 
         if agent_config is None:
-            agent_config = FRODO_General_Config()
+            agent_config = FRODO_Agent_Config()
 
         update_dataclass_from_dict(agent_config, kwargs)
 
@@ -365,7 +365,7 @@ def main():
     color_ag2 = (0, 0, 0.7)
 
     # === Add agents using new_general_agent ===
-    vfr1_config = FRODO_General_Config(color=color_ag1)
+    vfr1_config = FRODO_Agent_Config(color=color_ag1)
     agent_a = sim.new_agent(
         agent_id="vfrodo1",
         agent_class=FRODOGeneralAgent,
@@ -373,7 +373,7 @@ def main():
         agent_config=vfr1_config,
     )
 
-    vfr2_config = FRODO_General_Config(color=color_ag2)
+    vfr2_config = FRODO_Agent_Config(color=color_ag2)
     agent_b = FRODOGeneralAgent(
         agent_id="vfrodo2",
         start_config=start_b,
