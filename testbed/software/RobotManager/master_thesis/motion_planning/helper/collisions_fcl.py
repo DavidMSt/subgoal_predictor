@@ -5,8 +5,6 @@ from master_thesis.general.general_obstacles import GeneralObstacle
 # import meshcat.transformations as tf
 
 class CollisionChecker():
-    # _env: dict # environment in which agent is
-    # _plan: dict # plan of configurations we want to check for collisions
 
     def __init__(self, agent_config, env_config):
         self.env_config: EnvironmentConfig = env_config  
@@ -17,13 +15,6 @@ class CollisionChecker():
     def set_plan(self, plan): # TODO: Remove? 
         # self._plan = plan
         self.states = plan["plan"]["states"]
-    
-    def set_dimensions(self, L, W= None, H= None): # TODO: Remove? 
-        self.dimensions = {
-            "L": L,
-            "W": W,
-            "H": H
-        }
 
     def initialize_collision_manager(self, env_config, agent_config):
         self.initialize_env_manager(env_config)
@@ -83,9 +74,9 @@ class CollisionChecker():
 
         return not valid # ompl expects collision as return here
 
-    def check_states(self, states):
-        """Check multiple configurations"""
-        return [self.check_state(s) for s in states]
+    # def check_states(self, states):
+    #     """Check multiple configurations"""
+    #     return [self.check_state(s) for s in states]
 
     def broadphase_collision_checking(self, states):
         self.collisions_list = [self.check_state(state) for state in states]
@@ -202,6 +193,9 @@ class EnvironmentCollisionChecker:
         self.manager.registerObjects(list(self.static_objs.values()))
         self.manager.setup()
 
+    # ----------------------------------------------------------------------
+    # RL Observation space augmentations
+    # ----------------------------------------------------------------------
     def distance_and_bearing_to_closest_obstacle(self, agent):
         min_dist = float('inf')
         angle = 0.0

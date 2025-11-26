@@ -216,7 +216,6 @@ class OMPLPlannerFRODOBase(ABC):
             raise ValueError("Dimensions L, W, H must be provided for FRODO collision checking and must be valid positive numbers.")
 
         checker = CollisionChecker(env_config = self.env, agent_config=self.agent_config)
-        checker.set_dimensions(self.agent_config.length, self.agent_config.width, self.agent_config.height)
         checker.initialize_env_manager(self.env)
         return checker
     
@@ -449,21 +448,3 @@ class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
 if __name__ == "__main__":
     ...
 
-    # output, env, out_path = ArgParser.parse_arguments()
-    # planner_types = {
-    #     "arm": OMPLPlannerArm,
-    #     "car": OMPLPlannerCar
-    # }
-    # planner_type = env["motionplanning"]["type"]
-    # try:
-    #     planner_cls = planner_types[planner_type]
-    # except KeyError:
-    #     raise ValueError(f"Unsupported motion planning type: {planner_type}. Supported types are: {list(planner_types.keys())}.")
-    # planner = planner_cls(env=env, path_out_yaml=output, path_out_tree=out_path)
-
-
-    # planner.solve_problem()
-    # planner.export_solution_yaml()
-
-    # if out_path is not None:
-    #     planner.export_solution_tree() # TODO: Handling if arg parser has flag on
