@@ -1,14 +1,16 @@
 import numpy as np
 import fcl
-from master_thesis.general.configuration_containers import EnvironmentConfig, FRODO_Agent_Config
+from master_thesis.general.containers.agent_containers import FRODOAgentContainer
+from master_thesis.general.containers.environment_containers import EnvironmentContainer
+from master_thesis.general.containers.obstacle_containers import ObstacleContainer
 from master_thesis.general.general_obstacles import GeneralObstacle
 # import meshcat.transformations as tf
 
 class CollisionChecker():
 
-    def __init__(self, agent_config, env_config):
-        self.env_config: EnvironmentConfig = env_config  
-        self.agent_config: FRODO_Agent_Config = agent_config
+    def __init__(self, agent_config: FRODOAgentContainer, env_config: EnvironmentContainer):
+        self.env_config: EnvironmentContainer = env_config  
+        self.agent_config: FRODOAgentContainer = agent_config
         self.collisions_list = [] # initialize dynamic collison list
         self.initialize_collision_manager(env_config, agent_config)
 
@@ -27,7 +29,7 @@ class CollisionChecker():
         self.agent_manager = self.create_collision_manager(self.agent_objs)
 
 
-    def initialize_env_manager(self, env_config: EnvironmentConfig):
+    def initialize_env_manager(self, env_config: EnvironmentContainer):
         # Defensive programming: check for 'obstacles' attribute
         if not hasattr(env_config, "obstacles"):
             raise AttributeError("Provided env has no 'obstacles' attribute")
@@ -347,11 +349,6 @@ class EnvironmentCollisionChecker:
         geom = fcl.Box(L, W, H)
         tf = fcl.Transform(q, pos)
         return fcl.CollisionObject(geom, tf)
-    
-def frodo_collision_example():
-    collision_checker = CollisionChecker()
-    collision_checker.run_from_yaml()
-    collision_checker.dump_collisions_to_yaml()
 
 def simulatio_collision_example():
     ...

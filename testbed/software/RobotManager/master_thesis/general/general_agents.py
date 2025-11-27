@@ -238,7 +238,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     self, 
     agent_id: str,
     Ts=0.1, # TODO: this could probably be removed anyway, since Ts could also be received by env updates? 
-    start_config: tuple[float, ...] = (0.0, 0.0, 0.0),
+    start_config: tuple[float, float, float] = (0.0, 0.0, 0.0),
     color: tuple[float, float, float] = (1.0, 1.0, 1.0)
     ):
         agent_config = FRODO_Agent_Config(color = color, Ts= Ts)

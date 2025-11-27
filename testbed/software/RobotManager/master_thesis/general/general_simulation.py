@@ -108,31 +108,12 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         self.collision_checker = None      
 
         super().__init__(Ts=Ts, run_mode=run_mode, *args, **kwargs)
-        # # Call core environment init directly (skip FrodoEnvironment’s extra input registration)
-        # core_env.Environment.__init__(self, Ts=Ts, run_mode=run_mode)
-
-        # # adding input as extra phase here
-        # core.scheduling.Action(
-        #     action_id=FRODO_ENVIRONMENT_ACTIONS.INPUT,
-        #     object=self,
-        #     function=self.action_input,
-        #     priority=34,  # one tick after the last phase of FrodoEnvironment
-        #     parent=self.scheduling.actions['objects']
-        # )
 
         core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COLLISION,
                         object=self,
                         function=self._collision_checking,
                         priority=65,
                         parent=self.scheduling.actions['objects'])
-        
-        # core.scheduling.Action(
-        #     action_id=BASE_ENVIRONMENT_ACTIONS.OUTPUT,
-        #     object=self,
-        #     function=self.action_output,
-        #     priority=70,
-        #     parent=self.scheduling.actions['objects']
-        # )
 
     def action_output(self):
         for obj in self.objects.values():
@@ -248,30 +229,56 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         return obstacle
         
-    def new_obstacle(self,
-                    obstacle_id: str,
-                    config: Obstacle_Config | None,
-                    obstacle_class: type[GeneralObstacle] = GeneralObstacle, **obstacle_kwargs) -> GeneralObstacle | None:
-        
+    def new_obstacle(
+        self,
+        obstacle_id: str,
+        x: float = 0.0,
+        y: float = 0.0,
+        psi: float = 0.0,
+        length: float = 2.0,
+        width: float = 0.5,
+        height: float = 1.0,
+        obstacle_class: type[GeneralObstacle] = GeneralObstacle,
+        **kwargs
+    ) -> GeneralObstacle | None:
         if obstacle_id in SIMULATED_OBSTACLES:
-            self.logger.warning(f"Simulated agent {obstacle_id} already exists. Cannot add it again")
+            self.logger.warning(f"Obstacle {obstacle_id} already exists. Cannot add it again.")
             return None
-
-        # TODO: Add option for predefined obstacles here like in new_agent()
-
-        if config is None:
-            config = Obstacle_Config()
-
         obstacle = obstacle_class(
-            obstacle_id = obstacle_id,
-            config = config,
-            x = 0.0,
-            y = 0.0
+            obstacle_id=obstacle_id,
+            x=x,
+            y=y,
+            psi=psi,
+            length=length,
+            width=width,
+            height=height,
+            **kwargs
         )
-
         self.add_obstacle(obstacle)
-
         return obstacle
+
+    def new_wall(
+        self,
+        obstacle_id: str,
+        x: float,
+        y: float,
+        psi: float = 0.0,
+        length: float = 5.0,
+        width: float = 0.2,
+        height: float = 1.0,
+        **kwargs
+    ) -> GeneralObstacle | None:
+        return self.new_obstacle(
+            obstacle_id=obstacle_id,
+            x=x,
+            y=y,
+            psi=psi,
+            length=length,
+            width=width,
+            height=height,
+            obstacle_class=GeneralObstacle,
+            **kwargs
+        )
     
     def add_agent(self,
                 agent: FRODOGeneralAgent) -> FRODOGeneralAgent:
@@ -290,19 +297,21 @@ class FRODO_general_Simulation(FRODO_Simulation):
         except Exception:
             pass
         self.logger.info(f"Simulated agent {agent.agent_id} added")
-        self.cli.addChild(agent.cli)
+
+        if self.cli is not None:
+            self.cli.addChild(agent.cli)
 
         self.events.new_agent.set(agent)
 
         return agent
 
-    def new_agent(self,
+    
+    def new_agent(self, # type: ignore[override] 
                   agent_id: str,
-                  agent_config: FRODO_Agent_Config | None = None,
                   agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent,
-                  start_config: tuple[float, ...] | None = None,
-                  *args,
-                  **kwargs) -> FRODOGeneralAgent | None:
+                  start_config: tuple[float, float, float]  = (0.0, 0.0, 0.0),
+                  color:tuple[float, float, float] = (1.0,1.0,1.0),
+                  Ts = 0.1) -> FRODOGeneralAgent | None:
 
         if agent_id in SIMULATED_AGENTS:
             self.logger.warning(f"Simulated agent {agent_id} already exists. Cannot add it again")
@@ -317,22 +326,11 @@ class FRODO_general_Simulation(FRODO_Simulation):
                     f"or define the agent definition in the definitions.py file.")
                 return None
 
-            agent_config = FRODO_Agent_Config()
-
-        if agent_config is None:
-            agent_config = FRODO_Agent_Config()
-
-        update_dataclass_from_dict(agent_config, kwargs)
-
-        if start_config is None:
-            start_config = (0.0,0.0,0.0)
-
         agent = agent_class(
             agent_id=agent_id,
-            Ts=self.Ts,
-            agent_config=agent_config,
+            Ts= Ts,
             start_config= start_config,
-            **kwargs
+            color= color
         )
         
         self.add_agent(agent)
@@ -349,82 +347,57 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
 def main():
     # === Simulation setup ===
-    env_size_half = 10
+    env_size = 10
     sim = FRODO_general_Simulation(
         Ts=0.1,
-        limits=((-env_size_half, env_size_half), (-env_size_half, env_size_half)),
+        limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
     )
     sim.init()
 
     # === Initial agent poses ===
     start_a = (0.0, 0.0, 0.0)
-    start_b = (10.0, 10.5, 0.0)
-    start_c = (5.0, 3.5, 0.0)
+    start_b = (3.0, 3.5, 0.0)
 
-    # === Colors (GUI) ===
+    # === Colors ===
     color_ag1 = (0.7, 0, 0)
     color_ag2 = (0, 0, 0.7)
 
-    # === Add agents using new_general_agent ===
-    vfr1_config = FRODO_Agent_Config(color=color_ag1)
+    # === Add agents using the new API ===
     agent_a = sim.new_agent(
         agent_id="vfrodo1",
-        agent_class=FRODOGeneralAgent,
+        agent_config=FRODO_Agent_Config(color=color_ag1),
         start_config=start_a,
-        agent_config=vfr1_config,
     )
 
-    vfr2_config = FRODO_Agent_Config(color=color_ag2)
-    agent_b = FRODOGeneralAgent(
+    agent_b = sim.new_agent(
         agent_id="vfrodo2",
+        agent_config=FRODO_Agent_Config(color=color_ag2),
         start_config=start_b,
-        agent_config=vfr2_config,
     )
-    sim.add_agent(agent_b)
 
-    # vfr3_config = FRODO_General_Config(color=color_ag2)
-    # agent_c = FRODOGeneralAgent(
-    #     agent_id="vfrodo3",
-    #     start_config=start_c,
-    #     agent_config=vfr3_config,
-    # )
-    
-    # agent_b = sim.new_agent(
-    #     agent_id="vfrodo2",
-    #     agent_class=FRODOGeneralAgent,
-    #     start_config=start_b,
-    #     agent_config=vfr2_config,
-    # )
-
-    # === Add virtual obstacle (optional) ===
-    vob1_config = Obstacle_Config()
-    obstacle_b = sim.new_obstacle(
+    # === Add obstacle using new obstacle interface ===
+    sim.new_wall(
         obstacle_id="wall1",
-        config = vob1_config,
-        
+        x=5.0,
+        y=0.0,
+        psi=0.0,
+        length=4.0,
+        width=0.3,
     )
 
-    # === Example: input phases for moving straight forward ===
-    inputs_1 = tuple([np.array([1.0, 0.0]) for _ in range(2)])
-    inputs_2 = tuple([np.array([-1.0, 0.0]) for _ in range(2)])
-    durations = tuple([1] * len(inputs_1))
+    # === Example input phases ===
+    inputs_forward = (np.array([1.0, 0.0]),)
+    durations = (1,)
 
-    
-    assert agent_a, FRODOGeneralAgent # keep Pylance quiet
-    assert agent_b, FRODOGeneralAgent
-    agent_a.add_input_phase("forward", inputs=inputs_1, durations=durations, delta_t=0.4)
-    agent_b.add_input_phase("forward", inputs=inputs_1, durations=durations, delta_t=0.4)
-    agent_a.add_input_phase("after", inputs=inputs_2, durations=durations, delta_t=0.4)
-    agent_b.add_input_phase("after", inputs=inputs_2, durations=durations, delta_t=0.4)
+    agent_a.add_input_phase("forward", inputs=inputs_forward, durations=durations, delta_t=0.4)
+    agent_b.add_input_phase("forward", inputs=inputs_forward, durations=durations, delta_t=0.4)
+
     sim.activate_phase_all_agents("forward")
-    sim.activate_phase_all_agents("after")
 
     # === Start simulation ===
     sim.start()
 
-    time.sleep(1)
-
-    # === Infinite keep-alive ===
+    # === Keep alive ===
     while True:
         time.sleep(1)
 
