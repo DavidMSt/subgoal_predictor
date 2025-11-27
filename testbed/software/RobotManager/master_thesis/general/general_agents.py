@@ -237,15 +237,11 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     def __init__(
     self, 
     agent_id: str,
-    Ts=None,
-    agent_config: FRODO_Agent_Config | None = None,
-    start_config: tuple[float, ...] = (0.0, 0.0, 0.0)
+    Ts=0.1, # TODO: this could probably be removed anyway, since Ts could also be received by env updates? 
+    start_config: tuple[float, ...] = (0.0, 0.0, 0.0),
+    color: tuple[float, float, float] = (1.0, 1.0, 1.0)
     ):
-        if Ts is None:
-            Ts = 0.1
-
-        if agent_config is None:
-            agent_config = FRODO_Agent_Config(Ts = Ts)
+        agent_config = FRODO_Agent_Config(color = color, Ts= Ts)
 
         # ─────────────────────────────────────────────
         # CONTAINER + LOCAL WORLD REPRESENTATION

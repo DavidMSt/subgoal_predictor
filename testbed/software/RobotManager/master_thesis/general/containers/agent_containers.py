@@ -15,8 +15,13 @@ class FRODO_Agent_Config:
 @dataclass(frozen=False, slots=False)
 class FRODOAgentContainer(OverarchingContainer):
     config: FRODO_Agent_Config
-    state_getter: Callable[[], FRODO_State]
+
+    def __init__(self, config: FRODO_Agent_Config, state_getter: Callable[[], FRODO_State]):
+        super().__init__(config=config)
+        self.set_state_getter(state_getter)
 
     @property
     def snapshot(self) -> FRODO_State:
+        if self.state_getter is None:
+            raise AttributeError('Did not define a function which returns an agent state')
         return self.state_getter()

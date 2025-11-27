@@ -4,7 +4,9 @@ from core.utils.states import State
 
 @dataclass(frozen= False, slots = False)
 class Obstacle_State(State):
-    ...
+    x: float
+    y: float
+    psi: float
 
 @dataclass(frozen=True, slots=True)
 class Obstacle_Config:

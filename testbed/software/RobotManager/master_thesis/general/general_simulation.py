@@ -17,10 +17,10 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 
 # master thesis
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
-from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
+from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.motion_planning.helper.collisions_fcl import EnvironmentCollisionChecker
-from master_thesis.general.configuration_containers import EnvironmentConfig
-
+from master_thesis.general.containers.environment_containers import EnvironmentConfig
+from master_thesis.general.containers.obstacle_containers import ObstacleContainer
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
 SIMULATED_STATICS: dict[str, FRODO_Static] = {}

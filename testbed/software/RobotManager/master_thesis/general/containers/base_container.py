@@ -1,12 +1,16 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from abc import abstractmethod
 from typing import Any
-from typing import Callable
+from typing import Callable, Generic, TypeVar
+T_state = TypeVar("T_state")
 
 @dataclass
-class OverarchingContainer:
+class OverarchingContainer(Generic[T_state]):
     config: ...
-    state_getter: Callable[[], object] | None = None
+    state_getter: Callable[[], T_state] | None = field(default=None, repr=False, init=False)
+
+    def set_state_getter(self, fn: Callable[[], T_state]):
+        self.state_getter = fn
 
     @property
     def snapshot(self) -> object | None:
