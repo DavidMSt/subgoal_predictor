@@ -12,17 +12,11 @@ class FRODO_Agent_Config:
     height: float = 0.11
     Ts: float | None = None # gets overwritten with sim Ts once agent is created
 
-# @dataclass(frozen = False, slots = False)
-# class FRODO_Agent_State:
-#     x: float = 0.0
-#     y: float = 0.0
-#     psi: float = 0.0
-
 @dataclass(frozen=False, slots=False)
 class FRODOAgentContainer(OverarchingContainer):
     config: FRODO_Agent_Config
     state_getter: Callable[[], FRODO_State]
 
     @property
-    def state(self) -> FRODO_State:
+    def snapshot(self) -> FRODO_State:
         return self.state_getter()

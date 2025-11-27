@@ -43,14 +43,14 @@ class LocalWorldRepresentation:
     # ---- extraction for RL / GNN ----
     def as_observation(self):
         own = [
-            self.self_agent.state.x,
-            self.self_agent.state.y,
-            self.self_agent.state.psi
+            self.self_agent.snapshot.x,
+            self.self_agent.snapshot.y,
+            self.self_agent.snapshot.psi
         ]
 
         neigh = []
         for nb in self.neighbors.values():
-            neigh.append([nb.state.x, nb.state.y, nb.state.psi])
+            neigh.append([nb.snapshot.x, nb.snapshot.y, nb.snapshot.psi])
 
         limits = self.env_config.limits if self.env_config else None
 
