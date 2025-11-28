@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from extensions.simulation.src.objects.frodo.frodo import FRODO_State
 from master_thesis.general.containers.base_container import OverarchingContainer
 from extensions.simulation.src.objects.frodo.frodo import FRODO_State
@@ -15,13 +15,7 @@ class FRODO_Agent_Config:
 @dataclass(frozen=False, slots=False)
 class FRODOAgentContainer(OverarchingContainer):
     config: FRODO_Agent_Config
+    state: FRODO_State = field(default_factory= lambda: FRODO_State(0.0,0.0,0.0,0.0,0.0))
 
-    def __init__(self, config: FRODO_Agent_Config, state_getter: Callable[[], FRODO_State]):
-        super().__init__(config=config)
-        self.set_state_getter(state_getter)
 
-    @property
-    def snapshot(self) -> FRODO_State:
-        if self.state_getter is None:
-            raise AttributeError('Did not define a function which returns an agent state')
-        return self.state_getter()
+

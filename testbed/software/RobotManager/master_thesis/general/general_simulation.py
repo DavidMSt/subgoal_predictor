@@ -19,7 +19,7 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 # master thesis
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
 from master_thesis.general.general_obstacles import GeneralObstacle
-from master_thesis.motion_planning.helper.collisions_fcl import EnvironmentCollisionChecker
+from master_thesis.motion_planning.helper.collisions_fcl import WorldCollisionChecker
 from master_thesis.general.containers.environment_containers import EnvironmentConfig, EnvironmentContainer
 from master_thesis.general.containers.obstacle_containers import ObstacleContainer
 # Global registries
@@ -76,7 +76,7 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
             else:
                 raise AssertionError("Unknown object class during env collision checker setup")
 
-        self.collision_checker = EnvironmentCollisionChecker()
+        self.collision_checker = WorldCollisionChecker()
         self.collision_checker.initialize(
             agents=agents,
             obstacles=obstacles

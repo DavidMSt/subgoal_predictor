@@ -11,6 +11,7 @@ from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation,  FR
 from extensions.simulation.src.objects.frodo.frodo import FRODO_DynamicAgent
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.cli.cli import CommandSet, Command, CommandArgument
+from extensions.simulation.src.objects.frodo.frodo import FRODO_State
 import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
 from master_thesis.general.containers.agent_containers import FRODOAgentContainer, FRODO_Agent_Config
@@ -43,14 +44,14 @@ class LocalWorldRepresentation:
     # ---- extraction for RL / GNN ----
     def as_observation(self):
         own = [
-            self.self_agent.snapshot.x,
-            self.self_agent.snapshot.y,
-            self.self_agent.snapshot.psi
+            self.self_agent.x,
+            self.self_agent.y,
+            self.self_agent.psi
         ]
 
         neigh = []
         for nb in self.neighbors.values():
-            neigh.append([nb.snapshot.x, nb.snapshot.y, nb.snapshot.psi])
+            neigh.append([nb.x, nb.y, nb.psi])
 
         limits = self.env_config.limits if self.env_config else None
 
@@ -248,7 +249,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         # ─────────────────────────────────────────────
         self.container = FRODOAgentContainer(
             config=agent_config,
-            state_getter=lambda: self.state
+            state = FRODO_State(x = start_config[0], y = start_config[1], psi = start_config[2], v = 0.0, psi_dot = 0.0)
         )
         self.lwr = LocalWorldRepresentation(self_agent=self.container)
         # ─────────────────────────────────────────────
@@ -279,6 +280,9 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
 
         # Attach input function into scheduling (mirroring VisionAgent behavior)
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._input_function)
+        # Attach the update function for the agent containers
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT].addAction(self._container_update_function)
+
 
     def action_frodo_communication(self):
         ...
@@ -293,6 +297,15 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         u = self.runner.step()
         self.input.v = float(u[0])
         self.input.psi_dot = float(u[1])
+
+    # ----------------------------------------------------------------------
+
+    def _container_update_function(self):
+        raise AssertionError
+        st = self.container.state
+        st.x = self.state.x
+        st.y = self.state.y
+        st.psi = self.state.psi
 
     # ----------------------------------------------------------------------
     def add_input_phase(

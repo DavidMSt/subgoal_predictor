@@ -20,7 +20,7 @@ from ompl import util as ou # used to supress OMPL outputs
 from typing import Any
 from numpy.typing import NDArray
 from master_thesis.motion_planning.helper.nearest_neighbor import NearestNeighbor # TODO: Use scikit-learn kd tree here
-from master_thesis.motion_planning.helper.collisions_fcl import CollisionChecker
+from master_thesis.motion_planning.helper.collisions_fcl import AgentCollisionChecker
 from enum import Enum, auto
 from abc import ABC, abstractmethod
 from ompl.base import PathLengthOptimizationObjective
@@ -215,7 +215,7 @@ class OMPLPlannerFRODOBase(ABC):
         if L is None or W is None or H is None or L <= 0 or W <= 0 or H <= 0:
             raise ValueError("Dimensions L, W, H must be provided for FRODO collision checking and must be valid positive numbers.")
 
-        checker = CollisionChecker(env_config = self.env, agent_config=self.agent_config)
+        checker = AgentCollisionChecker(env_config = self.env, agent_config=self.agent_config)
         checker.initialize_env_manager(self.env)
         return checker
     

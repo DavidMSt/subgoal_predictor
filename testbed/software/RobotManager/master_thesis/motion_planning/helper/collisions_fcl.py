@@ -6,7 +6,7 @@ from master_thesis.general.containers.obstacle_containers import ObstacleContain
 from master_thesis.general.general_obstacles import GeneralObstacle
 # import meshcat.transformations as tf
 
-class CollisionChecker():
+class AgentCollisionChecker():
 
     def __init__(self, agent_config: FRODOAgentContainer, env_config: EnvironmentContainer):
         self.env_config: EnvironmentContainer = env_config  
@@ -14,9 +14,11 @@ class CollisionChecker():
         self.collisions_list = [] # initialize dynamic collison list
         self.initialize_collision_manager(env_config, agent_config)
 
-    def set_plan(self, plan): # TODO: Remove? 
-        # self._plan = plan
-        self.states = plan["plan"]["states"]
+    def check_agent_state(self):
+        ...
+
+    def check_env_state(self):
+        ...
 
     def initialize_collision_manager(self, env_config, agent_config):
         self.initialize_env_manager(env_config)
@@ -148,7 +150,7 @@ class CollisionChecker():
         return manager
 
 # TODO: make all this a single checker? 
-class EnvironmentCollisionChecker:
+class WorldCollisionChecker:
 
     def __init__(self, compute_closest_distance = False):
         self.static_objs = {}
@@ -354,5 +356,6 @@ def simulatio_collision_example():
     ...
 
 
-if __name__ == "__main__":
-    simulatio_collision_example()    
+# if __name__ == "__main__":
+#     simulatio_collision_example()    
+
