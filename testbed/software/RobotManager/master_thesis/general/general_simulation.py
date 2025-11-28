@@ -6,6 +6,7 @@ from typing import Type
 
 # bilbolab
 from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRODO_ENVIRONMENT_ACTIONS, FrodoEnvironment, FRODO_Static, FRODO_Simulation_Events
+from extensions.simulation.src.core.environment import Object
 from extensions.simulation.src.objects.frodo.frodo import FRODO_DynamicAgent
 from applications.FRODO.simulation.frodo_simulation_utils import frodo_virtual_agent_colors
 import extensions.simulation.src.core as core
@@ -19,7 +20,7 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
 from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.motion_planning.helper.collisions_fcl import EnvironmentCollisionChecker
-from master_thesis.general.containers.environment_containers import EnvironmentConfig
+from master_thesis.general.containers.environment_containers import EnvironmentConfig, EnvironmentContainer
 from master_thesis.general.containers.obstacle_containers import ObstacleContainer
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
@@ -31,10 +32,16 @@ USE_AGENT_DEFINITIONS = False
 USE_OBSTACLE_DEFINITIONS = True
 
 class FrodoGeneralEnvironment(FrodoEnvironment):
-    def __init__(self, Ts, run_mode, *args, **kwargs):
+    environment_container : EnvironmentContainer
+
+    def __init__(self, Ts, run_mode, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), *args, **kwargs):
         self.space = core.spaces.Space2D()
-        self._obstacles = []  
-        self.collision_checker = None      
+        self._obstacles = []  # TODO: still needed? 
+        self.collision_checker = None   
+        self.set_limits(limits)
+
+        environment_config = EnvironmentConfig(limits=limits, Ts = Ts)
+        self.environment_container = EnvironmentContainer(environment_config) 
 
         super().__init__(Ts=Ts, run_mode=run_mode, *args, **kwargs)
 
@@ -47,6 +54,15 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
     def action_output(self):
         for obj in self.objects.values():
             obj.output(self)
+
+    def addObject(self, objects: core_env.Object | list[Object]):
+        if isinstance(objects, FRODOGeneralAgent):
+            self.environment_container.add_agents(objects)
+
+        if isinstance(objects, GeneralObstacle):
+            self.environment_container.add_obstacles(objects)
+
+        return super().addObject(objects)
 
     def setup_collision_checker(self):
         agents = {}
@@ -71,6 +87,11 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         )
 
     def set_limits(self, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), wrapping = [False, False]):
+        # check if limits are valid
+        for i, limit in enumerate(limits):
+            if limit[0] > limit[1]:
+                self.logger.error(f"Invalid environment limits for dimension: {i}: {limit[0]} > {limit[1]}")
+        
         pos_dim = self.space.dimensions[0] # Get the first dimension of the space (E(2) vector)
         pos_dim.kwargs['wrapping'] = wrapping
         pos_dim.limits = limits
@@ -122,16 +143,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
         super().__init__(Ts)
 
         # override standard bilbo environment with my custom version
-        self.environment = env(Ts=Ts, run_mode='rt')
+        self.environment = env(Ts=Ts, run_mode='rt', limits = limits)
         self.agents = SIMULATED_AGENTS # TODO: Remove these global variables from BILBOLAB?
         self.statics = SIMULATED_STATICS
-
-        # check if limits are valid
-        for i, limit in enumerate(limits):
-            if limit[0] > limit[1]:
-                self.logger.error(f"Invalid environment limits for dimension: {i}: {limit[0]} > {limit[1]}")
-
-        self.environment.set_limits(limits = limits)
 
         self.obstacles = {}
 
