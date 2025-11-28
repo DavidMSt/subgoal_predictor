@@ -112,9 +112,6 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
 class FRODO_general_Simulation(FRODO_Simulation):
 
     environment: FrodoGeneralEnvironment
-
-    cli: FRODO_General_CommandSet | None = None
-
     agents: dict[str, FRODOGeneralAgent]
     statics: dict[str, FRODO_Static]
 
@@ -126,9 +123,8 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         # override standard bilbo environment with my custom version
         self.environment = env(Ts=Ts, run_mode='rt')
-        self.agents = SIMULATED_AGENTS
+        self.agents = SIMULATED_AGENTS # TODO: Remove these global variables from BILBOLAB?
         self.statics = SIMULATED_STATICS
-        self.cli = FRODO_General_CommandSet(self)
 
         # check if limits are valid
         for i, limit in enumerate(limits):
@@ -282,8 +278,8 @@ def main():
     sim.init()
 
     # === Initial agent poses ===
-    start_a = (0.0, 0.0, 0.0)
-    start_b = (3.0, 3.5, 0.0)
+    start_ag1 = (0.0, 0.0, 0.0)
+    start_ag2 = (3.0, 3.5, 0.0)
 
     # === Colors ===
     color_ag1 = (0.7, 0, 0)
@@ -292,15 +288,19 @@ def main():
     # === Add agents using the new API ===
     agent_a = sim.new_agent(
         agent_id="vfrodo1",
-        agent_config=FRODO_Agent_Config(color=color_ag1),
-        start_config=start_a,
+        start_config = start_ag1,
+        color= color_ag1
     )
 
     agent_b = sim.new_agent(
         agent_id="vfrodo2",
-        agent_config=FRODO_Agent_Config(color=color_ag2),
-        start_config=start_b,
+        start_config=start_ag2,
+        color= color_ag2,
     )
+
+    # type checker related
+    assert isinstance(agent_a, FRODOGeneralAgent)
+    assert isinstance(agent_b, FRODOGeneralAgent)
 
     # === Add obstacle using new obstacle interface ===
     sim.new_wall(

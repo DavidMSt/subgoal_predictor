@@ -76,10 +76,13 @@ class FRODO_General_CommandSet(CommandSet):
         )
 
 class FRODO_universal_Simulation(FRODO_general_Simulation):
+    cli: FRODO_General_CommandSet | None = None
+
     def __init__(self, Ts=0.1, limits=((-3,3),(-3,3)), env=FrodoGeneralEnvironment):
         super().__init__(Ts=Ts, limits=limits, env=env)
         self.mpi = MPSimulationModule(self.agents, self.logger)
         self.asi = AssignmentSimulationModule(env = env, logger=  self.logger, new_agent_fun= FRODOUniversalAgent)
+        self.cli = FRODO_General_CommandSet(self)
 
     def new_agent(self, agent_id, start_config, **kwargs):
         agent = FRODOUniversalAgent(

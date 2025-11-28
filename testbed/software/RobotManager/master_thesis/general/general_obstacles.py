@@ -10,12 +10,16 @@ class GeneralObstacle(FRODO_SimulationObject):
 
     def __init__(self, obstacle_id: str, x, y, psi, length, width, height):
         
+        self.obstacle_id = obstacle_id
+
         # bilbolab geometry
         self.space = spaces.Space2D()
         self.space.dimensions[0].limits = [
             [-length / 2, length / 2],
             [-width / 2,  width / 2]
         ]
+
+        super().__init__(object_id=obstacle_id, space=self.space)
 
         self.state = Obstacle_State( # TODO: do I really need the state here still? 
             x=x,
@@ -36,8 +40,6 @@ class GeneralObstacle(FRODO_SimulationObject):
         )
 
         self.container = ObstacleContainer(obstacle_config)
-
-        super().__init__(object_id=obstacle_id, space=self.space)
 
 
     # def set_state(self, x: float = None, y: float = None, psi: float = None):
