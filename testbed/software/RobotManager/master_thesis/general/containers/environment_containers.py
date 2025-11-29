@@ -20,13 +20,15 @@ class EnvironmentContainer(OverarchingContainer):
     state: EnvironmentState = field(default_factory=EnvironmentState)
 
     def add_obstacles(self, obstacle):
+        assert isinstance(obstacle, ObstacleContainer)
         self.state.obstacles[obstacle.object_id] = obstacle
 
     def remove_obstacles(self, obstacle_id):
         ...
 
     def add_agents(self, agent):
-        self.state.agents[agent.object_id] = agent
+        assert isinstance(agent, FRODOAgentContainer)
+        self.state.agents[agent.agent_id] = agent
     
     def remove_agents(self, agent_id):
         ...

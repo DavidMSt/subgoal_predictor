@@ -39,7 +39,7 @@ class GeneralObstacle(FRODO_SimulationObject):
             height = height
         )
 
-        self.container = ObstacleContainer(obstacle_config)
+        self.container = ObstacleContainer(object_id = self.object_id, config=obstacle_config)
 
 
     # def set_state(self, x: float = None, y: float = None, psi: float = None):

@@ -248,6 +248,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         # CONTAINER + LOCAL WORLD REPRESENTATION
         # ─────────────────────────────────────────────
         self.container = FRODOAgentContainer(
+            agent_id= agent_id,
             config=agent_config,
             state = FRODO_State(x = start_config[0], y = start_config[1], psi = start_config[2], v = 0.0, psi_dot = 0.0)
         )

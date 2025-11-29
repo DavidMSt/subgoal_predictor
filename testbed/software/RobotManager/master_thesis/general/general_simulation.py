@@ -22,6 +22,8 @@ from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.motion_planning.helper.collisions_fcl import WorldCollisionChecker
 from master_thesis.general.containers.environment_containers import EnvironmentConfig, EnvironmentContainer
 from master_thesis.general.containers.obstacle_containers import ObstacleContainer
+from master_thesis.general.containers.agent_containers import FRODOAgentContainer
+
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
 SIMULATED_STATICS: dict[str, FRODO_Static] = {}
@@ -37,7 +39,7 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
     def __init__(self, Ts, run_mode, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), *args, **kwargs):
         self.space = core.spaces.Space2D()
         self._obstacles = []  # TODO: still needed? 
-        self.collision_checker = None   
+        self.collision_checker = self.setup_collision_checker   
         self.set_limits(limits)
 
         environment_config = EnvironmentConfig(limits=limits, Ts = Ts)
@@ -56,15 +58,18 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
             obj.output(self)
 
     def addObject(self, objects: core_env.Object | list[Object]):
+        assert self.collision_checker is not None
+
         if isinstance(objects, FRODOGeneralAgent):
-            self.environment_container.add_agents(objects)
+            self.environment_container.add_agents(objects.container)
+            self.collision_checker.add_agent(objects.container, objects.agent_id)
 
         if isinstance(objects, GeneralObstacle):
-            self.environment_container.add_obstacles(objects)
+            self.environment_container.add_obstacles(objects.container)
 
         return super().addObject(objects)
 
-    def setup_collision_checker(self):
+    def setup_collision_checker(self)-> WorldCollisionChecker:
         agents = {}
         obstacles = {}
 
@@ -76,15 +81,12 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
             else:
                 raise AssertionError("Unknown object class during env collision checker setup")
 
-        self.collision_checker = WorldCollisionChecker()
-        self.collision_checker.initialize(
-            agents=agents,
-            obstacles=obstacles
-        )
+        collision_checker = WorldCollisionChecker(self.environment_container)
 
         self.logger.info(
             f"Collision checker initialized with {len(agents)} agents and {len(obstacles)} obstacles."
         )
+        return collision_checker
 
     def set_limits(self, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), wrapping = [False, False]):
         # check if limits are valid
@@ -104,11 +106,8 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         if self.collision_checker is None:
             return
 
-        # dynamic, up-to-date dictionaries:
-        agents = {k: v for k, v in self.objects.items() if isinstance(v, FRODOGeneralAgent)}
-        obstacles = {k: v for k, v in self.objects.items() if isinstance(v, GeneralObstacle)}
-
-        collisions = self.collision_checker.check_all(agents, obstacles)
+        self.collision_checker.update()
+        collisions = self.collision_checker.check_all()
 
         for aid, hits in collisions.items():
             if hits:
@@ -141,9 +140,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
     def __init__(self, Ts=0.1, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), env = FrodoGeneralEnvironment):
         
         super().__init__(Ts)
-
         # override standard bilbo environment with my custom version
         self.environment = env(Ts=Ts, run_mode='rt', limits = limits)
+        # self.environment.setup_collision_checker()
         self.agents = SIMULATED_AGENTS # TODO: Remove these global variables from BILBOLAB?
         self.statics = SIMULATED_STATICS
 
@@ -279,7 +278,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
             agent.activate_phase(phase)
 
     def start(self):
-        self.environment.setup_collision_checker()
+        
         super().start()
 
 def main():

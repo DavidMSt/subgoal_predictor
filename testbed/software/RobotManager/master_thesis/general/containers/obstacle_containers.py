@@ -19,5 +19,6 @@ class Obstacle_Config:
 
 @dataclass(frozen=False, slots = False)
 class ObstacleContainer(OverarchingContainer):
+    object_id: str
     config: Obstacle_Config
     

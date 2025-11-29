@@ -14,6 +14,7 @@ class FRODO_Agent_Config:
 
 @dataclass(frozen=False, slots=False)
 class FRODOAgentContainer(OverarchingContainer):
+    agent_id: str 
     config: FRODO_Agent_Config
     state: FRODO_State = field(default_factory= lambda: FRODO_State(0.0,0.0,0.0,0.0,0.0))
 
