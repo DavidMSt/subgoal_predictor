@@ -3,7 +3,7 @@ import extensions.simulation.src.core.spaces as spaces
 from dataclasses import dataclass
 # from applications.FRODO.simulation.frodo_simulation import FRODO_SimulationObject
 from extensions.simulation.src.core.environment import Object
-from master_thesis.general.containers.obstacle_containers import ObstacleContainer, Obstacle_State, Obstacle_Config
+from master_thesis.general.containers.obstacle_containers import ObstacleContainer, Obstacle_Config
 
 class GeneralObstacle(Object):
     object_type = "obstacle"
@@ -22,19 +22,19 @@ class GeneralObstacle(Object):
 
         super().__init__(object_id=obstacle_id, space=self.space)
 
-        self.state = Obstacle_State( # TODO: do I really need the state here still? 
-            x=x,
-            y=y,
-            psi=psi
-        )
+        # self.state = Obstacle_State( # TODO: do I really need the state here still? 
+        #     x=x,
+        #     y=y,
+        #     psi=psi
+        # )
 
         self.setPosition(x, y)
 
 
         obstacle_config = Obstacle_Config(
-            x0 = x,
-            y0 = y,
-            psi0 = psi,
+            x = x,
+            y = y,
+            psi = psi,
             length= length,
             width= width,
             height = height

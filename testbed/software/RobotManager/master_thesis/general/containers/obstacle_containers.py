@@ -1,18 +1,17 @@
 from dataclasses import dataclass
 from master_thesis.general.containers.base_container import OverarchingContainer
-from core.utils.states import State
 
-@dataclass(frozen= False, slots = False)
-class Obstacle_State(State):
-    x: float
-    y: float
-    psi: float
+# @dataclass(frozen= False, slots = False) #TODO obstacles are static, therefore strictly speaking 
+# class Obstacle_State():
+#     x: float
+#     y: float
+#     psi: float
 
 @dataclass(frozen=True, slots=True)
 class Obstacle_Config:
-    x0: float = 0.0
-    y0: float = 0.0
-    psi0: float = 0.0
+    x: float = 0.0
+    y: float = 0.0
+    psi: float = 0.0
     length: float = 2.0
     width: float = 0.5
     height: float = 1.0
