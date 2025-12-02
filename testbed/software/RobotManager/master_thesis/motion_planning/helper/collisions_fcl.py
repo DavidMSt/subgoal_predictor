@@ -24,9 +24,9 @@ class AgentCollisionChecker():
         self.initialize_env_manager(env_container)
         self.initialize_agent_manager(agent_container)
 
-    def initialize_agent_manager(self, agent_config):
+    def initialize_agent_manager(self, agent_container):
         # py-fcl does not expose the objects in a manager for update, therefore they must be accesible here
-        self.agent_objs = self.create_agent_objects(agent_config)
+        self.agent_objs = self.create_agent_objects(agent_container)
 
         self.agent_manager = self.create_collision_manager(self.agent_objs)
 
@@ -96,45 +96,34 @@ class AgentCollisionChecker():
             obstacle_list.append(_obs)
         return obstacle_list
     
-    def create_agent_objects(self, agent_config):
+    def create_agent_objects(self, agent_container: FRODOAgentContainer):
         """
         Create the initial FCL collision object for the FRODO agent.
-        The agent is initialized at state (0,0,0) and its transform
+        The agent is initialized at state and its transform
         will be updated later inside check_state().
         """
-        # --- create a zero state for initialization ---
-        class _ZeroState:
-            def __init__(self):
-                self.x = 0.0
-                self.y = 0.0
-                self.psi = 0.0
 
-        zero_state = _ZeroState()
-
-
-        obj = self.create_collision_box(agent_config, zero_state)
+        obj = self.create_collision_box(container= agent_container)
         return [obj]
     
-    def create_env_collision_object(self, obstacle):
-        if isinstance(obstacle, GeneralObstacle):
-            _obs = self.create_collision_box(config = obstacle.config, state = obstacle.state)
+    def create_env_collision_object(self, obstacle_container: ObstacleContainer):
+        if obstacle_container.shape == "box":
+            _obs = self.create_collision_box(container=obstacle_container)
         else:
             raise ValueError
         return _obs
 
     @staticmethod
-    def create_collision_box(config, state, q=None):
+    def create_collision_box(container : FRODOAgentContainer | ObstacleContainer):
         # FCL box expects (x_size, y_size, z_size)
-        geometry = fcl.Box(config.length, config.width, config.height)
+        geometry = fcl.Box(container.length, container.width, container.height)
 
         # position
-        pos = [state.x, state.y, 0.0]
+        pos = [container.x, container.y, 0.0]
 
-        # orientation
-        if q is None:
-            # default rotation: yaw = state.psi
-            yaw = state.psi
-            q = [np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
+        # default rotation: yaw = state.psi
+        yaw = container.psi
+        q = [np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
 
         # create transform
         transform = fcl.Transform(q, pos)

@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from extensions.simulation.src.objects.frodo.frodo import FRODO_State
 from master_thesis.general.containers.base_container import OverarchingContainer
 from extensions.simulation.src.objects.frodo.frodo import FRODO_State
-from typing import Callable
 
 @dataclass(frozen=True, slots = True)
 class FRODO_Agent_Config:
@@ -14,8 +13,8 @@ class FRODO_Agent_Config:
 
 @dataclass(frozen=False, slots=False)
 class FRODOAgentContainer(OverarchingContainer):
-    agent_id: str 
-    config: FRODO_Agent_Config
+    agent_id: str = field(kw_only=True)
+    config: FRODO_Agent_Config = field(default_factory=FRODO_Agent_Config)
     state: FRODO_State = field(default_factory= lambda: FRODO_State(0.0,0.0,0.0,0.0,0.0))
 
 

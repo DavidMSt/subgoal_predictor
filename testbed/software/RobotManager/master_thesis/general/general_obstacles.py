@@ -9,7 +9,7 @@ class GeneralObstacle(Object):
     object_type = "obstacle"
     static = True #TODO: This could be removed
 
-    def __init__(self, obstacle_id: str, x, y, psi, length, width, height):
+    def __init__(self, obstacle_id: str, x: float, y:float, psi:float, length:float, width:float, height:float):
         
         self.obstacle_id = obstacle_id
 
