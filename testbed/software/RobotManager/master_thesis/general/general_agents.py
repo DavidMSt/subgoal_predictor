@@ -144,7 +144,7 @@ class InputPhaseRunner:
 
         # immediately stop current phase and start the next one
         if cut_current or self.active == 'idle': 
-            self.change_phase(name=name)
+            self.active =name
         
         # wait until it is finished, just add new phase to active queue
         else:
@@ -162,13 +162,6 @@ class InputPhaseRunner:
 
         if name != 'idle':
             self._logger.info(f"Active phase set to '{name}'")
-
-    def change_phase(self, name: str):
-        self.active = name
-
-        # not necessary to print ending idle
-        if name != 'idle':
-            self._logger.info(f"Starting phase '{name}'")
 
     def get_phase(self, name: str) -> InputPhase:
         return self._phases[name]
@@ -219,12 +212,12 @@ class InputPhaseRunner:
         
         if self._queued_phases == []:
             print('no next phases available')
-            self.change_phase("idle")
+            self.active = "idle"
         
         else:
             print('found the next phase')
             phase_name = self._queued_phases.pop()
-            self.change_phase(phase_name)
+            self.acvitve = phase_name
 
 
 class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
