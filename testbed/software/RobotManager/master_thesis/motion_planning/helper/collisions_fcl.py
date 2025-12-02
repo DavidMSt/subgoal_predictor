@@ -92,7 +92,7 @@ class AgentCollisionChecker():
 
     def create_environment_objects(self):
         obstacle_list = []
-        for obstacle in self.env_config.obstacles:
+        for obstacle in self.env_config.state.obstacles.values():
             _obs = self.create_env_collision_object(obstacle)
             obstacle_list.append(_obs)
         return obstacle_list
@@ -162,11 +162,11 @@ class WorldCollisionChecker:
         self.obj_to_id: dict[fcl.CollisionObject, str] = {}
 
         # initialize all obstacles (static)
-        for oid, obs in env_container.obstacles.items():
+        for oid, obs in env_container.state.obstacles.items():
             self.add_obstacle(obs, oid)
 
         # initialize all agents (dynamic)
-        for aid, ag in env_container.agents.items():
+        for aid, ag in env_container.state.agents.items():
             self.add_agent(ag, aid)
 
         self.manager.setup()
@@ -201,7 +201,7 @@ class WorldCollisionChecker:
     def update(self):
         # only dynamic agents
         for aid, obj in self.agent_objs.items():
-            st = self.env.agents[aid].state
+            st = self.env.state.agents[aid].state
 
             q = [np.cos(st.psi / 2), 0, 0, np.sin(st.psi / 2)]
             pos = [st.x, st.y, 0.0]

@@ -39,13 +39,15 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
     def __init__(self, Ts, run_mode, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), *args, **kwargs):
         self.space = core.spaces.Space2D()
         self._obstacles = []  # TODO: still needed? 
-        self.collision_checker = self.setup_collision_checker   
         self.set_limits(limits)
 
         environment_config = EnvironmentConfig(limits=limits, Ts = Ts)
         self.environment_container = EnvironmentContainer(environment_config) 
 
         super().__init__(Ts=Ts, run_mode=run_mode, *args, **kwargs)
+        
+        # Initialize collision checker after parent init (when self.objects exists)
+        self.collision_checker = self.setup_collision_checker()
 
         core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COLLISION,
                         object=self,

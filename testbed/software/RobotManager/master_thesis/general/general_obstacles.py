@@ -1,10 +1,11 @@
 from extensions.simulation.src.core.environment import Object
 import extensions.simulation.src.core.spaces as spaces
 from dataclasses import dataclass
-from applications.FRODO.simulation.frodo_simulation import FRODO_SimulationObject
+# from applications.FRODO.simulation.frodo_simulation import FRODO_SimulationObject
+from extensions.simulation.src.core.environment import Object
 from master_thesis.general.containers.obstacle_containers import ObstacleContainer, Obstacle_State, Obstacle_Config
 
-class GeneralObstacle(FRODO_SimulationObject):
+class GeneralObstacle(Object):
     object_type = "obstacle"
     static = True #TODO: This could be removed
 
@@ -42,6 +43,7 @@ class GeneralObstacle(FRODO_SimulationObject):
         self.container = ObstacleContainer(object_id = self.object_id, config=obstacle_config)
 
 
+
     # def set_state(self, x: float = None, y: float = None, psi: float = None):
     #     if x is not None:
     #         self.state.x = x
@@ -51,6 +53,7 @@ class GeneralObstacle(FRODO_SimulationObject):
     #         self.state.psi = psi
 
     def output(self, env):
-        if hasattr(self, '_configuration') and self._configuration is not None:
-            self._configuration['pos'] = [self.state.x, self.state.y]
-            self._configuration['ori'] = [self.state.psi]
+        pass
+        # if hasattr(self, '_configuration') and self._configuration is not None:
+        #     self._configuration['pos'] = [self.state.x, self.state.y]
+        #     self._configuration['ori'] = [self.state.psi]
