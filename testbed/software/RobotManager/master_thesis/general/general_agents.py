@@ -302,7 +302,6 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     # ----------------------------------------------------------------------
 
     def _container_update_function(self):
-        raise AssertionError
         st = self.container.state
         st.x = self.state.x
         st.y = self.state.y
