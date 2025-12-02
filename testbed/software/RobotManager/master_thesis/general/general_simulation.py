@@ -165,7 +165,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
             getattr(obstacle, 'output', lambda env: None)(self.environment)
         except Exception:
             pass
-        self.logger.info(f"Simulated agent {obstacle.obstacle_id} added")
+        self.logger.info(f"Simulated obstacle {obstacle.obstacle_id} added")
 
         return obstacle
         

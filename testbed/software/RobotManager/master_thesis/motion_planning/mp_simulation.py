@@ -94,8 +94,8 @@ def mp_task_1ag_1obs():
     sim.init()
 
     # define start and goal
-    ag1_start = (2.0, 0.0, np.pi)
-    ag1_goal = (-1.0, 0.0, np.pi)
+    ag1_start = (0.0, 0.0, np.pi)
+    ag1_goal = (4.0, 0.0, np.pi)
 
 
 
