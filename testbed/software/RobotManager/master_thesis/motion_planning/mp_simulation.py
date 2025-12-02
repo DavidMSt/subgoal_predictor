@@ -50,9 +50,9 @@ class FRODO_MP_Simulation(FRODO_general_Simulation):
         self.mpi = MPSimulationModule(agents=self.agents, logger=self.logger)  # type: ignore
 
 
-def mp_task_example1():
-    app = FRODO_MP_Simulation()
-    app.init()
+def mp_task_no_obs():
+    sim = FRODO_MP_Simulation()
+    sim.init()
 
     # define start and goal
     ag1_start = (2.0, 0.0, np.pi)
@@ -62,28 +62,28 @@ def mp_task_example1():
 
 
     ag1 = FRODO_MotionPlanning_Agent(
-        env_config=app.environment,
+        env_container=sim.environment.environment_container,
         agent_id="frodo1_v",
-        Ts=app.Ts,
+        Ts=sim.Ts,
         start_config=ag1_start
     )
-    app.add_agent(ag1)
-    app.mpi.agent_motion_planning(ag1, solution_phase_name="goal", start_config=ag1_start, goal_config= ag1_goal)
+    sim.add_agent(ag1)
+    sim.mpi.agent_motion_planning(ag1, solution_phase_name="goal", start_config=ag1_start, goal_config= ag1_goal)
 
     ag2 = FRODO_MotionPlanning_Agent(
-        env_config=app.environment,
+        env_container=sim.environment.environment_container,
         agent_id="frodo2_v",
-        Ts=app.Ts,
+        Ts=sim.Ts,
         start_config=ag2_start
     )
-    app.add_agent(ag2)
-    app.mpi.agent_motion_planning(ag2, solution_phase_name="goal", start_config=tuple(ag2_start), goal_config=tuple(ag2_goal))
+    sim.add_agent(ag2)
+    sim.mpi.agent_motion_planning(ag2, solution_phase_name="goal", start_config=tuple(ag2_start), goal_config=tuple(ag2_goal))
 
-    app.start()
+    sim.start()
 
     time.sleep(1)
 
-    app.activate_phase_all_agents(phase="goal")
+    sim.activate_phase_all_agents(phase="goal")
 
     time.sleep(5)
 
@@ -92,4 +92,4 @@ def mp_task_example1():
     
 
 if __name__ == '__main__':
-    mp_task_example1()
+    mp_task_no_obs()

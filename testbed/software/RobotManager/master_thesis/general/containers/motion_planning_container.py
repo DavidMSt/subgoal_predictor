@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 import numpy as np
-from core.utils.states import State # TODO: do I even need this statee import here?
+
+from master_thesis.general.containers.base_container import OverarchingContainer
+
 
 @dataclass(frozen = False, slots=True)
 class MotionPlanningState:
@@ -41,12 +43,14 @@ class MotionPlanningConfig:
     so_r2_weight: float = 0.1
     # select which planner to use
     planner: str = 'rrt'
+    # Select how to sample
+    sampler: str = 'UNIFORM'
 
     # control bounds (only relevant for kinodynamic case)
     theta_dot_bounds: tuple = (-np.pi/3, np.pi/3)
     v_bounds: tuple = (-1.0, 1.0)
 
 @dataclass(slots = True)
-class MotionPlannigContainer:
+class MotionPlanningContainer(OverarchingContainer):
     state: MotionPlanningState
     config: MotionPlanningConfig

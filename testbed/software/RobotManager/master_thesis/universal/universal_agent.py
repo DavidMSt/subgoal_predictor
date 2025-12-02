@@ -15,7 +15,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         
         assert isinstance(agent_config, FRODO_Agent_Config) # if not provided as argument, will be created by class constructor with default values
         
-        self.mpi = MPAgentModule(agent_config= agent_config, env_config= env_config, runner=self.runner, logger = self.logger)
+        self.mpi = MPAgentModule(agent_config= agent_config, env_container= env_config, runner=self.runner, logger = self.logger)
         self.asi = AssignmentAgentModule(agent_id=agent_id, logger=self.logger)
         self.exi = ... # TODO
 

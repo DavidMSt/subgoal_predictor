@@ -8,11 +8,11 @@ from master_thesis.general.general_obstacles import GeneralObstacle
 
 class AgentCollisionChecker():
 
-    def __init__(self, agent_config: FRODOAgentContainer, env_config: EnvironmentContainer):
-        self.env_config: EnvironmentContainer = env_config  
-        self.agent_config: FRODOAgentContainer = agent_config
+    def __init__(self, agent_container: FRODOAgentContainer, env_container: EnvironmentContainer):
+        self.env_config: EnvironmentContainer = env_container  
+        self.agent_config: FRODOAgentContainer = agent_container
         self.collisions_list = [] # initialize dynamic collison list
-        self.initialize_collision_manager(env_config, agent_config)
+        self.initialize_collision_manager(env_container, agent_container)
 
     def check_agent_state(self):
         ...
@@ -20,9 +20,9 @@ class AgentCollisionChecker():
     def check_env_state(self):
         ...
 
-    def initialize_collision_manager(self, env_config, agent_config):
-        self.initialize_env_manager(env_config)
-        self.initialize_agent_manager(agent_config)
+    def initialize_collision_manager(self, env_container, agent_container):
+        self.initialize_env_manager(env_container)
+        self.initialize_agent_manager(agent_container)
 
     def initialize_agent_manager(self, agent_config):
         # py-fcl does not expose the objects in a manager for update, therefore they must be accesible here
@@ -31,10 +31,9 @@ class AgentCollisionChecker():
         self.agent_manager = self.create_collision_manager(self.agent_objs)
 
 
-    def initialize_env_manager(self, env_config: EnvironmentContainer):
-        # Defensive programming: check for 'obstacles' attribute
-        if not hasattr(env_config, "obstacles"):
-            raise AttributeError("Provided env has no 'obstacles' attribute")
+    def initialize_env_manager(self, env_container: EnvironmentContainer):
+        if not isinstance(env_container, EnvironmentContainer):
+            raise TypeError('Did not pass valid environment container, argument of type: ', type(env_container))
         obstacle_objects_list = self.create_environment_objects()
         self.env_manager = self.create_collision_manager(obstacle_objects_list)
     

@@ -214,7 +214,6 @@ class InputPhaseRunner:
             self.active = "idle"
         
         else:
-            print('found the next phase')
             phase_name = self._queued_phases.pop()
             self.active = phase_name
 
@@ -435,28 +434,22 @@ class FRODO_GeneralAgent_CommandSet(CommandSet):
     def _change_phase(self, name):
         self.agent.activate_phase(name)
 
-
-def main():
+if __name__ == '__main__':
     ...
 
-    while True:
-        time.sleep(10)
+    # sim = FRODO_Simulation()
+    # sim.init()
 
-if __name__ == '__main__':
-    
-    sim = FRODO_Simulation()
-    sim.init()
+    # cfg = FRODO_Agent_Config(
+    #     color = (1, 0, 0), 
+    # )
 
-    cfg = FRODO_Agent_Config(
-        color = (1, 0, 0), 
-    )
+    # agent = FRODOGeneralAgent(agent_id = 'frodo01', start_config= [0.0,0.0,0.0])
 
-    agent = FRODOGeneralAgent(agent_id = 'frodo01', start_config= [0.0,0.0,0.0])
+    # # sim.new_agent(agent_id='vfrodo1', fov_deg=100, vision_radius=1.5)
+    # sim.add_agent(agent)
 
-    # sim.new_agent(agent_id='vfrodo1', fov_deg=100, vision_radius=1.5)
-    sim.add_agent(agent)
+    # sim.start()
 
-    sim.start()
-
-    while True:
-        time.sleep(10)
+    # while True:
+    #     time.sleep(10)
