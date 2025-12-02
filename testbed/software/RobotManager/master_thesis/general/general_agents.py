@@ -160,8 +160,8 @@ class InputPhaseRunner:
             raise KeyError(f"Unknown phase '{name}', can't be set as active. Add it to the runner first.")
         self._active = name
 
-        if name != 'idle':
-            self._logger.info(f"Active phase set to '{name}'")
+        # if name != 'idle':
+        self._logger.info(f"Active phase set to '{name}'")
 
     def get_phase(self, name: str) -> InputPhase:
         return self._phases[name]
@@ -207,17 +207,18 @@ class InputPhaseRunner:
     def phase_ended(self):
         active_phase = self.active
         if active_phase != "idle": # no need to tell every time the idle phase ends
-            self._logger.info(f"Phase '{active_phase}' ended, removing it now.")
             del self._phases[active_phase]
         
         if self._queued_phases == []:
-            print('no next phases available')
+            # no next phases activated
             self.active = "idle"
         
         else:
             print('found the next phase')
             phase_name = self._queued_phases.pop()
-            self.acvitve = phase_name
+            self.active = phase_name
+
+        self._logger.info(f"Phase '{active_phase}' ended, now transitioning to phase: {self.active}")
 
 
 class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
@@ -308,16 +309,26 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         durations: tuple[int, ...] | None = None,
         delta_t: float = 0.1,
         origin_state=None,
-        states: tuple[np.ndarray, ...] = None
+        states: tuple[np.ndarray, ...] | None = None
     ):
+        """
+        - Register a pre-planned input phase to the agent
+        - Note: The phase timesteps are then translated into simulation timestep
+
+        Args:
+            name (str): Name the phase will be registered under
+            inputs (tuple[np.ndarray, ...]): series of inputs, one for each PHASE timestep
+            durations (tuple[int, ...] | None, optional): Scalar describing the number of PHASE timesteps an input has Defaults to None.
+            delta_t (float, optional): Delta t used in this phase, together with durations this gets translated into simulation time steps. Defaults to 0.1.
+            origin_state (_type_, optional): Describe from which state this should be executed. Defaults to None.
+            states (tuple[np.ndarray, ...], optional): Sequence of states the agent should follow according to planning. Defaults to None.
+        """
         if durations is None:
             durations = tuple([1] * len(inputs))
 
         if origin_state is None:
             origin_state = self.state
 
-        # if states == None:
-        #     states = self.compute_states(inputs, durations, origin_state, delta_t)
         phase = InputPhase(inputs, states, durations, delta_t)
         self.runner.add_phase(name, phase)
 

@@ -329,12 +329,16 @@ def main():
 
     # === Example input phases ===
     inputs_forward = (np.array([1.0, 0.0]),)
-    durations = (1,)
+    inputs_backward = (np.array([-1.0, 0.0]),)
+    durations = (5,)
 
     agent_a.add_input_phase("forward", inputs=inputs_forward, durations=durations, delta_t=0.4)
     agent_b.add_input_phase("forward", inputs=inputs_forward, durations=durations, delta_t=0.4)
+    agent_a.add_input_phase("backward", inputs=inputs_backward, durations=durations, delta_t=0.4)
+    agent_b.add_input_phase("backward", inputs=inputs_backward, durations=durations, delta_t=0.4)
 
     sim.activate_phase_all_agents("forward")
+    sim.activate_phase_all_agents("backward")
 
     # === Start simulation ===
     sim.start()
