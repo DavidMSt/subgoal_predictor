@@ -45,11 +45,9 @@ class DistanceCalculator:
     def _dubins_distance(self, agent_container, task_container) -> float:
         # placeholder
         raise NotImplementedError("Dubins distance not implemented yet")
+    
 
-
-
-
-class AssignmentAgentModule():
+class TAAgentModule():
     """Interface for assignment agents. Handles decentralized assignments"""
     agent_id: str   # Unique identifier for the agent
     task_assignment_container: AgentTAContainer
@@ -151,7 +149,7 @@ class FRODO_AssignmentAgent(FRODOGeneralAgent):
         )
 
         # add assignment module
-        self.asi = AssignmentAgentModule(
+        self.asi = TAAgentModule(
             agent_id=agent_id,
             ta_container=task_container,
             logger=self.logger,

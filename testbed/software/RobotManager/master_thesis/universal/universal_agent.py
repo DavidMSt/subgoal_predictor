@@ -2,13 +2,13 @@ from typing import List
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config
 from master_thesis.general.general_simulation import FrodoGeneralEnvironment
 from master_thesis.motion_planning.mp_agent import MPAgentModule
-from master_thesis.task_assignment.ta_agent import AssignmentAgentModule
+from master_thesis.task_assignment.ta_agent import TAAgentModule
 from master_thesis.containers.ta_container import AgentTAContainer, AgentTaskConfig, AgentTaskState
 
 
 class FRODOUniversalAgent(FRODOGeneralAgent):
     mpi: MPAgentModule
-    asi: AssignmentAgentModule
+    asi: TAAgentModule
     exi: ...
 
     def __init__(self, env_config, agent_id: str, Ts=None, start_config=(0.0,0.0,0.0), color=None, *args, **kwargs) -> None:
@@ -23,7 +23,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         self.mpi = MPAgentModule(agent_config=self.container, env_container=env_config, runner=self.runner, logger=self.logger)
 
         # Assignment Agent module
-        self.asi = AssignmentAgentModule(
+        self.asi = TAAgentModule(
             agent_id=agent_id,
             agent_container=self.container,
             ta_container=ta_container,
