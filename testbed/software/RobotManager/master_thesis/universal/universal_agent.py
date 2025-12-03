@@ -2,7 +2,7 @@ from typing import List
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config
 from master_thesis.general.general_simulation import FrodoGeneralEnvironment
 from master_thesis.motion_planning.mp_agent import MPAgentModule
-from master_thesis.task_assignment.task_agent import AssignmentAgentModule
+from testbed.software.RobotManager.master_thesis.task_assignment.ta_agent import AssignmentAgentModule
 
 
 class FRODOUniversalAgent(FRODOGeneralAgent):

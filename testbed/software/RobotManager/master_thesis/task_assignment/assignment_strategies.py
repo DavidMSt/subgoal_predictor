@@ -10,7 +10,7 @@ from numpy.typing import NDArray
 
 import extensions.simulation.src.core as core
 
-from master_thesis.task_assignment.task_agent import FRODO_AssignmentAgent
+from testbed.software.RobotManager.master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
 from master_thesis.task_assignment.task_objects import Task
 
 
