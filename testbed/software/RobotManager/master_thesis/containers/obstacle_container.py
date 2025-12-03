@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from master_thesis.general.containers.base_container import OverarchingContainer
+from master_thesis.containers.base_container import OverarchingContainer
 
 # @dataclass(frozen= False, slots = False) #TODO obstacles are static, therefore strictly speaking 
 # class Obstacle_State():

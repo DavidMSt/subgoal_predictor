@@ -2,7 +2,7 @@ import numpy as np
 from extensions.simulation.src.core.environment import Object
 import extensions.simulation.src.core as core
 
-from master_thesis.general.containers.task_container import TaskContainer, Task_Config
+from master_thesis.containers.task_container import TaskContainer, Task_Config
 
 # ----------------------------- Task Classes -----------------------------
 

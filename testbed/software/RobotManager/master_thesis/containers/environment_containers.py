@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 
-from master_thesis.general.containers.base_container import OverarchingContainer
-from master_thesis.general.containers.agent_containers import FRODOAgentContainer
+from master_thesis.containers.base_container import OverarchingContainer
+from master_thesis.containers.agent_containers import FRODOAgentContainer
 from testbed.software.RobotManager.master_thesis.general.containers.obstacle_container import ObstacleContainer
 
 @dataclass(frozen= False, slots= False) # must be dynamically changeable since env can change

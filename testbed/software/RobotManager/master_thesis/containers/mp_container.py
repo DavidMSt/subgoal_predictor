@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import numpy as np
 
-from master_thesis.general.containers.base_container import OverarchingContainer
+from master_thesis.containers.base_container import OverarchingContainer
 
 
 @dataclass(frozen = False, slots=True)
