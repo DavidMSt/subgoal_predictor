@@ -21,7 +21,7 @@ from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_
 from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.motion_planning.helper.collisions_fcl import WorldCollisionChecker
 from master_thesis.general.containers.environment_containers import EnvironmentConfig, EnvironmentContainer
-from master_thesis.general.containers.obstacle_containers import ObstacleContainer
+from testbed.software.RobotManager.master_thesis.general.containers.obstacle_container import ObstacleContainer
 from master_thesis.general.containers.agent_containers import FRODOAgentContainer
 
 # Global registries

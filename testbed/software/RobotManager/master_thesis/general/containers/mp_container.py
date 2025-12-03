@@ -5,7 +5,7 @@ from master_thesis.general.containers.base_container import OverarchingContainer
 
 
 @dataclass(frozen = False, slots=True)
-class MotionPlanningState:
+class AgentMotionPlanningState:
     success: bool = False
     message: str | None = None
 
@@ -26,7 +26,7 @@ class MotionPlanningState:
     cost: float | None = None
 
 @dataclass(frozen = True, slots = True)
-class MotionPlanningConfig:
+class AgentMotionPlanningConfig:
     
     # start/ goal configurations
     start: np.ndarray
@@ -51,6 +51,6 @@ class MotionPlanningConfig:
     v_bounds: tuple = (-1.0, 1.0)
 
 @dataclass(slots = True)
-class MotionPlanningContainer(OverarchingContainer):
-    state: MotionPlanningState
-    config: MotionPlanningConfig
+class AgentMotionPlanningContainer(OverarchingContainer):
+    state: AgentMotionPlanningState
+    config: AgentMotionPlanningConfig

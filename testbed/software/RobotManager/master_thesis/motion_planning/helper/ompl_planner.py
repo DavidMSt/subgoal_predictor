@@ -23,7 +23,7 @@ from master_thesis.motion_planning.helper.nearest_neighbor import NearestNeighbo
 from master_thesis.motion_planning.helper.collisions_fcl import AgentCollisionChecker
 from master_thesis.general.containers.agent_containers import FRODOAgentContainer
 from master_thesis.general.containers.environment_containers import EnvironmentContainer
-from master_thesis.general.containers.motion_planning_container import MotionPlanningContainer
+from testbed.software.RobotManager.master_thesis.general.containers.mp_container import AgentMotionPlanningContainer
 
 from enum import Enum, auto
 from abc import ABC, abstractmethod
@@ -54,7 +54,7 @@ class SamplerType(Enum):
 
     
 class OMPLPlannerFRODOBase(ABC):
-    def __init__(self, mp_container: MotionPlanningContainer, 
+    def __init__(self, mp_container: AgentMotionPlanningContainer, 
                  agent_container: FRODOAgentContainer, 
                  env_container: EnvironmentContainer, 
                  sampler: SamplerType = SamplerType.UNIFORM):
@@ -229,7 +229,7 @@ class OMPLPlannerFRODOBase(ABC):
     
 
 class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
-    def __init__(self, mp_container: MotionPlanningContainer, 
+    def __init__(self, mp_container: AgentMotionPlanningContainer, 
                  agent_container: FRODOAgentContainer, 
                  env_container: EnvironmentContainer, 
                  sampler: SamplerType = SamplerType.UNIFORM):
@@ -363,7 +363,7 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
 
 class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
 
-    def __init__(self, mp_container: MotionPlanningContainer, 
+    def __init__(self, mp_container: AgentMotionPlanningContainer, 
                  agent_container: FRODOAgentContainer, 
                  env_container: EnvironmentContainer, 
                  sampler: SamplerType = SamplerType.UNIFORM):

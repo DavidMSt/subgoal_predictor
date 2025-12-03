@@ -3,7 +3,7 @@ from extensions.cli.cli import CommandSet, Command, CommandArgument
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment, SIMULATED_AGENTS, SIMULATED_STATICS
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.motion_planning.mp_simulation import MPSimulationModule
-from master_thesis.task_assignment.task_simulation import AssignmentSimulationModule
+from testbed.software.RobotManager.master_thesis.task_assignment.ta_simulation import AssignmentSimulationModule
 
 class FRODO_General_CommandSet(CommandSet):
     def __init__(self, sim: "FRODO_general_Simulation"):

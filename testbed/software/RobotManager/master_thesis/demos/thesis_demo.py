@@ -16,7 +16,7 @@ from core.utils.logging_utils import Logger, addLogRedirection, LOGGING_COLORS
 from core.utils.sound.sound import SoundSystem
 from extensions.babylon.src.babylon import BabylonVisualization
 from extensions.babylon.src.lib.objects.bilbo.bilbo import BabylonBilbo
-from extensions.babylon.src.lib.objects.box.box import WallFancy, Wall
+from extensions.babylon.src.lib.objects.box.box import WallFancy, Wall, Box
 from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
 from extensions.babylon.src.lib.objects.frodo.frodo import BabylonFrodo
 from extensions.cli.cli import CommandSet, CLI, Command, CommandArgument
@@ -37,6 +37,7 @@ from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
 from master_thesis.general.general_simulation import FrodoGeneralEnvironment
 from master_thesis.demos.demo_scenarios.simple_maze import setup_simple_maze
+from master_thesis.task_assignment.task_objects import Task
 
 
 
@@ -68,6 +69,7 @@ class ThesisDemo:
 
         self.robots = {}
         self.obstacles = {}
+        self.tasks = {}  # dict[str, Task]
 
         self.command_set = BILBO_Interactive_CommandSet(self)
 
@@ -182,6 +184,48 @@ class ThesisDemo:
 
         return container
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def addTask(self, task_id: str,
+                x: float = 0.0,
+                y: float = 0.0,
+                orientation: float = 0.0,
+                color: list = None) -> Task | None:
+        """
+        Add a task/goal location to the environment.
+        Visualized as a colored tile/box.
+        """
+        # Check if it already exists
+        if task_id in self.tasks:
+            self.logger.warning(f'Task with ID {task_id} already exists')
+            return None
+
+        # Create Task object
+        task = Task(
+            id=task_id,
+            position=(x, y),
+            orientation=orientation,
+            is_assignable=True
+        )
+
+        # Create babylon visualization as a colored tile
+        if color is None:
+            color = [0, 1, 0]  # Default green for goal/task
+
+        task_visual = Box(
+            object_id=task_id,
+            color=color,
+            size={'x': 0.3, 'y': 0.3, 'z': 0.02},  # Very flat tile
+            x=x,
+            y=y,
+            z=0.01  # Just above ground
+        )
+        self.babylon_visualization.addObject(task_visual)
+
+        # Store task
+        self.tasks[task_id] = task
+        self.logger.info(f'Task with ID {task_id} added at ({x}, {y})')
+
+        return task
 
     # ------------------------------------------------------------------------------------------------------------------
 
@@ -256,6 +300,19 @@ class ThesisDemo:
             discard_inputs=True,
         ))
         page1.addWidget(maze_button, height=2, width=4)
+
+        # Add Task Button
+        task_button = Button(text="Add Task (0, 0)", callback=Callback(
+            function=self.addTask,
+            inputs={
+                'task_id': 'task1',
+                'x': 0.0,
+                'y': 0.0,
+                'color': [1, 1, 0]  # Yellow
+            },
+            discard_inputs=True,
+        ))
+        page1.addWidget(task_button, height=2, width=4)
 
     def _buildBabylonFloor(self):
 
