@@ -20,7 +20,7 @@ from master_thesis.general.containers.environment_containers import EnvironmentC
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
 from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo, OMPLPlannerFRODOBase
 from master_thesis.general.general_agents import InputPhaseRunner, InputPhase
-from master_thesis.general.containers.motion_planning_container import MotionPlanningConfig
+from master_thesis.general.containers.motion_planning_container import AgentMotionPlanningConfig
 
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)
 
@@ -41,7 +41,7 @@ class MPAgentModule():
         if isinstance(motion_planner, str):
             raise NotImplementedError
         
-        mp_config = MotionPlanningConfig(
+        mp_config = AgentMotionPlanningConfig(
             start=start_config,
             goal=goal_config,
         )
