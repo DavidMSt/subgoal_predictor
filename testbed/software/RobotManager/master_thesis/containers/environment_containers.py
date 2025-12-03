@@ -2,12 +2,14 @@ from dataclasses import dataclass, field
 
 from master_thesis.containers.base_container import OverarchingContainer
 from master_thesis.containers.agent_containers import FRODOAgentContainer
-from testbed.software.RobotManager.master_thesis.general.containers.obstacle_container import ObstacleContainer
+from master_thesis.containers.obstacle_container import ObstacleContainer
+from master_thesis.containers.task_container import TaskContainer
 
 @dataclass(frozen= False, slots= False) # must be dynamically changeable since env can change
 class EnvironmentState:
     obstacles: dict[str, ObstacleContainer] = field(default_factory=dict)
     agents: dict[str, FRODOAgentContainer] = field(default_factory=dict)
+    tasks: dict[str, TaskContainer] = field(default_factory=dict)
 
 @dataclass(frozen= True, slots= True) # must be dynamically changeable since env can change
 class EnvironmentConfig:
@@ -29,6 +31,14 @@ class EnvironmentContainer(OverarchingContainer):
     def add_agents(self, agent):
         assert isinstance(agent, FRODOAgentContainer)
         self.state.agents[agent.agent_id] = agent
-    
+
     def remove_agents(self, agent_id):
         ...
+
+    def add_tasks(self, task):
+        assert isinstance(task, TaskContainer)
+        self.state.tasks[task.object_id] = task
+
+    def remove_tasks(self, task_id):
+        if task_id in self.state.tasks:
+            del self.state.tasks[task_id]

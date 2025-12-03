@@ -39,7 +39,6 @@ from master_thesis.demos.demo_scenarios.simple_maze import setup_simple_maze
 from master_thesis.task_assignment.task_objects import Task
 
 
-
 @dataclasses.dataclass
 class RobotContainer:
     babylon: BabylonFrodo
@@ -201,8 +200,9 @@ class ThesisDemo:
         # Create Task object
         task = Task(
             id=task_id,
-            position=(x, y),
-            orientation=orientation,
+            x=x,
+            y=y,
+            psi=orientation,
             is_assignable=True
         )
 

@@ -20,7 +20,7 @@ from master_thesis.containers.environment_containers import EnvironmentContainer
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
 from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo, OMPLPlannerFRODOBase
 from master_thesis.general.general_agents import InputPhaseRunner, InputPhase
-from testbed.software.RobotManager.master_thesis.general.containers.mp_container import AgentMotionPlanningConfig
+from master_thesis.containers.mp_container import AgentMotionPlanningConfig
 
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)
 

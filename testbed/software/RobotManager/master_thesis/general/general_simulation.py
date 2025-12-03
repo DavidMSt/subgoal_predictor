@@ -23,11 +23,13 @@ from master_thesis.motion_planning.helper.collisions_fcl import WorldCollisionCh
 from master_thesis.containers.environment_containers import EnvironmentConfig, EnvironmentContainer
 from master_thesis.containers.obstacle_container import ObstacleContainer
 from master_thesis.containers.agent_containers import FRODOAgentContainer
+from master_thesis.task_assignment.task_objects import Task
 
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
 SIMULATED_STATICS: dict[str, FRODO_Static] = {}
 SIMULATED_OBSTACLES: dict[str, GeneralObstacle] = {}
+SIMULATED_TASKS: dict[str, Task] = {}
 
 # ======================================================================================================================
 USE_AGENT_DEFINITIONS = False
@@ -274,7 +276,102 @@ class FRODO_general_Simulation(FRODO_Simulation):
         self.add_agent(agent)
 
         return agent
-    
+
+    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent) -> list[FRODOGeneralAgent]:
+        """
+        Spawn multiple agents in the environment.
+        If configurations is None, agents are spawned uniformly at random inside env limits.
+
+        Args:
+            n: Number of agents to spawn
+            configurations: Optional list of (x, y, psi) tuples for agent positions
+            agent_class: Agent class to instantiate
+
+        Returns:
+            List of created agent objects
+        """
+        if configurations is not None and n != len(configurations):
+            self.logger.error('Spawning agents: If configurations is not None, n must equal amount of agents to be spawned')
+            return []
+
+        # Get environment limits from container
+        x_lim = self.environment.environment_container.config.limits[0]
+        y_lim = self.environment.environment_container.config.limits[1]
+
+        # Generate random configurations if none provided
+        if configurations is None:
+            configurations = []
+            for _ in range(n):
+                x = np.random.uniform(x_lim[0], x_lim[1])
+                y = np.random.uniform(y_lim[0], y_lim[1])
+                psi = (np.random.uniform(0.0, 2.0 * np.pi) + np.pi) % (2.0 * np.pi) - np.pi
+                configurations.append((x, y, psi))
+
+        # Spawn the agents
+        agents = []
+        for config in configurations:
+            agent_id = f"vfrodo{len(SIMULATED_AGENTS)}"
+            agent = self.new_agent(agent_id=agent_id, agent_class=agent_class, start_config=config)
+            if agent:
+                agents.append(agent)
+
+        return agents
+
+    # Task management methods
+    def add_task(self, task: Task) -> Task:
+        """Add an existing Task instance to the simulation"""
+        global SIMULATED_TASKS
+        SIMULATED_TASKS[task.object_id] = task
+
+        # Add to environment
+        self.environment.addObject(task)
+
+        # Add container to environment container
+        self.environment.environment_container.add_tasks(task.container)
+
+        self.logger.info(f'Task with ID {task.object_id} added')
+        return task
+
+    def spawn_tasks(self, n: int, configurations: list[tuple[float, float, float]] | None = None) -> list[Task]:
+        """
+        Spawn multiple tasks in the environment.
+        If configurations is None, tasks are spawned uniformly at random inside env limits.
+
+        Args:
+            n: Number of tasks to spawn
+            configurations: Optional list of (x, y, psi) tuples for task positions
+
+        Returns:
+            List of created Task objects
+        """
+        if configurations is not None and n != len(configurations):
+            self.logger.error('Spawning tasks: If configurations is not None, n must equal amount of tasks to be spawned')
+            return []
+
+        # Get environment limits from container
+        x_lim = self.environment.environment_container.config.limits[0]
+        y_lim = self.environment.environment_container.config.limits[1]
+
+        # Generate random positions if none provided
+        if configurations is None:
+            configurations = []
+            for _ in range(n):
+                x = np.random.uniform(x_lim[0], x_lim[1])
+                y = np.random.uniform(y_lim[0], y_lim[1])
+                psi = (np.random.uniform(0.0, 2.0 * np.pi) + np.pi) % (2.0 * np.pi) - np.pi
+                configurations.append((x, y, psi))
+
+        # Spawn the tasks
+        tasks = []
+        for i, config in enumerate(configurations):
+            task_id = f"task_{len(SIMULATED_TASKS)}"
+            x, y, psi = config
+            task = Task(id=task_id, x=x, y=y, psi=psi)
+            self.add_task(task)
+            tasks.append(task)
+
+        return tasks
+
     def activate_phase_all_agents(self, phase :str):
         for agent in self.agents.values():
             agent.activate_phase(phase)
