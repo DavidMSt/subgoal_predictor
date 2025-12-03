@@ -24,5 +24,8 @@ def setup_simple_maze(demo):
     # Internal obstacles to create maze paths
     demo.addObstacle("obs1", x=-1.0, y=0.0, length=2.0, width=0.2)
     demo.addObstacle("obs2", x=1.0, y=0.5, length=2.0, width=0.2)
-    
-    demo.logger.info("Simple maze setup complete. Robot at (-2, -2), goal could be at (2, 2)")
+
+    # Add goal task
+    demo.addTask("goal1", x=2.0, y=2.0, color=[0, 1, 0])  # Green goal at (2, 2)
+
+    demo.logger.info("Simple maze setup complete. Robot at (-2, -2), goal at (2, 2)")
