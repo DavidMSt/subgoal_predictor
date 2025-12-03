@@ -34,8 +34,7 @@ from extensions.joystick.joystick_manager import JoystickManager, Joystick
 # from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.universal.universal_simulation import FRODO_universal_Simulation
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
-from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
-from master_thesis.general.general_simulation import FrodoGeneralEnvironment
+from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.demos.demo_scenarios.simple_maze import setup_simple_maze
 from master_thesis.task_assignment.task_objects import Task
 

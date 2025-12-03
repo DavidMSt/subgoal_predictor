@@ -14,6 +14,7 @@ from master_thesis.general.general_simulation import FRODO_general_Simulation, F
 from master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
 from master_thesis.task_assignment.task_objects import Task
 from master_thesis.task_assignment.assignment_strategies import StrategyABC, HungarianStrategy, RandomStrategy, AssignmentResult
+from master_thesis.containers.environment_containers import EnvironmentContainer
 
 class AgentFactory(Protocol):
     """Class with callable, provides needed structure (in and output) for agent creation methods used by the sim
@@ -30,9 +31,10 @@ class AgentFactory(Protocol):
 
 class AssignmentSimulationModule():
 
-    def __init__(self, env:FrodoGeneralEnvironment, logger: Logger, new_agent_fun: AgentFactory, *args, **kwargs):
+    def __init__(self, env: FrodoGeneralEnvironment, env_container: EnvironmentContainer, logger: Logger, new_agent_fun: AgentFactory, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.env = env
+        self.env = env  #TODO: remove environment completely - currently only really needed for the clear objects function i would say
+        self.env_container = env_container
         self.logger = logger
         self._new_agent_fun = new_agent_fun
 
@@ -63,11 +65,10 @@ class AssignmentSimulationModule():
         
         if configurations is not None and n != len(configurations):
             self.logger.error('Spawning agents: If positions is not None, n must equal amount of agents to be spawned')
-        
-        # get the environments limits for x and y
-        pos_dim = self.env.space.dimensions[0]
-        x_lim = pos_dim.limits[0]
-        y_lim = pos_dim.limits[1]
+
+        # get the environments limits for x and y from container
+        x_lim = self.env_container.config.limits[0]
+        y_lim = self.env_container.config.limits[1]
         
         if configurations is None:
             configurations = []
@@ -94,10 +95,9 @@ class AssignmentSimulationModule():
         if configurations is not None and n != len(configurations):
             self.logger.error('Spawning tasks: If positions is not None, n must equal amount of tasks to be spawned')
 
-        # get environment limits (assumes rectangular 2D space)
-        pos_dim = self.env.space.dimensions[0]
-        x_lim = pos_dim.limits[0]
-        y_lim = pos_dim.limits[1]
+        # get environment limits from container
+        x_lim = self.env_container.config.limits[0]
+        y_lim = self.env_container.config.limits[1]
 
         # generate random positions if none provided
         if configurations is None:
@@ -111,7 +111,8 @@ class AssignmentSimulationModule():
         # spawn the tasks
         for i in range(n):
             task_id = f"task_{current_number_tasks}"
-            new_task = Task(id=task_id, position=configurations[i][:2], orientation= configurations[i][2])
+            x, y, psi = configurations[i]
+            new_task = Task(id=task_id, x=x, y=y, psi=psi)
             self.env.addObject(new_task)
             current_number_tasks += 1
 
@@ -154,7 +155,7 @@ class FRODO_AssignmentSimulation(FRODO_general_Simulation):
     def __init__(self, Ts=0.1, limits: tuple[tuple[int, int], ...] = ((-3,3), (3,3)), env=FrodoGeneralEnvironment):
         super().__init__(Ts, limits, env)
 
-        self.asi = AssignmentSimulationModule(self.environment, self.logger, self.new_agent)
+        self.asi = AssignmentSimulationModule(self.environment, self.environment.environment_container, self.logger, self.new_agent)
 
 
 def assignment_example():
