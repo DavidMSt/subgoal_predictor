@@ -12,13 +12,15 @@ import extensions.simulation.src.core as core
 
 from master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
 from master_thesis.task_assignment.task_objects import Task
+from master_thesis.general.containers.agent_containers import FRODOAgentContainer
+from master_thesis.general.containers.task_container import TaskContainer
 
 
 
 @dataclass(frozen=True)
 class AssignmentResult:
-    agent_configurations: list[core.spaces.State]
-    task_configurations: list[core.spaces.State]
+    agent_containers: list[FRODOAgentContainer]
+    task_containers: list[TaskContainer]
     strategy: "StrategyABC"
     assignment_matrix: NDArray[np.bool_] | None      # shape: (n_agents, n_tasks)
     matches: list[tuple[int, int]] | None             # (agent_idx, task_idx)
@@ -79,10 +81,10 @@ class StrategyABC(ABC):
             else:
                 raise ValueError('number of tasks and agents must be equal for one-to-one assignments - only case code can handle')
 
-                # Clear existing assignments
+        # Clear existing assignments
         for agent in agents:
-            agent.asi._available_tasks.clear()
-            agent.asi._assigned_tasks.clear()
+            agent.asi.task_assignment_container.state.available_tasks.clear()
+            agent.asi.task_assignment_container.state.assigned_tasks.clear()
 
         if mode == self.RunningMode.CENTRAL: 
             ctx = self.central(ctx, logger)
@@ -112,8 +114,8 @@ class StrategyABC(ABC):
             for i, j in ctx.matches:
                 assignment[i, j] = True
         result = AssignmentResult(
-            agent_configurations=[agent.getConfiguration for agent in ctx.agents],
-            task_configurations=[task.position for task in ctx.tasks],
+            agent_containers=[agent.container for agent in ctx.agents],
+            task_containers=[task.container for task in ctx.tasks],
             strategy=self,
             assignment_matrix=assignment,
             matches=ctx.matches
@@ -173,7 +175,7 @@ class HungarianStrategy(StrategyABC):
         ctx.matches = list(zip(row_ind.tolist(), col_ind.tolist()))
         # Assign selected task to each agent (one-to-one)
         for a_idx, t_idx in ctx.matches:
-            ctx.agents[a_idx].asi._assigned_tasks = [ctx.tasks[t_idx]]
+            ctx.agents[a_idx].asi.assign_task(ctx.tasks[t_idx].object_id)
         return ctx
     
     def local(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> None:

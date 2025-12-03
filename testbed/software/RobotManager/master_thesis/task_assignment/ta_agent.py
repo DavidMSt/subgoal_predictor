@@ -78,19 +78,9 @@ class TAAgentModule():
         self.task_assignment_container.assigned_tasks.clear()
 
     def compute_task_cost_vector(self, tasks: tuple[Task, ...]) -> list[np.floating]:
-
-        task_configurations = self.extract_task_configurations(tasks)
-        cost_vector = [self.distance_fun(self.agent_container, configuration) for configuration in task_configurations]
+        """Compute cost vector for a list of tasks based on distance from agent."""
+        cost_vector = [self.distance_fun(self.agent_container, task.container) for task in tasks]
         return cost_vector
-
-    # def extract_task_configurations(self, tasks: tuple[Task, ...]) -> list[core.spaces.State]:
-    #     """
-    #     Extracts the local positions of agents or tasks from a list of objects.
-    #     """
-    #     configurations = []
-    #     for task in tasks:
-    #         configurations.append(task.configuration)
-    #     return configurations
     
     def assign_task(self, task_id: str) -> None:
         """Assign a task to this agent (centralized assignment)"""
