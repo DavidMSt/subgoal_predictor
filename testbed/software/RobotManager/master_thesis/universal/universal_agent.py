@@ -10,13 +10,12 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
     asi: AssignmentAgentModule
     exi: ...
 
-    def __init__(self, env_config, agent_id: str, Ts=None, agent_config: FRODO_Agent_Config | None = None, start_config=(0.0,0.0,0.0), *args, **kwargs) -> None:
-        super().__init__(agent_id = agent_id, Ts = Ts, agent_config = agent_config, start_config =  start_config)
+    def __init__(self, env_config, agent_id: str, Ts=None, start_config=(0.0,0.0,0.0), color=None, *args, **kwargs) -> None:
+        super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, color=color)
         
-        assert isinstance(agent_config, FRODO_Agent_Config) # if not provided as argument, will be created by class constructor with default values
-        
-        self.mpi = MPAgentModule(agent_config= agent_config, env_container= env_config, runner=self.runner, logger = self.logger)
-        self.asi = AssignmentAgentModule(agent_id=agent_id, logger=self.logger)
+        # MPAgent module
+        self.mpi = MPAgentModule(agent_config=self.container, env_container=env_config, runner=self.runner, logger=self.logger)
+        self.asi = AssignmentAgentModule(agent_id=agent_id, logger=self.logger, get_state_fun=self._get_state)
         self.exi = ... # TODO
 
 

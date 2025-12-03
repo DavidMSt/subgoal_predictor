@@ -84,8 +84,6 @@ def mp_task_2ag_0obs():
 
     sim.activate_phase_all_agents(phase="goal")
 
-    time.sleep(5)
-
     while True:
         time.sleep(1)
 
@@ -125,8 +123,6 @@ def mp_task_1ag_1obs():
     sim.start()
 
     sim.activate_phase_all_agents(phase="goal")
-
-    time.sleep(5)
 
     while True:
         time.sleep(1)

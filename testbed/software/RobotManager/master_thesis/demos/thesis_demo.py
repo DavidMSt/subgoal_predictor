@@ -36,6 +36,7 @@ from master_thesis.universal.universal_simulation import FRODO_universal_Simulat
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.general.general_obstacles import GeneralObstacle, Obstacle_Config
 from master_thesis.general.general_simulation import FrodoGeneralEnvironment
+from master_thesis.demos.demo_scenarios.simple_maze import setup_simple_maze
 
 
 
@@ -78,12 +79,11 @@ class ThesisDemo:
         self.babylon_visualization = BabylonVisualization(id='babylon', babylon_config={
             'title': 'HHI demo'})
 
-        # Simulation Environment 
-        self.env = FrodoGeneralEnvironment(Ts=0.01, run_mode='rt') # TODO: put here my adjusted environment? 
+        # Simulation
         self.sim = FRODO_universal_Simulation(Ts=0.01)
 
-
-        self.env.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT].addAction(self._simulationOutputStep)
+        # Attach output callback to the simulation's environment
+        self.sim.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT].addAction(self._simulationOutputStep)
 
         # Make a logging redirection
         addLogRedirection(self._logRedirection, minimum_level='DEBUG')
@@ -95,9 +95,8 @@ class ThesisDemo:
         self._buildGUI()
         self._buildBabylonFloor()
         self.babylon_visualization.init()
-        self.env.init()
-        self.env.initialize()
-
+        self.sim.environment.init()
+        self.sim.environment.initialize()
         self.sim.init()
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -106,7 +105,7 @@ class ThesisDemo:
         self.free_port(8400)
         self.gui.start()
         self.babylon_visualization.start()
-        self.env.start()
+        self.sim.environment.start()
         self.sim.start()
         self.logger.info("HHI demo started")
 
@@ -164,7 +163,10 @@ class ThesisDemo:
             obstacle_id=obstacle_id,
             x=x,
             y=y,
-            config=Obstacle_Config(length=length, width=width)
+            psi=0.0,
+            length=length,
+            width=width,
+            height=1.0
         )
 
         assert sim_obstacle is not None
@@ -247,6 +249,14 @@ class ThesisDemo:
         ))
         page1.addWidget(bilbo1_button, height=2, width=4)
 
+        # Simple Maze Button
+        maze_button = Button(text="Load Simple Maze", callback=Callback(
+            function=setup_simple_maze,
+            inputs={'demo': self},
+            discard_inputs=True,
+        ))
+        page1.addWidget(maze_button, height=2, width=4)
+
     def _buildBabylonFloor(self):
 
         floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
@@ -263,14 +273,13 @@ class ThesisDemo:
     def _simulationOutputStep(self):
         ...
         for robot in list(self.robots.values()):
-            cfg = robot.sim_agent.configuration_global
-            pos = cfg['pos']
-            ori = cfg['ori'][0] if 'ori' in cfg else 0 # TODO: watch out for potential errors!
-
+            # Read state directly instead of using configuration_global
+            state = robot.sim_agent.state
+            
             robot.babylon.setState(
-                x = pos[0],
-                y = pos[1],
-                psi = ori,
+                x=state.x,
+                y=state.y,
+                psi=state.psi,
             )
         # # Update all BILBOs
         # for robot in self.robots.values():

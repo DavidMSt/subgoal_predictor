@@ -69,10 +69,10 @@ class FRODO_General_CommandSet(CommandSet):
 
     # === private ---------------------------------------------------------
     def _add_general_agent(self, agent_id, x=0.0, y=0.0, psi=0.0, color=None):
-        config = FRODO_Agent_Config(color=color)
         return self.sim.new_agent(
             agent_id=agent_id,
-            agent_class= 
+            start_config=(x, y, psi),
+            color=color
         )
 
 class FRODO_universal_Simulation(FRODO_general_Simulation):
@@ -84,9 +84,9 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         self.asi = AssignmentSimulationModule(env = env, logger=  self.logger, new_agent_fun= FRODOUniversalAgent)
         self.cli = FRODO_General_CommandSet(self)
 
-    def new_agent(self, agent_id, start_config, **kwargs):
+    def new_agent(self, agent_id, start_config=(0.0, 0.0, 0.0), **kwargs):
         agent = FRODOUniversalAgent(
-            env=self.environment,
+            env_config=self.environment.environment_container,
             agent_id=agent_id,
             Ts=self.Ts,
             start_config=start_config,
