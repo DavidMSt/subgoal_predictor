@@ -23,7 +23,7 @@ from master_thesis.motion_planning.helper.nearest_neighbor import NearestNeighbo
 from master_thesis.motion_planning.helper.collisions_fcl import AgentCollisionChecker
 from master_thesis.general.containers.agent_containers import FRODOAgentContainer
 from master_thesis.general.containers.environment_containers import EnvironmentContainer
-from master_thesis.general.containers.motion_planning_container import AgentMotionPlanningContainer
+from testbed.software.RobotManager.master_thesis.general.containers.mp_container import AgentMotionPlanningContainer
 
 from enum import Enum, auto
 from abc import ABC, abstractmethod

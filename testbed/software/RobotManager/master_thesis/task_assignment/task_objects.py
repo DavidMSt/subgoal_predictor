@@ -6,42 +6,42 @@ from extensions.simulation.src.core.spaces import Space, State
 from typing import Tuple, cast
 import logging
 from abc import ABC, abstractmethod
+
+from master_thesis.general.containers.task_container import TaskContainer
 # from master_thesis.task_assignment.assingment_interface import AssignmentAgentInterface
 
 # ----------------------------- Task Classes -----------------------------
 
 class Task(Object):
-    def __init__(
-        self,
-        id,
-        position: tuple[float, float] = (0.0, 0.0),
-        orientation: float = 0,
-        *,
-        is_assignable: bool = True,
+    def __init__(self, id, x, y, psi, *, is_assignable: bool = True,
     ):
         self.space = core.spaces.Space2D()  # quick fix TODO: make clean once Object handles this correctly 
         super().__init__(object_id=id, space=self.space)
 
-        self.assigned = False
-        self.is_assignable = is_assignable
-        self.setPosition(x = position[0], y = position[1])
-        self.setOrientation(orientation)
+        config = 
 
-    def setPosition(self, x=None, y=None, *args, **kwargs):
-        if isinstance(x, list):
-            x, y = x[0], x[1]
-        super().setPosition([x,y])
+        self.container = TaskContainer()
 
-    @property
-    def position(self):
-        return [self.configuration_global['pos']['x'], self.configuration_global['pos']['y'] ]
+        # self.assigned = False
+        # self.is_assignable = is_assignable
+        # self.setPosition(x = position[0], y = position[1])
+        # self.setOrientation(orientation)
 
-    @property
-    def orientation(self):
-        return self.configuration['psi'].value
+    # def setPosition(self, x=None, y=None, *args, **kwargs):
+    #     if isinstance(x, list):
+    #         x, y = x[0], x[1]
+    #     super().setPosition([x,y])
 
-    def setOrientation(self, psi):
-        super().setConfiguration(dimension='psi', value=psi)
+    # @property
+    # def position(self):
+    #     return [self.configuration_global['pos']['x'], self.configuration_global['pos']['y'] ]
+
+    # @property
+    # def orientation(self):
+    #     return self.configuration['psi'].value
+
+    # def setOrientation(self, psi):
+    #     super().setConfiguration(dimension='psi', value=psi)
 
 if __name__ == "__main__":
     t = Task(id = 'task_test')

@@ -2,7 +2,7 @@ import numpy as np
 import fcl
 from master_thesis.general.containers.agent_containers import FRODOAgentContainer
 from master_thesis.general.containers.environment_containers import EnvironmentContainer
-from master_thesis.general.containers.obstacle_containers import ObstacleContainer
+from testbed.software.RobotManager.master_thesis.general.containers.obstacle_container import ObstacleContainer
 from master_thesis.general.general_obstacles import GeneralObstacle
 # import meshcat.transformations as tf
 
