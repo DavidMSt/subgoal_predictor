@@ -298,8 +298,19 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
     def add_obstacle(self,
         obstacle: GeneralObstacle) -> GeneralObstacle:
+        # Check if entity creation is frozen
+        if self.environment.environment_container.entities_creation_frozen:
+            raise RuntimeError("Cannot add obstacles after simulation has started. Entity creation is frozen.")
 
         global SIMULATED_OBSTACLES
+
+        # Mark obstacle in both grids (static obstacle)
+        self.environment.mark_object_in_grid(
+            x=obstacle.container.x, y=obstacle.container.y, psi=obstacle.container.psi,
+            length=obstacle.container.length, width=obstacle.container.width,
+            mark_full=True, mark_static=True
+        )
+
         SIMULATED_OBSTACLES[obstacle.obstacle_id] = obstacle
 
         # Enforce Ts on obstacle
@@ -367,8 +378,19 @@ class FRODO_general_Simulation(FRODO_Simulation):
         )
     
     def add_agent(self, agent: FRODOGeneralAgent) -> FRODOGeneralAgent:
+        # Check if entity creation is frozen
+        if self.environment.environment_container.entities_creation_frozen:
+            raise RuntimeError("Cannot add agents after simulation has started. Entity creation is frozen.")
 
         global SIMULATED_AGENTS
+
+        # Mark agent in occupancy_grid_full (not static)
+        self.environment.mark_object_in_grid(
+            x=agent.container.x, y=agent.container.y, psi=agent.container.psi,
+            length=agent.container.length, width=agent.container.width,
+            mark_full=True, mark_static=False
+        )
+
         SIMULATED_AGENTS[agent.agent_id] = agent
 
         # Enforce Ts on agent
@@ -464,7 +486,20 @@ class FRODO_general_Simulation(FRODO_Simulation):
     # Task management methods
     def add_task(self, task: Task) -> Task:
         """Add an existing Task instance to the simulation"""
+        # Check if entity creation is frozen
+        if self.environment.environment_container.entities_creation_frozen:
+            raise RuntimeError("Cannot add tasks after simulation has started. Entity creation is frozen.")
+
         global SIMULATED_TASKS
+
+        # Mark task in occupancy_grid_full (small footprint for task marker)
+        task_size = 0.3  # 30cm marker size
+        self.environment.mark_object_in_grid(
+            x=task.container.x, y=task.container.y, psi=task.container.psi,
+            length=task_size, width=task_size,
+            mark_full=True, mark_static=False
+        )
+
         SIMULATED_TASKS[task.object_id] = task
 
         # Add to environment
@@ -521,7 +556,10 @@ class FRODO_general_Simulation(FRODO_Simulation):
             agent.activate_phase(phase)
 
     def start(self):
-        
+        # Freeze entity creation - no more agents/tasks/obstacles can be added after this point
+        self.environment.environment_container.entities_creation_frozen = True
+        self.logger.info("Entity creation frozen - no new objects can be added during simulation runtime")
+
         super().start()
 
 def main():
