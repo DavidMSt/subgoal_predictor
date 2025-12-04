@@ -37,6 +37,7 @@ from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.demos.demo_scenarios.simple_maze import setup_simple_maze
 from master_thesis.task_assignment.task_objects import Task
+from master_thesis.task_assignment.assignment_strategies import HungarianStrategy, RandomStrategy
 
 
 @dataclasses.dataclass
@@ -219,6 +220,9 @@ class ThesisDemo:
             z=0.01  # Just above ground
         )
         self.babylon_visualization.addObject(task_visual)
+
+        # Add task to simulation
+        self.sim.add_task(task)
 
         # Store task
         self.tasks[task_id] = task

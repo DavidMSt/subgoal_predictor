@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import numpy as np
 
 from master_thesis.containers.base_container import OverarchingContainer
 from master_thesis.containers.agent_containers import FRODOAgentContainer
@@ -10,11 +11,16 @@ class EnvironmentState:
     obstacles: dict[str, ObstacleContainer] = field(default_factory=dict)
     agents: dict[str, FRODOAgentContainer] = field(default_factory=dict)
     tasks: dict[str, TaskContainer] = field(default_factory=dict)
+    occupancy_grid_full: np.ndarray | None = None  # obstacles + agents + tasks (for spawning)
+    occupancy_grid_static: np.ndarray | None = None  # obstacles only (for RL observations)
+    entities_creation_frozen: bool = False  # locked after sim.start()
 
-@dataclass(frozen= True, slots= True) # must be dynamically changeable since env can change
+@dataclass(frozen= True, slots= True)
 class EnvironmentConfig:
     limits: tuple[tuple[int, int], ...]
     Ts: float
+    grid_resolution: float = 0.1  # 10cm grid cells
+    grid_padding: float = 0.5  # extra space around workspace boundaries
 
 @dataclass(frozen=False, slots = False)
 class EnvironmentContainer(OverarchingContainer):
