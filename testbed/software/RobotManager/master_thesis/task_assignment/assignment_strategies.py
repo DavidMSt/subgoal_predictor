@@ -12,8 +12,8 @@ import extensions.simulation.src.core as core
 
 from master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
 from master_thesis.task_assignment.task_objects import Task
-from master_thesis.general.containers.agent_containers import FRODOAgentContainer
-from master_thesis.general.containers.task_container import TaskContainer
+from master_thesis.containers.agent_containers import FRODOAgentContainer
+from master_thesis.containers.task_container import TaskContainer
 
 
 

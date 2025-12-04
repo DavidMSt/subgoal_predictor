@@ -14,6 +14,10 @@ class Task(Object):
         task_config = Task_Config(x=x, y=y, psi=psi)
         self.container = TaskContainer(object_id=id, config=task_config)
 
+    def output(self, env):
+        """Output method required by environment scheduler. Tasks have no output behavior."""
+        pass
+
 if __name__ == "__main__":
     t1 = Task(id='task_test', x=10.3, y=2.3, psi=np.pi)
     t2 = Task(id='task_test2', x=1.3, y=-1.3, psi=3*np.pi)
