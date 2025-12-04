@@ -7,8 +7,6 @@ from extensions.simulation.src import core as core
 from master_thesis.task_assignment.task_objects import Task
 from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.containers.ta_container import AgentTAContainer
-from master_thesis.containers.agent_containers import FRODOAgentContainer
-from master_thesis.containers.environment_containers import EnvironmentContainer
 
 class DistanceCalculator:
     """

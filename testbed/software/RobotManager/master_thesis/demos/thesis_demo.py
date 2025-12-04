@@ -308,13 +308,74 @@ class ThesisDemo:
     # === PRIVATE METHODS ==============================================================================================
     
     def reset(self):
+        """
+        Reset the entire simulation:
+        - Remove all robots, obstacles, and tasks from Babylon visualization
+        - Remove all objects from simulation environment
+        - Clear all tracking dictionaries
+        - Reinitialize collision checker and occupancy grids
+        """
+        self.logger.info("Resetting simulation...")
 
-        ...
-        #     robot['robot'].removeJoystick()
-        #     self.env.removeObject(robot['robot'])
-        #     self.babylon_visualization.removeObject(robot['babylon'])
-        #     self.logger.info(f'Robot {robot["robot"].agent_id} removed')
-        #     self.robots.pop(robot['robot'].agent_id)
+        # Remove all robots
+        for robot_id, robot_container in list(self.robots.items()):
+            # Remove from Babylon
+            self.babylon_visualization.removeObject(robot_container.babylon)
+            # Remove from simulation environment
+            self.sim.environment.removeObject(robot_container.sim_agent)
+            self.logger.debug(f'Robot {robot_id} removed')
+        self.robots.clear()
+
+        # Remove all obstacles
+        for obstacle_id, obstacle_container in list(self.obstacles.items()):
+            # Remove from Babylon (if visualization exists)
+            if obstacle_container.babylon is not None:
+                self.babylon_visualization.removeObject(obstacle_container.babylon)
+            # Remove from simulation environment
+            self.sim.environment.removeObject(obstacle_container.sim_obstacle)
+            self.logger.debug(f'Obstacle {obstacle_id} removed')
+        self.obstacles.clear()
+
+        # Remove all tasks
+        for task_id, task in list(self.tasks.items()):
+            # Get babylon object by ID and remove it
+            if task_id in self.babylon_visualization.objects:
+                babylon_task = self.babylon_visualization.objects[task_id]
+                self.babylon_visualization.removeObject(babylon_task)
+            # Remove from simulation environment
+            self.sim.environment.removeObject(task)
+            self.logger.debug(f'Task {task_id} removed')
+        self.tasks.clear()
+
+        # Clear global simulation dicts
+        from master_thesis.general.general_simulation import SIMULATED_AGENTS, SIMULATED_STATICS, SIMULATED_TASKS
+        SIMULATED_AGENTS.clear()
+        SIMULATED_STATICS.clear()
+        SIMULATED_TASKS.clear()
+
+        # Clear environment container dicts
+        self.sim.environment.environment_container.agents.clear()
+        self.sim.environment.environment_container.obstacles.clear()
+        self.sim.environment.environment_container.tasks.clear()
+
+        # Clear environment's agents dict (separate from objects dict)
+        if hasattr(self.sim.environment, 'agents'):
+            self.sim.environment.agents.clear()
+
+        # Debug: verify all environment dicts are clear
+        self.logger.debug(f"Environment objects remaining: {len(self.sim.environment.objects)}")
+        self.logger.debug(f"Environment agents remaining: {len(getattr(self.sim.environment, 'agents', {}))}")
+
+        # Reinitialize collision checker (clears agent_objs and obstacle_objs)
+        self.sim.environment.collision_checker = self.sim.environment.setup_collision_checker()
+
+        # Re-initialize occupancy grids
+        self.sim.environment.initialize_occupancy_grids()
+
+        # Unfreeze entity creation so we can add new entities
+        self.sim.environment.environment_container.entities_creation_frozen = False
+
+        self.logger.info("Simulation reset complete")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _buildGUI(self):
