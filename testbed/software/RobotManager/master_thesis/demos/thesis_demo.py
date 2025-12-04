@@ -231,6 +231,56 @@ class ThesisDemo:
         return task
 
     # ------------------------------------------------------------------------------------------------------------------
+    def spawnAgentsAndTasks(self, n: int = 3):
+        """
+        Spawn n agents and n tasks in collision-free positions using the occupancy grid.
+        This tests the hybrid spawning system (grid + FCL).
+        """
+        self.logger.info(f"Spawning {n} agents and {n} tasks in collision-free positions...")
+
+        # Spawn agents using simulation's spawn_agents method
+        spawned_agents = self.sim.spawn_agents(n=n, agent_class=FRODOUniversalAgent)
+
+        # Create babylon visualizations for spawned agents
+        for i, agent in enumerate(spawned_agents):
+            agent_id = agent.agent_id
+
+            # Create babylon visualization
+            robot_babylon = BabylonFrodo(object_id=agent_id, color=[1, 0, 0], fov=0, text=str(i+1))
+            robot_babylon.setState(x=agent.state.x, y=agent.state.y, psi=agent.state.psi)
+            self.babylon_visualization.addObject(robot_babylon)
+
+            # Store in robots dict
+            self.robots[agent_id] = RobotContainer(babylon=robot_babylon, sim_agent=agent)
+            self.logger.info(f'Agent {agent_id} spawned at ({agent.state.x:.2f}, {agent.state.y:.2f})')
+
+        # Spawn tasks using simulation's spawn_tasks method
+        spawned_tasks = self.sim.spawn_tasks(n=n)
+
+        # Create babylon visualizations for spawned tasks
+        colors = [[0, 1, 0], [0, 1, 1], [1, 0, 1], [1, 1, 0], [0, 0.5, 1]]  # Various colors
+        for i, task in enumerate(spawned_tasks):
+            task_id = task.object_id
+            color = colors[i % len(colors)]
+
+            # Create babylon visualization
+            task_visual = Box(
+                object_id=task_id,
+                color=color,
+                size={'x': 0.3, 'y': 0.3, 'z': 0.02},
+                x=task.container.x,
+                y=task.container.y,
+                z=0.01
+            )
+            self.babylon_visualization.addObject(task_visual)
+
+            # Store task
+            self.tasks[task_id] = task
+            self.logger.info(f'Task {task_id} spawned at ({task.container.x:.2f}, {task.container.y:.2f})')
+
+        self.logger.info(f"Successfully spawned {len(spawned_agents)} agents and {len(spawned_tasks)} tasks")
+
+    # ------------------------------------------------------------------------------------------------------------------
 
     def free_port(self, port):
         try:
@@ -316,6 +366,14 @@ class ThesisDemo:
             discard_inputs=True,
         ))
         page1.addWidget(task_button, height=2, width=4)
+
+        # Spawn Agents & Tasks Button
+        spawn_button = Button(text="Spawn 3 Agents & Tasks", callback=Callback(
+            function=self.spawnAgentsAndTasks,
+            inputs={'n': 3},
+            discard_inputs=True,
+        ))
+        page1.addWidget(spawn_button, height=2, width=4)
 
     def _buildBabylonFloor(self):
 
