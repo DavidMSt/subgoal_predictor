@@ -371,7 +371,6 @@ class ThesisGUI:
         # Clear global simulation dicts
         from master_thesis.general.general_simulation import SIMULATED_AGENTS, SIMULATED_STATICS, SIMULATED_TASKS
         SIMULATED_AGENTS.clear()
-        SIMULATED_STATICS.clear()
         SIMULATED_TASKS.clear()
 
         # Clear environment container dicts

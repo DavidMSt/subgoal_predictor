@@ -13,7 +13,6 @@ import extensions.simulation.src.core as core
 import extensions.simulation.src.core.environment as core_env
 from applications.FRODO.definitions import get_simulated_agent_definition_by_id
 from core.utils.dataclass_utils import update_dataclass_from_dict
-
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 
 # master thesis
@@ -24,7 +23,6 @@ from master_thesis.general.general_tasks import GeneralTask
 
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
-SIMULATED_STATICS: dict[str, FRODO_Static] = {}
 SIMULATED_OBSTACLES: dict[str, GeneralObstacle] = {}
 SIMULATED_TASKS: dict[str, GeneralTask] = {}
 
@@ -47,7 +45,6 @@ class FRODO_general_Simulation(FRODO_Simulation):
         self.environment = env(Ts=Ts, run_mode='rt', limits = limits)
         # self.environment.setup_collision_checker()
         self.agents = SIMULATED_AGENTS # TODO: Remove these global variables from BILBOLAB?
-        self.statics = SIMULATED_STATICS
 
         self.obstacles = {}
 

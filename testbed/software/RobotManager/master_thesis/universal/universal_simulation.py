@@ -1,6 +1,6 @@
 from extensions.cli.cli import CommandSet, Command, CommandArgument
 
-from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment, SIMULATED_AGENTS, SIMULATED_STATICS
+from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.motion_planning.mp_simulation import MPSimulationModule
 from master_thesis.task_assignment.ta_simulation import AssignmentSimulationModule
@@ -15,10 +15,10 @@ class FRODO_General_CommandSet(CommandSet):
         # ------------------------------------------------------------------
         self.addCommand(Command(
             name='list',
-            description='List all agents and statics',
+            description='List all agents',
             arguments=[],
             function=lambda: self.sim.logger.info(
-                f"Agents: {list(SIMULATED_AGENTS.keys())}\nStatics: {list(SIMULATED_STATICS.keys())}"
+                f"Agents: {list(SIMULATED_AGENTS.keys())}\n Tasks: {list(SIMULATED_TASKS)}\n Obstacles: {list(SIMULATED_OBSTACLES)}"
             )
         ))
 
