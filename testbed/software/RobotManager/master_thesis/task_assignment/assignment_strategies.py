@@ -83,8 +83,8 @@ class StrategyABC(ABC):
 
         # Clear existing assignments
         for agent in agents:
-            agent.asi.task_assignment_container.state.available_tasks.clear()
-            agent.asi.task_assignment_container.state.assigned_tasks.clear()
+            agent.asi.ta_container.state.available_tasks.clear()
+            agent.asi.ta_container.state.assigned_tasks.clear()
 
         if mode == self.RunningMode.CENTRAL: 
             ctx = self.central(ctx, logger)

@@ -36,6 +36,8 @@ from master_thesis.gui.demo_scenarios.simple_maze import setup_simple_maze
 from master_thesis.general.general_tasks import GeneralTask
 # from master_thesis.task_assignment.assignment_strategies import HungarianStrategy, RandomStrategy
 
+# TODO: implement babylon-only method that colors a task once it is assigned in the agetns color 
+
 class BabylonTask(Box):
     """
     Babylon task visualization that inherits from Box.
@@ -300,8 +302,8 @@ class ThesisGUI:
             )
             self.babylon_visualization.addObject(task_visual)
 
-            # Store task
-            self.tasks[task_id] = task
+            # Store task in container
+            self.tasks[task_id] = TaskGUIContainer(babylon=task_visual, sim_task=task)
             self.logger.info(f'Task {task_id} spawned at ({task.container.x:.2f}, {task.container.y:.2f})')
 
         self.logger.info(f"Successfully spawned {len(spawned_agents)} agents and {len(spawned_tasks)} tasks")
@@ -341,12 +343,17 @@ class ThesisGUI:
 
         # Remove all robots
         for robot_id, robot_container in list(self.robots.items()):
-            # Remove from Babylon
-            self.babylon_visualization.removeObject(robot_container.babylon)
-            # Remove from simulation environment
-            self.sim.environment.removeObject(robot_container.sim_agent)
-            self.logger.debug(f'Robot {robot_id} removed')
+            try:
+                # Remove from Babylon
+                self.babylon_visualization.removeObject(robot_container.babylon)
+                self.logger.debug(f'Robot {robot_id} removed from Babylon')
+                # Remove from simulation environment
+                self.sim.environment.removeObject(robot_container.sim_agent)
+                self.logger.debug(f'Robot {robot_id} removed from simulation')
+            except Exception as e:
+                self.logger.error(f'Error removing robot {robot_id}: {e}')
         self.robots.clear()
+        self.logger.debug(f'Robots dict cleared')
 
         # Remove all obstacles
         for obstacle_id, obstacle_container in list(self.obstacles.items()):
@@ -359,20 +366,20 @@ class ThesisGUI:
         self.obstacles.clear()
 
         # Remove all tasks
-        for task_id, task in list(self.tasks.items()):
-            # Get babylon object by ID and remove it
-            if task_id in self.babylon_visualization.objects:
-                babylon_task = self.babylon_visualization.objects[task_id]
-                self.babylon_visualization.removeObject(babylon_task)
+        for task_id, task_container in list(self.tasks.items()):
+            # Remove from Babylon (if visualization exists)
+            if task_container.babylon is not None:
+                self.babylon_visualization.removeObject(task_container.babylon)
             # Remove from simulation environment
-            self.sim.environment.removeObject(task)
+            self.sim.environment.removeObject(task_container.sim_task)
             self.logger.debug(f'Task {task_id} removed')
         self.tasks.clear()
 
         # Clear global simulation dicts
-        from master_thesis.general.general_simulation import SIMULATED_AGENTS, SIMULATED_STATICS, SIMULATED_TASKS
+        from master_thesis.general.general_simulation import SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
         SIMULATED_AGENTS.clear()
         SIMULATED_TASKS.clear()
+        SIMULATED_OBSTACLES.clear()
 
         # Clear environment container dicts
         self.sim.environment.environment_container.agents.clear()

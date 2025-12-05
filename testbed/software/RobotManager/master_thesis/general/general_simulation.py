@@ -21,10 +21,10 @@ from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.general.general_environment import FrodoGeneralEnvironment
 from master_thesis.general.general_tasks import GeneralTask
 
-# Global registries
-SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
-SIMULATED_OBSTACLES: dict[str, GeneralObstacle] = {}
-SIMULATED_TASKS: dict[str, GeneralTask] = {}
+# # Global registries
+# SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
+# SIMULATED_OBSTACLES: dict[str, GeneralObstacle] = {}
+# SIMULATED_TASKS: dict[str, GeneralTask] = {}
 
 # ======================================================================================================================
 USE_AGENT_DEFINITIONS = False
@@ -34,7 +34,8 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
     environment: FrodoGeneralEnvironment
     agents: dict[str, FRODOGeneralAgent]
-    statics: dict[str, FRODO_Static]
+    obstacles: dict[str, GeneralObstacle]
+    tasks: dict[str, GeneralTask]
 
     events: FRODO_Simulation_Events
 
@@ -44,17 +45,15 @@ class FRODO_general_Simulation(FRODO_Simulation):
         # override standard bilbo environment with my custom version
         self.environment = env(Ts=Ts, run_mode='rt', limits = limits)
         # self.environment.setup_collision_checker()
-        self.agents = SIMULATED_AGENTS # TODO: Remove these global variables from BILBOLAB?
-
+        self.agents = {} # TODO: Remove these global variables from BILBOLAB?
         self.obstacles = {}
+        self.tasks = {}
 
     def add_obstacle(self,
         obstacle: GeneralObstacle) -> GeneralObstacle:
         # Check if entity creation is frozen
         if self.environment.environment_container.entities_creation_frozen:
             raise RuntimeError("Cannot add obstacles after simulation has started. Entity creation is frozen.")
-
-        global SIMULATED_OBSTACLES
 
         # Mark obstacle in both grids (static obstacle)
         self.environment.mark_object_in_grid(
@@ -63,7 +62,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
             mark_full=True, mark_static=True
         )
 
-        SIMULATED_OBSTACLES[obstacle.obstacle_id] = obstacle
+        self.obstacles[obstacle.obstacle_id] = obstacle
 
         # Enforce Ts on obstacle
         obstacle.scheduling.Ts = self.Ts
@@ -90,7 +89,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
         obstacle_class: type[GeneralObstacle] = GeneralObstacle,
         **kwargs
     ) -> GeneralObstacle | None:
-        if obstacle_id in SIMULATED_OBSTACLES:
+        if obstacle_id in self.obstacles:
             self.logger.warning(f"Obstacle {obstacle_id} already exists. Cannot add it again.")
             return None
         obstacle = obstacle_class(
@@ -134,8 +133,6 @@ class FRODO_general_Simulation(FRODO_Simulation):
         if self.environment.environment_container.entities_creation_frozen:
             raise RuntimeError("Cannot add agents after simulation has started. Entity creation is frozen.")
 
-        global SIMULATED_AGENTS
-
         # Mark agent in occupancy_grid_full (not static)
         self.environment.mark_object_in_grid(
             x=agent.container.x, y=agent.container.y, psi=agent.container.psi,
@@ -143,7 +140,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
             mark_full=True, mark_static=False
         )
 
-        SIMULATED_AGENTS[agent.agent_id] = agent
+        self.agents[agent.agent_id] = agent
 
         # Enforce Ts on agent
         agent.scheduling.Ts = self.Ts
@@ -171,7 +168,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
                   color:tuple[float, float, float] = (1.0,1.0,1.0),
                   Ts = 0.1) -> FRODOGeneralAgent | None:
 
-        if agent_id in SIMULATED_AGENTS:
+        if agent_id in self.agents:
             self.logger.warning(f"Simulated agent {agent_id} already exists. Cannot add it again")
             return None
 
@@ -244,7 +241,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
         # Spawn the agents
         agents = []
         for config in configurations:
-            agent_id = f"vfrodo{len(SIMULATED_AGENTS)}"
+            agent_id = f"vfrodo{len(self.agents)}"
             agent = self.new_agent(agent_id=agent_id, agent_class=agent_class, start_config=config)
             if agent:
                 agents.append(agent)
@@ -258,7 +255,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
             y: float, 
             psi: float 
                  ) -> GeneralTask | None:
-        if task_id in SIMULATED_TASKS:
+        if task_id in self.tasks:
             self.logger.warning(f"Task {task_id} already exists. Cannot add it again.")
             return None
 
@@ -279,8 +276,6 @@ class FRODO_general_Simulation(FRODO_Simulation):
         if self.environment.environment_container.entities_creation_frozen:
             raise RuntimeError("Cannot add tasks after simulation has started. Entity creation is frozen.")
 
-        global SIMULATED_TASKS
-
         # Mark task in occupancy_grid_full (small footprint for task marker)
         task_size = 0.3  # 30cm marker size to block grid cells in environment
         self.environment.mark_object_in_grid(
@@ -289,7 +284,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
             mark_full=True, mark_static=False
         )
 
-        SIMULATED_TASKS[task.object_id] = task
+        self.tasks[task.object_id] = task
 
         # Add to environment
         self.environment.addObject(task)
@@ -347,7 +342,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
         # Spawn the tasks
         tasks = []
         for i, config in enumerate(configurations):
-            task_id = f"task_{len(SIMULATED_TASKS)}"
+            task_id = f"task_{len(self.tasks)}"
             x, y, psi = config
             task = GeneralTask(id=task_id, x=x, y=y, psi=psi)
             self.add_task(task)

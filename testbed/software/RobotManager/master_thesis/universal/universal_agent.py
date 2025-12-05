@@ -3,7 +3,7 @@ from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_
 from master_thesis.general.general_simulation import FrodoGeneralEnvironment
 from master_thesis.motion_planning.mp_agent import MPAgentModule
 from master_thesis.task_assignment.ta_agent import TAAgentModule
-from master_thesis.containers.ta_container import AgentTAContainer, AgentTaskConfig, AgentTaskState
+from master_thesis.containers.ta_container import AgentTAContainer, AgentTAConfig, AgentTAState
 
 
 class FRODOUniversalAgent(FRODOGeneralAgent):
@@ -15,8 +15,8 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, color=color)
 
         # Create task assignment container with default config and state
-        ta_config = AgentTaskConfig()
-        ta_state = AgentTaskState()
+        ta_config = AgentTAConfig()
+        ta_state = AgentTAState()
         ta_container = AgentTAContainer(config=ta_config, state=ta_state)
 
         # MPAgent module

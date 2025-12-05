@@ -51,6 +51,6 @@ class AgentMotionPlanningConfig:
     v_bounds: tuple = (-1.0, 1.0)
 
 @dataclass(slots = True)
-class AgentMotionPlanningContainer(OverarchingContainer):
+class AgentMPContainer(OverarchingContainer):
     state: AgentMotionPlanningState
     config: AgentMotionPlanningConfig

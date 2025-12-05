@@ -1,9 +1,13 @@
 from extensions.cli.cli import CommandSet, Command, CommandArgument
 
-from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
+from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment #, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.motion_planning.mp_simulation import MPSimulationModule
-from master_thesis.task_assignment.ta_simulation import AssignmentSimulationModule
+from master_thesis.task_assignment.ta_simulation import TASimulationModule
+
+from master_thesis.containers.mp_container import AgentMPContainer
+from master_thesis.containers.ta_container import AgentTAContainer
+
 
 class FRODO_General_CommandSet(CommandSet):
     def __init__(self, sim: "FRODO_general_Simulation"):
@@ -80,8 +84,16 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
     def __init__(self, Ts=0.1, limits=((-3,3),(-3,3)), env=FrodoGeneralEnvironment):
         super().__init__(Ts=Ts, limits=limits, env=env)
-        self.mpi = MPSimulationModule(self.agents, self.logger)
-        self.asi = AssignmentSimulationModule(self.logger)
+        
+        self.mp_containers: dict[str, AgentMPContainer] = {}
+        self.ta_containers: dict[str, AgentTAContainer] = {}
+
+        env_cont = self.environment.environment_container
+
+        self.mpi = MPSimulationModule(self.agents, self.logger) # TODO: modify the mp simulation module to use containers as well
+        self.asi = TASimulationModule(env_cont=env_cont, agent_ta_conts= self.ta_containers, logger = self.logger)
+        
+
         self.cli = FRODO_General_CommandSet(self)
 
     def new_agent(self, agent_id, start_config=(0.0, 0.0, 0.0), **kwargs):
@@ -93,6 +105,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
             **kwargs
         )
         self.add_agent(agent)
+        self.ta_containers[agent_id] = agent.asi.ta_container
         return agent
 
 if __name__ == "__main__":

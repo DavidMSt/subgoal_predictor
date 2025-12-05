@@ -48,32 +48,32 @@ class DistanceCalculator:
 class TAAgentModule():
     """Interface for assignment agents. Handles decentralized assignments"""
     agent_id: str   # Unique identifier for the agent
-    task_assignment_container: AgentTAContainer
+    ta_container: AgentTAContainer
 
     def __init__(self, agent_id: str, agent_container, ta_container: AgentTAContainer, logger, get_state_fun: Callable[[], core.spaces.State]):
 
         self.agent_id = agent_id
-        self.task_assignment_container = ta_container
+        self.ta_container = ta_container
         self.agent_container = agent_container
         self.logger = logger
         self._get_state_fun = get_state_fun
         # TODO: Use metric, e.g. dubins distance which accounts for turning radius
-        self.distance_fun = DistanceCalculator(self.task_assignment_container.distance_metric).measure  # set the cost function
+        self.distance_fun = DistanceCalculator(self.ta_container.distance_metric).measure  # set the cost function
     
     def add_tasks(self, tasks: tuple[GeneralTask,...]) -> None:
         # Add only tasks with unique IDs to the available_tasks list
-        existing_ids = set(self.task_assignment_container.available_tasks)
+        existing_ids = set(self.ta_container.available_tasks)
         new_task_ids = [task.object_id for task in tasks if task.object_id not in existing_ids]
         duplicated_ids = [task.object_id for task in tasks if task.object_id in existing_ids]
         if duplicated_ids:
             self.logger.warning(f'Detected duplicated tasks with IDs: {duplicated_ids}, keeping only one instance')
-        self.task_assignment_container.available_tasks.extend(new_task_ids)
+        self.ta_container.available_tasks.extend(new_task_ids)
 
     def clear_tasks(self):
-        self.task_assignment_container.available_tasks.clear()
+        self.ta_container.available_tasks.clear()
 
     def clear_assigned_tasks(self):
-        self.task_assignment_container.assigned_tasks.clear()
+        self.ta_container.assigned_tasks.clear()
 
     def compute_task_cost_vector(self, tasks: tuple[GeneralTask, ...]) -> list[np.floating]:
         """Compute cost vector for a list of tasks based on distance from agent."""
@@ -82,65 +82,66 @@ class TAAgentModule():
     
     def assign_task(self, task_id: str) -> None:
         """Assign a task to this agent (centralized assignment)"""
-        self.task_assignment_container.assigned_tasks.append(task_id)
-        if self.task_assignment_container.current_task_id is None:
-            self.task_assignment_container.current_task_id = task_id
+        self.ta_container.assigned_tasks.append(task_id)
+        if self.ta_container.current_task_id is None:
+            self.ta_container.current_task_id = task_id
         self.logger.info(f"Agent {self.agent_id} assigned task {task_id}")
 
     def get_current_task_goal(self, tasks_dict: dict) -> tuple[float, float] | None:
         """Get goal position from current task"""
-        if self.task_assignment_container.current_task_id is None:
+        if self.ta_container.current_task_id is None:
             return None
-        task = tasks_dict[self.task_assignment_container.current_task_id]
+        task = tasks_dict[self.ta_container.current_task_id]
         return (task.container.x, task.container.y)
 
     def mark_task_complete(self):
         """Mark current task as complete, move to next"""
-        if self.task_assignment_container.current_task_id:
-            self.logger.info(f"Agent {self.agent_id}: Task {self.task_assignment_container.current_task_id} completed")
-            self.task_assignment_container.tasks_completed += 1
-            self.task_assignment_container.current_task_id = None
+        if self.ta_container.current_task_id:
+            self.logger.info(f"Agent {self.agent_id}: Task {self.ta_container.current_task_id} completed")
+            self.ta_container.tasks_completed += 1
+            self.ta_container.current_task_id = None
 
             # Move to next task in queue if available
-            if len(self.task_assignment_container.assigned_tasks) > 0:
-                self.task_assignment_container.current_task_id = self.task_assignment_container.assigned_tasks[0]
-                self.task_assignment_container.assigned_tasks.pop(0)
-                self.logger.info(f"Agent {self.agent_id}: Starting next task {self.task_assignment_container.current_task_id}")
+            if len(self.ta_container.assigned_tasks) > 0:
+                self.ta_container.current_task_id = self.ta_container.assigned_tasks[0]
+                self.ta_container.assigned_tasks.pop(0)
+                self.logger.info(f"Agent {self.agent_id}: Starting next task {self.ta_container.current_task_id}")
 
-class FRODO_AssignmentAgent(FRODOGeneralAgent):
 
-    def __init__(
-        self,
-        agent_id: str,
-        start_config: tuple[float, float, float],
-        agent_config=None,
-        runner=None,
-        Ts=None,
-        **kwargs
-    ):
-        super().__init__(
-            agent_id=agent_id,
-            start_config=start_config,
-            agent_config=agent_config,
-            Ts=Ts,
-        )
+# class FRODO_AssignmentAgent(FRODOGeneralAgent):
 
-        self.runner = runner
+#     def __init__(
+#         self,
+#         agent_id: str,
+#         start_config: tuple[float, float, float],
+#         agent_config=None,
+#         runner=None,
+#         Ts=None,
+#         **kwargs
+#     ):
+#         super().__init__(
+#             agent_id=agent_id,
+#             start_config=start_config,
+#             agent_config=agent_config,
+#             Ts=Ts,
+#         )
 
-        print(self.state)
+#         self.runner = runner
 
-        # Create task container
-        from master_thesis.containers.ta_container import AgentTaskConfig, AgentTaskState
-        task_container = AgentTAContainer(
-            config=AgentTaskConfig(),
-            state=AgentTaskState()
-        )
+#         print(self.state)
 
-        # add assignment module
-        self.asi = TAAgentModule(
-            agent_id=agent_id,
-            agent_container=self.container,
-            ta_container=task_container,
-            logger=self.logger,
-            get_state_fun=self._get_state
-        )
+#         # Create task container
+#         from master_thesis.containers.ta_container import AgentTAConfig, AgentTAState
+#         task_container = AgentTAContainer(
+#             config=AgentTAConfig(),
+#             state=AgentTAState()
+#         )
+
+#         # add assignment module
+#         self.asi = TAAgentModule(
+#             agent_id=agent_id,
+#             agent_container=self.container,
+#             ta_container=task_container,
+#             logger=self.logger,
+#             get_state_fun=self._get_state
+#         )

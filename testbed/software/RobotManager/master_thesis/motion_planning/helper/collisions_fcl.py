@@ -91,7 +91,7 @@ class AgentCollisionChecker():
 
     def create_environment_objects(self):
         obstacle_list = []
-        for obstacle in self.env_config.state.obstacles.values():
+        for obstacle in self.env_config.state.obstacle_conts.values():
             _obs = self.create_env_collision_object(obstacle)
             obstacle_list.append(_obs)
         return obstacle_list
@@ -140,24 +140,28 @@ class AgentCollisionChecker():
 # TODO: make all this a single checker? 
 class WorldCollisionChecker:
 
-    def __init__(self, env_container: EnvironmentContainer):
-        self.env = env_container
+    def __init__(self, env_cont: EnvironmentContainer):
+        self.env_cont = env_cont
 
         self.manager = fcl.DynamicAABBTreeCollisionManager()
+
+        self.initialize_objects()
+
+        self.manager.setup()
+
+    def initialize_objects(self):
 
         self.agent_objs: dict[str, fcl.CollisionObject] = {}
         self.obstacle_objs: dict[str, fcl.CollisionObject] = {}
         self.obj_to_id: dict[fcl.CollisionObject, str] = {}
 
         # initialize all obstacles (static)
-        for oid, obs in env_container.state.obstacles.items():
+        for oid, obs in self.env_cont.state.obstacle_conts.items():
             self.add_obstacle(obs, oid)
 
         # initialize all agents (dynamic)
-        for aid, ag in env_container.state.agents.items():
+        for aid, ag in self.env_cont.state.agent_conts.items():
             self.add_agent(ag, aid)
-
-        self.manager.setup()
 
     def add_agent(self, agent_container: FRODOAgentContainer, agent_id: str):
         obj = self._make_box(agent_container.config, agent_container.state)
@@ -189,7 +193,7 @@ class WorldCollisionChecker:
     def update(self):
         # only dynamic agents
         for aid, obj in self.agent_objs.items():
-            st = self.env.state.agents[aid].state
+            st = self.env_cont.state.agent_conts[aid].state
 
             q = [np.cos(st.psi / 2), 0, 0, np.sin(st.psi / 2)]
             pos = [st.x, st.y, 0.0]

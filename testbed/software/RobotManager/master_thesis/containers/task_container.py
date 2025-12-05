@@ -4,7 +4,7 @@ from master_thesis.containers.base_container import OverarchingContainer
 
 @dataclass(frozen=False, slots = False)
 class TaskState:
-    is_assigned: bool = False
+    assigned_agent: str = ''
     priority: int = 0
     color: tuple[float, float, float] = (1.0, 1.0, 1.0)
     is_assignable: bool = True

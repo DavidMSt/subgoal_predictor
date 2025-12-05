@@ -8,9 +8,9 @@ from master_thesis.containers.task_container import TaskContainer
 
 @dataclass(frozen= False, slots= False) # must be dynamically changeable since env can change
 class EnvironmentState:
-    obstacles: dict[str, ObstacleContainer] = field(default_factory=dict)
-    agents: dict[str, FRODOAgentContainer] = field(default_factory=dict)
-    tasks: dict[str, TaskContainer] = field(default_factory=dict)
+    obstacle_conts: dict[str, ObstacleContainer] = field(default_factory=dict)
+    agent_conts: dict[str, FRODOAgentContainer] = field(default_factory=dict)
+    task_conts: dict[str, TaskContainer] = field(default_factory=dict)
     occupancy_grid_full: np.ndarray | None = None  # obstacles + agents + tasks (for spawning)
     occupancy_grid_static: np.ndarray | None = None  # obstacles only (for RL observations)
     entities_creation_frozen: bool = False  # locked after sim.start()
@@ -29,22 +29,22 @@ class EnvironmentContainer(OverarchingContainer):
 
     def add_obstacles(self, obstacle):
         assert isinstance(obstacle, ObstacleContainer)
-        self.state.obstacles[obstacle.object_id] = obstacle
+        self.state.obstacle_conts[obstacle.object_id] = obstacle
 
     def remove_obstacles(self, obstacle_id):
         ...
 
     def add_agents(self, agent):
         assert isinstance(agent, FRODOAgentContainer)
-        self.state.agents[agent.agent_id] = agent
+        self.state.agent_conts[agent.agent_id] = agent
 
     def remove_agents(self, agent_id):
         ...
 
     def add_tasks(self, task):
         assert isinstance(task, TaskContainer)
-        self.state.tasks[task.object_id] = task
+        self.state.task_conts[task.object_id] = task
 
     def remove_tasks(self, task_id):
-        if task_id in self.state.tasks:
-            del self.state.tasks[task_id]
+        if task_id in self.state.task_conts:
+            del self.state.task_conts[task_id]
