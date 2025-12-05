@@ -56,7 +56,7 @@ class TAAgentModule():
         self.ta_container = ta_container
         self.agent_container = agent_container
         self.logger = logger
-        self._get_state_fun = get_state_fun
+
         # TODO: Use metric, e.g. dubins distance which accounts for turning radius
         self.distance_fun = DistanceCalculator(self.ta_container.distance_metric).measure  # set the cost function
     

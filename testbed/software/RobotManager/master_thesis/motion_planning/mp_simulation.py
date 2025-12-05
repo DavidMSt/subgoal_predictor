@@ -2,7 +2,7 @@ from dataclasses import dataclass, field, replace
 import time
 import numpy as np
 from typing import Type, cast, overload
-from logging import Logger
+from core.utils.logging_utils import Logger
 
 # bilbolab
 import extensions.simulation.src.core as core

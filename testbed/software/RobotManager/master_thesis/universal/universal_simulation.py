@@ -1,5 +1,7 @@
 from extensions.cli.cli import CommandSet, Command, CommandArgument
 
+from core.utils.logging_utils import Logger
+
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment #, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.motion_planning.mp_simulation import MPSimulationModule
@@ -22,7 +24,7 @@ class FRODO_General_CommandSet(CommandSet):
             description='List all agents',
             arguments=[],
             function=lambda: self.sim.logger.info(
-                f"Agents: {list(SIMULATED_AGENTS.keys())}\n Tasks: {list(SIMULATED_TASKS)}\n Obstacles: {list(SIMULATED_OBSTACLES)}"
+                f"Agents: {list(sim.agents.keys())}\n Tasks: {list(sim.tasks.keys())}\n Obstacles: {list(sim.obstacles.keys())}"
             )
         ))
 
@@ -89,6 +91,8 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         self.ta_containers: dict[str, AgentTAContainer] = {}
 
         env_cont = self.environment.environment_container
+
+        assert isinstance(self.logger, Logger)
 
         self.mpi = MPSimulationModule(self.agents, self.logger) # TODO: modify the mp simulation module to use containers as well
         self.asi = TASimulationModule(env_cont=env_cont, agent_ta_conts= self.ta_containers, logger = self.logger)
