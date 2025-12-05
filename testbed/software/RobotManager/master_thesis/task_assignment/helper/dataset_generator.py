@@ -2,7 +2,7 @@ import torch
 from testbed.software.RobotManager.master_thesis.task_assignment.ta_simulation import AssignmentSimulationModule, FRODO_AssignmentSimulation
 from master_thesis.task_assignment.assignment_strategies import RandomStrategy, HungarianStrategy
 from testbed.software.RobotManager.master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
-from master_thesis.task_assignment.task_objects import Task
+from master_thesis.general.general_tasks import Task
 from master_thesis.task_assignment.assignment_strategies import HungarianStrategy
 from torch.utils.data import Dataset, DataLoader as TorchDataLoader
 

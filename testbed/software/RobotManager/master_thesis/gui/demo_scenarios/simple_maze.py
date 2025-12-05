@@ -8,6 +8,8 @@ def setup_simple_maze(demo):
     Args:
         demo: ThesisDemo instance
     """
+    wall_width = 0.2
+
     # Add robot at start position
     r = demo.addRobot("frodo1")
     r.sim_agent.state.x = -2.0

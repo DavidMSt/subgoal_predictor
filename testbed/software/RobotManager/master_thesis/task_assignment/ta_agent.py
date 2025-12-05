@@ -4,7 +4,7 @@ from numpy.typing import NDArray
 
 from extensions.simulation.src import core as core
 
-from master_thesis.task_assignment.task_objects import Task
+from master_thesis.general.general_tasks import Task
 from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.containers.ta_container import AgentTAContainer
 

@@ -12,7 +12,7 @@ from logging import Logger
 
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment, SIMULATED_AGENTS, SIMULATED_TASKS
 from master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
-from master_thesis.task_assignment.task_objects import Task
+from master_thesis.general.general_tasks import Task
 from master_thesis.task_assignment.assignment_strategies import StrategyABC, HungarianStrategy, RandomStrategy, AssignmentResult
 
 class AssignmentSimulationModule():

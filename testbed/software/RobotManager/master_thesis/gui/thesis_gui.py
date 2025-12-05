@@ -24,38 +24,67 @@ from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.objects.python.buttons import Button
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
-# from extensions.simulation.src.objects.base_environment import BaseEnvironment
-from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Control_Mode, DEFAULT_BILBO_MODEL, \
-    BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES, BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS
+# from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Control_Mode, DEFAULT_BILBO_MODEL, \
+#     BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES, BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS
 from extensions.joystick.joystick_manager import JoystickManager, Joystick
 
 # thesis imports
-# from master_thesis.general.general_simulation import FRODO_general_Simulation
-# from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.universal.universal_simulation import FRODO_universal_Simulation
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.general.general_obstacles import GeneralObstacle
-from master_thesis.demos.demo_scenarios.simple_maze import setup_simple_maze
-from master_thesis.task_assignment.task_objects import Task
-from master_thesis.task_assignment.assignment_strategies import HungarianStrategy, RandomStrategy
+from master_thesis.gui.demo_scenarios.simple_maze import setup_simple_maze
+from master_thesis.general.general_tasks import Task
+# from master_thesis.task_assignment.assignment_strategies import HungarianStrategy, RandomStrategy
 
+class BabylonTask(Box):
+    """
+    Babylon task visualization that inherits from Box.
+    All tasks have fixed size 0.3 x 0.3 x 0.02 and z position 0.01.
+    Color can be set dynamically.
+    """
+    def __init__(self, object_id: str, x, y, color):
+        # fixed size
+        size = {'x': 0.3, 'y': 0.3, 'z': 0.02}
+
+        z = 0.0
+
+        # Call parent Box constructor with all kwargs (including color, x, y)
+        super().__init__(object_id, size= size, x = x, y = y, z = z, color = color)
+
+    def setColor(self, color: list):
+        """
+        Dynamically update the task color.
+
+        Args:
+            color: RGB color as [r, g, b] with values 0-1
+        """
+        self.config['color'] = color
+        self.updateConfig()
+        
 
 @dataclasses.dataclass
-class RobotContainer:
+class RobotDemoContainer:
     babylon: BabylonFrodo
     sim_agent: FRODOUniversalAgent
 
 @dataclasses.dataclass
-class ObstacleContainer:
+class ObstacleDemoContainer:
     babylon: WallFancy | None
     sim_obstacle: GeneralObstacle
 
+@dataclasses.dataclass
+class TaskDemoContainer:
+    babylon: Box | None
+    sim_task: Task
+
 
 # === BILBO INTERACTIVE EXAMPLE ========================================================================================
-class ThesisDemo:
+class ThesisGUI:
     joystick_manager: JoystickManager
     babylon_visualization: BabylonVisualization
-    robots: dict[str, RobotContainer]
+    robots: dict[str, RobotDemoContainer]
+    obstacles: dict[str, ObstacleDemoContainer]
+    tasks: dict[str, TaskDemoContainer]
 
     cli: CLI
     gui: GUI
@@ -68,7 +97,7 @@ class ThesisDemo:
 
         self.robots = {}
         self.obstacles = {}
-        self.tasks = {}  # dict[str, Task]
+        self.tasks = {} 
 
         self.command_set = BILBO_Interactive_CommandSet(self)
 
@@ -117,7 +146,7 @@ class ThesisDemo:
         time.sleep(2)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addRobot(self, robot_id: str) -> RobotContainer | None:
+    def addRobot(self, robot_id: str) -> RobotDemoContainer | None:
 
         # Check if the robot already exists
         if robot_id in self.robots:
@@ -133,7 +162,7 @@ class ThesisDemo:
         assert robot_sim is not None
 
         # store both
-        self.robots[robot_id] = RobotContainer(
+        self.robots[robot_id] = RobotDemoContainer(
             babylon=robot_babylon,
             sim_agent=robot_sim)
         self.logger.info(f'Robot with ID {robot_id} added')
@@ -146,7 +175,7 @@ class ThesisDemo:
                 x: float = 0.0,
                 y: float = 0.0,
                 length: float = 1.0,
-                width: float = 0.3) -> ObstacleContainer | None:
+                width: float = 0.3) -> ObstacleDemoContainer | None:
 
         # Check if it already exists
         if obstacle_id in self.obstacles:
@@ -154,7 +183,6 @@ class ThesisDemo:
             return None
 
         # babylon visualization
-        # (Use WallFancy to match your environment)
         wall_visual = WallFancy(obstacle_id, length=length, include_end_caps=True)
         wall_visual.setPosition(x=x, y=y)
         self.babylon_visualization.addObject(wall_visual)
@@ -173,7 +201,7 @@ class ThesisDemo:
         assert sim_obstacle is not None
 
         # Store both
-        container = ObstacleContainer(
+        container = ObstacleDemoContainer(
             babylon=wall_visual,
             sim_obstacle=sim_obstacle
         )
@@ -185,20 +213,21 @@ class ThesisDemo:
 
     # ------------------------------------------------------------------------------------------------------------------
     def addTask(self, task_id: str,
-                x: float = 0.0,
-                y: float = 0.0,
-                orientation: float = 0.0,
-                color: list = None) -> Task | None:
-        """
-        Add a task/goal location to the environment.
-        Visualized as a colored tile/box.
-        """
+                x: float = 0.0, 
+                y: float = 0.0, 
+                orientation: float = 0.0, 
+                color: list| None = None) -> Task | None:
+        
         # Check if it already exists
         if task_id in self.tasks:
             self.logger.warning(f'Task with ID {task_id} already exists')
             return None
+        
+        # Task Babylon
+        task_visual = BabylonTask(object_id=task_id, color=[220, 220, 220], x=x, y=y)
+        self.babylon_visualization.addObject(task_visual)
 
-        # Create Task object
+        # Task Simulation
         task = Task(
             id=task_id,
             x=x,
@@ -206,20 +235,6 @@ class ThesisDemo:
             psi=orientation,
             is_assignable=True
         )
-
-        # Create babylon visualization as a colored tile
-        if color is None:
-            color = [0, 1, 0]  # Default green for goal/task
-
-        task_visual = Box(
-            object_id=task_id,
-            color=color,
-            size={'x': 0.3, 'y': 0.3, 'z': 0.02},  # Very flat tile
-            x=x,
-            y=y,
-            z=0.01  # Just above ground
-        )
-        self.babylon_visualization.addObject(task_visual)
 
         # Add task to simulation
         self.sim.add_task(task)
@@ -229,6 +244,18 @@ class ThesisDemo:
         self.logger.info(f'Task with ID {task_id} added at ({x}, {y})')
 
         return task
+    
+    # ------------------------------------------------------------------------------------------------------------------
+    def removeRobot(self, robot: str | RobotDemoContainer):
+        ...
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def removeObstacle(self, obstacle: str | RobotDemoContainer):
+        ...
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def removeTask(self, task: str | RobotDemoContainer):
+        ...
 
     # ------------------------------------------------------------------------------------------------------------------
     def spawnAgentsAndTasks(self, n: int = 3):
@@ -251,7 +278,7 @@ class ThesisDemo:
             self.babylon_visualization.addObject(robot_babylon)
 
             # Store in robots dict
-            self.robots[agent_id] = RobotContainer(babylon=robot_babylon, sim_agent=agent)
+            self.robots[agent_id] = RobotDemoContainer(babylon=robot_babylon, sim_agent=agent)
             self.logger.info(f'Agent {agent_id} spawned at ({agent.state.x:.2f}, {agent.state.y:.2f})')
 
         # Spawn tasks using simulation's spawn_tasks method
@@ -264,13 +291,11 @@ class ThesisDemo:
             color = colors[i % len(colors)]
 
             # Create babylon visualization
-            task_visual = Box(
+            task_visual = BabylonTask(
                 object_id=task_id,
                 color=color,
-                size={'x': 0.3, 'y': 0.3, 'z': 0.02},
                 x=task.container.x,
-                y=task.container.y,
-                z=0.01
+                y=task.container.y
             )
             self.babylon_visualization.addObject(task_visual)
 
@@ -295,11 +320,7 @@ class ThesisDemo:
             pass
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeRobot(self, robot: str | RobotContainer):
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def getRobotByID(self, robot_id: str) -> RobotContainer | None:
+    def getRobotByID(self, robot_id: str) -> RobotDemoContainer | None:
         if robot_id in self.robots:
             return self.robots[robot_id]
         else:
@@ -475,7 +496,7 @@ class ThesisDemo:
 # === BILBO INTERACTIVE CLI ============================================================================================
 class BILBO_Interactive_CommandSet(CommandSet):
 
-    def __init__(self, example: ThesisDemo):
+    def __init__(self, example: ThesisGUI):
         super().__init__('example_david')
         self.example = example
 
@@ -508,7 +529,7 @@ class BILBO_Interactive_CommandSet(CommandSet):
 
 
 def main():
-    example = ThesisDemo()
+    example = ThesisGUI()
 
     example.init()
     example.start()

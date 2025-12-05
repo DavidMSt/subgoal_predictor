@@ -20,7 +20,7 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
 from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.general.general_environment import FrodoGeneralEnvironment
-from master_thesis.task_assignment.task_objects import Task
+from master_thesis.general.general_tasks import Task
 
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
@@ -253,6 +253,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
                 agents.append(agent)
 
         return agents
+    
+    def new_task(self):
+        ...
 
     # Task management methods
     def add_task(self, task: Task) -> Task:

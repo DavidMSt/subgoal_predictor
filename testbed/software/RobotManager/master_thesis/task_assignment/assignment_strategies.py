@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 import extensions.simulation.src.core as core
 
 from master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
-from master_thesis.task_assignment.task_objects import Task
+from master_thesis.general.general_tasks import Task
 from master_thesis.containers.agent_containers import FRODOAgentContainer
 from master_thesis.containers.task_container import TaskContainer
 
