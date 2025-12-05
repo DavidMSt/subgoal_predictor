@@ -63,17 +63,17 @@ class BabylonTask(Box):
         
 
 @dataclasses.dataclass
-class RobotDemoContainer:
+class RobotGUIContainer:
     babylon: BabylonFrodo
     sim_agent: FRODOUniversalAgent
 
 @dataclasses.dataclass
-class ObstacleDemoContainer:
+class ObstacleGUIContainer:
     babylon: WallFancy | None
     sim_obstacle: GeneralObstacle
 
 @dataclasses.dataclass
-class TaskDemoContainer:
+class TaskGUIContainer:
     babylon: Box | None
     sim_task: GeneralTask
 
@@ -82,9 +82,9 @@ class TaskDemoContainer:
 class ThesisGUI:
     joystick_manager: JoystickManager
     babylon_visualization: BabylonVisualization
-    robots: dict[str, RobotDemoContainer]
-    obstacles: dict[str, ObstacleDemoContainer]
-    tasks: dict[str, TaskDemoContainer]
+    robots: dict[str, RobotGUIContainer]
+    obstacles: dict[str, ObstacleGUIContainer]
+    tasks: dict[str, TaskGUIContainer]
 
     cli: CLI
     gui: GUI
@@ -146,7 +146,7 @@ class ThesisGUI:
         time.sleep(2)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addRobot(self, robot_id: str) -> RobotDemoContainer | None:
+    def newRobot(self, robot_id: str) -> RobotGUIContainer | None:
 
         # Check if the robot already exists
         if robot_id in self.robots:
@@ -162,7 +162,7 @@ class ThesisGUI:
         assert robot_sim is not None
 
         # store both
-        self.robots[robot_id] = RobotDemoContainer(
+        self.robots[robot_id] = RobotGUIContainer(
             babylon=robot_babylon,
             sim_agent=robot_sim)
         self.logger.info(f'Robot with ID {robot_id} added')
@@ -171,11 +171,11 @@ class ThesisGUI:
     
     # ------------------------------------------------------------------------------------------------------------------
     
-    def addObstacle(self, obstacle_id: str,
+    def newObstacle(self, obstacle_id: str,
                 x: float = 0.0,
                 y: float = 0.0,
                 length: float = 1.0,
-                width: float = 0.3) -> ObstacleDemoContainer | None:
+                width: float = 0.3) -> ObstacleGUIContainer | None:
 
         # Check if it already exists
         if obstacle_id in self.obstacles:
@@ -183,9 +183,9 @@ class ThesisGUI:
             return None
 
         # babylon visualization
-        wall_visual = WallFancy(obstacle_id, length=length, include_end_caps=True)
-        wall_visual.setPosition(x=x, y=y)
-        self.babylon_visualization.addObject(wall_visual)
+        wall_babylon = WallFancy(obstacle_id, length=length, include_end_caps=True)
+        wall_babylon.setPosition(x=x, y=y)
+        self.babylon_visualization.addObject(wall_babylon)
 
         # simulation
         sim_obstacle = self.sim.new_obstacle(
@@ -201,8 +201,8 @@ class ThesisGUI:
         assert sim_obstacle is not None
 
         # Store both
-        container = ObstacleDemoContainer(
-            babylon=wall_visual,
+        container = ObstacleGUIContainer(
+            babylon=wall_babylon,
             sim_obstacle=sim_obstacle
         )
 
@@ -212,49 +212,50 @@ class ThesisGUI:
         return container
 
     # ------------------------------------------------------------------------------------------------------------------
-    def addTask(self, task_id: str,
+    def newTask(self, task_id: str,
                 x: float = 0.0, 
                 y: float = 0.0, 
-                orientation: float = 0.0, 
-                color: list| None = None) -> GeneralTask | None:
+                psi: float = 0.0, 
+                color: list| None = None) -> TaskGUIContainer | None:
         
         # Check if it already exists
         if task_id in self.tasks:
             self.logger.warning(f'Task with ID {task_id} already exists')
             return None
         
-        # Task Babylon
-        task_visual = BabylonTask(object_id=task_id, color=[220, 220, 220], x=x, y=y)
-        self.babylon_visualization.addObject(task_visual)
+        # Babylon Visulization
+        task_babylon = BabylonTask(object_id=task_id, color=[220, 220, 220], x=x, y=y)
+        self.babylon_visualization.addObject(task_babylon)
 
-        # Task Simulation
-        task = GeneralTask(
-            id=task_id,
-            x=x,
-            y=y,
-            psi=orientation,
-            is_assignable=True
+        # Simulation
+        sim_task = self.sim.new_task(task_id=task_id, 
+                        x = x,
+                        y = y, 
+                        psi = psi)
+
+        assert sim_task is not None
+
+        container = TaskGUIContainer(
+            babylon= task_babylon,
+            sim_task= sim_task
         )
 
-        # Add task to simulation
-        self.sim.add_task(task)
-
         # Store task
-        self.tasks[task_id] = task
+        self.tasks[task_id] = container
         self.logger.info(f'Task with ID {task_id} added at ({x}, {y})')
 
-        return task
+        return container
     
     # ------------------------------------------------------------------------------------------------------------------
-    def removeRobot(self, robot: str | RobotDemoContainer):
+    def removeRobot(self, robot: str | RobotGUIContainer):
         ...
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeObstacle(self, obstacle: str | RobotDemoContainer):
+    def removeObstacle(self, obstacle: str | RobotGUIContainer):
         ...
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeTask(self, task: str | RobotDemoContainer):
+    def removeTask(self, task: str | RobotGUIContainer):
         ...
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -278,7 +279,7 @@ class ThesisGUI:
             self.babylon_visualization.addObject(robot_babylon)
 
             # Store in robots dict
-            self.robots[agent_id] = RobotDemoContainer(babylon=robot_babylon, sim_agent=agent)
+            self.robots[agent_id] = RobotGUIContainer(babylon=robot_babylon, sim_agent=agent)
             self.logger.info(f'Agent {agent_id} spawned at ({agent.state.x:.2f}, {agent.state.y:.2f})')
 
         # Spawn tasks using simulation's spawn_tasks method
@@ -320,7 +321,7 @@ class ThesisGUI:
             pass
 
     # ------------------------------------------------------------------------------------------------------------------
-    def getRobotByID(self, robot_id: str) -> RobotDemoContainer | None:
+    def getRobotByID(self, robot_id: str) -> RobotGUIContainer | None:
         if robot_id in self.robots:
             return self.robots[robot_id]
         else:
@@ -419,7 +420,7 @@ class ThesisGUI:
         page1.addWidget(reset_button, height=2, width=4)
 
         bilbo1_button = Button(text="Add BILBO 1", callback=Callback(
-            function=self.addRobot,
+            function=self.newRobot,
             inputs={
                 'robot_id': 'bilbo1'
             },
@@ -437,7 +438,7 @@ class ThesisGUI:
 
         # Add Task Button
         task_button = Button(text="Add Task (0, 0)", callback=Callback(
-            function=self.addTask,
+            function=self.newTask,
             inputs={
                 'task_id': 'task1',
                 'x': 0.0,
@@ -500,7 +501,7 @@ class BILBO_Interactive_CommandSet(CommandSet):
         self.example = example
 
         add_robot_command = Command(
-            function=self.example.addRobot,
+            function=self.example.newRobot,
             name='add_robot',
             description='Add a new robot to the simulation',
             allow_positionals=True,
@@ -510,7 +511,7 @@ class BILBO_Interactive_CommandSet(CommandSet):
         )
 
         add_obstacle_command = Command(
-            function=self.example.addObstacle,
+            function=self.example.newObstacle,
             name='add_obstacle',
             description='Add an obstacle (visual + simulation)',
             allow_positionals=True,

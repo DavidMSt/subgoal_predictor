@@ -251,8 +251,26 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         return agents
     
-    def new_task(self):
-        ...
+    def new_task(
+            self,
+            task_id,
+            x: float,
+            y: float, 
+            psi: float 
+                 ) -> GeneralTask | None:
+        if task_id in SIMULATED_TASKS:
+            self.logger.warning(f"Task {task_id} already exists. Cannot add it again.")
+            return None
+
+        task = GeneralTask(
+            id = task_id, 
+            x = x, 
+            y = y, 
+            psi = psi
+        )
+        self.add_task(task)
+        return task
+
 
     # Task management methods
     def add_task(self, task: GeneralTask) -> GeneralTask:
@@ -264,7 +282,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
         global SIMULATED_TASKS
 
         # Mark task in occupancy_grid_full (small footprint for task marker)
-        task_size = 0.3  # 30cm marker size
+        task_size = 0.3  # 30cm marker size to block grid cells in environment
         self.environment.mark_object_in_grid(
             x=task.container.x, y=task.container.y, psi=task.container.psi,
             length=task_size, width=task_size,
