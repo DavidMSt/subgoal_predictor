@@ -33,10 +33,10 @@ class DistanceCalculator:
 
     def _euclidean_distance_2d(self, agent_container, task_container) -> float:
         # extract agent (dynamic) position
-        ax, ay = agent_container.state.x, agent_container.state.y
+        ax, ay = agent_container.x, agent_container.y
 
         # extract task (static) position
-        tx, ty = task_container.config.x, task_container.config.y
+        tx, ty = task_container.x, task_container.y
 
         return float(np.hypot(ax - tx, ay - ty))
 
@@ -92,7 +92,7 @@ class TAAgentModule():
         if self.task_assignment_container.current_task_id is None:
             return None
         task = tasks_dict[self.task_assignment_container.current_task_id]
-        return tuple(task.position)
+        return (task.container.x, task.container.y)
 
     def mark_task_complete(self):
         """Mark current task as complete, move to next"""
@@ -130,7 +130,7 @@ class FRODO_AssignmentAgent(FRODOGeneralAgent):
         print(self.state)
 
         # Create task container
-        from testbed.software.RobotManager.master_thesis.general.containers.ta_container import AgentTaskConfig, AgentTaskState
+        from master_thesis.containers.ta_container import AgentTaskConfig, AgentTaskState
         task_container = AgentTAContainer(
             config=AgentTaskConfig(),
             state=AgentTaskState()
@@ -139,6 +139,7 @@ class FRODO_AssignmentAgent(FRODOGeneralAgent):
         # add assignment module
         self.asi = TAAgentModule(
             agent_id=agent_id,
+            agent_container=self.container,
             ta_container=task_container,
             logger=self.logger,
             get_state_fun=self._get_state
