@@ -15,7 +15,7 @@ from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_
 from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.motion_planning.helper.collisions_fcl import WorldCollisionChecker
 from master_thesis.containers.environment_containers import EnvironmentConfig, EnvironmentContainer
-from master_thesis.general.general_tasks import Task
+from master_thesis.general.general_tasks import GeneralTask
 
 # ======================================================================================================================
 

@@ -20,13 +20,13 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
 from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.general.general_environment import FrodoGeneralEnvironment
-from master_thesis.general.general_tasks import Task
+from master_thesis.general.general_tasks import GeneralTask
 
 # Global registries
 SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}
 SIMULATED_STATICS: dict[str, FRODO_Static] = {}
 SIMULATED_OBSTACLES: dict[str, GeneralObstacle] = {}
-SIMULATED_TASKS: dict[str, Task] = {}
+SIMULATED_TASKS: dict[str, GeneralTask] = {}
 
 # ======================================================================================================================
 USE_AGENT_DEFINITIONS = False
@@ -258,7 +258,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
         ...
 
     # Task management methods
-    def add_task(self, task: Task) -> Task:
+    def add_task(self, task: GeneralTask) -> GeneralTask:
         """Add an existing Task instance to the simulation"""
         # Check if entity creation is frozen
         if self.environment.environment_container.entities_creation_frozen:
@@ -285,7 +285,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
         self.logger.info(f'Task with ID {task.object_id} added')
         return task
 
-    def spawn_tasks(self, n: int, configurations: list[tuple[float, float, float]] | None = None) -> list[Task]:
+    def spawn_tasks(self, n: int, configurations: list[tuple[float, float, float]] | None = None) -> list[GeneralTask]:
         """
         Spawn multiple tasks in collision-free positions using hybrid approach (grid + FCL).
         If configurations is None, tasks are spawned uniformly at random inside env limits.
@@ -334,7 +334,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
         for i, config in enumerate(configurations):
             task_id = f"task_{len(SIMULATED_TASKS)}"
             x, y, psi = config
-            task = Task(id=task_id, x=x, y=y, psi=psi)
+            task = GeneralTask(id=task_id, x=x, y=y, psi=psi)
             self.add_task(task)
             tasks.append(task)
 

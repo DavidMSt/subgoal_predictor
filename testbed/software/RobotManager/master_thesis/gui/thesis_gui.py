@@ -33,7 +33,7 @@ from master_thesis.universal.universal_simulation import FRODO_universal_Simulat
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.gui.demo_scenarios.simple_maze import setup_simple_maze
-from master_thesis.general.general_tasks import Task
+from master_thesis.general.general_tasks import GeneralTask
 # from master_thesis.task_assignment.assignment_strategies import HungarianStrategy, RandomStrategy
 
 class BabylonTask(Box):
@@ -75,7 +75,7 @@ class ObstacleDemoContainer:
 @dataclasses.dataclass
 class TaskDemoContainer:
     babylon: Box | None
-    sim_task: Task
+    sim_task: GeneralTask
 
 
 # === BILBO INTERACTIVE EXAMPLE ========================================================================================
@@ -216,7 +216,7 @@ class ThesisGUI:
                 x: float = 0.0, 
                 y: float = 0.0, 
                 orientation: float = 0.0, 
-                color: list| None = None) -> Task | None:
+                color: list| None = None) -> GeneralTask | None:
         
         # Check if it already exists
         if task_id in self.tasks:
@@ -228,7 +228,7 @@ class ThesisGUI:
         self.babylon_visualization.addObject(task_visual)
 
         # Task Simulation
-        task = Task(
+        task = GeneralTask(
             id=task_id,
             x=x,
             y=y,

@@ -2,7 +2,7 @@ import torch
 from testbed.software.RobotManager.master_thesis.task_assignment.ta_simulation import AssignmentSimulationModule, FRODO_AssignmentSimulation
 from master_thesis.task_assignment.assignment_strategies import RandomStrategy, HungarianStrategy
 from testbed.software.RobotManager.master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
-from master_thesis.general.general_tasks import Task
+from master_thesis.general.general_tasks import GeneralTask
 from master_thesis.task_assignment.assignment_strategies import HungarianStrategy
 from torch.utils.data import Dataset, DataLoader as TorchDataLoader
 
@@ -25,7 +25,7 @@ class DataSetGenerator:
     def _features_from_scene(
         self,
         agents: tuple["FRODO_AssignmentAgent", ...],
-        tasks: tuple["Task", ...],
+        tasks: tuple["GeneralTask", ...],
         *,
         normalize: bool,
         x_lim: tuple[float, float],

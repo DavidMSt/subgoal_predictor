@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 import extensions.simulation.src.core as core
 
 from master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
-from master_thesis.general.general_tasks import Task
+from master_thesis.general.general_tasks import GeneralTask
 from master_thesis.containers.agent_containers import FRODOAgentContainer
 from master_thesis.containers.task_container import TaskContainer
 
@@ -39,7 +39,7 @@ class StrategyABC(ABC):
         Enables to be flexible concerning the output assignment result without making the Strategies have a state
         """
         agents: tuple[FRODO_AssignmentAgent, ...]
-        tasks: tuple[Task, ...]
+        tasks: tuple[GeneralTask, ...]
         scores: np.ndarray | None = None
         matches: list[tuple[int,int]]| None = None
 
@@ -65,7 +65,7 @@ class StrategyABC(ABC):
         """Run per-agent step (decentralized)."""
         ...
 
-    def run(self, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["Task", ...], logger: Logger | None = None, mode = None) -> Any:
+    def run(self, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None, mode = None) -> Any:
         mode = (mode or getattr(self, "default_mode"))
 
         ctx = self.AssignmentContext(agents, tasks)

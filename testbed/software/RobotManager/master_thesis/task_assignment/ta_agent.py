@@ -4,7 +4,7 @@ from numpy.typing import NDArray
 
 from extensions.simulation.src import core as core
 
-from master_thesis.general.general_tasks import Task
+from master_thesis.general.general_tasks import GeneralTask
 from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.containers.ta_container import AgentTAContainer
 
@@ -60,7 +60,7 @@ class TAAgentModule():
         # TODO: Use metric, e.g. dubins distance which accounts for turning radius
         self.distance_fun = DistanceCalculator(self.task_assignment_container.distance_metric).measure  # set the cost function
     
-    def add_tasks(self, tasks: tuple[Task,...]) -> None:
+    def add_tasks(self, tasks: tuple[GeneralTask,...]) -> None:
         # Add only tasks with unique IDs to the available_tasks list
         existing_ids = set(self.task_assignment_container.available_tasks)
         new_task_ids = [task.object_id for task in tasks if task.object_id not in existing_ids]
@@ -75,7 +75,7 @@ class TAAgentModule():
     def clear_assigned_tasks(self):
         self.task_assignment_container.assigned_tasks.clear()
 
-    def compute_task_cost_vector(self, tasks: tuple[Task, ...]) -> list[np.floating]:
+    def compute_task_cost_vector(self, tasks: tuple[GeneralTask, ...]) -> list[np.floating]:
         """Compute cost vector for a list of tasks based on distance from agent."""
         cost_vector = [self.distance_fun(self.agent_container, task.container) for task in tasks]
         return cost_vector
