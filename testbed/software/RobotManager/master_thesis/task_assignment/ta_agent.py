@@ -70,7 +70,8 @@ class TAAgentModule():
             self.logger.warning(f'Detected duplicated tasks with IDs: {duplicated_ids}, keeping only one instance')
         
         self.ta_container.available_tasks.extend(new_task_ids)
-        if 
+        if self.ta_container.mode == "decentral":
+            raise NotImplementedError
 
     def clear_tasks(self):
         self.ta_container.available_tasks.clear()
