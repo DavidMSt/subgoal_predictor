@@ -61,16 +61,22 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_motion_planning)
 
     def _action_task_assignment(self):
-        
-         # is decentralized task assignment requested 
-        if self.tai.assignment_pending:
-            self.tai.assignment_pending = False # set flag to false before starting the computation
-            raise NotImplementedError
-            
-            
+        if self.tai.ta_container.state.mode != "decentral":
+            return  # Centralized mode - skip TA
+        if self.tai.ta_container.state.assigned_task is not None:
+            return  # Already have task
+        if not self.tai.assignment_pending:
+            return  # No assignment requested
+        # ... do assignment
 
     def _action_motion_planning(self):
-        print('here')
+        if self.tai.ta_container.state.assigned_task is None:
+            return  # No task to plan for
+        if self.runner.active != "idle":
+            return  # Already executing
+        # ... do planning
+
+
 
 def main():
     import time
