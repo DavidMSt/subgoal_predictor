@@ -8,11 +8,12 @@ class AgentTAState:
     
     # Available/known tasks (for decentralized decision making)
     available_tasks: list[TaskContainer] = field(default_factory=list)
-    decentralized_planning: bool = False
+    assignment_pending: bool = False
     
     # Task assignment
     assigned_task: TaskContainer| None = None
     strategy: str = "HUNGARIAN" # TODO: Import the available strategies here? 
+    
 
     # Execution state - subgoal 
     #prediction
@@ -26,16 +27,9 @@ class AgentTAState:
 @dataclass(frozen=True, slots=True)
 class AgentTAConfig:
     """Immutable configuration for agent task management"""
-    # Decentralized assignment policy (if None, use simple greedy)
-    # Examples: 'greedy_nearest', 'auction', 'gnn', etc.
-    decentralized_policy: str | None = None
 
     # Distance computation parameters
-    distance_metric: str = 'euclidean'  # 'euclidean', 'manhattan', etc.
-
-    # Task selection parameters
-    max_task_distance: float = 10.0
-    task_preference_weight: float = 1.0
+    distance_metric: str = 'euclidean'  # 'euclidean', 'manhattan', 'dubins', etc.
 
 @dataclass(slots=True)
 class AgentTAContainer(OverarchingContainer):

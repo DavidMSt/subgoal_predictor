@@ -68,7 +68,9 @@ class TAAgentModule():
         duplicated_ids = [task.object_id for task in tasks if task.object_id in existing_ids]
         if duplicated_ids:
             self.logger.warning(f'Detected duplicated tasks with IDs: {duplicated_ids}, keeping only one instance')
+        
         self.ta_container.available_tasks.extend(new_task_ids)
+        if 
 
     def clear_tasks(self):
         self.ta_container.available_tasks.clear()
@@ -108,6 +110,14 @@ class TAAgentModule():
                 self.ta_container.assigned_tasks.pop(0)
                 self.logger.info(f"Agent {self.agent_id}: Starting next task {self.ta_container.current_task_id}")
 
+    @property
+    def assignment_pending(self) -> bool:
+        return self.ta_container.assignment_pending
+    
+    @assignment_pending.setter
+    def assignment_pending(self, value: bool = False) -> None:
+        self.ta_container.assignment_pending = value
+        
 
 class FRODO_AssignmentAgent(FRODOGeneralAgent):
 

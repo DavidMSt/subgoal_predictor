@@ -7,7 +7,7 @@ from master_thesis.containers.task_container import TaskContainer, Task_Config
 # ----------------------------- Task Classes -----------------------------
 
 class GeneralTask(Object):
-    def __init__(self, id, x, y, psi, *, is_assignable: bool = True):
+    def __init__(self, id, x: float, y: float, psi: float, *, is_assignable: bool = True):
         self.space = core.spaces.Space2D()  # quick fix TODO: make clean once Object handles this correctly
         super().__init__(object_id=id, space=self.space)
 
@@ -15,8 +15,11 @@ class GeneralTask(Object):
         self.container = TaskContainer(object_id=id, config=task_config)
 
     def output(self, env):
-        """Output method required by environment scheduler. Tasks have no output behavior."""
+        """Output method required by environment scheduler. Tasks have no output behavior, therefore dummy ."""
         pass
+
+    def _poll_assignment_status_action(self): # TODO: poll here the assignment status to change the color? 
+        ...
 
 if __name__ == "__main__":
     t1 = GeneralTask(id='task_test', x=10.3, y=2.3, psi=np.pi)

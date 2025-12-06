@@ -116,7 +116,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         assert isinstance(agent, FRODOUniversalAgent)
         
         # keep references to the module specific containers
-        self.ta_containers[agent_id] = agent.asi.ta_container
+        self.ta_containers[agent_id] = agent.tai.ta_container
 
 
         return agent

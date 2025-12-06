@@ -15,7 +15,7 @@ from master_thesis.general.general_tasks import GeneralTask
 # from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.containers.environment_containers import EnvironmentContainer
-from master_thesis.task_assignment.assignment_strategies import StrategyABC, HungarianStrategy, RandomStrategy, AssignmentResult
+from master_thesis.task_assignment.ta_strategies import StrategyABC, HungarianStrategy, RandomStrategy, AssignmentResult
 from master_thesis.containers.ta_container import AgentTAContainer
 from master_thesis.containers.environment_containers import EnvironmentContainer
 
