@@ -7,6 +7,7 @@ from extensions.simulation.src import core as core
 from master_thesis.general.general_tasks import GeneralTask
 from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.containers.ta_container import AgentTAContainer
+from master_thesis.containers.ta_container import AgentTAConfig, AgentTAState
 
 class DistanceCalculator:
     """
@@ -50,7 +51,7 @@ class TAAgentModule():
     agent_id: str   # Unique identifier for the agent
     ta_container: AgentTAContainer
 
-    def __init__(self, agent_id: str, agent_container, ta_container: AgentTAContainer, logger, get_state_fun: Callable[[], core.spaces.State]):
+    def __init__(self, agent_id: str, agent_container, ta_container: AgentTAContainer, logger):
 
         self.agent_id = agent_id
         self.ta_container = ta_container
@@ -108,40 +109,36 @@ class TAAgentModule():
                 self.logger.info(f"Agent {self.agent_id}: Starting next task {self.ta_container.current_task_id}")
 
 
-# class FRODO_AssignmentAgent(FRODOGeneralAgent):
+class FRODO_AssignmentAgent(FRODOGeneralAgent):
 
-#     def __init__(
-#         self,
-#         agent_id: str,
-#         start_config: tuple[float, float, float],
-#         agent_config=None,
-#         runner=None,
-#         Ts=None,
-#         **kwargs
-#     ):
-#         super().__init__(
-#             agent_id=agent_id,
-#             start_config=start_config,
-#             agent_config=agent_config,
-#             Ts=Ts,
-#         )
+    def __init__(
+        self,
+        agent_id: str,
+        start_config: tuple[float, float, float],
+        agent_config=None,
+        runner=None,
+        Ts=0.1,
+        **kwargs
+    ):
+        super().__init__(
+            agent_id=agent_id,
+            start_config=start_config,
+            Ts=Ts,
+        )
 
-#         self.runner = runner
+        self.runner = runner
 
-#         print(self.state)
+        print(self.state)
 
-#         # Create task container
-#         from master_thesis.containers.ta_container import AgentTAConfig, AgentTAState
-#         task_container = AgentTAContainer(
-#             config=AgentTAConfig(),
-#             state=AgentTAState()
-#         )
+        task_container = AgentTAContainer(
+            config=AgentTAConfig(),
+            state=AgentTAState()
+        )
 
-#         # add assignment module
-#         self.asi = TAAgentModule(
-#             agent_id=agent_id,
-#             agent_container=self.container,
-#             ta_container=task_container,
-#             logger=self.logger,
-#             get_state_fun=self._get_state
-#         )
+        # add assignment module
+        self.asi = TAAgentModule(
+            agent_id=agent_id,
+            agent_container=self.container,
+            ta_container=task_container,
+            logger=self.logger,
+        )

@@ -267,11 +267,14 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
 
 
     def setup_scheduling(self):
-        core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COMMUNICATION,
-                    object=self,
-                    function=self.action_frodo_communication,
-                    priority=2)
+        # core.scheduling.Action(action_id=BASE_ENVIRONMENT_ACTIONS.COMMUNICATION,
+        #             object=self,
+        #             function=self.action_frodo_communication,
+        #             priority=2)
+        
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.COMMUNICATION].addAction(self.action_frodo_communication)
 
+        # TODO: should I attach these functions rather to frodo or rather to environment? 
         # Attach input function into scheduling (mirroring VisionAgent behavior)
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._input_function)
         # Attach the update function for the agent containers

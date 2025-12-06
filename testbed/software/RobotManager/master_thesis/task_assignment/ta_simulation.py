@@ -4,14 +4,13 @@
 import time
 from typing import Type, Dict, Protocol, Callable, Sequence, Literal
 
-
 import numpy as np
 
 
 from logging import Logger
 
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment#, SIMULATED_AGENTS, SIMULATED_TASKS
-from master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
+# from master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
 from master_thesis.general.general_tasks import GeneralTask
 # from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
