@@ -9,6 +9,7 @@ from master_thesis.task_assignment.ta_simulation import TASimulationModule
 
 from master_thesis.containers.mp_container import AgentMPContainer
 from master_thesis.containers.ta_container import AgentTAContainer
+from master_thesis.containers.exe_container import ExecutionContainer
 
 
 class FRODO_General_CommandSet(CommandSet):
@@ -89,6 +90,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         
         self.mp_containers: dict[str, AgentMPContainer] = {}
         self.ta_containers: dict[str, AgentTAContainer] = {}
+        self.exe_containers: dict[str, ExecutionContainer] = {}
 
         env_cont = self.environment.environment_container
 
@@ -100,17 +102,56 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
         self.cli = FRODO_General_CommandSet(self)
 
-    def new_agent(self, agent_id, start_config=(0.0, 0.0, 0.0), **kwargs):
-        agent = FRODOUniversalAgent(
-            env_config=self.environment.environment_container,
-            agent_id=agent_id,
-            Ts=self.Ts,
-            start_config=start_config,
-            **kwargs
-        )
-        self.add_agent(agent)
+    def new_agent(self, # type: ignore[override] 
+                  agent_id: str,
+                  agent_class: type[FRODOUniversalAgent] = FRODOUniversalAgent,
+                  start_config: tuple[float, float, float]  = (0.0, 0.0, 0.0),
+                  color:tuple[float, float, float] = (1.0,1.0,1.0),
+                  Ts = 0.1) -> FRODOUniversalAgent | None:
+
+        # use parent class, just with universal agent per default
+        agent = super().new_agent(agent_id=agent_id, agent_class=agent_class, start_config= start_config, color= color, Ts = Ts)
+        
+        # keep linter quiet
+        assert isinstance(agent, FRODOUniversalAgent)
+        
+        # keep references to the module specific containers
         self.ta_containers[agent_id] = agent.asi.ta_container
+
+
         return agent
 
 if __name__ == "__main__":
-    ...
+
+    # Simulation Init
+    env_size = 10
+    sim = FRODO_general_Simulation(
+        Ts=0.1,
+        limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
+    )
+    sim.init()
+
+    # === Initial agent poses ===
+    start_ag1 = (0.0, 0.0, 0.0)
+
+    # === Add agents using the new API ===
+    agent_1 = sim.new_agent(
+        agent_id="vfrodo1",
+        start_config = start_ag1,
+    )
+
+    # to keep linter quiet
+    assert isinstance(agent_1, FRODOUniversalAgent)
+
+    # === Add obstacle using new obstacle interface ===
+    sim.new_wall(
+        obstacle_id="wall1",
+        x=5.0,
+        y=0.0,
+        psi=0.0,
+        length=4.0,
+        width=0.3,
+    )
+
+
+

@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import numpy as np
 
 from master_thesis.containers.base_container import OverarchingContainer
@@ -6,8 +6,11 @@ from master_thesis.containers.base_container import OverarchingContainer
 
 @dataclass(frozen = False, slots=True)
 class AgentMotionPlanningState:
+    # flag for action
+    start_plannign: bool = False
+    
+    # did motion planning work? 
     success: bool = False
-    message: str | None = None
 
     # raw planner output
     raw_states: list[np.ndarray] | None = None
@@ -15,7 +18,7 @@ class AgentMotionPlanningState:
     raw_durations: list[float] | None = None
     raw_delta_t: float | None = None
 
-    # optional post-processing
+    # optional post-processing, e.g. spline creation
     smoothed_states: list[np.ndarray] | None = None
     smoothed_inputs: list[np.ndarray] | None = None
     smoothed_delta_t: float | None = None
@@ -52,5 +55,5 @@ class AgentMotionPlanningConfig:
 
 @dataclass(slots = True)
 class AgentMPContainer(OverarchingContainer):
-    state: AgentMotionPlanningState
-    config: AgentMotionPlanningConfig
+    state: AgentMotionPlanningState = field(default_factory=AgentMotionPlanningState)
+    config: AgentMotionPlanningConfig | None = None

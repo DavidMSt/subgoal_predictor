@@ -39,5 +39,5 @@ class AgentTAConfig:
 
 @dataclass(slots=True)
 class AgentTAContainer(OverarchingContainer):
-    config: AgentTAConfig
-    state: AgentTAState
+    config: AgentTAConfig = field(default_factory=AgentTAConfig)
+    state: AgentTAState = field(default_factory=AgentTAState)

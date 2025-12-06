@@ -24,7 +24,7 @@ class EnvironmentConfig:
 
 @dataclass(frozen=False, slots = False)
 class EnvironmentContainer(OverarchingContainer):
-    config: EnvironmentConfig
+    config: EnvironmentConfig  # No default - must be provided (requires limits and Ts)
     state: EnvironmentState = field(default_factory=EnvironmentState)
 
     def add_obstacles(self, obstacle):
