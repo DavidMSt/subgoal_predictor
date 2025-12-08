@@ -23,4 +23,4 @@ This is an active development repository containing all modules implemented as p
 1.	Install Python dependencies (pip install -r requirements.txt).
 2.	Install OMPL manually if motion-planning components are used.
 3.	For visualization, install frontend assets (npm install in the visualization directory).
-4.	To launch the GUI, run: python3 master_thesis/gui/thesis_gui.py
+4.	To launch the GUI, run: ``` python3 master_thesis/gui/thesis_gui.py ```
