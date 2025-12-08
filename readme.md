@@ -6,10 +6,10 @@ The work extends the existing BilboLab robotics framework with learning-based mo
 # Contribution Overview
 
 This fork adds the components required for learning-enhanced control, including:
-	•	GNN-based decentralized task assignment
-	•	kinodynamic motion-planning modules
-	•	execution interfaces for integrating learned sub-goals
-	•	supporting infrastructure (containers, scheduling, collision checking, etc.)
+•	GNN-based decentralized task assignment
+•	kinodynamic motion-planning modules
+•	execution interfaces for integrating learned sub-goals
+•	supporting infrastructure (containers, scheduling, collision checking, etc.)
 
 All thesis-related development is located under:
 testbed/simulation/RobotManager/master_thesis/
