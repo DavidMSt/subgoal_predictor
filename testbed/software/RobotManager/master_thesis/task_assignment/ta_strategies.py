@@ -1,16 +1,8 @@
-from typing import Tuple, Any
-from enum import StrEnum
 from scipy.optimize import linear_sum_assignment
-from dataclasses import dataclass
 from abc import ABC, abstractmethod
 import numpy as np
 from logging import Logger
-from numpy.typing import NDArray
 
-import extensions.simulation.src.core as core
-
-from master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
-from master_thesis.general.general_tasks import GeneralTask
 from master_thesis.containers.agent_containers import FRODOAgentContainer
 from master_thesis.containers.task_container import TaskContainer
 from master_thesis.containers.assignment_context_container import (
@@ -30,12 +22,12 @@ class StrategyABC(ABC):
         super().__init__()
 
     @abstractmethod
-    def run(self, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentContextContainer:
+    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
         """Run the assignment strategy. Returns the assignment context container with results.
 
         Args:
-            agents: Tuple of agent objects
-            tasks: Tuple of task objects
+            agent_containers: Dict of agent containers by object_id
+            task_containers: Dict of task containers by object_id
             logger: Optional logger
 
         Returns:
@@ -51,13 +43,10 @@ class StrategyABC(ABC):
 class CentralizedStrategyABC(StrategyABC):
     """Base class for centralized assignment strategies."""
 
-    def run(self, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentContextContainer:
+    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
         """Run centralized assignment."""
         # Create context with full information (centralized)
         # For centralized: self_state=None, nearby_agents=all agents, nearby_tasks=all tasks
-        agent_containers = {agent.container.object_id: agent.container for agent in agents}
-        task_containers = {task.container.object_id: task.container for task in tasks}
-
         ctx = AssignmentContextContainer(
             config=AssignmentContextConfig(
                 self_state=None,  # No single agent perspective
@@ -74,24 +63,19 @@ class CentralizedStrategyABC(StrategyABC):
                 logger.error(msg)
             raise ValueError(msg)
 
-        # Clear existing assignments
-        for agent in agents:
-            agent.asi.ta_container.state.available_tasks.clear()
-            agent.asi.clear_assigned_task()
-
         # Run strategy-specific logic
-        ctx = self.solve(ctx, agents, tasks, logger)
+        ctx = self.solve(ctx, agent_containers, task_containers, logger)
 
         return ctx
 
     @abstractmethod
-    def solve(self, ctx: AssignmentContextContainer, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentContextContainer:
+    def solve(self, ctx: AssignmentContextContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
         """Centralized solver - implemented by subclasses.
 
         Args:
             ctx: Assignment context container with full information
-            agents: Tuple of agent objects (for accessing methods like compute_task_cost_vector)
-            tasks: Tuple of task objects
+            agent_containers: Dict of agent containers by object_id
+            task_containers: Dict of task containers by object_id
             logger: Optional logger
 
         Returns:
@@ -107,7 +91,7 @@ class CentralizedStrategyABC(StrategyABC):
 class DecentralizedStrategyABC(StrategyABC):
     """Base class for decentralized assignment strategies."""
 
-    def run(self, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentContextContainer:
+    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
         """Run decentralized assignment (per-agent logic).
 
         For decentralized strategies, each agent makes its own decision based on local information.
@@ -129,12 +113,12 @@ class DecentralizedStrategyABC(StrategyABC):
         )
 
         # Run strategy-specific logic (if any - most decentralized strategies are passive)
-        ctx = self.solve(ctx, agents, tasks, logger)
+        ctx = self.solve(ctx, agent_containers, task_containers, logger)
 
         return ctx
 
     @abstractmethod
-    def solve(self, ctx: AssignmentContextContainer, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentContextContainer:
+    def solve(self, ctx: AssignmentContextContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
         """Decentralized solver - implemented by subclasses.
 
         For decentralized strategies, this typically doesn't produce matches directly.
@@ -143,8 +127,8 @@ class DecentralizedStrategyABC(StrategyABC):
 
         Args:
             ctx: Assignment context container (mostly empty for decentralized)
-            agents: Tuple of agent objects
-            tasks: Tuple of task objects
+            agent_containers: Dict of agent containers by object_id
+            task_containers: Dict of task containers by object_id
             logger: Optional logger
 
         Returns:
@@ -159,7 +143,7 @@ class DecentralizedStrategyABC(StrategyABC):
 
 class RandomStrategy(CentralizedStrategyABC):
 
-    def solve(self, ctx: AssignmentContextContainer, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentContextContainer:
+    def solve(self, ctx: AssignmentContextContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
         """Run centralized random assignment."""
 
         # Extract counts from context
@@ -179,33 +163,24 @@ class RandomStrategy(CentralizedStrategyABC):
 
 class HungarianStrategy(CentralizedStrategyABC):
 
-    def solve(self, ctx: AssignmentContextContainer, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentContextContainer:
-        """Centralized Hungarian assignment using per-agent cost vectors."""
+    def solve(self, ctx: AssignmentContextContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
+        """Centralized Hungarian assignment using Euclidean distance cost."""
         n_agents = len(ctx.config.nearby_agents)
         n_tasks = len(ctx.config.nearby_tasks)
 
-        # Build cost matrix from agents' cost vectors (assumes same task ordering)
+        # Build cost matrix from Euclidean distances
         cost_matrix = np.zeros((n_agents, n_tasks), dtype=np.float64)
-        for i, agent in enumerate(agents):
-            cost_vector_i = agent.asi.compute_task_cost_vector(tasks=tasks)
-            if len(cost_vector_i) != n_tasks:
-                msg = (
-                    f"Agent {i} provided a cost vector of length {len(cost_vector_i)} "
-                    f"but there are {n_tasks} tasks."
-                )
-                (logger.error(msg) if logger else None)
-                raise ValueError(msg)
-            cost_matrix[i, :] = cost_vector_i
+        for i, agent_cont in enumerate(agent_containers.values()):
+            for j, task_cont in enumerate(task_containers.values()):
+                dx = agent_cont.x - task_cont.x
+                dy = agent_cont.y - task_cont.y
+                cost_matrix[i, j] = np.sqrt(dx**2 + dy**2)
 
         # Run Hungarian algorithm
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
         # Store matches in state
         ctx.state.matches = list(zip(row_ind.tolist(), col_ind.tolist()))
-
-        # Assign selected task to each agent (one-to-one)
-        for a_idx, t_idx in ctx.state.matches:
-            agents[a_idx].asi.assign_task(tasks[t_idx].object_id)
 
         return ctx
 
@@ -217,7 +192,7 @@ class HungarianStrategy(CentralizedStrategyABC):
 class CBBAStrategy(DecentralizedStrategyABC):
     """Consensus-Based Bundle Algorithm (decentralized auction-based)."""
 
-    def solve(self, ctx: AssignmentContextContainer, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentContextContainer:
+    def solve(self, ctx: AssignmentContextContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
         """Run per-agent CBBA step (decentralized auction-based)."""
         raise NotImplementedError("CBBA not yet implemented")
 
@@ -225,7 +200,7 @@ class CBBAStrategy(DecentralizedStrategyABC):
 class GNNStrategy(DecentralizedStrategyABC):
     """Graph Neural Network strategy (decentralized)."""
 
-    def solve(self, ctx: AssignmentContextContainer, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentContextContainer:
+    def solve(self, ctx: AssignmentContextContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
         """Run per-agent GNN inference (decentralized neural network)."""
         raise NotImplementedError("GNN not yet implemented")
 
@@ -233,6 +208,6 @@ class GNNStrategy(DecentralizedStrategyABC):
 class TwoTowersStrategy(DecentralizedStrategyABC):
     """Two-Towers neural network strategy (decentralized)."""
 
-    def solve(self, ctx: AssignmentContextContainer, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentContextContainer:
+    def solve(self, ctx: AssignmentContextContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
         """Run per-agent two-towers neural network (decentralized)."""
         raise NotImplementedError("TwoTowers not yet implemented")
