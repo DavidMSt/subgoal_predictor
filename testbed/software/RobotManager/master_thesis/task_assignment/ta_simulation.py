@@ -21,10 +21,10 @@ from master_thesis.task_assignment.ta_strategies import (
     DecentralizedStrategyABC,
     HungarianStrategy,
     RandomStrategy,
-    AssignmentResult
 )
 from master_thesis.containers.ta_container import AgentTAContainer
 from master_thesis.containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.assignment_context_container import AssignmentContextContainer
 
 class TASimulationModule():
     """Module for handling task assignment logic only. Object spawning handled by simulation."""
@@ -50,7 +50,7 @@ class TASimulationModule():
         self,
         strategy: StrategyABC,
         verbose: bool = False
-    ) -> AssignmentResult:
+    ) -> AssignmentContextContainer:
         """
         Assign tasks to agents using the provided strategy.
 
