@@ -1,4 +1,3 @@
-
 from typing import Tuple, Any
 from enum import StrEnum
 from scipy.optimize import linear_sum_assignment
@@ -56,8 +55,8 @@ class CentralizedStrategyABC(StrategyABC):
         """Run centralized assignment."""
         # Create context with full information (centralized)
         # For centralized: self_state=None, nearby_agents=all agents, nearby_tasks=all tasks
-        agent_containers = tuple(agent.container for agent in agents)
-        task_containers = tuple(task.container for task in tasks)
+        agent_containers = {agent.container.object_id: agent.container for agent in agents}
+        task_containers = {task.container.object_id: task.container for task in tasks}
 
         ctx = AssignmentContextContainer(
             config=AssignmentContextConfig(
@@ -123,8 +122,8 @@ class DecentralizedStrategyABC(StrategyABC):
         ctx = AssignmentContextContainer(
             config=AssignmentContextConfig(
                 self_state=None,  # Will be set per-agent during their actions
-                nearby_agents=tuple(),  # Will be set per-agent based on sensing
-                nearby_tasks=tuple()  # Will be set per-agent based on sensing
+                nearby_agents={},  # Will be set per-agent based on sensing
+                nearby_tasks={}  # Will be set per-agent based on sensing
             ),
             state=AssignmentContextState(strategy=self)
         )

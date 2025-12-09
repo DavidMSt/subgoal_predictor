@@ -39,10 +39,10 @@ class AssignmentContextConfig:
     self_state: FRODOAgentContainer | None = None
 
     # For centralized: all agents. For decentralized: visible/communicable neighbors
-    nearby_agents: tuple[FRODOAgentContainer, ...] = field(default_factory=tuple)
+    nearby_agents: dict[str, FRODOAgentContainer] = field(default_factory=dict)
 
     # For centralized: all tasks. For decentralized: visible tasks
-    nearby_tasks: tuple[TaskContainer, ...] = field(default_factory=tuple)
+    nearby_tasks: dict[str, TaskContainer] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
