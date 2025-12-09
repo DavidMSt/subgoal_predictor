@@ -7,12 +7,13 @@ from core.utils.logging_utils import Logger
 # bilbolab
 import extensions.simulation.src.core as core
 
-from master_thesis.motion_planning.mp_agent import FRODO_MotionPlanning_Agent
+from master_thesis.motion_planning.mp_agent_module import FRODO_MotionPlanning_Agent
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
-from master_thesis.motion_planning.mp_agent import FRODO_MotionPlanning_Agent, MPAgentModule
+from master_thesis.motion_planning.mp_agent_module import FRODO_MotionPlanning_Agent, MPAgentModule
 from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo
 from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.general.general_obstacles import GeneralObstacle
+from master_thesis.general.general_tasks import GeneralTask
 
 class MPSimulationModule():
     agents: dict[str, FRODOGeneralAgent]
@@ -93,7 +94,7 @@ def mp_task_1ag_1obs():
 
     # define start and goal
     ag1_start = (0.0, 0.0, np.pi)
-    ag1_goal = (4.0, 0.0, np.pi)
+    task1_config = (4.0, 0.0, np.pi)
 
 
 
@@ -114,11 +115,13 @@ def mp_task_1ag_1obs():
         height=1,
     )
 
+    task1 = GeneralTask(id = 'task1',x = task1_config[0], y = task1_config[1], psi= task1_config[2])
+
     # add agent and obstacle
     sim.add_agent(ag1)
     sim.add_obstacle(obs1)
 
-    sim.mpi.agent_motion_planning(ag1, solution_phase_name="goal", start_config=ag1_start, goal_config= ag1_goal)
+    sim.mpi.agent_motion_planning(ag1, solution_phase_name="goal", start_config=ag1_start, goal_config= )
 
     sim.start()
 

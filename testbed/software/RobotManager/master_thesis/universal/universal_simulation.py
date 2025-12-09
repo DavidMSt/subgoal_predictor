@@ -4,8 +4,8 @@ from core.utils.logging_utils import Logger
 
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment #, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
-from master_thesis.motion_planning.mp_simulation import MPSimulationModule
-from master_thesis.task_assignment.ta_simulation import TASimulationModule
+from master_thesis.motion_planning.mp_simulation_module import MPSimulationModule
+from master_thesis.task_assignment.ta_simulation_module import TASimulationModule
 from master_thesis.task_assignment.ta_strategies import HungarianStrategy, CBBAStrategy
 
 from master_thesis.containers.mp_container import AgentMPContainer

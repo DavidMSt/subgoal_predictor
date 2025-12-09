@@ -3,8 +3,8 @@ from typing import List
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config
-from master_thesis.motion_planning.mp_agent import MPAgentModule
-from master_thesis.task_assignment.ta_agent import TAAgentModule
+from master_thesis.motion_planning.mp_agent_module import MPAgentModule
+from master_thesis.task_assignment.ta_agent_module import TAAgentModule
 
 from master_thesis.containers.environment_containers import EnvironmentContainer
 from master_thesis.containers.ta_container import AgentTAContainer, AgentTAConfig, AgentTAState
