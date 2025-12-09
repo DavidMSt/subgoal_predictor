@@ -6,6 +6,7 @@ from master_thesis.general.general_simulation import FRODO_general_Simulation, F
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.motion_planning.mp_simulation import MPSimulationModule
 from master_thesis.task_assignment.ta_simulation import TASimulationModule
+from master_thesis.task_assignment.ta_strategies import HungarianStrategy, CBBAStrategy
 
 from master_thesis.containers.mp_container import AgentMPContainer
 from master_thesis.containers.ta_container import AgentTAContainer
@@ -97,27 +98,33 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         assert isinstance(self.logger, Logger)
 
         self.mpi = MPSimulationModule(self.agents, self.logger) # TODO: modify the mp simulation module to use containers as well
-        self.asi = TASimulationModule(env_cont=env_cont, agent_ta_conts= self.ta_containers, logger = self.logger)
+        self.tai = TASimulationModule(env_cont=env_cont, agent_ta_conts= self.ta_containers, logger = self.logger)
         
 
         self.cli = FRODO_General_CommandSet(self)
 
-    def new_agent(self, # type: ignore[override] 
+    def new_agent(self, # type: ignore[override]
                   agent_id: str,
                   agent_class: type[FRODOUniversalAgent] = FRODOUniversalAgent,
                   start_config: tuple[float, float, float]  = (0.0, 0.0, 0.0),
                   color:tuple[float, float, float] = (1.0,1.0,1.0),
                   Ts = 0.1) -> FRODOUniversalAgent | None:
 
-        # use parent class, just with universal agent per default
-        agent = super().new_agent(agent_id=agent_id, agent_class=agent_class, start_config= start_config, color= color, Ts = Ts)
-        
+        # Pass env_container as kwarg to FRODOUniversalAgent
+        agent = super().new_agent(
+            agent_id=agent_id,
+            agent_class=agent_class,
+            start_config=start_config,
+            color=color,
+            Ts=Ts,
+            env_container=self.environment.environment_container  # Add env_container
+        )
+
         # keep linter quiet
         assert isinstance(agent, FRODOUniversalAgent)
-        
+
         # keep references to the module specific containers
         self.ta_containers[agent_id] = agent.tai.ta_container
-
 
         return agent
 
@@ -125,7 +132,7 @@ if __name__ == "__main__":
 
     # Simulation Init
     env_size = 10
-    sim = FRODO_general_Simulation(
+    sim = FRODO_universal_Simulation(
         Ts=0.1,
         limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
     )
@@ -153,5 +160,11 @@ if __name__ == "__main__":
         width=0.3,
     )
 
+    sim.new_task('example_task', -1.0,-1.0, 0)
 
+    # Decentralized (agents decide themselves via actions)
+    print(sim.tai.assign_tasks(strategy=CBBAStrategy()))
+
+    # Centralized (simulation computes assignments)
+    sim.tai.assign_tasks(strategy=HungarianStrategy())
 

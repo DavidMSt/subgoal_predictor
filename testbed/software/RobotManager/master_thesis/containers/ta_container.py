@@ -5,15 +5,13 @@ from master_thesis.containers.task_container import TaskContainer
 @dataclass(frozen=False, slots=True)
 class AgentTAState:
     """Mutable runtime state for agent task execution"""
-    
+
     # Available/known tasks (for decentralized decision making)
     available_tasks: list[TaskContainer] = field(default_factory=list)
     assignment_pending: bool = False
-    
+
     # Task assignment
-    assigned_task: TaskContainer| None = None
-    strategy: str = "HUNGARIAN" # TODO: Import the available strategies here? 
-    mode: str = "central" # TODO: Turn this into enum? 
+    assigned_task: TaskContainer| None = None 
 
     # Execution state - subgoal 
     #prediction

@@ -61,20 +61,58 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_motion_planning)
 
     def _action_task_assignment(self):
-        if self.tai.ta_container.state.mode != "decentral":
-            return  # Centralized mode - skip TA
+        """Decentralized task assignment action (greedy nearest)."""
         if self.tai.ta_container.state.assigned_task is not None:
             return  # Already have task
         if not self.tai.assignment_pending:
             return  # No assignment requested
-        # ... do assignment
+
+        # Greedy assignment: select nearest available task
+        available_tasks = self.tai.ta_container.state.available_tasks
+        if not available_tasks:
+            return  # No tasks available
+
+        min_distance = float('inf')
+        nearest_task = None
+
+        for task_container in available_tasks:
+            distance = self.tai.distance_fun(self.container, task_container)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_task = task_container
+
+        if nearest_task:
+            self.tai.ta_container.state.assigned_task = nearest_task
+            self.tai.assignment_pending = False
+            self.logger.info(f"Agent {self.agent_id} assigned task {nearest_task.object_id} (distance: {min_distance:.2f})")
 
     def _action_motion_planning(self):
+        """Motion planning action - creates phase for assigned task."""
         if self.tai.ta_container.state.assigned_task is None:
             return  # No task to plan for
         if self.runner.active != "idle":
-            return  # Already executing
-        # ... do planning
+            return  # Already executing a phase
+
+        # Plan motion to assigned task
+        task = self.tai.ta_container.state.assigned_task
+        start_config = (self.state.x, self.state.y, self.state.psi)
+        goal_config = (task.x, task.y, task.psi)
+
+        phase_key = f"task_{task.object_id}"
+
+        self.logger.info(f"Planning motion from {start_config} to task {task.object_id} at {goal_config}")
+
+        # Call motion planner (this adds the phase to runner)
+        self.mpi.plan_motion(
+            phase_key=phase_key,
+            start_config=start_config,
+            goal_config=goal_config
+        )
+
+        # Activate the phase if planning succeeded
+        if phase_key in self.runner._phases:
+            self.runner.activate_phase(phase_key)
+            self.logger.info(f"Activated motion phase {phase_key}")
 
 
 

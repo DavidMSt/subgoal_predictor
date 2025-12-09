@@ -161,12 +161,13 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         return agent
 
-    def new_agent(self, # type: ignore[override] 
+    def new_agent(self, # type: ignore[override]
                   agent_id: str,
                   agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent,
                   start_config: tuple[float, float, float]  = (0.0, 0.0, 0.0),
                   color:tuple[float, float, float] = (1.0,1.0,1.0),
-                  Ts = 0.1) -> FRODOGeneralAgent | None:
+                  Ts = 0.1,
+                  **kwargs) -> FRODOGeneralAgent | None:
 
         if agent_id in self.agents:
             self.logger.warning(f"Simulated agent {agent_id} already exists. Cannot add it again")
@@ -185,9 +186,10 @@ class FRODO_general_Simulation(FRODO_Simulation):
             agent_id=agent_id,
             Ts= Ts,
             start_config= start_config,
-            color= color
+            color= color,
+            **kwargs  # Pass through any additional kwargs (e.g., env_container)
         )
-        
+
         self.add_agent(agent)
 
         return agent

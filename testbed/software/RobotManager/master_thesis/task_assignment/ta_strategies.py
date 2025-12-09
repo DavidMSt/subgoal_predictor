@@ -27,15 +27,19 @@ class AssignmentResult:
     # total_cost: float                           # sum of chosen costs
 
 class StrategyABC(ABC):
-    default_mode = "central"
+    """Base class for task assignment strategies.
+
+    Subclasses implement either centralized or decentralized assignment.
+    Split into CentralizedStrategyABC and DecentralizedStrategyABC.
+    """
 
     def __init__(self) -> None:
         super().__init__()
 
     @dataclass
     class AssignmentContext:
-        """ 
-        Datacontainer that is passed through the individual functions. 
+        """
+        Datacontainer that is passed through the individual functions.
         Enables to be flexible concerning the output assignment result without making the Strategies have a state
         """
         agents: tuple[FRODO_AssignmentAgent, ...]
@@ -43,64 +47,11 @@ class StrategyABC(ABC):
         scores: np.ndarray | None = None
         matches: list[tuple[int,int]]| None = None
 
-    class RunningMode(StrEnum):
-        """
-        Decide in which mode the strategy should be runnning. 
-        Especially relevant for things like CTDE (Cetnralized training, decentralized execution) in learning-based strategies
-
-        Args:
-            StrEnum (_type_): _description_
-        """
-        CENTRAL = 'central'
-        LOCAL = 'local'
-
 
     @abstractmethod
-    def central(self, ctx: AssignmentContext, logger: Logger | None = None) -> AssignmentContext:
-        """Run centralized solver using sim.env (agents, tasks, costs)."""
+    def run(self, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentResult:
+        """Run the assignment strategy. Implemented by subclasses."""
         ...
-
-    @abstractmethod
-    def local(self, ctx, logger: Logger | None = None) -> Any:
-        """Run per-agent step (decentralized)."""
-        ...
-
-    def run(self, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None, mode = None) -> Any:
-        mode = (mode or getattr(self, "default_mode"))
-
-        ctx = self.AssignmentContext(agents, tasks)
-
-        # Extract agents and tasks
-        n_agents = len(ctx.agents)
-        n_tasks = len(ctx.tasks)
-
-        # check if one-to one is possible
-        if n_agents != n_tasks:
-            if logger is not None:
-                logger.error('number of tasks and agents must be equal for one-to-one assignments - only case code can handle')
-            else:
-                raise ValueError('number of tasks and agents must be equal for one-to-one assignments - only case code can handle')
-
-        # Clear existing assignments
-        for agent in agents:
-            agent.asi.ta_container.state.available_tasks.clear()
-            agent.asi.ta_container.state.assigned_tasks.clear()
-
-        if mode == self.RunningMode.CENTRAL: 
-            ctx = self.central(ctx, logger)
-        
-        elif mode == self.RunningMode.LOCAL:
-            ctx = self.local(ctx, logger)
-
-        else:
-            if logger is not None:
-                logger.error("Mode for assignment strategy is not compatible, choose either local or central")
-            else: 
-                raise ValueError("Mode for assignment strategy is not compatible, choose either local or central")
-            
-        result = self.create_assignment_result(ctx=ctx)
-
-        return result
 
     def create_assignment_result(self, ctx: AssignmentContext) -> AssignmentResult:
         """
@@ -122,10 +73,70 @@ class StrategyABC(ABC):
         )
         return result
 
-class RandomStrategy(StrategyABC):
-    default_mode = "central"
 
-    def central(self, ctx, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
+# ============================================================================
+# CENTRALIZED STRATEGIES
+# ============================================================================
+
+class CentralizedStrategyABC(StrategyABC):
+    """Base class for centralized assignment strategies."""
+
+    def run(self, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentResult:
+        """Run centralized assignment."""
+        ctx = self.AssignmentContext(agents, tasks)
+
+        # Validate one-to-one constraint
+        if len(ctx.agents) != len(ctx.tasks):
+            msg = f'Number of agents ({len(ctx.agents)}) must equal number of tasks ({len(ctx.tasks)}) for one-to-one assignment'
+            if logger:
+                logger.error(msg)
+            raise ValueError(msg)
+
+        # Clear existing assignments
+        for agent in agents:
+            agent.asi.ta_container.state.available_tasks.clear()
+            agent.asi.ta_container.state.assigned_tasks.clear()
+
+        # Run strategy-specific logic
+        ctx = self.solve(ctx, logger)
+
+        return self.create_assignment_result(ctx)
+
+    @abstractmethod
+    def solve(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
+        """Centralized solver - implemented by subclasses."""
+        ...
+
+
+# ============================================================================
+# DECENTRALIZED STRATEGIES
+# ============================================================================
+
+class DecentralizedStrategyABC(StrategyABC):
+    """Base class for decentralized assignment strategies."""
+
+    def run(self, agents: Tuple[FRODO_AssignmentAgent, ...], tasks: Tuple["GeneralTask", ...], logger: Logger | None = None) -> AssignmentResult:
+        """Run decentralized assignment (per-agent logic)."""
+        ctx = self.AssignmentContext(agents, tasks)
+
+        # Run strategy-specific logic
+        ctx = self.solve(ctx, logger)
+
+        return self.create_assignment_result(ctx)
+
+    @abstractmethod
+    def solve(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
+        """Decentralized solver - implemented by subclasses."""
+        ...
+
+
+# ============================================================================
+# CONCRETE CENTRALIZED STRATEGIES
+# ============================================================================
+
+class RandomStrategy(CentralizedStrategyABC):
+
+    def solve(self, ctx, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
         """Run centralized solver using sim.env (agents, tasks, costs)."""
 
         # Extract agents and tasks
@@ -140,16 +151,11 @@ class RandomStrategy(StrategyABC):
         assignment[rows, cols] = True
         ctx.matches = list(zip(rows.tolist(), cols.tolist()))
         return ctx
-    
-    def local(self, ctx, logger: Logger | None = None) -> None:
-        """Run per-agent step (decentralized)."""
-        raise NotImplementedError
 
-# ----------- HungarianStrategy -----------
-class HungarianStrategy(StrategyABC):
-    default_mode = "central"
 
-    def central(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
+class HungarianStrategy(CentralizedStrategyABC):
+
+    def solve(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
         """Centralized Hungarian assignment using per-agent cost vectors."""
         n_agents = len(ctx.agents)
         n_tasks = len(ctx.tasks)
@@ -177,36 +183,31 @@ class HungarianStrategy(StrategyABC):
         for a_idx, t_idx in ctx.matches:
             ctx.agents[a_idx].asi.assign_task(ctx.tasks[t_idx].object_id)
         return ctx
-    
-    def local(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> None:
-        """Run per-agent step (decentralized)."""
-        raise NotImplementedError
 
-class CBBAStrategy(StrategyABC):
-    def central(self, ctx:StrategyABC.AssignmentContext, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
-        """Run centralized solver using sim.env (agents, tasks, costs)."""
-        ...
 
-    def local(self, ctx, logger: Logger | None = None) -> None:
-        """Run per-agent step (decentralized)."""
-        ...
+# ============================================================================
+# CONCRETE DECENTRALIZED STRATEGIES
+# ============================================================================
 
-class GNNStrategy(StrategyABC):
-    default_mode = "local"
-    def central(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
-        """Run centralized solver using sim.env (agents, tasks, costs)."""
-        ...
+class CBBAStrategy(DecentralizedStrategyABC):
+    """Consensus-Based Bundle Algorithm (decentralized auction-based)."""
 
-    def local(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> None:
-        """Run per-agent step (decentralized)."""
-        raise NotImplementedError
+    def solve(self, ctx, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
+        """Run per-agent CBBA step (decentralized auction-based)."""
+        raise NotImplementedError("CBBA not yet implemented")
 
-class TwoTowersStrategy(StrategyABC):
-    default_mode = "local"
 
-    def central(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
-        ...
+class GNNStrategy(DecentralizedStrategyABC):
+    """Graph Neural Network strategy (decentralized)."""
 
-    def local(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> None:
-        """Run per-agent step (decentralized)."""
-        ...
+    def solve(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
+        """Run per-agent GNN inference (decentralized neural network)."""
+        raise NotImplementedError("GNN not yet implemented")
+
+
+class TwoTowersStrategy(DecentralizedStrategyABC):
+    """Two-Towers neural network strategy (decentralized)."""
+
+    def solve(self, ctx: StrategyABC.AssignmentContext, logger: Logger | None = None) -> StrategyABC.AssignmentContext:
+        """Run per-agent two-towers neural network (decentralized)."""
+        raise NotImplementedError("TwoTowers not yet implemented")
