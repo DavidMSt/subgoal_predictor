@@ -1,6 +1,6 @@
 import time
 
-from core.utils.events import EventListener
+from core.utils.events import Event
 from core.utils.exit import register_exit_callback
 from core.utils.network import get_wifi_ssid, check_internet, getSignalStrength
 from robot.bilbo_common import BILBO_Common
@@ -25,11 +25,11 @@ class BILBO_Display:
         self.status_page = StatusPage()
         self.display.add_page(self.status_page)
 
-        self.sample_listener = EventListener(event=self.core.events.sample,
-                                             callback=self._updateDisplay,
-                                             max_rate=0.2)
+        self.core.events.sample.on(
+            callback=self._updateDisplay,
+            max_rate=0.2
+        )
 
-        self.sample_listener.start()
         register_exit_callback(self.close)
 
     # === METHODS ======================================================================================================

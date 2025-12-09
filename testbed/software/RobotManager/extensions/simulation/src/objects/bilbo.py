@@ -32,7 +32,7 @@ class BilboModel:
     d_w: float  # Distance between of the wheels
     I_w: float  # Inertia of the wheels
     I_y: float  # Inertia of the body
-    I_x: float # Inertia of the body
+    I_x: float  # Inertia of the body
     I_z: float  # Inertia of the body
     c_alpha: float  # Drag coefficient, speed dependent
     r_w: float  # Radius of the wheels
@@ -433,6 +433,7 @@ class BILBO_Dynamics_3D_Linear_reduced:
             self.system = control.StateSpace((self.system.A - self.system.B @ K), self.system.B,
                                              self.system.C, self.system.D, self.Ts, remove_useless_states=False)
 
+            print(self.system)
             self.K = K
         return K
 
@@ -653,21 +654,28 @@ class BILBO_Dynamics_3D:
 
         K = np.hstack((np.zeros((2, 1)), K))
 
+        print(f"A={reduced_linear_dynamics.system.A}")
+        print(f"B={reduced_linear_dynamics.system.B}")
+        print(f"K={K}")
+
+
         if apply_poles_to_system:
             self.K = K
         return K
 
     # ------------------------------------------------------------------------------------------------------------------
     def step(self, input: BILBO_3D_Input):
-        self.state = self._dynamics(self.state, input)
+        self.state, dynamics_input = self._dynamics(self.state, input)
+        return self.state, dynamics_input
 
     # ------------------------------------------------------------------------------------------------------------------
-    def simulate(self, input: list[BILBO_3D_Input],
+    def simulate(self, input: list | np.ndarray,
                  reset: bool = True,
                  x0: BILBO_3D_State = None,
-                 include_zero_step: bool = True) -> list[BILBO_3D_State]:
+                 include_zero_step: bool = True) -> tuple[list[BILBO_3D_State], list[BILBO_3D_Input]]:
         input = listToStateList(input, BILBO_3D_Input)
         state_list = []
+        input_list = []
         if x0 is not None:
             self.state = BILBO_3D_State.as_state(x0)
         elif reset:
@@ -675,11 +683,13 @@ class BILBO_Dynamics_3D:
 
         if include_zero_step:
             state_list.append(self.state)
+            input_list.append([0,0])
 
         for inp_i in input:
-            self.step(inp_i)
+            state, dynamics_input = self.step(inp_i)
             state_list.append(self.state)
-        return state_list
+            input_list.append(dynamics_input)
+        return state_list, input_list
 
     # ------------------------------------------------------------------------------------------------------------------
     def setState(self, state: BILBO_3D_State | np.ndarray | list):
@@ -748,7 +758,7 @@ class BILBO_Dynamics_3D:
                 D_33 / V_2) * psi_dot - (B_3 / V_2) * (u[0] - u[1])
 
         new_state = state.asarray() + state_dot * self.Ts
-        return BILBO_3D_State.fromarray(new_state)
+        return BILBO_3D_State.fromarray(new_state), u
 
 
 # ======================================================================================================================
@@ -797,7 +807,7 @@ class BILBO_DynamicAgent(Agent):
 
         self.mode = BILBO_Control_Mode.BALANCING
 
-        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._controller)
+        # self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._controller)
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.DYNAMICS].addAction(self._dynamics)
 
     # === PROPERTIES ===================================================================================================
@@ -826,10 +836,7 @@ class BILBO_DynamicAgent(Agent):
 
     # ------------------------------------------------------------------------------------------------------------------
     def reset(self, x0: BILBO_3D_State = None):
-        if x0 is not None:
-            self.dynamics.x0 = x0
-
-        self.dynamics.reset()
+        self.dynamics.setState(x0)
 
     # ------------------------------------------------------------------------------------------------------------------
     def setMode(self, mode: BILBO_Control_Mode):

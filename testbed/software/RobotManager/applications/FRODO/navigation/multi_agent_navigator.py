@@ -1,5 +1,6 @@
 from __future__ import annotations
 import abc
+import dataclasses
 import enum
 import threading
 import time
@@ -861,6 +862,14 @@ class NavigatorPlanCallback:
     error: CallbackContainer
 
 
+@dataclasses.dataclass(frozen=True)
+class NavigatorPlan_Sample:
+    id: str
+    status: NavigatorPlanState
+    current_action: str | None
+    current_action_index: int | None
+
+
 class NavigatorPlan:
     """
     A linear plan: executes actions in order. Non-blocking actions are dispatched
@@ -1012,6 +1021,13 @@ class NavigatorPlan:
         with open(file_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(data, f, sort_keys=False)
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_sample(self) -> NavigatorPlan_Sample:
+        return NavigatorPlan_Sample(self.id,
+                                    self.state,
+                                    self.current_action.id if self.current_action else None,
+                                    self.current_action_index)
+
     # === PRIVATE METHODS ==============================================================================================
     def _task(self) -> None:
         """
@@ -1055,6 +1071,13 @@ class NavigatorPlan:
 class MultiAgentNavigator_State(enum.StrEnum):
     RUNNING = 'running'
     IDLE = 'idle'
+
+
+@dataclasses.dataclass(frozen=True)
+class MultiAgentNavigator_Sample:
+    status: MultiAgentNavigator_State
+    current_plan_id: str | None
+    current_plan: NavigatorPlan_Sample
 
 
 class MultiAgentNavigator:
@@ -1132,6 +1155,7 @@ class MultiAgentNavigator:
             return
         plan = NavigatorPlan.from_yaml(plan_file)
         self.load_plan(plan, start)
+
     # ------------------------------------------------------------------------------------------------------------------
     def stop_current_plan(self):
         raise NotImplementedError
@@ -1156,6 +1180,12 @@ class MultiAgentNavigator:
             return None
 
         return self.agents[agent_id]
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_sample(self) -> MultiAgentNavigator_Sample:
+        return MultiAgentNavigator_Sample(self.state,
+                                          current_plan_id=self.current_plan.id if self.current_plan else None,
+                                          current_plan=self.current_plan.get_sample() if self.current_plan else None)
 
     # === PRIVATE METHODS ==============================================================================================
     def _plan_finished_callback(self, *args, **kwargs):

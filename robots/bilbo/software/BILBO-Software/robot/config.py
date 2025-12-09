@@ -4,6 +4,7 @@ import yaml
 
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.files import fileExists
+from core.utils.network import get_own_hostname
 from robot.paths import CONFIG_PATH
 
 
@@ -129,5 +130,9 @@ def bilbo_config_to_file(file_name: str, information: BILBO_Config):
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-def get_bilbo_config(bilbo_id: str) -> BILBO_Config:
+def get_bilbo_config(bilbo_id: str | None = None) -> BILBO_Config:
+
+    if bilbo_id is None:
+        bilbo_id = get_own_hostname()
+
     return bilbo_config_from_file(f"{bilbo_id}.yaml")

@@ -32,7 +32,7 @@ class UGV02:
         # --- Serial connection ---
         self.serial = serial.Serial(port, baudrate=baudrate, timeout=SERIAL_TIMEOUT)
         self.logger = logging.getLogger("UGV02")
-        self.logger.setLevel(logging.DEBUG)
+        self.logger.setLevel(logging.INFO)
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", "%H:%M:%S"))
         self.logger.addHandler(handler)

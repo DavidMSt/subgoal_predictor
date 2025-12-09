@@ -17,7 +17,7 @@
 #include "firmware_core.h"
 #include "bilbo_drive.h"
 
-class TWIPR_Sequencer;
+class BILBO_Sequencer;
 class TWIPR_Supervisor;
 extern core_utils_RegisterMap<256> register_map;
 
@@ -180,7 +180,7 @@ public:
 
 	twipr_control_callbacks_t callbacks;
 
-	friend class TWIPR_Sequencer;
+	friend class BILBO_Sequencer;
 	friend class TWIPR_Supervisor;
 
 private:

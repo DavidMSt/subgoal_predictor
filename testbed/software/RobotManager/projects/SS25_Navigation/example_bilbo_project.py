@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import time
 
 import numpy as np
@@ -15,6 +16,7 @@ from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
 from extensions.cli.cli import CommandSet, CLI, Command, CommandArgument
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
+from extensions.gui.src.lib.plot.realtime.rt_plot import RT_Plot_Widget, ServerMode, UpdateMode, TimeSeries
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.simulation.src.objects.base_environment import BaseEnvironment
 from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Control_Mode, DEFAULT_BILBO_MODEL, \
@@ -39,10 +41,60 @@ BILBO_MAPPINGS = {
 }
 
 
+@dataclasses.dataclass
+class VelocityCommand:
+    v: float = 0.0
+    psi_dot: float = 0.0
+
+
+@dataclasses.dataclass
+class VelocityControllerConfig:
+    k_p_v: float = -0.179
+    k_i_v: float = -0.936
+    k_d_v: float = -0.005
+
+    k_psi_dot: float = 0.0
+    k_integral_max: float = 10.0
+
+
+# === INTERACTIVE BILBO ================================================================================================
+@dataclasses.dataclass
+class VelocityCommand:
+    v: float = 0.0
+    psi_dot: float = 0.0
+
+
+@dataclasses.dataclass
+class VelocityControllerConfig:
+    # Longitudinal velocity PID
+    k_p_v: float = -0.179
+    k_i_v: float = -0.8
+    k_d_v: float = -0.005
+
+    # Yaw rate (psi_dot) PID
+    k_p_psi_dot: float = 0.35121
+    k_i_psi_dot: float = 7.6256
+    k_d_psi_dot: float = 0.0023
+
+    # Integral limits
+    k_integral_max_v: float = 10.0
+    k_integral_max_psi_dot: float = 10.0
+
+
 # === INTERACTIVE BILBO ================================================================================================
 class ProjectBILBO(BILBO_DynamicAgent):
     joystick: Joystick | None = None
     cli: CommandSet
+
+    _v_integral: float = 0.0
+    _v_last_error: float = 0.0
+
+    _psi_dot_integral: float = 0.0
+    _psi_dot_last_error: float = 0.0
+
+    _last_state: BILBO_3D_State | None = None
+
+    debug: float
 
     # === INIT =========================================================================================================
     def __init__(self, agent_id, *args, **kwargs):
@@ -50,8 +102,10 @@ class ProjectBILBO(BILBO_DynamicAgent):
 
         self.logger = Logger(f'InteractiveBILBO {agent_id}', 'DEBUG')
 
-        self.eigenstructureAssignment(poles=BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES,
-                                      eigenvectors=BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS)
+        self.eigenstructureAssignment(
+            poles=BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES,
+            eigenvectors=BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS
+        )
 
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self.input_function)
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT].addAction(self.output_function)
@@ -102,6 +156,53 @@ class ProjectBILBO(BILBO_DynamicAgent):
         )
         self.cli.addCommand(set_position_command)
 
+        self.cli.addCommand(Command(
+            name='set_velocity',
+            function=self._set_velocity,
+            arguments=[
+                CommandArgument(name='v',
+                                type=float,
+                                description='velocity',
+                                optional=False),
+                CommandArgument(name='psi_dot',
+                                type=float,
+                                description='angular velocity',
+                                optional=False)
+            ]
+
+        ))
+
+        self.cli.addCommand(Command(
+            name='reset',
+            function=self.reset,
+        ))
+
+        # This still only sets the v PID from CLI (psi_dot PID gains can be set in code for now)
+        self.cli.addCommand(Command(
+            name='set_pid',
+            function=self._set_velocity_pid,
+            arguments=[
+                CommandArgument(name='kp',
+                                type=float,
+                                description='Proportional gain',
+                                optional=False),
+                CommandArgument(name='ki',
+                                type=float,
+                                description='Integral gain',
+                                optional=False),
+                CommandArgument(name='kd',
+                                type=float,
+                                description='Derivative gain',
+                                optional=False)
+            ]
+        ))
+
+        self.velocity_command = VelocityCommand()
+
+        self.velocity_controller_config = VelocityControllerConfig()
+        self.velocity_controller_output = np.zeros(2)
+        self.debug_value = 1
+
     # === METHODS ======================================================================================================
     def assignJoystick(self, joystick: Joystick):
         self.joystick = joystick
@@ -118,6 +219,7 @@ class ProjectBILBO(BILBO_DynamicAgent):
         self.joystick.callbacks.B.remove(self.disableController)
 
         self.joystick = None
+        self.velocity_command = VelocityCommand()
 
     # ------------------------------------------------------------------------------------------------------------------
     def enableController(self):
@@ -132,27 +234,30 @@ class ProjectBILBO(BILBO_DynamicAgent):
     # ------------------------------------------------------------------------------------------------------------------
     def input_function(self):
         if self.joystick is None:
-            self.input = [0, 0]
+            return
+        if self.mode != BILBO_Control_Mode.VELOCITY:
             return
 
-        axis_forward = self.joystick.getAxis('LEFT_VERTICAL')
-        axis_turn = self.joystick.getAxis('RIGHT_HORIZONTAL')
+        axis_forward = -self.joystick.getAxis('LEFT_VERTICAL')
+        axis_turn = -self.joystick.getAxis('RIGHT_HORIZONTAL')
 
-        left_wheel = axis_forward * 0.7 + axis_turn * 1
-        right_wheel = axis_forward * 0.7 - axis_turn * 1
-
-        self.input = [left_wheel, right_wheel]
+        velocity_command = VelocityCommand(v=axis_forward * 2, psi_dot=axis_turn * 6)
+        self.velocity_command = velocity_command
 
     # ------------------------------------------------------------------------------------------------------------------
     def _controller(self) -> BILBO_3D_Input:
+        """
+        this runs in every time step before the dynamics
+        Returns:
+
+        """
         if self.mode == BILBO_Control_Mode.OFF:
             controller_input = BILBO_3D_Input(M_L=0, M_R=0)
         elif self.mode == BILBO_Control_Mode.BALANCING:
             controller_input = self.input.asarray() - self.K @ self.dynamics.state.asarray()
         elif self.mode == BILBO_Control_Mode.VELOCITY:
-            velocity_controller_output = self._velocity_control()
-
-            controller_input = velocity_controller_output - self.K @ self.dynamics.state.asarray()
+            self.velocity_controller_output = self._velocity_control()
+            controller_input = self.velocity_controller_output - self.K @ self.dynamics.state.asarray()
         elif self.mode == BILBO_Control_Mode.POSITION:
             controller_input = BILBO_3D_Input(M_L=0, M_R=0)
         else:
@@ -162,25 +267,122 @@ class ProjectBILBO(BILBO_DynamicAgent):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _velocity_control(self) -> np.ndarray:
-        # self.logger.info(f'Velocity control')
+        """
+        Combined PID control for forward velocity v and yaw rate psi_dot.
+        Produces left/right wheel torques.
+        """
         state = self.dynamics.state
 
-        return np.asarray([0, 0])
+        v = state.v
+        psi_dot = state.psi_dot
+
+        # Errors
+        e_v = self.velocity_command.v - v
+        e_psi_dot = self.velocity_command.psi_dot - psi_dot
+
+        # Integrals
+        self._v_integral += e_v * self.Ts
+        self._psi_dot_integral += e_psi_dot * self.Ts
+
+        # Derivatives
+        e_v_dot = (e_v - self._v_last_error) / self.Ts
+        self._v_last_error = e_v
+
+        e_psi_dot_dot = (e_psi_dot - self._psi_dot_last_error) / self.Ts
+        self._psi_dot_last_error = e_psi_dot
+
+        # Saturate integrals
+        if self._v_integral > self.velocity_controller_config.k_integral_max_v:
+            self._v_integral = self.velocity_controller_config.k_integral_max_v
+        elif self._v_integral < -self.velocity_controller_config.k_integral_max_v:
+            self._v_integral = -self.velocity_controller_config.k_integral_max_v
+
+        if self._psi_dot_integral > self.velocity_controller_config.k_integral_max_psi_dot:
+            self._psi_dot_integral = self.velocity_controller_config.k_integral_max_psi_dot
+        elif self._psi_dot_integral < -self.velocity_controller_config.k_integral_max_psi_dot:
+            self._psi_dot_integral = -self.velocity_controller_config.k_integral_max_psi_dot
+
+        # PID for v
+        u_v = (
+            self.velocity_controller_config.k_p_v * e_v +
+            self.velocity_controller_config.k_i_v * self._v_integral +
+            self.velocity_controller_config.k_d_v * e_v_dot
+        )
+
+        # PID for psi_dot
+        u_psi = (
+            self.velocity_controller_config.k_p_psi_dot * e_psi_dot +
+            self.velocity_controller_config.k_i_psi_dot * self._psi_dot_integral +
+            self.velocity_controller_config.k_d_psi_dot * e_psi_dot_dot
+        )
+
+        # Debug: show something meaningful (e.g. psi_dot control output)
+        self.debug_value = u_psi
+
+        # Combine into wheel torques:
+        #   forward term u_v is same on both wheels,
+        #   turning term u_psi is differential.
+        u_l = u_v - u_psi
+        u_r = u_v + u_psi
+
+        return np.asarray([u_l, u_r])
 
     # ------------------------------------------------------------------------------------------------------------------
     def _position_control(self):
         ...
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _set_velocity(self, v: float, psi_dot: float):
+        self.velocity_command.v = v
+        self.velocity_command.psi_dot = psi_dot
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def reset(self, x0=None):
+        super().reset(BILBO_3D_State(0, 0, 0, 0, 0, 0, 0))
+        self.velocity_command.v = 0
+        self.velocity_command.psi_dot = 0
+        self._last_state = copy.deepcopy(self.dynamics.state)
+
+        # Reset PID states
+        self._v_integral = 0.0
+        self._v_last_error = 0.0
+        self._psi_dot_integral = 0.0
+        self._psi_dot_last_error = 0.0
+
+        # self.setMode(BILBO_Control_Mode.BALANCING)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_velocity_pid(self, kp: float, ki: float, kd: float):
+        """
+        Set PID gains for the forward velocity v.
+        psi_dot gains are configured separately (for now, just in code).
+        """
+        self.velocity_controller_config.k_p_v = kp
+        self.velocity_controller_config.k_i_v = ki
+        self.velocity_controller_config.k_d_v = kd
+        self.logger.info(f'Velocity PID gains set to: kp={kp}, ki={ki}, kd={kd}')
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _set_control_mode(self, mode: int):
         if mode not in [0, 2, 3, 4]:
             self.logger.warning(f'Unknown mode: {mode}')
             return
+
+        if mode == 3:
+            # VELOCITY mode: reset PID states
+            self._v_integral = 0.0
+            self._v_last_error = 0.0
+            self._psi_dot_integral = 0.0
+            self._psi_dot_last_error = 0.0
+            self._last_state = BILBO_3D_State(0, 0, 0, 0, 0, 0, 0)
+            self.velocity_controller_output = np.zeros(2)
+
         self.logger.info(f'Controller mode set to {BILBO_Control_Mode(mode)}')
         self.setMode(BILBO_Control_Mode(mode))
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _set_state(self, x: float | None = None, y: float | None = None, theta: float | None = None, psi: float | None = None):
+    def _set_state(self, x: float | None = None, y: float | None = None, theta: float | None = None,
+                   psi: float | None = None):
 
         state = copy.copy(self.dynamics.state)
 
@@ -287,13 +489,11 @@ class BILBO_InteractiveExample:
             return
 
         # Create a new simulated robot
-        robot = ProjectBILBO(agent_id=robot_id)
-
-        # Add it to the environment
-        self.env.addObject(robot)
+        robot = ProjectBILBO(agent_id=robot_id, Ts=0.01)
 
         self.robots[robot_id] = {'robot': robot}
-
+        # Add it to the environment
+        self.env.addObject(robot)
         # Add a babylon object
 
         robot_babylon = BabylonBilbo(object_id=robot_id, color=BILBO_MAPPINGS[robot_id]['color'],
@@ -302,9 +502,98 @@ class BILBO_InteractiveExample:
 
         self.robots[robot_id]['babylon'] = robot_babylon
 
+        plot = RT_Plot_Widget(
+            plot_config={
+                "title": f"{robot_id} Plot",
+                "show_title": True,
+                "legend_label_type": "point",
+            },
+            server_mode=ServerMode.EXTERNAL,
+            update_mode=UpdateMode.CONTINUOUS,
+        )
+
         self.cli.root.addChild(robot.cli)
 
         self.logger.info(f'Robot with ID {robot_id} added')
+
+        # Add Plot
+        y_axis = plot.plot.add_y_axis(
+            f"{robot_id}_v",
+            {
+                "label": f"v [m/s]",
+                "min": -2,
+                "max": 2,
+                "color": [1, 1, 1],
+                "grid_color": [0.5, 0.5, 0.5, 0.4],
+                "precision": 2,
+                "highlight_zero": True,
+                "side": "left",
+            },
+        )
+
+        timeseries_v = TimeSeries(
+            id=f"{robot_id}_v",
+            y_axis=y_axis,  # can pass the object or its id
+            name=f"{robot_id}_v",
+            unit="m/s",
+            color=[1, 0, 0],
+            fill=False,
+            tension=0.0,
+            precision=2,
+            width=2,
+        )
+
+        timeseries_v_cmd = TimeSeries(
+            id=f"{robot_id}_v_cmd",
+            y_axis=y_axis,  # can pass the object or its id
+            name=f"{robot_id}_v_cmd",
+            unit="m/s",
+            color=[0, 0, 1],
+            fill=False,
+            tension=0.0,
+            precision=2,
+            width=2,
+        )
+
+        timeseries_psi_dot = TimeSeries(
+            id=f"{robot_id}_psi_dot",
+            y_axis=y_axis,  # can pass the object or its id
+            name=f"{robot_id}_psi_dot",
+            unit="rad",
+            color=[0, 1, 0],
+            fill=False,
+            tension=0.0,
+            precision=2,
+            width=2,
+        )
+
+        timeseries_psi_dot_cmd = TimeSeries(
+            id=f"{robot_id}_psi_dot_cmd",
+            y_axis=y_axis,  # can pass the object or its id
+            name=f"{robot_id}_psi_dot_cmd",
+            unit="rad/s",
+            color=[1, 0, 1],
+            fill=False,
+            tension=0.0,
+            precision=2,
+            width=2,
+        )
+
+
+        timeseries_v.set_value(0.0)
+        timeseries_v_cmd.set_value(0.0)
+        plot.plot.add_timeseries(timeseries_v)
+        plot.plot.add_timeseries(timeseries_v_cmd)
+        plot.plot.add_timeseries(timeseries_psi_dot_cmd)
+        plot.plot.add_timeseries(timeseries_psi_dot)
+
+        self.robots[robot_id]['plot'] = plot
+        self.robots[robot_id]['timeseries_v'] = timeseries_v
+        self.robots[robot_id]['timeseries_v_cmd'] = timeseries_v_cmd
+        self.robots[robot_id]['timeseries_psi_dot'] = timeseries_psi_dot
+        self.robots[robot_id]['timeseries_psi_dot_cmd'] = timeseries_psi_dot_cmd
+
+        self.page.addWidget(plot, row=1, height=18, width=18)
 
     # ------------------------------------------------------------------------------------------------------------------
     def removeRobot(self, robot: str | ProjectBILBO):
@@ -312,7 +601,6 @@ class BILBO_InteractiveExample:
 
     # ------------------------------------------------------------------------------------------------------------------
     def assignJoystick(self, joystick: int, robot: str | ProjectBILBO):
-
         joystick = self.joystick_manager.getJoystickById(joystick)
         if joystick is None:
             self.logger.warning(f'Joystick with ID {joystick} does not exist')
@@ -348,17 +636,14 @@ class BILBO_InteractiveExample:
 
     # === PRIVATE METHODS ==============================================================================================
     def _newJoystick_callback(self, joystick: Joystick):
-
         self.soundsystem.speak(f'New joystick {joystick.id} connected.')
 
     # ------------------------------------------------------------------------------------------------------------------
     def _joystickDisconnected_callback(self, joystick: Joystick):
-
         self.soundsystem.speak(f'Joystick with {joystick.id} disconnected.')
 
     # ------------------------------------------------------------------------------------------------------------------
     def _buildGUI(self):
-
         # Add a simple category
         cat1 = Category('cat1', max_pages=1)
 
@@ -368,6 +653,8 @@ class BILBO_InteractiveExample:
 
         # Add it to the GUI
         self.gui.addCategory(cat1)
+
+        self.page = page1
 
         # Add the Babylon Widget
         self.babylon_widget = BabylonWidget(widget_id='babylon_widget')
@@ -405,7 +692,6 @@ class BILBO_InteractiveExample:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _simulationOutputStep(self):
-
         # Update all BILBOs
         for robot in self.robots.values():
             try:
@@ -414,6 +700,10 @@ class BILBO_InteractiveExample:
                                            y=state.y,
                                            theta=state.theta,
                                            psi=state.psi)
+                robot['timeseries_v'].set_value(state.v)
+                robot['timeseries_v_cmd'].set_value(robot['robot'].velocity_command.v)
+                robot['timeseries_psi_dot'].set_value(state.psi_dot)
+                robot['timeseries_psi_dot_cmd'].set_value(robot['robot'].velocity_command.psi_dot)
             except Exception as e:
                 self.logger.error(f'Error updating robot {robot["robot"].agent_id}: {e}')
 

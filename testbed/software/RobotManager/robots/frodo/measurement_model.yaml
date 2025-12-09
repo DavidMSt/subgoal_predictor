@@ -10,14 +10,14 @@ components:
       corner: 1.2
     bearing:
       baseline: 0.0
-      gain_1: 0.01
+      gain_1: 0.02
       gain_2: 1
-      corner: 0.85
+      corner: 0.5235987755982988
     psi:
       baseline: 0.0
-      gain_1: 0.0
-      gain_2: 1
-      corner: 1
+      gain_1: 0.02
+      gain_2: 0.5
+      corner: 0.7853981633974483
     v:
       baseline: 0.0
       gain_1: 0.3
@@ -38,7 +38,7 @@ components:
       baseline: 0.0
       gain_1: 0.01
       gain_2: 1
-      corner: 0.85
+      corner: 0.7853981633974483
     psi:
       baseline: 0.0
       gain_1: 0.0
@@ -64,7 +64,7 @@ components:
       baseline: 0.0
       gain_1: 0.01
       gain_2: 1
-      corner: 0.85
+      corner: 0.7853981633974483
     psi:
       baseline: 0.0
       gain_1: 0.0

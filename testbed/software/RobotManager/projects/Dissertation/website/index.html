@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <title>Coming Soon</title>
+    <!-- Make background cover full mobile viewport (including safe areas) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+    <style>
+        :root {
+            --bg: #0f1115;
+            --text-main: #f9fafb;
+            --text-muted: #9ca3af;
+            --accent-1: #ff7a7a;
+            --accent-2: #ffb86c;
+            --accent-3: #5ddcff;
+            --accent-4: #a855ff;
+            --track: #1f2933;
+            --progress-value: 0.63; /* 0.63 = 63% */
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        /* Make sure there is never white around the page */
+        html {
+            height: 100%;
+            background: #020617;
+        }
+
+        body {
+            height: 100%;
+            min-height: 100dvh; /* better on mobile than 100vh */
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
+            system-ui, -system-ui, sans-serif;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: clamp(12px, 3vh, 24px);
+            text-align: center;
+            background:
+                radial-gradient(circle at top, #222630 0, #0f1115 50%),
+                radial-gradient(circle at bottom, #020617 0, #020617 60%);
+            overflow-x: hidden; /* allow vertical scroll if needed, but no side gaps */
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: -80px;
+            pointer-events: none;
+            background: radial-gradient(circle at center, transparent 0, transparent 55%, rgba(0, 0, 0, 0.65) 100%);
+            mix-blend-mode: multiply;
+            opacity: 0.8;
+            z-index: -1;
+        }
+
+        .wrap {
+            max-width: 700px;
+            width: 100%;
+            position: relative;
+            margin: 0 auto;
+        }
+
+        .orb {
+            position: absolute;
+            border-radius: 999px;
+            filter: blur(40px);
+            opacity: 0.55;
+            mix-blend-mode: screen;
+            pointer-events: none;
+            z-index: -2;
+            animation: orbDrift 26s ease-in-out infinite alternate;
+        }
+
+        .orb--left {
+            width: 260px;
+            height: 260px;
+            background: radial-gradient(circle, rgba(182, 255, 59, 0.4), transparent 70%);
+            top: 10%;
+            left: -6%;
+            animation-delay: -6s;
+        }
+
+        .orb--right {
+            width: 260px;
+            height: 260px;
+            background: radial-gradient(circle, rgba(90, 165, 255, 0.4), transparent 70%);
+            bottom: -6%;
+            right: -4%;
+            animation-delay: -12s;
+        }
+
+        @keyframes orbDrift {
+            0% {
+                transform: translate3d(0, 0, 0);
+            }
+            50% {
+                transform: translate3d(20px, -10px, 0);
+            }
+            100% {
+                transform: translate3d(-16px, 14px, 0);
+            }
+        }
+
+        /* Bigger title */
+        .title {
+            font-size: clamp(3.2rem, 6vw, 4rem);
+            font-weight: 800;
+            letter-spacing: -0.05em;
+            margin-bottom: 18px;
+            background: linear-gradient(
+                    120deg,
+                    var(--accent-1),
+                    var(--accent-2),
+                    var(--accent-3),
+                    var(--accent-4)
+            );
+            background-size: 220% 220%;
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            -webkit-text-fill-color: transparent;
+            animation: titleGradient 10s ease-in-out infinite alternate;
+        }
+
+        @keyframes titleGradient {
+            0% {
+                background-position: 0% 50%;
+            }
+            100% {
+                background-position: 100% 50%;
+            }
+        }
+
+        .subtitle {
+            font-size: 1rem;
+            margin-bottom: 36px;
+            color: var(--text-muted);
+        }
+
+        /* Robot with halo */
+        .robot-wrap {
+            position: relative;
+            display: inline-block;
+            margin-bottom: 46px;
+            transform-origin: center bottom;
+            z-index: 0; /* create stacking context so negative z children don't get lost */
+        }
+
+        .robot-wrap::before,
+        .robot-wrap::after {
+            content: "";
+            position: absolute;
+            inset: -40px -60px;
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
+        .robot-wrap::before {
+            background: radial-gradient(circle at 40% 10%, rgba(255, 255, 255, 0.08), transparent 55%),
+            radial-gradient(circle at 20% 80%, rgba(182, 255, 59, 0.20), transparent 70%),
+            radial-gradient(circle at 80% 40%, rgba(93, 220, 255, 0.18), transparent 70%);
+            filter: blur(32px);
+            opacity: 0.45;
+            animation: haloPulse 7s ease-in-out infinite;
+            z-index: -1; /* behind robot, but now safely inside stacking context */
+        }
+
+        @keyframes haloPulse {
+            0% {
+                opacity: 0.65;
+                transform: scale(0.96);
+            }
+            50% {
+                opacity: 1;
+                transform: scale(1.04);
+            }
+            100% {
+                opacity: 0.7;
+                transform: scale(1);
+            }
+        }
+
+        .robot-wrap::after {
+            background: radial-gradient(ellipse at bottom, rgba(0, 0, 0, 0.75) 0, transparent 60%);
+            transform: translateY(32px) scale(1.1, 0.8);
+            opacity: 0.8;
+            filter: blur(18px);
+            z-index: -1;
+        }
+
+        .robot {
+            max-width: min(380px, 78vw);
+            height: auto;
+            filter: drop-shadow(0 16px 26px rgba(0, 0, 0, 0.8));
+            transform-origin: center center;
+            transition: transform 0.6s ease, filter 0.6s ease;
+            position: relative;
+            z-index: 0;
+            opacity: 0.7
+        }
+
+        /* Hover tilt only (no floating animation) */
+        .robot-wrap:hover .robot {
+            transform: translateY(-3px) rotate3d(0, 1, 0, 5deg);
+            filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.9)) saturate(1.05);
+        }
+
+        /* Progress */
+        .progress {
+            max-width: 480px;
+            margin: 0 auto;
+            text-align: left;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 8px;
+            color: var(--text-muted);
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            font-size: 0.82rem;
+        }
+
+        .progress-percent {
+            font-size: 0.9rem;
+            color: #e5e7eb;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .progress-track {
+            position: relative;
+            width: 100%;
+            height: 11px;
+            border-radius: 999px;
+            background: radial-gradient(circle at top, #111827, #020617);
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            position: absolute;
+            inset: 0;
+            background-image: linear-gradient(
+                    120deg,
+                    var(--accent-1),
+                    var(--accent-2),
+                    var(--accent-3),
+                    var(--accent-4)
+            );
+            background-size: 220% 220%;
+            transform-origin: left center;
+            transform: scaleX(0);
+            animation: fillGrow 1.8s cubic-bezier(0.33, 1, 0.68, 1) forwards,
+            fillSheen 9s linear infinite;
+        }
+
+        .progress-track::after {
+            content: "";
+            position: absolute;
+            inset: -40%;
+            background: linear-gradient(
+                    120deg,
+                    transparent 0,
+                    rgba(255, 255, 255, 0.22) 38%,
+                    transparent 70%
+            );
+            mix-blend-mode: screen;
+            animation: barSheen 3.8s ease-in-out infinite;
+        }
+
+        @keyframes fillGrow {
+            0% {
+                transform: scaleX(0);
+            }
+            100% {
+                transform: scaleX(var(--progress-value));
+            }
+        }
+
+        @keyframes fillSheen {
+            0% {
+                background-position: 0% 50%;
+            }
+            100% {
+                background-position: 100% 50%;
+            }
+        }
+
+        @keyframes barSheen {
+            0% {
+                transform: translateX(-60%);
+                opacity: 0;
+            }
+            30% {
+                opacity: 1;
+            }
+            70% {
+                opacity: 1;
+            }
+            100% {
+                transform: translateX(40%);
+                opacity: 0;
+            }
+        }
+
+        /* --- Mobile landscape tweaks to reduce vertical scroll --- */
+        @media (max-height: 520px) and (orientation: landscape) {
+            body {
+                padding: 8px;
+            }
+
+            .title {
+                font-size: clamp(2.2rem, 4vw, 3rem);
+                margin-bottom: 10px;
+            }
+
+            .subtitle {
+                margin-bottom: 20px;
+            }
+
+            .robot-wrap {
+                margin-bottom: 24px;
+            }
+
+            .robot {
+
+                max-width: min(260px, 60vw);
+            }
+
+            .progress {
+                max-width: 420px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+<main class="wrap">
+    <div class="orb orb--left"></div>
+    <div class="orb orb--right"></div>
+
+    <h1 class="title">Coming Soon …</h1>
+
+    <p class="subtitle">
+        Unfortunately the additional material is not available yet.
+    </p>
+
+    <div class="robot-wrap">
+        <img src="bilbo_2.png" alt="Balancing Robot" class="robot">
+    </div>
+
+    <section class="progress">
+        <div class="progress-header">
+            <span>Thesis progress</span>
+            <span class="progress-percent" id="progressText">0%</span>
+        </div>
+        <div class="progress-track">
+            <div class="progress-fill"></div>
+        </div>
+    </section>
+</main>
+
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const targetPercent = Math.round(parseFloat(getComputedStyle(document.documentElement)
+            .getPropertyValue("--progress-value")) * 100);
+        const duration = 1600;
+        const el = document.getElementById("progressText");
+        let start = null;
+
+        function step(timestamp) {
+            if (!start) start = timestamp;
+            const elapsed = timestamp - start;
+            const progress = Math.min(elapsed / duration, 1);
+            const current = Math.round(progress * targetPercent);
+            el.textContent = current + "%";
+            if (progress < 1) requestAnimationFrame(step);
+        }
+
+        requestAnimationFrame(step);
+    });
+</script>
+</body>
+</html>

@@ -16,7 +16,7 @@
 
 #include "twipr_logging.h"
 #include "bilbo_supervisor.h"
-#include "twipr_sequencer.h"
+#include "bilbo_sequencer.h"
 #include "io.h"
 
 #include "bilbo_drive.h"
@@ -55,7 +55,7 @@ public:
 
 	TWIPR_CommunicationManager comm;
 	TWIPR_ControlManager control;
-	TWIPR_Sequencer sequencer;
+	BILBO_Sequencer sequencer;
 	TWIPR_Estimation estimation;
 	TWIPR_Supervisor supervisor;
 	TWIPR_Sensors sensors;

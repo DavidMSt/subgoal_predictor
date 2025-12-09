@@ -46,6 +46,7 @@ class TrackedOrigin:
             self.tracking_valid = False
             return
         return
+
         origin = data.markers[self.definition.origin]
         x_axis_end = data.markers[self.definition.x_axis_end]
         y_axis_end = data.markers[self.definition.y_axis_end]

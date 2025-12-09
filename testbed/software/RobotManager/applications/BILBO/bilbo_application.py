@@ -28,7 +28,7 @@ from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import setLoggerLevel, Logger
 from core.utils.loop import infinite_loop
 from core.utils.sound.sound import speak, SoundSystem
-from core.utils.files import relativeToFullPath
+from core.utils.files import get_absolute_path
 
 # ======================================================================================================================
 ENABLE_SPEECH_OUTPUT = True

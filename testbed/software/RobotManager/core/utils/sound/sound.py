@@ -14,7 +14,7 @@ import numpy as np
 from core.utils.network.network import check_internet
 from core.utils.os_utils import getOS
 from core.utils.pygame_utils import pygame
-from core.utils.files import get_script_path, relativeToFullPath, makeDir, joinPaths, fileExists, deleteFile, listFilesInDir, \
+from core.utils.files import get_script_path, get_absolute_path, makeDir, joinPaths, fileExists, deleteFile, listFilesInDir, \
     splitExtension
 from core.utils.logging_utils import Logger
 
@@ -47,8 +47,8 @@ def playFile(file):
     """
     if fileExists(file):
         file_path = file
-    elif fileExists(relativeToFullPath(f'library/{file}.wav')):
-        file_path = relativeToFullPath(f'library/{file}.wav')
+    elif fileExists(get_absolute_path(f'library/{file}.wav')):
+        file_path = get_absolute_path(f'library/{file}.wav')
     else:
         return
 
@@ -199,13 +199,13 @@ def cleanTTS():
     """
 
     try:
-        for file in listFilesInDir(relativeToFullPath('tts_files')):
-            file_path = joinPaths(relativeToFullPath('tts_files'), file)
+        for file in listFilesInDir(get_absolute_path('tts_files')):
+            file_path = joinPaths(get_absolute_path('tts_files'), file)
             if fileExists(file_path):
                 deleteFile(file_path)
 
         # Reset the index.json structure
-        with open(relativeToFullPath('./tts_files/index.json'), "w") as f:
+        with open(get_absolute_path('./tts_files/index.json'), "w") as f:
             json.dump({}, f)
 
         logger.info("TTS files cleared.")
@@ -239,10 +239,10 @@ class SoundSystem:
         self.script_dir = get_script_path()
 
         # Prepare directories for TTS and sound files
-        self.tts_folder = relativeToFullPath('./tts_files')
+        self.tts_folder = get_absolute_path('./tts_files')
         makeDir(self.tts_folder)
 
-        self.sound_folder = relativeToFullPath('./sounds')
+        self.sound_folder = get_absolute_path('./sounds')
         makeDir(self.sound_folder)
 
         # Index file to store mapping of text to generated TTS files

@@ -4,8 +4,8 @@ import time
 
 import numpy as np
 
-from applications.FRODO.tracker.definitions import TrackedFRODO, TrackedOrigin, FRODO_TRACKED_OBJECTS, ORIGINS, \
-    TrackedStatic, TRACKED_STATICS
+from applications.FRODO.testbed.tracker.definitions import TrackedFRODO, TrackedOrigin, ORIGINS, \
+    TrackedStatic, TRACKED_STATICS, TRACKED_FRODO_DEFINITIONS
 from core.utils.events import event_definition, Event
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
@@ -105,8 +105,8 @@ class FRODO_Tracker:
         self.logger.info(f"Received description from OptiTrack: {rigid_bodies}")
 
         for id, body_description in rigid_bodies.items():
-            if id in FRODO_TRACKED_OBJECTS:
-                self.robots[id] = FRODO_TRACKED_OBJECTS[id]
+            if id in TRACKED_FRODO_DEFINITIONS:
+                self.robots[id] = TRACKED_FRODO_DEFINITIONS[id]
                 self.logger.info(f"Added {id} to tracked frodo objects")
 
             if id in ORIGINS:

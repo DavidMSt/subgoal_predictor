@@ -15,7 +15,7 @@
 
 #include "core.h"
 #include "twipr_logging.h"
-#include "twipr_sequencer.h"
+#include "bilbo_sequencer.h"
 #include "firmware_core.h"
 
 // Define the length of the command message used in SPI communication.

@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 
 
-def relativeToFullPath(path_str):
+def get_absolute_path(path_str):
     """
     Resolve the absolute path from a relative, absolute, or home path.
 

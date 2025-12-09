@@ -17,6 +17,7 @@ from applications.FRODO.utilities.measurements import agent_is_in_fov
 from core.utils.dataclass_utils import update_dataclass_from_dict
 from core.utils.events import event_definition, Event
 from core.utils.exit import register_exit_callback
+from core.utils.files import get_absolute_path, get_absolute_path
 from core.utils.logging_utils import Logger
 from core.utils.states import State
 from extensions.cli.cli import CommandSet, Command, CommandArgument
@@ -206,7 +207,7 @@ class FRODO_VisionAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.input = [0, 0]
         self.measurements = []
 
-        self.covariance_model = measurement_model_from_file('./model.yaml', local=True)
+        self.measurement_model = measurement_model_from_file(get_absolute_path('./model.yaml'))
 
         self.cli = FRODO_VisionAgent_CommandSet(self)
 
@@ -371,7 +372,7 @@ class FRODO_VisionAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
             # Relative orientation (target vs self)
             rel_psi = qmt.wrapToPi(obj_psi(target) - own_psi)
 
-            cov = self.covariance_model.covariance.covariance(
+            cov = self.measurement_model.covariance.covariance(
                 measurement=np.asarray([rel_vec_body[0], rel_vec_body[1], rel_psi]),
                 v=self.state.v,
                 psi_dot=self.state.psi_dot

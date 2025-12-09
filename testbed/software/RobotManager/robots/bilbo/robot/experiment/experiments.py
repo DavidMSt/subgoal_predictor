@@ -11,11 +11,15 @@ from core.utils.logging_utils import Logger
 from robots.bilbo.robot.bilbo import BILBO
 from robots.bilbo.robot.bilbo_control import BILBO_Control
 from robots.bilbo.robot.bilbo_core import BILBO_Core
-from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_CONTROL_DT
 from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_Experiment, BILBO_ExperimentHandler, \
     BILBO_Experiment_Events, BILBO_Experiment_Status
-from robots.bilbo.robot.experiment.definitions import BILBO_OutputTrajectory, BILBO_InputTrajectory
-from robots.bilbo.robot.experiment.helpers import trajectoryInputToVector, generateTrajectoryInputsFromVector
+from robots.bilbo.robot.experiment.experiment_definitions import BILBO_OutputTrajectory, BILBO_InputTrajectory
+from robots.bilbo.robot.experiment.experiment_helpers import generate_trajectory_inputs
+
+
+# from robots.bilbo.robot.experiment.definitions import BILBO_OutputTrajectory, BILBO_InputTrajectory
+# from robots.bilbo.robot.experiment.helpers import trajectoryInputToVector, generateTrajectoryInputsFromVector
 
 
 # ======================================================================================================================
@@ -81,7 +85,6 @@ class DILC_Experiment(BILBO_Experiment):
     q_window: str = "hann"  # "hann" | "hamming" | "blackman"
     Q_u: np.ndarray  # NxN Toeplitz zero-phase smoothing matrix for u-updates
 
-
     q_fc_iml: float = 0.4
     Q_u_iml: np.ndarray
 
@@ -95,7 +98,7 @@ class DILC_Experiment(BILBO_Experiment):
 
         if reference_trajectory is None:
             self.reference_trajectory = self._generateDefaultReferenceTrajectory()
-            self.reference_trajectory_vec = 1.0*np.asarray(self.reference_trajectory.output)
+            self.reference_trajectory_vec = 1.0 * np.asarray(self.reference_trajectory.output)
             self.reference_trajectory_vec = self.reference_trajectory_vec
             self._N = len(self.reference_trajectory_vec)
 
@@ -241,12 +244,16 @@ class DILC_Experiment(BILBO_Experiment):
 
         # 1. Generate Input Trajectory from current u
         input_trajectory = BILBO_InputTrajectory(
-            time_vector=self.reference_trajectory.time_vector,
-            length=len(self.reference_trajectory.time_vector),
             name=f'DILC Input Trajectory {self.trial_index}',
             id=self.trial_index,
-            control_mode=BILBO_Control_Mode.BALANCING,
-            inputs=generateTrajectoryInputsFromVector(self.u)
+            inputs=generate_trajectory_inputs(self.u),
+            dt=BILBO_CONTROL_DT
+            # time_vector=self.reference_trajectory.time_vector,
+            # length=len(self.reference_trajectory.time_vector),
+            # name=f'DILC Input Trajectory {self.trial_index}',
+            # id=self.trial_index,
+            # control_mode=BILBO_Control_Mode.BALANCING,
+            # inputs=generateTrajectoryInputsFromVector(self.u)
         )
 
         self.logger.info(f"DILC trial {self.trial_index}/{self.num_trials}. Waiting for user ...")
@@ -517,7 +524,6 @@ class DILC_Experiment(BILBO_Experiment):
             Q = Q / dc_gain
         self.Q_u = Q
 
-
         h_iml = design_zero_phase_fir(fc=self.q_fc_iml, L=self.q_len, window=self.q_window)
         Q_iml = build_Qf_zero_padded(h_iml, self._N)
         Q_iml = 0.5 * (Q_iml + Q_iml.T)
@@ -525,9 +531,6 @@ class DILC_Experiment(BILBO_Experiment):
         if dc_gain != 0:
             Q_iml = Q_iml / dc_gain
         self.Q_u_iml = Q_iml
-
-
-
 
 # ======================================================================================================================
 # class IML_Experiment(BILBO_Experiment):

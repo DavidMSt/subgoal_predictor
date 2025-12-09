@@ -21,7 +21,7 @@ from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRO
     FRODO_VisionAgent_Interactive, FRODO_Static, FRODO_ENVIRONMENT_ACTIONS
 from core.utils.colors import random_color_from_palette, get_color_from_palette, LIGHT_GREEN, LIGHT_RED, NamedColor
 from core.utils.exit import register_exit_callback
-from core.utils.files import relativeToFullPath
+from core.utils.files import get_absolute_path
 from core.utils.logging_utils import Logger, LOGGING_COLORS, addLogRedirection
 from core.utils.network.network import getHostIP
 from core.utils.sound.sound import SoundSystem
@@ -717,8 +717,8 @@ class FRODO_App_Standalone:
 
                     # For the centralized agent
                     algorithm_measurement_for_centralized = AlgorithmAgentMeasurement(
-                        agent_from=agent_container.centralized_algorithm_agent,
-                        agent_to=self.algorithm_centralized.agents[to_id],
+                        agent_from=agent_container.agent.agent_id,
+                        agent_to=to_id,
                         measurement=np.asarray([measurement.position[0], measurement.position[1], measurement.psi]),
                         covariance=measurement.covariance
                     )
@@ -727,8 +727,8 @@ class FRODO_App_Standalone:
 
                     # For the distributed agent
                     algorithm_measurement_for_distributed = AlgorithmAgentMeasurement(
-                        agent_from=agent_container.distributed_algorithm_agent,
-                        agent_to=self.algorithm_distributed.agents[to_id],
+                        agent_from=agent_container.agent.agent_id,
+                        agent_to=to_id,
                         measurement=np.asarray([measurement.position[0], measurement.position[1], measurement.psi]),
                         covariance=measurement.covariance
                     )
@@ -962,7 +962,7 @@ class FRODO_App_Standalone:
 
     def multi_agent_demo_yaml(self):
 
-        file = relativeToFullPath('./multi_agent_scenario_1.yml')
+        file = get_absolute_path('./multi_agent_scenario_1.yml')
         adapters = [FRODO_Sim_NavigatedObject(cont.agent) for _, cont in self.agents.items()]
         self.navigator.initialize(adapters)
         plan = NavigatorPlan.from_yaml(file)

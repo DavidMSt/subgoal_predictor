@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import yaml
 
-from core.utils.files import fileExists, relativeToFullPath
+from core.utils.files import fileExists, get_absolute_path
 
 
 @dataclass
@@ -172,6 +172,21 @@ class FRODO_MeasurementModel:
     def get_covariance(self, measurement: np.ndarray, v: float, psi_dot: float) -> np.ndarray:
         return self.covariance.covariance(measurement, v, psi_dot)
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def __repr__(self):
+        cov_repr = repr(self.covariance).replace("\n", "")
+        return (
+            f"{self.__class__.__name__}("
+            f"fov={self.fov:.3f}, "
+            f"min_d={self.min_measurement_distance:.1f}, "
+            f"max_d={self.max_measurement_distance:.1f}, "
+            f"bias_x={self.bias_x:.2f}, "
+            f"bias_y={self.bias_y:.2f}, "
+            f"bias_psi={self.bias_psi:.2f}, "
+            f"covariance={cov_repr}"
+            ")"
+        )
+
 
 # ==============================
 # Thin wrappers (if you like)
@@ -208,14 +223,11 @@ def _error_model_from_dict(d: dict) -> ErrorModel:
     )
 
 
-def measurement_model_from_file(file, local: bool = False) -> FRODO_MeasurementModel:
+def measurement_model_from_file(file) -> FRODO_MeasurementModel:
     """
     Load a MeasurementModel from a YAML file path or file-like object.
     Supports either 'fov_rad' or 'fov_deg' in the YAML.
     """
-
-    if local:
-        file = relativeToFullPath(file)
 
     if not fileExists(file):
         raise FileNotFoundError(f"File not found: {file}")
@@ -597,7 +609,7 @@ if __name__ == '__main__':
                 ),
             ))
     )
-    analyze_measurement_model(model, 'x')
+    # analyze_measurement_model(model, 'x')
 
-    # measurement_model_to_file(model, '../simulation/model.yaml')
+    measurement_model_to_file(model, '../simulation/model.yaml')
     # model = measurement_model_from_file('../simulation/model.yaml')

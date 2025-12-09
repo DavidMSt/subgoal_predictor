@@ -438,6 +438,7 @@ class RT_Plot_Widget(Widget):
         self.plot = RT_Plot_Backend(f"{widget_id}_plot",
                                     send_function=self._send_to_plot,
                                     update_function=self._update_plot,
+                                    **plot_config or {},
                                     **kwargs)
 
     def getConfiguration(self) -> dict:

@@ -1,0 +1,5 @@
+# Use index.html as the default file
+DirectoryIndex index.html
+
+# Show index.html for all “not found” URLs
+ErrorDocument 404 /index.html

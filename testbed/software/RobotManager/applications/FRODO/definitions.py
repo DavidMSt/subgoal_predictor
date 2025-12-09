@@ -3,11 +3,12 @@ import dataclasses
 import numpy as np
 
 from core.utils.colors import NamedColor, Colors
-from core.utils.files import relativeToFullPath
+from core.utils.files import get_absolute_path
 
 # ======================================================================================================================
-EXPERIMENT_DIR = relativeToFullPath("./experiments")
-PLANS_DIR = relativeToFullPath("./experiments/utilities/plans")
+EXPERIMENT_DIR = get_absolute_path("./experiments")
+PLANS_DIR = get_absolute_path("./experiments/utilities/plans")
+
 
 # ======================================================================================================================
 @dataclasses.dataclass
