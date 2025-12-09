@@ -17,14 +17,17 @@ from master_thesis.motion_planning.helper.collisions_fcl import WorldCollisionCh
 from master_thesis.containers.environment_containers import EnvironmentConfig, EnvironmentContainer
 from master_thesis.general.general_tasks import GeneralTask
 
+from master_thesis.containers.base_container import BaseContainer
+
 # ======================================================================================================================
 
 class FrodoGeneralEnvironment(FrodoEnvironment):
     environment_container : EnvironmentContainer
 
-    def __init__(self, Ts, run_mode, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), *args, **kwargs):
+    def __init__(self, Ts, run_mode, limits: tuple[tuple[int, int], ...] = ((-5, 5), (-5, 5)), *args, **kwargs):
         self.space = core.spaces.Space2D()
         self._obstacles = []  # TODO: still needed? 
+
         self.set_limits(limits)
 
         environment_config = EnvironmentConfig(limits=limits, Ts = Ts)
@@ -45,11 +48,15 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
                         parent=self.scheduling.actions['objects'])
 
     def action_output(self):
+        print(self.limits)
         for obj in self.objects.values():
             obj.output(self)
 
     def addObject(self, objects: core_env.Object | list[Object]):
         assert self.collision_checker is not None
+
+        # TODO: Make this functional by not letting the limits of the env be overwritten with strange other values
+        self.check_limits(objects.container.x, objects.container.y)
 
         if isinstance(objects, FRODOGeneralAgent):
             self.environment_container.add_agents(objects.container)
@@ -88,6 +95,19 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         pos_dim = self.space.dimensions[0] # Get the first dimension of the space (E(2) vector)
         pos_dim.kwargs['wrapping'] = wrapping
         pos_dim.limits = limits
+
+    def check_limits(self, x: float, y: float):
+        (xmin, xmax), (ymin, ymax) = self.limits
+
+        if not (xmin <= x <= xmax):
+            raise ValueError(
+                f"[ENV ERROR] x={x} outside allowed range [{xmin}, {xmax}]"
+            )
+
+        if not (ymin <= y <= ymax):
+            raise ValueError(
+                f"[ENV ERROR] y={y} outside allowed range [{ymin}, {ymax}]"
+            )
 
     def action_input(self):
         # print(f"=== ENV INPUT PHASE @ tick {self.scheduling.tick}") # TODO: enabling this shows that this phase is called twice? bug? 
