@@ -54,15 +54,15 @@ class MPAgentModule():
         if start_task == None:
             # use current agent state as start config
             agent_state = extract_config_from_cont(self.agent_cont)
-            start_config = np.ndarray(agent_state)
+            start_config = np.array(agent_state)
 
         # if start specified, e.g. to predict path between two tasks
         else: 
             task_state = extract_config_from_cont(start_task)
-            start_config = np.ndarray(task_state)
+            start_config = np.array(task_state)
 
         assert isinstance(goal_task, TaskContainer)
-        goal_config = np.ndarray(extract_config_from_cont(goal_task))
+        goal_config = np.array(extract_config_from_cont(goal_task))
         
         # update the mp container
         self.mp_container.start = start_config

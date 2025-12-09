@@ -79,8 +79,9 @@ class OMPLPlannerFRODOBase(ABC):
     def ompl_setup(self):
         self._space = self._create_space()
         self._si = self._create_space_info()
-        self._pdef = self._create_pdef()
-        self._planner = self.create_planner()
+        # self._pdef = self._create_pdef()
+        
+        # self._planner = self.create_planner()
 
     @abstractmethod
     def select_planner_type(self, si) -> Any:
@@ -340,6 +341,7 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
     
     def solve_problem(self, verbose = False) -> tuple[bool, float]:
         self._pdef = self._create_pdef() # update the pdef with current start goal from the container
+        self._planner = self.create_planner() # TODO: This should not have to be recreated each time?
         self._planner.setProblemDefinition(self._pdef) # tell the planner about the new problem definition
         self.check_pdef_validity()
         self._solution_path = None
