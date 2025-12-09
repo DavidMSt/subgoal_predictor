@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-from master_thesis.containers.base_container import OverarchingContainer
+from master_thesis.containers.base_container import BaseContainer
 from master_thesis.containers.agent_containers import FRODOAgentContainer
 from master_thesis.containers.task_container import TaskContainer
 import numpy as np
@@ -46,7 +46,7 @@ class AssignmentContextConfig:
 
 
 @dataclass(slots=True)
-class AssignmentContextContainer(OverarchingContainer):
+class AssignmentContextContainer(BaseContainer):
     """Container for assignment strategy context and results.
 
     Holds both input information (config) and strategy outputs (state).

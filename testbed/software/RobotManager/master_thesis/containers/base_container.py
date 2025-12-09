@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 
 @dataclass
-class OverarchingContainer():
+class BaseContainer():
     config: Any
     state: Any
 

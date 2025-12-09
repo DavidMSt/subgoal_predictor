@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from master_thesis.containers.base_container import OverarchingContainer
+from master_thesis.containers.base_container import BaseContainer
 
 
 @dataclass(frozen=False, slots = False)
@@ -19,7 +19,7 @@ class Task_Config:
     temporary: bool = False # For RL-waypoint prediction we want to remove them later again
 
 @dataclass(frozen=False, slots = False)
-class TaskContainer(OverarchingContainer):
+class TaskContainer(BaseContainer):
     object_id: str = field(kw_only=True)
     config: Task_Config = field(default_factory=Task_Config)
     state: TaskState = field(default_factory=TaskState)

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from master_thesis.containers.base_container import OverarchingContainer
+from master_thesis.containers.base_container import BaseContainer
 
 @dataclass(frozen=False, slots = False)
 class ExecutionState:
@@ -10,6 +10,6 @@ class Execution_Config:
     ...
 
 @dataclass(frozen=False, slots = False)
-class ExecutionContainer(OverarchingContainer):
+class ExecutionContainer(BaseContainer):
     config: Execution_Config = field(default_factory=Execution_Config)
     state: ExecutionState = field(default_factory=ExecutionState)

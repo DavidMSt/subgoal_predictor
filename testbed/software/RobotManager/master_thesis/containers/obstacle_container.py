@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from master_thesis.containers.base_container import OverarchingContainer
+from master_thesis.containers.base_container import BaseContainer
 
 # @dataclass(frozen= False, slots = False) #TODO obstacles are static, therefore strictly speaking 
 # class Obstacle_State():
@@ -18,7 +18,7 @@ class Obstacle_Config:
     shape: str = 'box'
 
 @dataclass(frozen=False, slots = False)
-class ObstacleContainer(OverarchingContainer):
+class ObstacleContainer(BaseContainer):
     object_id: str = field(kw_only=True)
     config: Obstacle_Config = field(default_factory=Obstacle_Config)
     state: None = None

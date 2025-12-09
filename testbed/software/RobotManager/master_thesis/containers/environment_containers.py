@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 import numpy as np
 
-from master_thesis.containers.base_container import OverarchingContainer
+from master_thesis.containers.base_container import BaseContainer
 from master_thesis.containers.agent_containers import FRODOAgentContainer
 from master_thesis.containers.obstacle_container import ObstacleContainer
 from master_thesis.containers.task_container import TaskContainer
@@ -23,7 +23,7 @@ class EnvironmentConfig:
     grid_padding: float = 0.5  # extra space around workspace boundaries
 
 @dataclass(frozen=False, slots = False)
-class EnvironmentContainer(OverarchingContainer):
+class EnvironmentContainer(BaseContainer):
     config: EnvironmentConfig  # No default - must be provided (requires limits and Ts)
     state: EnvironmentState = field(default_factory=EnvironmentState)
 

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from master_thesis.containers.base_container import OverarchingContainer
+from master_thesis.containers.base_container import BaseContainer
 from master_thesis.containers.task_container import TaskContainer
 
 @dataclass(frozen=False, slots=True)
@@ -30,6 +30,6 @@ class AgentTAConfig:
     distance_metric: str = 'euclidean'  # 'euclidean', 'manhattan', 'dubins', etc.
 
 @dataclass(slots=True)
-class AgentTAContainer(OverarchingContainer):
+class AgentTAContainer(BaseContainer):
     config: AgentTAConfig = field(default_factory=AgentTAConfig)
     state: AgentTAState = field(default_factory=AgentTAState)

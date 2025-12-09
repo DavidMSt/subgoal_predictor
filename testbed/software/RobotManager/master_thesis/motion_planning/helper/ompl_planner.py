@@ -339,7 +339,8 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
         return solution_dict
     
     def solve_problem(self, verbose = False) -> tuple[bool, float]:
-
+        self._pdef = self._create_pdef() # update the pdef with current start goal from the container
+        self._planner.setProblemDefinition(self._pdef) # tell the planner about the new problem definition
         self.check_pdef_validity()
         self._solution_path = None
 

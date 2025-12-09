@@ -21,6 +21,8 @@ from master_thesis.general.general_simulation import FRODO_general_Simulation, F
 from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo, OMPLPlannerFRODOBase
 from master_thesis.general.general_agents import InputPhaseRunner, InputPhase
 from master_thesis.containers.mp_container import AgentMPConfig, AgentMPContainer
+from master_thesis.containers.task_container import TaskContainer
+from master_thesis.containers.base_container import BaseContainer
 
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)
 
@@ -28,32 +30,44 @@ class MPAgentModule():
     env_config: EnvironmentContainer
     agent_cont: FRODOAgentContainer
 
-    def __init__(self,agent_cont: FRODOAgentContainer, env_container: EnvironmentContainer, runner: InputPhaseRunner, logger: Logger) -> None:
+    def __init__(self,agent_cont: FRODOAgentContainer, env_container: EnvironmentContainer, runner: InputPhaseRunner, logger: Logger, mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino) -> None:
         self.agent_cont = agent_cont
         self.env_config = env_container
         self.runner = runner
         self.logger = logger
+        self.mp_type = mp_type
+        self.motion_planner = None
+        self.mp_container = self.setup_mp_container()
 
-    def plan_motion(self, phase_key: str, goal_config, start_config = None, motion_planner: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino):
+    def plan_motion(self, phase_key: str, goal_task: TaskContainer| None, start_task: TaskContainer | None = None):
+        def extract_config_from_cont(container: BaseContainer):
+            state = [container.x, container.y, container.psi]
+            return state
+
         if self.runner is None:
             self.logger.warning("Runner not initialized, Solution is not added as executable phase")
 
-        if isinstance(motion_planner, str):
-            raise NotImplementedError
+        if self.motion_planner is None:
+            self.motion_planner = self.setup_motion_planner()
         
-        if start_config == None:
+        # if no start specified use the current agent config
+        if start_task == None:
             # use current agent state as start config
-            agent_state = [self.agent_cont.x, self.agent_cont.y, self.agent_cont.psi]
+            agent_state = extract_config_from_cont(self.agent_cont)
             start_config = np.ndarray(agent_state)
+
+        # if start specified, e.g. to predict path between two tasks
+        else: 
+            task_state = extract_config_from_cont(start_task)
+            start_config = np.ndarray(task_state)
+
+        assert isinstance(goal_task, TaskContainer)
+        goal_config = np.ndarray(extract_config_from_cont(goal_task))
         
-        mp_config = AgentMPConfig(
-            start=start_config,
-            goal=goal_config,
-        )
+        # update the mp container
+        self.mp_container.start = start_config
+        self.mp_container.goal = goal_config
 
-        mp_container = AgentMPContainer(config=mp_config)
-
-        self.motion_planner = motion_planner(mp_container=mp_container, agent_container= self.agent_cont, env_container= self.env_config)# TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
         solved, path_length = self.motion_planner.solve_problem()
 
         if solved:
@@ -74,6 +88,16 @@ class MPAgentModule():
             )
         else:
             self.logger.warning(f"No solution found! timeout reached")
+
+    def setup_mp_container(self):
+        config = AgentMPConfig() # TODO: Offer choice to make more adjustments when calling the function
+        mp_container = AgentMPContainer(config = config)
+        return mp_container
+
+    def setup_motion_planner(self):
+        # TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
+        motion_planner = self.mp_type(mp_container=self.mp_container, agent_container= self.agent_cont, env_container= self.env_config)
+        return motion_planner
 
 class FRODO_MotionPlanning_Agent(FRODOGeneralAgent):
     mpi: MPAgentModule

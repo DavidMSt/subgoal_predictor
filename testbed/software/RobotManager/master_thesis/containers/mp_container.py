@@ -1,11 +1,16 @@
 from dataclasses import dataclass, field
 import numpy as np
 
-from master_thesis.containers.base_container import OverarchingContainer
+from master_thesis.containers.base_container import BaseContainer
 
 
 @dataclass(frozen = False, slots=True)
 class AgentMPState:
+
+    # start/ goal configurations
+    start: np.ndarray| None = None
+    goal: np.ndarray | None = None
+
     # flag for action
     start_plannign: bool = False
     
@@ -30,10 +35,6 @@ class AgentMPState:
 
 @dataclass(frozen = True, slots = True)
 class AgentMPConfig:
-    
-    # start/ goal configurations
-    start: np.ndarray
-    goal: np.ndarray | None
 
     # hyperparameters
     # timelimit for each motion planning problem
@@ -54,6 +55,6 @@ class AgentMPConfig:
     v_bounds: tuple = (-1.0, 1.0)
 
 @dataclass(slots = True)
-class AgentMPContainer(OverarchingContainer):
+class AgentMPContainer(BaseContainer):
     state: AgentMPState = field(default_factory=AgentMPState)
     config: AgentMPConfig | None = None
