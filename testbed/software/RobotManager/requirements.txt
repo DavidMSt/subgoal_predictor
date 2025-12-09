@@ -47,4 +47,12 @@ cvxpy >= 1.7.3
 audioop-lts; python_version >= "3.13"
 torch-geometric >= 2.6.1
 torch >= 2.8.0
-stable-baselines3 >=2.7.0
+stable-baselines3 >= 2.7.0
+
+# Motion planning
+# NOTE: OMPL cannot be installed via pip. Install separately:
+#  OMPL module not found. Download from
+#  https://github.com/ompl/ompl/releases
+#  then install via:
+#        pip install ompl-<version>.whl
+#        Or use Docker: docker pull kavrakilab/ompl

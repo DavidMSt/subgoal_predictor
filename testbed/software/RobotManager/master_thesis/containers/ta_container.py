@@ -13,7 +13,7 @@ class AgentTAState:
     # Task assignment
     assigned_task: TaskContainer| None = None
     strategy: str = "HUNGARIAN" # TODO: Import the available strategies here? 
-    mode: str = "decentral" # TODO: Turn this into enum? 
+    mode: str = "central" # TODO: Turn this into enum? 
 
     # Execution state - subgoal 
     #prediction
