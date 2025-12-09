@@ -57,8 +57,8 @@ class CentralizedStrategyABC(StrategyABC):
         )
 
         # Validate one-to-one constraint
-        if len(ctx.config.nearby_agents) != len(ctx.config.nearby_tasks):
-            msg = f'Number of agents ({len(ctx.config.nearby_agents)}) must equal number of tasks ({len(ctx.config.nearby_tasks)}) for one-to-one assignment'
+        if len(ctx.nearby_agents) != len(ctx.nearby_tasks):
+            msg = f'Number of agents ({len(ctx.nearby_agents)}) must equal number of tasks ({len(ctx.nearby_tasks)}) for one-to-one assignment'
             if logger:
                 logger.error(msg)
             raise ValueError(msg)
@@ -147,8 +147,8 @@ class RandomStrategy(CentralizedStrategyABC):
         """Run centralized random assignment."""
 
         # Extract counts from context
-        n_agents = len(ctx.config.nearby_agents)
-        n_tasks = len(ctx.config.nearby_tasks)
+        n_agents = len(ctx.nearby_agents)
+        n_tasks = len(ctx.nearby_tasks)
 
         # Random assignment
         rng = np.random.default_rng()
@@ -156,8 +156,8 @@ class RandomStrategy(CentralizedStrategyABC):
         rows = rng.choice(n_agents, size=m, replace=False)
         cols = rng.choice(n_tasks, size=m, replace=False)
 
-        # Store matches in state
-        ctx.state.matches = list(zip(rows.tolist(), cols.tolist()))
+        # Store matches
+        ctx.matches = list(zip(rows.tolist(), cols.tolist()))
         return ctx
 
 
@@ -165,8 +165,8 @@ class HungarianStrategy(CentralizedStrategyABC):
 
     def solve(self, ctx: AssignmentContextContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> AssignmentContextContainer:
         """Centralized Hungarian assignment using Euclidean distance cost."""
-        n_agents = len(ctx.config.nearby_agents)
-        n_tasks = len(ctx.config.nearby_tasks)
+        n_agents = len(ctx.nearby_agents)
+        n_tasks = len(ctx.nearby_tasks)
 
         # Build cost matrix from Euclidean distances
         cost_matrix = np.zeros((n_agents, n_tasks), dtype=np.float64)
@@ -179,8 +179,8 @@ class HungarianStrategy(CentralizedStrategyABC):
         # Run Hungarian algorithm
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-        # Store matches in state
-        ctx.state.matches = list(zip(row_ind.tolist(), col_ind.tolist()))
+        # Store matches
+        ctx.matches = list(zip(row_ind.tolist(), col_ind.tolist()))
 
         return ctx
 

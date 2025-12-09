@@ -62,12 +62,12 @@ class AssignmentContextContainer(OverarchingContainer):
         Returns:
             Boolean matrix of shape (n_agents, n_tasks) where True indicates assignment
         """
-        n_agents = len(self.config.nearby_agents)
-        n_tasks = len(self.config.nearby_tasks)
+        n_agents = len(self.nearby_agents)
+        n_tasks = len(self.nearby_tasks)
         assignment = np.zeros((n_agents, n_tasks), dtype=np.bool_)
 
-        if self.state.matches is not None:
-            for i, j in self.state.matches:
+        if self.matches is not None:
+            for i, j in self.matches:
                 assignment[i, j] = True
 
         return assignment
