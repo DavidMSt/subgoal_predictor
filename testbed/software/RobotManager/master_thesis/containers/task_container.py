@@ -16,6 +16,7 @@ class Task_Config:
     psi: float = 0.0
     goal_tolerance_xy: float = 0.15  # Position tolerance in meters (15cm radius)
     goal_tolerance_psi: float | None = None  # Orientation tolerance in radians (None = ignore orientation)
+    temporary: bool = False # For RL-waypoint prediction we want to remove them later again
 
 @dataclass(frozen=False, slots = False)
 class TaskContainer(OverarchingContainer):

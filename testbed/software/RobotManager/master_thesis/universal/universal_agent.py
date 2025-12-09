@@ -35,7 +35,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
 
         # MPAgent module
         self.mpi = MPAgentModule(
-            agent_config=self.container, 
+            agent_cont=self.container, 
             env_container=env_container, 
             runner=self.runner, 
             logger=self.logger)
