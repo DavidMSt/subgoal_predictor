@@ -98,38 +98,3 @@ class MPAgentModule():
         # TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
         motion_planner = self.mp_type(mp_container=self.mp_container, agent_container= self.agent_cont, env_container= self.env_config)
         return motion_planner
-
-class FRODO_MotionPlanning_Agent(FRODOGeneralAgent):
-    mpi: MPAgentModule
- 
-    def __init__(self, env_container: EnvironmentContainer, agent_id: str, Ts=None, start_config=(0,0,0), *args, **kwargs):
-        super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, *args, **kwargs)
-
-        # MPAgent module
-        self.mpi = MPAgentModule(
-            agent_cont=self.container,   # now built by general agent itself
-            env_container=env_container,            # MUST match new env container
-            runner=self.runner,
-            logger=self.logger
-        )
-
-
-if __name__ == '__main__':
-    sim = FRODO_general_Simulation(Ts=0.1, env=FrodoGeneralEnvironment)
-    sim.init()
-    sim.start()
-    start_config = [0.0, 0.0, 0.0]
-    goal_config = [1.0, 1.0, np.pi]
-    agent = FRODO_MotionPlanning_Agent(
-        env_container=sim.environment.environment_container, 
-        agent_id='frodo1_v', 
-        Ts=0.1,
-        start_config=start_config
-    )
-    sim.add_agent(agent)
-    agent.mpi.plan_motion(phase_key='test_phase', start_config=start_config, goal_config=goal_config)
-    
-    agent.runner.activate_phase('test_phase')
-
-    sleep(3)
-    print(agent._configuration)

@@ -120,35 +120,3 @@ class TAAgentModule():
     def assignment_pending(self, value: bool = False) -> None:
         self.ta_container.assignment_pending = value
         
-
-class FRODO_AssignmentAgent(FRODOGeneralAgent):
-
-    def __init__(
-        self,
-        agent_id: str,
-        start_config: tuple[float, float, float],
-        runner=None,
-        Ts=0.1
-    ):
-        super().__init__(
-            agent_id=agent_id,
-            start_config=start_config,
-            Ts=Ts,
-        )
-
-        self.runner = runner
-
-        print(self.state)
-
-        task_container = AgentTAContainer(
-            config=AgentTAConfig(),
-            state=AgentTAState()
-        )
-
-        # add assignment module
-        self.asi = TAAgentModule(
-            agent_id=agent_id,
-            agent_container=self.container,
-            ta_container=task_container,
-            logger=self.logger,
-        )
