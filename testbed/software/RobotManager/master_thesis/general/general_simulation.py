@@ -146,6 +146,19 @@ class FRODO_general_Simulation(FRODO_Simulation):
         agent.scheduling.Ts = self.Ts
         agent.dynamics.Ts = self.Ts
 
+        # Add agent to environment container and initialize local world
+        self.environment.environment_container.add_agents(agent.container)
+
+        # Initialize local world container for agent if not already present
+        if not hasattr(agent, 'lw_cont') or agent.lw_cont is None:
+            from master_thesis.containers.general_containers.local_world_container import (
+                LocalWorldContainer, LocalWorldConfig, LocalWorldState
+            )
+            agent.lw_cont = LocalWorldContainer(
+                config=LocalWorldConfig(),
+                state=LocalWorldState()
+            )
+
         self.environment.addAgent(agent)
         # ensure the agent exposes its current configuration immediately (populate configuration_global)
         try:

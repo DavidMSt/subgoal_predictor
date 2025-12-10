@@ -18,6 +18,9 @@ from master_thesis.containers.general_containers.environment_container import En
 from master_thesis.general.general_tasks import GeneralTask
 
 from master_thesis.containers.base_container import BaseContainer
+from master_thesis.containers.general_containers.local_world_container import (
+                    LocalWorldContainer, LocalWorldConfig, LocalWorldState
+                )
 
 # ======================================================================================================================
 
@@ -45,11 +48,92 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
                         priority=65,
                         parent=self.scheduling.actions['objects'])
         
-        self.scheduling.actions[FRODO_ENVIRONMENT_ACTIONS.COMMUNICATION].addAction(self._update_lw_function)
-        
+        core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COMMUNICATION, #TODO: initialize it like this?
+                        object=self,
+                        function=self._update_lw_function,
+                        priority=31,
+                        parent=self.scheduling.actions['objects'])
+
     def _update_lw_function(self):
-        for agent in self.agents:
-            # get position of the agent
+        """
+        Update each agent's local world container based on sensing ranges.
+
+        Operates purely on containers:
+        - Reads agent/task/obstacle containers from environment_container.state
+        - Filters containers by distance using agent positions from containers
+        - Assigns filtered container references to each agent's local world state
+
+        For each agent, populate its local world state with:
+        - Nearby agents (within agent_range)
+        - Nearby tasks (within task_range)
+        - Nearby obstacles (within obstacle_range, or all if None)
+
+        Ranges are defined in environment_container.config.
+        """
+        def filter_by_range(agent_x: float, agent_y: float,
+                        containers: dict, range_limit: float | None) -> dict:
+            """
+            Filter containers by distance from agent position.
+
+            Args:
+                agent_x, agent_y: Agent position (from agent container)
+                containers: Dictionary of containers with x, y attributes (via BaseContainer.__getattr__)
+                range_limit: Maximum distance (None = infinite range, return all)
+
+            Returns:
+                Filtered dictionary of container references within range
+            """
+            if range_limit is None:
+                # Infinite range - return all containers
+                return containers.copy()
+
+            filtered = {}
+            for obj_id, obj_cont in containers.items():
+                # Access x, y from container (forwards to config/state via BaseContainer)
+                dist = np.sqrt((obj_cont.x - agent_x)**2 + (obj_cont.y - agent_y)**2)
+                if dist <= range_limit:
+                    filtered[obj_id] = obj_cont
+
+            return filtered
+
+        env_config = self.environment_container.config
+        env_state = self.environment_container.state
+
+        # Iterate over agent containers in environment state
+        for agent_str, agent in self.agents.items():
+            print(type(agent))
+            assert isinstance(agent, FRODOGeneralAgent)
+
+            lwr_cont = agent.lwr_cont
+            assert isinstance(lwr_cont, LocalWorldContainer)
+            
+            # Get agent's position
+            agent_x = agent.state.x
+            agent_y = agent.state.y
+
+            # Update nearby agent containers (excluding self)
+            nearby_agents = filter_by_range(
+                agent_x, agent_y,
+                env_state.agent_conts,
+                env_config.agent_range
+            )
+            # Remove self from neighbors
+            nearby_agents.pop(agent_str, None)
+            lwr_cont.neighbors = nearby_agents
+
+            # Update nearby task containers
+            lwr_cont.state.tasks = filter_by_range(
+                agent_x, agent_y,
+                env_state.task_conts,
+                env_config.task_range
+            )
+
+            # Update nearby obstacle containers
+            lwr_cont.state.obstacles = filter_by_range(
+                agent_x, agent_y,
+                env_state.obstacle_conts,
+                env_config.obstacle_range
+            )
 
     def action_output(self):
         for obj in self.objects.values():
@@ -58,15 +142,24 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
     def addObject(self, objects: core_env.Object | list[Object]):
         assert self.collision_checker is not None
 
-        # TODO: Make this functional by not letting the limits of the env be overwritten with strange other values
         self.check_limits(objects.container.x, objects.container.y)
 
         if isinstance(objects, FRODOGeneralAgent):
+            # Add agent to environment container
             self.environment_container.add_agents(objects.container)
             self.collision_checker.add_agent(objects.container, objects.agent_id)
 
-        if isinstance(objects, GeneralObstacle):
+            # Initialize local world container for agent
+            objects.lwr_cont = LocalWorldContainer(
+                config=LocalWorldConfig(),
+                state=LocalWorldState()
+            )
+
+        elif isinstance(objects, GeneralObstacle):
             self.environment_container.add_obstacles(objects.container)
+
+        elif isinstance(objects, GeneralTask):
+            self.environment_container.add_tasks(objects.container)
 
         return super().addObject(objects)
 
@@ -130,10 +223,6 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
     @property
     def limits(self) ->list[list[float]]:
         return self.space.dimensions[0].limits
-    
-    @property
-    def obstacles(self):
-        return self._obstacles
     
     @property
     def environment_configuration(self) -> EnvironmentConfig:

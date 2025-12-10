@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from master_thesis.containers.base_container import BaseContainer
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.obstacle_container import ObstacleContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
@@ -33,6 +34,6 @@ class LocalWorldState:
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=False, slots=False)
-class LocalWorldContainer:
-    config: LocalWorldConfig
+class LocalWorldContainer(BaseContainer):
+    config: LocalWorldConfig = field(default_factory= LocalWorldConfig)
     state: LocalWorldState = field(default_factory=LocalWorldState)

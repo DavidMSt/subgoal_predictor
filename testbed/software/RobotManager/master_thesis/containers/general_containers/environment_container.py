@@ -56,8 +56,8 @@ class EnvironmentConfig:
     grid_padding: float = 0.5  # extra space around workspace boundaries
 
     # agent visibility ranges
-    agent_range: float | None = 1.0
-    task_range: float| None = 1.0
+    agent_range: float | None = None
+    task_range: float| None = None
     obstacle_range: float | None = None
 
 

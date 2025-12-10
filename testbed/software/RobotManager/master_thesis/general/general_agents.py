@@ -179,6 +179,8 @@ class InputPhaseRunner:
 
 
 class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
+    lwr_cont: LocalWorldContainer | None
+
     """
     Lightweight general agent:
     - uses FRODO_DynamicAgent for motion
@@ -192,7 +194,6 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     Ts=0.1, # TODO: this could probably be removed anyway, since Ts could also be received by env updates? 
     start_config: tuple[float, float, float] = (0.0, 0.0, 0.0),
     color: tuple[float, float, float] = (1.0, 1.0, 1.0),
-    lwr: LocalWorldContainer | None = None
     ):
         agent_config = FRODO_Agent_Config(color = color, Ts= Ts)
 
@@ -224,8 +225,8 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.state.y = float(y0)
         self.state.psi = float(psi0)
 
-        # Create the local world container
-        self.lwr = lwr
+        # Local world representation, will be initialized and updated, when agent is added to environment
+        self.lwr_cont = None
 
 
 
@@ -245,6 +246,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
 
 
     def action_frodo_communication(self):
+        print('heeere:', self.lwr_cont)
         ...
 
     # ----------------------------------------------------------------------
