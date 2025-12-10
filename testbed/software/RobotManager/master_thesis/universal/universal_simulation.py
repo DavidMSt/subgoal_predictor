@@ -8,9 +8,9 @@ from master_thesis.motion_planning.mp_simulation_module import MPSimulationModul
 from master_thesis.task_assignment.ta_simulation_module import TASimulationModule
 from master_thesis.task_assignment.ta_strategies import HungarianStrategy, CBBAStrategy
 
-from master_thesis.containers.mp_container import AgentMPContainer
-from master_thesis.containers.ta_container import AgentTAContainer
-from master_thesis.containers.exe_container import ExecutionContainer
+from master_thesis.containers.module_containers.mp_container import AgentMPContainer
+from master_thesis.containers.module_containers.ta_container import AgentTAContainer
+from master_thesis.containers.module_containers.exe_container import ExecutionContainer
 
 
 class FRODO_General_CommandSet(CommandSet):
@@ -133,7 +133,9 @@ def assignment_example_simple():
      # create simulation (no web gui)
     sim = FRODO_universal_Simulation(
         Ts=0.1,
+        limits = ((-4, 4), (-6, 6))
     )
+    sim.init()
 
     # spawn task and agents
     sim.spawn_agents(n = 1, agent_class=FRODOUniversalAgent)
@@ -142,6 +144,74 @@ def assignment_example_simple():
     # assign task to agent
     result = sim.tai.assign_tasks(HungarianStrategy(), verbose = True)
     print(result)
+
+def general_example():
+    import numpy as np
+    import time
+    from master_thesis.general.general_agents import FRODOGeneralAgent
+
+    env_size = 10
+    sim = FRODO_universal_Simulation(
+        Ts=0.1,
+        # limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
+        limits = ((-5, 5), (-6, 6))
+    )
+    sim.init()
+
+    # === Initial agent poses ===
+    start_ag1 = (0.0, 0.0, 0.0)
+    start_ag2 = (3.0, 3.5, 0.0)
+
+    # === Colors ===
+    color_ag1 = (0.7, 0, 0)
+    color_ag2 = (0, 0, 0.7)
+
+    # === Add agents using the new API ===
+    agent_a = sim.new_agent(
+        agent_id="vfrodo1",
+        start_config = start_ag1,
+        color= color_ag1
+    )
+
+    agent_b = sim.new_agent(
+        agent_id="vfrodo2",
+        start_config=start_ag2,
+        color= color_ag2,
+    )
+
+    # type checker related
+    assert isinstance(agent_a, FRODOGeneralAgent)
+    assert isinstance(agent_b, FRODOGeneralAgent)
+
+    # === Add obstacle using new obstacle interface ===
+    sim.new_wall(
+        obstacle_id="wall1",
+        x=5.0,
+        y=0.0,
+        psi=0.0,
+        length=4.0,
+        width=0.3,
+    )
+
+    # === Example input phases ===
+    inputs_forward = (np.array([1.0, 0.0]),)
+    inputs_backward = (np.array([-1.0, 0.0]),)
+    durations = (20,)
+
+    agent_a.add_input_phase("forward", inputs=inputs_forward, durations=durations, delta_t=0.4)
+    agent_b.add_input_phase("forward", inputs=inputs_forward, durations=durations, delta_t=0.4)
+    agent_a.add_input_phase("backward", inputs=inputs_backward, durations=durations, delta_t=0.4)
+    agent_b.add_input_phase("backward", inputs=inputs_backward, durations=durations, delta_t=0.4)
+
+    sim.activate_phase_all_agents("forward")
+    sim.activate_phase_all_agents("backward")
+
+    # === Start simulation ===
+    sim.start()
+
+    # === Keep alive ===
+    while True:
+        time.sleep(1)
 
 def assignment_example_less_simple():
      # Simulation Init
@@ -174,7 +244,7 @@ def assignment_example_less_simple():
         width=0.3,
     )
 
-    sim.new_task('example_task', -1.0,-1.0, 0)
+    sim.new_task('example_task', -1.0,-4.0, 0)
 
     # Decentralized (agents decide themselves via actions)
     print(sim.tai.assign_tasks(strategy=CBBAStrategy()))
@@ -184,5 +254,5 @@ def assignment_example_less_simple():
 
 if __name__ == "__main__":
 
-   assignment_example_simple()
+   general_example()
 

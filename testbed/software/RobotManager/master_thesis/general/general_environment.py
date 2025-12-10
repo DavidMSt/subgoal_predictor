@@ -14,7 +14,7 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
 from master_thesis.general.general_obstacles import GeneralObstacle
 from master_thesis.motion_planning.helper.collisions_fcl import WorldCollisionChecker
-from master_thesis.containers.environment_containers import EnvironmentConfig, EnvironmentContainer
+from master_thesis.containers.general_containers.environment_containers import EnvironmentConfig, EnvironmentContainer
 from master_thesis.general.general_tasks import GeneralTask
 
 from master_thesis.containers.base_container import BaseContainer
@@ -25,15 +25,15 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
     environment_container : EnvironmentContainer
 
     def __init__(self, Ts, run_mode, limits: tuple[tuple[int, int], ...] = ((-5, 5), (-5, 5)), *args, **kwargs):
+        super().__init__(Ts=Ts, run_mode=run_mode, *args, **kwargs)
         self.space = core.spaces.Space2D()
         self._obstacles = []  # TODO: still needed? 
 
         self.set_limits(limits)
-
         environment_config = EnvironmentConfig(limits=limits, Ts = Ts)
         self.environment_container = EnvironmentContainer(environment_config) 
 
-        super().__init__(Ts=Ts, run_mode=run_mode, *args, **kwargs)
+
         
         # Initialize collision checker after parent init (when self.objects exists)
         self.collision_checker = self.setup_collision_checker()
@@ -48,7 +48,6 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
                         parent=self.scheduling.actions['objects'])
 
     def action_output(self):
-        print(self.limits)
         for obj in self.objects.values():
             obj.output(self)
 

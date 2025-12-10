@@ -2,9 +2,9 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from master_thesis.containers.base_container import BaseContainer
-from master_thesis.containers.agent_containers import FRODOAgentContainer
-from master_thesis.containers.obstacle_container import ObstacleContainer
-from master_thesis.containers.task_container import TaskContainer
+from master_thesis.containers.general_containers.agent_containers import FRODOAgentContainer
+from master_thesis.containers.general_containers.obstacle_container import ObstacleContainer
+from master_thesis.containers.general_containers.task_container import TaskContainer
 
 @dataclass(frozen= False, slots= False) # must be dynamically changeable since env can change
 class EnvironmentState:

@@ -3,9 +3,9 @@ from abc import ABC, abstractmethod
 import numpy as np
 from logging import Logger
 
-from master_thesis.containers.agent_containers import FRODOAgentContainer
-from master_thesis.containers.task_container import TaskContainer
-from master_thesis.containers.assignment_context_container import (
+from master_thesis.containers.general_containers.agent_containers import FRODOAgentContainer
+from master_thesis.containers.general_containers.task_container import TaskContainer
+from master_thesis.containers.module_containers.assignment_context_container import (
     CentralizedAssignmentContainer,
     CentralizedAssignmentConfig,
     CentralizedAssignmentState,

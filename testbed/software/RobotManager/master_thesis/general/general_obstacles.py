@@ -3,7 +3,7 @@ import extensions.simulation.src.core.spaces as spaces
 from dataclasses import dataclass
 # from applications.FRODO.simulation.frodo_simulation import FRODO_SimulationObject
 from extensions.simulation.src.core.environment import Object
-from master_thesis.containers.obstacle_container import ObstacleContainer, Obstacle_Config
+from master_thesis.containers.general_containers.obstacle_container import ObstacleContainer, Obstacle_Config
 
 class GeneralObstacle(Object):
     object_type = "obstacle"

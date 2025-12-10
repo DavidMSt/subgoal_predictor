@@ -363,12 +363,13 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         super().start()
 
-def main():
+def general_example():
     # === Simulation setup ===
     env_size = 10
     sim = FRODO_general_Simulation(
         Ts=0.1,
-        limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
+        # limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
+        limits = ((-4, 4), (-6, 6))
     )
     sim.init()
 
@@ -427,6 +428,7 @@ def main():
     while True:
         time.sleep(1)
 
+    
 if __name__ == "__main__":
-    main()
+    general_example()
     

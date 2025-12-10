@@ -6,10 +6,10 @@ from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_
 from master_thesis.motion_planning.mp_agent_module import MPAgentModule
 from master_thesis.task_assignment.ta_agent_module import TAAgentModule
 
-from master_thesis.containers.environment_containers import EnvironmentContainer
-from master_thesis.containers.ta_container import AgentTAContainer, AgentTAConfig, AgentTAState
-from master_thesis.containers.mp_container import AgentMPContainer
-from master_thesis.containers.exe_container import ExecutionContainer
+from master_thesis.containers.general_containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.module_containers.ta_container import AgentTAContainer, AgentTAConfig, AgentTAState
+from master_thesis.containers.module_containers.mp_container import AgentMPContainer
+from master_thesis.containers.module_containers.exe_container import ExecutionContainer
 
 
 class FRODOUniversalAgent(FRODOGeneralAgent):

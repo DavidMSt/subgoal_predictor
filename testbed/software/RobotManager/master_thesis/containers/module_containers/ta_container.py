@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from master_thesis.containers.base_container import BaseContainer
-from master_thesis.containers.task_container import TaskContainer
+from master_thesis.containers.general_containers.task_container import TaskContainer
 
 @dataclass(frozen=False, slots=True)
 class AgentTAState:
@@ -20,6 +20,8 @@ class AgentTAState:
     
     # Local world representation
     local_obstacles: list = field(default_factory=list)  # agent's perception
+
+    
     
 
 @dataclass(frozen=True, slots=True)

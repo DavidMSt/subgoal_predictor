@@ -15,13 +15,13 @@ from core.utils.logging_utils import Logger
 from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
 
 from master_thesis.general.general_agents import FRODOGeneralAgent
-from master_thesis.containers.agent_containers import FRODOAgentContainer
-from master_thesis.containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.general_containers.agent_containers import FRODOAgentContainer
+from master_thesis.containers.general_containers.environment_containers import EnvironmentContainer
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
 from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo, OMPLPlannerFRODOBase
 from master_thesis.general.general_agents import InputPhaseRunner, InputPhase
-from master_thesis.containers.mp_container import AgentMPConfig, AgentMPContainer
-from master_thesis.containers.task_container import TaskContainer
+from master_thesis.containers.module_containers.mp_container import AgentMPConfig, AgentMPContainer
+from master_thesis.containers.general_containers.task_container import TaskContainer
 from master_thesis.containers.base_container import BaseContainer
 
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)

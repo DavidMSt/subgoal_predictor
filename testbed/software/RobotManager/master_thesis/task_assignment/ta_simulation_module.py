@@ -1,5 +1,5 @@
 from core.utils.logging_utils import Logger
-from master_thesis.containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.general_containers.environment_containers import EnvironmentContainer
 from master_thesis.task_assignment.ta_strategies import (
     StrategyABC,
     CentralizedStrategyABC,
@@ -7,9 +7,9 @@ from master_thesis.task_assignment.ta_strategies import (
     HungarianStrategy,
     RandomStrategy,
 )
-from master_thesis.containers.ta_container import AgentTAContainer
-from master_thesis.containers.environment_containers import EnvironmentContainer
-from master_thesis.containers.assignment_context_container import AssignmentContextContainer
+from master_thesis.containers.module_containers.ta_container import AgentTAContainer
+from master_thesis.containers.general_containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.module_containers.assignment_context_container import CentralizedAssignmentContainer
 
 class TASimulationModule():
     """Module for handling task assignment logic only. Object spawning handled by simulation."""
@@ -35,7 +35,7 @@ class TASimulationModule():
         self,
         strategy: StrategyABC,
         verbose: bool = False
-    ) -> AssignmentContextContainer:
+    ) -> CentralizedAssignmentContainer:
         """
         Assign tasks to agents using the provided strategy.
 
@@ -57,9 +57,13 @@ class TASimulationModule():
 
         # For decentralized strategies: publish tasks to agents
         if isinstance(strategy, DecentralizedStrategyABC):
+            # 1. Write the available tasks for each agent in the agents' container
             for agent_id, ta_cont in agent_ta_conts.items():
                 ta_cont.state.available_tasks = list(task_conts.values())
                 ta_cont.state.assignment_pending = True
+
+            # 2. Agent will now do indendent task prediction - Wait until each agent returned its result
+            
 
             # Agents will handle assignment themselves via their actions
             # Return empty result

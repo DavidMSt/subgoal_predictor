@@ -14,8 +14,8 @@ from extensions.cli.cli import CommandSet, Command, CommandArgument
 from extensions.simulation.src.objects.frodo.frodo import FRODO_State
 import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
-from master_thesis.containers.agent_containers import FRODOAgentContainer, FRODO_Agent_Config
-from master_thesis.containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.general_containers.agent_containers import FRODOAgentContainer, FRODO_Agent_Config
+from master_thesis.containers.general_containers.environment_containers import EnvironmentContainer
 
 @dataclass(slots=True)
 class LocalWorldRepresentation:
