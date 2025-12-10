@@ -85,33 +85,70 @@ class CentralizedStrategyABC(StrategyABC):
 
 
 # ============================================================================
-# DECENTRALIZED STRATEGIES
+# DECENTRALIZED STRATEGIES (Multi-round by default)
 # ============================================================================
 
 class DecentralizedStrategyABC(StrategyABC):
-    """Base class for decentralized assignment strategies."""
+    """Base class for decentralized assignment strategies with multi-round support.
+
+    All decentralized strategies support multiple rounds of decision-making and
+    communication. Simple strategies (like greedy) converge in 1 round, while
+    complex strategies (like CBBA) use multiple rounds for negotiation.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.state = {}  # Strategy-specific state (bids, bundles, etc.)
+        self.converged = False
+        self.round_num = 0
 
     @abstractmethod
-    def solve(self, agent_container: FRODOAgentContainer,  visibble_agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> TaskContainer:
-        """Run decentralized assignment (per-agent logic).
+    def solve_round(self, agent_container: FRODOAgentContainer, visible_agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> TaskContainer | None:
+        """Execute one round of decision-making.
 
-        For decentralized strategies, each agent makes its own decision based on local information.
-        Returns a dict mapping agent_id to their individual assignment context.
+        Args:
+            agent_container: The agent making the decision
+            visible_agent_containers: Other agents this agent can see
+            task_containers: Available tasks to choose from
+            logger: Optional logger
+
+        Returns:
+            TaskContainer: Current best choice (may change in future rounds)
+            None: If no task can be assigned
         """
         ...
 
-    # @abstractmethod
-    # def solve(self, ctx: DecentralizedAssignmentContainer, logger: Logger | None = None) -> DecentralizedAssignmentContainer:
-    #     """Decentralized solver for a single agent - implemented by subclasses.
+    def get_messages_to_send(self) -> dict:
+        """Return messages to broadcast to neighbors (for communication).
 
-    #     Args:
-    #         ctx: Decentralized assignment context for one agent
-    #         logger: Optional logger
+        Returns:
+            dict: Messages to send (e.g., {'bids': {...}, 'chosen_task': 'task_1'})
+                  Empty dict means no messages (default for simple strategies)
+        """
+        return {}
 
-    #     Returns:
-    #         Updated context with agent's chosen task
-    #     """
-    #     ...
+    def receive_messages(self, neighbor_id: str, messages: dict):
+        """Process messages received from a neighbor.
+
+        Args:
+            neighbor_id: ID of the neighbor sending messages
+            messages: Dict containing neighbor's information
+        """
+        pass  # Default: no-op (for simple strategies)
+
+    def check_convergence(self) -> bool:
+        """Check if strategy has converged (no more rounds needed).
+
+        Returns:
+            bool: True if converged, False if more rounds needed
+        """
+        return self.converged
+
+    def reset(self):
+        """Reset strategy state for a new assignment episode."""
+        self.state = {}
+        self.converged = False
+        self.round_num = 0
 
 
 # ============================================================================
