@@ -6,6 +6,23 @@ from master_thesis.containers.general_containers.agent_container import FRODOAge
 from master_thesis.containers.general_containers.obstacle_container import ObstacleContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 
+# ---------------------------------------------------------------------------
+# EnvironmentState:
+# Holds the complete *global* world state.
+# This is the "true" world representation inside the simulator.
+# - Obstacles (static or dynamic)
+# - Agents (their true state containers)
+# - Tasks
+# - Occupancy grids (full + static)
+#
+# This state is written by the environment and the simulation,
+# and read by:
+# - collision checker
+# - local world updater
+# - spawning logic
+# - task assignment / motion modules
+# ---------------------------------------------------------------------------
+
 @dataclass(frozen= False, slots= False) # must be dynamically changeable since env can change
 class EnvironmentState:
     obstacle_conts: dict[str, ObstacleContainer] = field(default_factory=dict)
@@ -15,12 +32,44 @@ class EnvironmentState:
     occupancy_grid_static: np.ndarray | None = None  # obstacles only (for RL observations)
     entities_creation_frozen: bool = False  # locked after sim.start()
 
+#
+# ---------------------------------------------------------------------------
+# EnvironmentConfig:
+# Stores global, static configuration of the environment.
+# These parameters define the physics and resolution of the simulated world.
+#
+# - limits: workspace boundaries
+# - Ts: simulation step size
+# - grid_resolution: occupancy grid cell size
+# - grid_padding: extra margin around limits for grid construction
+# - agent_ranges: generic sensing range for all agents (if needed)
+#
+# This configuration is identical for all agents and
+# remains constant during simulation.
+# ---------------------------------------------------------------------------
+
 @dataclass(frozen= True, slots= True)
 class EnvironmentConfig:
     limits: tuple[tuple[int, int], ...]
     Ts: float
     grid_resolution: float = 0.1  # 10cm grid cells
     grid_padding: float = 0.5  # extra space around workspace boundaries
+    agent_ranges: float | None = 1.0
+
+#
+# ---------------------------------------------------------------------------
+# EnvironmentContainer:
+# High–level container combining:
+#   - config  (static world definition)
+#   - state   (dynamic world elements)
+#
+# This container is the central entry point for:
+#   - adding/removing obstacles, agents, tasks
+#   - accessing global state for updates
+#   - providing world info to modules (TA, MP, EXE)
+#
+# It mirrors the overall world representation used by the simulation.
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=False, slots = False)
 class EnvironmentContainer(BaseContainer):

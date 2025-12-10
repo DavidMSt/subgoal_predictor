@@ -17,49 +17,6 @@ from core.utils.logging_utils import Logger
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer, FRODO_Agent_Config
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 
-@dataclass(slots=True)
-class LocalWorldRepresentation:
-    """
-    Local, non-learned representation of what the agent knows.
-    """
-    # required
-    self_agent: FRODOAgentContainer
-
-    # dynamic
-    neighbors: dict[str, FRODOAgentContainer] = field(default_factory=dict)
-
-    # static
-    env_config: EnvironmentContainer | None = None
-
-    # ---- update interface ----
-    def update_self(self):
-        pass
-
-    def update_neighbor(self, agent_id: str, container: FRODOAgentContainer):
-        self.neighbors[agent_id] = container
-
-    def remove_neighbor(self, agent_id: str):
-        self.neighbors.pop(agent_id, None)
-
-    # ---- extraction for RL / GNN ----
-    def as_observation(self):
-        own = [
-            self.self_agent.x,
-            self.self_agent.y,
-            self.self_agent.psi
-        ]
-
-        neigh = []
-        for nb in self.neighbors.values():
-            neigh.append([nb.x, nb.y, nb.psi])
-
-        limits = self.env_config.limits if self.env_config else None
-
-        return {
-            "self": own,
-            "neighbors": neigh,
-            "limits": limits
-        }
 
 @dataclass
 class InputPhaseState():
@@ -245,7 +202,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
             config=agent_config,
             state = FRODO_State(x = start_config[0], y = start_config[1], psi = start_config[2], v = 0.0, psi_dot = 0.0)
         )
-        self.lwr = LocalWorldRepresentation(self_agent=self.container)
+        # self.lwr = LocalWorldRepresentation(self_agent=self.container)
         # ─────────────────────────────────────────────
 
         self.agent_id = agent_id
