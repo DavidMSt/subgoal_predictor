@@ -101,7 +101,6 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
 
         # Iterate over agent containers in environment state
         for agent_str, agent in self.agents.items():
-            print(type(agent))
             assert isinstance(agent, FRODOGeneralAgent)
 
             lwr_cont = agent.lwr_cont
@@ -118,7 +117,7 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
                 env_config.agent_range
             )
             # Remove self from neighbors
-            nearby_agents.pop(agent_str, None)
+            # nearby_agents.pop(agent_str, None) # don't pop anymore
             lwr_cont.neighbors = nearby_agents
 
             # Update nearby task containers

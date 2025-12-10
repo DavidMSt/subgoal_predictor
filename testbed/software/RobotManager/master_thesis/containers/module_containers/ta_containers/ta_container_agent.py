@@ -11,11 +11,9 @@ class AgentTAState:
     # Task assignment
     assigned_task: TaskContainer| None = None 
 
-    # scores for each nearby task
-    task_scores: list[float] | None = None  # Scores for each nearby task
+    # scores for each visible task
+    task_scores: list[float] | None = None  # Scores for each visible task
     bid_values: dict[str, float] | None = None  # For auction-based strategies (CBBA)
-
-    
     
 
 @dataclass(frozen=True, slots=True)

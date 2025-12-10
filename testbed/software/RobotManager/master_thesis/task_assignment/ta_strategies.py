@@ -3,15 +3,13 @@ from abc import ABC, abstractmethod
 import numpy as np
 from logging import Logger
 
+from master_thesis.containers.base_container import BaseContainer
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
-from master_thesis.containers.module_containers.ta_container_sim import (
+from master_thesis.containers.module_containers.ta_containers.ta_container_sim import (
     SimTAContainer,
     SimTAConfig,
-    SimTAState,
-    DecentralizedAssignmentContainer,
-    DecentralizedAssignmentConfig,
-    DecentralizedAssignmentState
+    SimTAState
 )
 
 class StrategyABC(ABC):
@@ -47,7 +45,7 @@ class StrategyABC(ABC):
 class CentralizedStrategyABC(StrategyABC):
     """Base class for centralized assignment strategies."""
 
-    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer:
+    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> BaseContainer:
         """Run centralized assignment."""
         # Create context with full information (centralized)
         ctx = SimTAContainer(
@@ -93,52 +91,27 @@ class CentralizedStrategyABC(StrategyABC):
 class DecentralizedStrategyABC(StrategyABC):
     """Base class for decentralized assignment strategies."""
 
-    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> dict[str, DecentralizedAssignmentContainer]:
+    @abstractmethod
+    def solve(self, agent_container: FRODOAgentContainer,  visibble_agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> TaskContainer:
         """Run decentralized assignment (per-agent logic).
 
         For decentralized strategies, each agent makes its own decision based on local information.
         Returns a dict mapping agent_id to their individual assignment context.
         """
-        # Each agent creates its own context and makes its own decision
-        results: dict[str, DecentralizedAssignmentContainer] = {}
-
-        for agent_id, agent_cont in agent_containers.items():
-            # Create context for this agent with its local view
-            ctx = DecentralizedAssignmentContainer(
-                config=DecentralizedAssignmentConfig(
-                    self_state=agent_cont,
-                    nearby_agents=self._get_visible_agents(agent_cont, agent_containers),
-                    nearby_tasks=self._get_visible_tasks(agent_cont, task_containers)
-                ),
-                state=DecentralizedAssignmentState(strategy=self)
-            )
-
-            # Agent makes its decision
-            ctx = self.solve_for_agent(ctx, logger)
-            results[agent_id] = ctx
-
-        return results
-
-    def _get_visible_agents(self, agent_cont: FRODOAgentContainer, all_agents: dict[str, FRODOAgentContainer]) -> dict[str, FRODOAgentContainer]:
-        """Get agents visible to this agent. Default: see all (override for limited sensing)."""
-        return {aid: ac for aid, ac in all_agents.items() if aid != agent_cont.object_id}
-
-    def _get_visible_tasks(self, agent_cont: FRODOAgentContainer, all_tasks: dict[str, TaskContainer]) -> dict[str, TaskContainer]:
-        """Get tasks visible to this agent. Default: see all (override for limited sensing)."""
-        return all_tasks
-
-    @abstractmethod
-    def solve_for_agent(self, ctx: DecentralizedAssignmentContainer, logger: Logger | None = None) -> DecentralizedAssignmentContainer:
-        """Decentralized solver for a single agent - implemented by subclasses.
-
-        Args:
-            ctx: Decentralized assignment context for one agent
-            logger: Optional logger
-
-        Returns:
-            Updated context with agent's chosen task
-        """
         ...
+
+    # @abstractmethod
+    # def solve(self, ctx: DecentralizedAssignmentContainer, logger: Logger | None = None) -> DecentralizedAssignmentContainer:
+    #     """Decentralized solver for a single agent - implemented by subclasses.
+
+    #     Args:
+    #         ctx: Decentralized assignment context for one agent
+    #         logger: Optional logger
+
+    #     Returns:
+    #         Updated context with agent's chosen task
+    #     """
+    #     ...
 
 
 # ============================================================================
@@ -194,10 +167,48 @@ class HungarianStrategy(CentralizedStrategyABC):
 # CONCRETE DECENTRALIZED STRATEGIES
 # ============================================================================
 
+class GreedyNearestStrategy(DecentralizedStrategyABC):
+    """Greedy nearest task selection (decentralized)."""
+
+    def solve(self, agent_container: FRODOAgentContainer, visible_agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> TaskContainer:
+        """Select nearest available task.
+
+        Args:
+            agent_container: The agent making the decision
+            visible_agent_containers: Other agents this agent can see
+            task_containers: Available tasks to choose from
+            logger: Optional logger
+
+        Returns:
+            TaskContainer for the chosen task
+        """
+        if not task_containers:
+            raise ValueError("No tasks available for assignment")
+
+        # Get agent position
+        agent_x = agent_container.x
+        agent_y = agent_container.y
+
+        # Find nearest task
+        min_dist = float('inf')
+        nearest_task = None
+
+        for task_cont in task_containers.values():
+            dx = task_cont.x - agent_x
+            dy = task_cont.y - agent_y
+            dist = np.sqrt(dx**2 + dy**2)
+
+            if dist < min_dist:
+                min_dist = dist
+                nearest_task = task_cont
+
+        return nearest_task
+
+
 class CBBAStrategy(DecentralizedStrategyABC):
     """Consensus-Based Bundle Algorithm (decentralized auction-based)."""
 
-    def solve_for_agent(self, ctx: DecentralizedAssignmentContainer, logger: Logger | None = None) -> DecentralizedAssignmentContainer:
+    def solve(self, agent_container: FRODOAgentContainer, visible_agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> TaskContainer:
         """Run per-agent CBBA step (decentralized auction-based)."""
         raise NotImplementedError("CBBA not yet implemented")
 
@@ -205,7 +216,7 @@ class CBBAStrategy(DecentralizedStrategyABC):
 class GNNStrategy(DecentralizedStrategyABC):
     """Graph Neural Network strategy (decentralized)."""
 
-    def solve_for_agent(self, ctx: DecentralizedAssignmentContainer, logger: Logger | None = None) -> DecentralizedAssignmentContainer:
+    def solve(self, agent_container: FRODOAgentContainer, visible_agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> TaskContainer:
         """Run per-agent GNN inference (decentralized neural network)."""
         raise NotImplementedError("GNN not yet implemented")
 
@@ -213,6 +224,6 @@ class GNNStrategy(DecentralizedStrategyABC):
 class TwoTowersStrategy(DecentralizedStrategyABC):
     """Two-Towers neural network strategy (decentralized)."""
 
-    def solve_for_agent(self, ctx: DecentralizedAssignmentContainer, logger: Logger | None = None) -> DecentralizedAssignmentContainer:
+    def solve(self, agent_container: FRODOAgentContainer, visible_agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> TaskContainer:
         """Run per-agent two-towers neural network (decentralized)."""
         raise NotImplementedError("TwoTowers not yet implemented")
