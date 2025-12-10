@@ -15,10 +15,6 @@ class GeneralObstacle(Object):
 
         # bilbolab geometry
         self.space = spaces.Space2D()
-        self.space.dimensions[0].limits = [
-            [-length / 2, length / 2],
-            [-width / 2,  width / 2]
-        ]
 
         super().__init__(object_id=obstacle_id, space=self.space)
 
