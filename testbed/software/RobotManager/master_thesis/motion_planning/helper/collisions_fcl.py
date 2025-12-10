@@ -1,7 +1,7 @@
 import numpy as np
 import fcl
-from master_thesis.containers.general_containers.agent_containers import FRODOAgentContainer
-from master_thesis.containers.general_containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.general_containers.obstacle_container import ObstacleContainer
 from master_thesis.general.general_obstacles import GeneralObstacle
 # import meshcat.transformations as tf

@@ -21,8 +21,8 @@ from typing import Any
 from numpy.typing import NDArray
 from master_thesis.motion_planning.helper.nearest_neighbor import NearestNeighbor # TODO: Use scikit-learn kd tree here
 from master_thesis.motion_planning.helper.collisions_fcl import AgentCollisionChecker
-from master_thesis.containers.general_containers.agent_containers import FRODOAgentContainer
-from master_thesis.containers.general_containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.module_containers.mp_container import AgentMPContainer
 
 from enum import Enum, auto

@@ -1,5 +1,5 @@
 from core.utils.logging_utils import Logger
-from master_thesis.containers.general_containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.task_assignment.ta_strategies import (
     StrategyABC,
     CentralizedStrategyABC,
@@ -8,7 +8,7 @@ from master_thesis.task_assignment.ta_strategies import (
     RandomStrategy,
 )
 from master_thesis.containers.module_containers.ta_container import AgentTAContainer
-from master_thesis.containers.general_containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.module_containers.assignment_context_container import CentralizedAssignmentContainer
 
 class TASimulationModule():

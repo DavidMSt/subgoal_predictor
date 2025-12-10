@@ -7,7 +7,7 @@ class AgentTAState:
     """Mutable runtime state for agent task execution"""
 
     # Available/known tasks (for decentralized decision making)
-    available_tasks: list[TaskContainer] = field(default_factory=list)
+    # available_tasks: list[TaskContainer] = field(default_factory=list)
     assignment_pending: bool = False
 
     # Task assignment

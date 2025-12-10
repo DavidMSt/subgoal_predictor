@@ -15,8 +15,8 @@ from core.utils.logging_utils import Logger
 from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
 
 from master_thesis.general.general_agents import FRODOGeneralAgent
-from master_thesis.containers.general_containers.agent_containers import FRODOAgentContainer
-from master_thesis.containers.general_containers.environment_containers import EnvironmentContainer
+from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
 from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo, OMPLPlannerFRODOBase
 from master_thesis.general.general_agents import InputPhaseRunner, InputPhase

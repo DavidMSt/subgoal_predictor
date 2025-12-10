@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 from master_thesis.containers.base_container import BaseContainer
-from master_thesis.containers.general_containers.agent_containers import FRODOAgentContainer
+from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 import numpy as np
 
