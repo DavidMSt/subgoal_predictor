@@ -54,7 +54,12 @@ class EnvironmentConfig:
     Ts: float
     grid_resolution: float = 0.1  # 10cm grid cells
     grid_padding: float = 0.5  # extra space around workspace boundaries
-    agent_ranges: float | None = 1.0
+
+    # agent visibility ranges
+    agent_range: float | None = 1.0
+    task_range: float| None = 1.0
+    obstacle_range: float | None = None
+
 
 #
 # ---------------------------------------------------------------------------

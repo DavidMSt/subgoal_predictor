@@ -32,8 +32,6 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         self.set_limits(limits)
         environment_config = EnvironmentConfig(limits=limits, Ts = Ts)
         self.environment_container = EnvironmentContainer(environment_config) 
-
-
         
         # Initialize collision checker after parent init (when self.objects exists)
         self.collision_checker = self.setup_collision_checker()
@@ -41,11 +39,17 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         # Initialize occupancy grids
         self.initialize_occupancy_grids()
 
-        core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COLLISION,
+        core.scheduling.Action(action_id=FRODO_ENVIRONMENT_ACTIONS.COLLISION, #TODO: initialize it like this?
                         object=self,
                         function=self._collision_checking,
                         priority=65,
                         parent=self.scheduling.actions['objects'])
+        
+        self.scheduling.actions[FRODO_ENVIRONMENT_ACTIONS.COMMUNICATION].addAction(self._update_lw_function)
+        
+    def _update_lw_function(self):
+        for agent in self.agents:
+            # get position of the agent
 
     def action_output(self):
         for obj in self.objects.values():

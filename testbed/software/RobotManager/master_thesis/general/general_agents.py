@@ -16,6 +16,7 @@ import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer, FRODO_Agent_Config
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
+from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 
 
 @dataclass
@@ -190,7 +191,8 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     agent_id: str,
     Ts=0.1, # TODO: this could probably be removed anyway, since Ts could also be received by env updates? 
     start_config: tuple[float, float, float] = (0.0, 0.0, 0.0),
-    color: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    color: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    lwr: LocalWorldContainer | None = None
     ):
         agent_config = FRODO_Agent_Config(color = color, Ts= Ts)
 
@@ -221,6 +223,10 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.state.x = float(x0)
         self.state.y = float(y0)
         self.state.psi = float(psi0)
+
+        # Create the local world container
+        self.lwr = lwr
+
 
 
     def setup_scheduling(self):
