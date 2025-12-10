@@ -7,9 +7,9 @@ from master_thesis.task_assignment.ta_strategies import (
     HungarianStrategy,
     RandomStrategy,
 )
-from master_thesis.containers.module_containers.ta_container import AgentTAContainer
+from master_thesis.containers.module_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
-from master_thesis.containers.module_containers.assignment_context_container import CentralizedAssignmentContainer
+from master_thesis.containers.module_containers.ta_container_sim import SimTAContainer
 
 class TASimulationModule():
     """Module for handling task assignment logic only. Object spawning handled by simulation."""
@@ -35,7 +35,7 @@ class TASimulationModule():
         self,
         strategy: StrategyABC,
         verbose: bool = False
-    ) -> CentralizedAssignmentContainer:
+    ) -> SimTAContainer:
         """
         Assign tasks to agents using the provided strategy.
 
@@ -59,7 +59,6 @@ class TASimulationModule():
         if isinstance(strategy, DecentralizedStrategyABC):
             # 1. Write the available tasks for each agent in the agents' container
             for agent_id, ta_cont in agent_ta_conts.items():
-                ta_cont.state.available_tasks = list(task_conts.values())
                 ta_cont.state.assignment_pending = True
 
             # 2. Agent will now do indendent task prediction - Wait until each agent returned its result
@@ -78,7 +77,6 @@ class TASimulationModule():
             # )
 
         elif isinstance(strategy, CentralizedStrategyABC):
-            print('here')
             result = strategy.run(self.agent_conts, task_conts)
             print(result)
 

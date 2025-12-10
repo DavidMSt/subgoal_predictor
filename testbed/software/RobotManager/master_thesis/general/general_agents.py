@@ -246,7 +246,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
 
 
     def action_frodo_communication(self):
-        print('heeere:', self.lwr_cont)
+        # dummy function for all communication from the FRODO class outwards
         ...
 
     # ----------------------------------------------------------------------

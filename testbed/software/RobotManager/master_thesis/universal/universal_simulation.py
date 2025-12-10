@@ -9,7 +9,7 @@ from master_thesis.task_assignment.ta_simulation_module import TASimulationModul
 from master_thesis.task_assignment.ta_strategies import HungarianStrategy, CBBAStrategy
 
 from master_thesis.containers.module_containers.mp_container import AgentMPContainer
-from master_thesis.containers.module_containers.ta_container import AgentTAContainer
+from master_thesis.containers.module_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.module_containers.exe_container import ExecutionContainer
 
 
@@ -254,5 +254,6 @@ def assignment_example_less_simple():
 
 if __name__ == "__main__":
 
-   general_example()
+#    general_example()
+    assignment_example_less_simple()
 

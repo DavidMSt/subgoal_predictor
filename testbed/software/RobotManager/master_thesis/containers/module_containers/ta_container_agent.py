@@ -5,21 +5,15 @@ from master_thesis.containers.general_containers.task_container import TaskConta
 @dataclass(frozen=False, slots=True)
 class AgentTAState:
     """Mutable runtime state for agent task execution"""
-
-    # Available/known tasks (for decentralized decision making)
-    # available_tasks: list[TaskContainer] = field(default_factory=list)
+    # Set from the simulation, flag get polled by the agent
     assignment_pending: bool = False
 
     # Task assignment
     assigned_task: TaskContainer| None = None 
 
-    # Execution state - subgoal 
-    #prediction
-    waypoints: list[tuple[float, float]] | None = None
-    current_waypoint_idx: int = 0
-    
-    # Local world representation
-    local_obstacles: list = field(default_factory=list)  # agent's perception
+    # scores for each nearby task
+    task_scores: list[float] | None = None  # Scores for each nearby task
+    bid_values: dict[str, float] | None = None  # For auction-based strategies (CBBA)
 
     
     

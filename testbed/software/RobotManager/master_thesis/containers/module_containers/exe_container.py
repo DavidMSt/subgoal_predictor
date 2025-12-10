@@ -3,8 +3,9 @@ from master_thesis.containers.base_container import BaseContainer
 
 @dataclass(frozen=False, slots = False)
 class ExecutionState:
-    ...
-
+    waypoints: list[tuple[float, float]] | None = None
+    current_waypoint_idx: int = 0
+    
 @dataclass(frozen=True, slots=True)
 class Execution_Config:
     ...

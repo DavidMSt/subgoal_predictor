@@ -5,10 +5,10 @@ from logging import Logger
 
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
-from master_thesis.containers.module_containers.assignment_context_container import (
-    CentralizedAssignmentContainer,
-    CentralizedAssignmentConfig,
-    CentralizedAssignmentState,
+from master_thesis.containers.module_containers.ta_container_sim import (
+    SimTAContainer,
+    SimTAConfig,
+    SimTAState,
     DecentralizedAssignmentContainer,
     DecentralizedAssignmentConfig,
     DecentralizedAssignmentState
@@ -25,7 +25,7 @@ class StrategyABC(ABC):
         super().__init__()
 
     @abstractmethod
-    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> CentralizedAssignmentContainer | dict[str, DecentralizedAssignmentContainer]:
+    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer | dict[str, DecentralizedAssignmentContainer]:
         """Run the assignment strategy. Returns the assignment context container with results.
 
         Args:
@@ -47,15 +47,15 @@ class StrategyABC(ABC):
 class CentralizedStrategyABC(StrategyABC):
     """Base class for centralized assignment strategies."""
 
-    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> CentralizedAssignmentContainer:
+    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer:
         """Run centralized assignment."""
         # Create context with full information (centralized)
-        ctx = CentralizedAssignmentContainer(
-            config=CentralizedAssignmentConfig(
+        ctx = SimTAContainer(
+            config=SimTAConfig(
                 nearby_agents=agent_containers,  # All agents (full information)
                 nearby_tasks=task_containers  # All tasks (full information)
             ),
-            state=CentralizedAssignmentState(strategy=self)
+            state=SimTAState(strategy=self)
         )
 
         # Validate one-to-one constraint
@@ -71,7 +71,7 @@ class CentralizedStrategyABC(StrategyABC):
         return ctx
 
     @abstractmethod
-    def solve(self, ctx: CentralizedAssignmentContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> CentralizedAssignmentContainer:
+    def solve(self, ctx: SimTAContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer:
         """Centralized solver - implemented by subclasses.
 
         Args:
@@ -147,7 +147,7 @@ class DecentralizedStrategyABC(StrategyABC):
 
 class RandomStrategy(CentralizedStrategyABC):
 
-    def solve(self, ctx: CentralizedAssignmentContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> CentralizedAssignmentContainer:
+    def solve(self, ctx: SimTAContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer:
         """Run centralized random assignment."""
 
         # Extract counts from context
@@ -167,7 +167,7 @@ class RandomStrategy(CentralizedStrategyABC):
 
 class HungarianStrategy(CentralizedStrategyABC):
 
-    def solve(self, ctx: CentralizedAssignmentContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> CentralizedAssignmentContainer:
+    def solve(self, ctx: SimTAContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer:
         """Centralized Hungarian assignment using Euclidean distance cost."""
         n_agents = len(ctx.nearby_agents)
         n_tasks = len(ctx.nearby_tasks)
