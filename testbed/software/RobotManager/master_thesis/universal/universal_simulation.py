@@ -9,7 +9,7 @@ from master_thesis.task_assignment.ta_simulation_module import TASimulationModul
 from master_thesis.task_assignment.ta_strategies import HungarianStrategy, CBBAStrategy
 
 from master_thesis.containers.module_containers.mp_container import AgentMPContainer
-from master_thesis.containers.module_containers.ta_container_agent import AgentTAContainer
+from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.module_containers.exe_container import ExecutionContainer
 
 
@@ -214,6 +214,7 @@ def general_example():
         time.sleep(1)
 
 def assignment_example_less_simple():
+    from master_thesis.task_assignment.ta_strategies import RandomStrategyCent
      # Simulation Init
     env_size = 10
     sim = FRODO_universal_Simulation(
@@ -247,10 +248,10 @@ def assignment_example_less_simple():
     sim.new_task('example_task', -1.0,-4.0, 0)
 
     # Decentralized (agents decide themselves via actions)
-    print(sim.tai.assign_tasks(strategy=CBBAStrategy()))
+    # print(sim.tai.assign_tasks(strategy=RandomStrategyCent))
 
     # Centralized (simulation computes assignments)
-    sim.tai.assign_tasks(strategy=HungarianStrategy())
+    sim.tai.assign_tasks(strategy=HungarianStrategy)
 
 if __name__ == "__main__":
 

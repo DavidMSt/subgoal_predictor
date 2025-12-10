@@ -7,7 +7,7 @@ from master_thesis.motion_planning.mp_agent_module import MPAgentModule
 from master_thesis.task_assignment.ta_agent_module import TAAgentModule
 
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
-from master_thesis.containers.module_containers.ta_container_agent import AgentTAContainer, AgentTAConfig, AgentTAState
+from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer, AgentTAConfig, AgentTAState
 from master_thesis.containers.module_containers.mp_container import AgentMPContainer
 from master_thesis.containers.module_containers.exe_container import ExecutionContainer
 

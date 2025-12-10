@@ -5,11 +5,11 @@ from master_thesis.task_assignment.ta_strategies import (
     CentralizedStrategyABC,
     DecentralizedStrategyABC,
     HungarianStrategy,
-    RandomStrategy,
+    RandomStrategyCent,
 )
-from master_thesis.containers.module_containers.ta_container_agent import AgentTAContainer
+from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
-from master_thesis.containers.module_containers.ta_container_sim import SimTAContainer
+from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAContainer
 
 class TASimulationModule():
     """Module for handling task assignment logic only. Object spawning handled by simulation."""
@@ -31,11 +31,7 @@ class TASimulationModule():
         # To control the actual task assignment (publish tasks, assign them if central method)
         self.agent_ta_conts = agent_ta_conts
 
-    def assign_tasks(
-        self,
-        strategy: StrategyABC,
-        verbose: bool = False
-    ) -> SimTAContainer:
+    def assign_tasks(self, strategy: type[StrategyABC]):
         """
         Assign tasks to agents using the provided strategy.
 
@@ -49,16 +45,11 @@ class TASimulationModule():
         Returns:
             AssignmentResult containing matches and assignment matrix
         """
-        agent_ta_conts = self.agent_ta_conts
-        task_conts = self.task_conts
-
-        if not agent_ta_conts or not task_conts:
-            raise ValueError("No agents or tasks available for assignment.")
 
         # For decentralized strategies: publish tasks to agents
-        if isinstance(strategy, DecentralizedStrategyABC):
+        if issubclass(strategy, DecentralizedStrategyABC):
             # 1. Write the available tasks for each agent in the agents' container
-            for agent_id, ta_cont in agent_ta_conts.items():
+            for agent_id, ta_cont in self.agent_ta_conts.items():
                 ta_cont.state.assignment_pending = True
 
             # 2. Agent will now do indendent task prediction - Wait until each agent returned its result
@@ -76,8 +67,9 @@ class TASimulationModule():
             #     matches=None
             # )
 
-        elif isinstance(strategy, CentralizedStrategyABC):
-            result = strategy.run(self.agent_conts, task_conts)
+        elif issubclass(strategy, CentralizedStrategyABC):
+            strategy_instance = strategy()
+            result = strategy_instance.run(agent_containers= self.agent_conts, task_containers= self.task_conts)
             print(result)
 
         else:

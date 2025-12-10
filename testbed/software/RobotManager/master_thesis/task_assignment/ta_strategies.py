@@ -1,5 +1,6 @@
 from scipy.optimize import linear_sum_assignment
 from abc import ABC, abstractmethod
+from typing import Any
 import numpy as np
 from logging import Logger
 
@@ -23,7 +24,7 @@ class StrategyABC(ABC):
         super().__init__()
 
     @abstractmethod
-    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer | dict[str, DecentralizedAssignmentContainer]:
+    def run(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> Any:
         """Run the assignment strategy. Returns the assignment context container with results.
 
         Args:
@@ -155,7 +156,7 @@ class DecentralizedStrategyABC(StrategyABC):
 # CONCRETE CENTRALIZED STRATEGIES
 # ============================================================================
 
-class RandomStrategy(CentralizedStrategyABC):
+class RandomStrategyCent(CentralizedStrategyABC):
 
     def solve(self, ctx: SimTAContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer:
         """Run centralized random assignment."""
