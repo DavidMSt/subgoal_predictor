@@ -1,5 +1,4 @@
 from core.utils.logging_utils import Logger
-from master_thesis.task_assignment.ta_agent_module import FRODO_AssignmentAgent
 from master_thesis.containers.environment_containers import EnvironmentContainer
 from master_thesis.task_assignment.ta_strategies import (
     StrategyABC,
@@ -75,9 +74,12 @@ class TASimulationModule():
             # )
 
         elif isinstance(strategy, CentralizedStrategyABC):
-            self.logger.error('centralized  TA SIM not implemented')
-            return None
+            print('here')
+            result = strategy.run(self.agent_conts, task_conts)
+            print(result)
+
+        else:
+            self.logger.error('Selected TA strategy of unknown type, neither central nor decentral')
         # For centralized strategies: run strategy and get result
-        # Note: This requires agents to have the old FRODO_AssignmentAgent interface
         # For universal agents in centralized mode, use this method directly
 

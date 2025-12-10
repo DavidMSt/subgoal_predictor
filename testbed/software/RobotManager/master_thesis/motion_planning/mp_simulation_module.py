@@ -1,20 +1,9 @@
-from dataclasses import dataclass, field, replace
-import time
-import numpy as np
-from typing import Type, cast, overload
+# bilbolab
 from core.utils.logging_utils import Logger
 
-# bilbolab
-import extensions.simulation.src.core as core
-
-from master_thesis.motion_planning.mp_agent_module import FRODO_MotionPlanning_Agent
-from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
-from master_thesis.motion_planning.mp_agent_module import FRODO_MotionPlanning_Agent, MPAgentModule
-from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo
+# master thesis
+from master_thesis.motion_planning.mp_agent_module import MPAgentModule
 from master_thesis.general.general_agents import FRODOGeneralAgent
-from master_thesis.general.general_obstacles import GeneralObstacle
-from master_thesis.general.general_tasks import GeneralTask
-
 from master_thesis.containers.task_container import TaskContainer
 
 class MPSimulationModule():

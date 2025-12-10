@@ -86,7 +86,7 @@ class FRODO_General_CommandSet(CommandSet):
 class FRODO_universal_Simulation(FRODO_general_Simulation):
     cli: FRODO_General_CommandSet | None = None
 
-    def __init__(self, Ts=0.1, limits=((-3,3),(-3,3)), env=FrodoGeneralEnvironment):
+    def __init__(self, Ts=0.1, limits=((-5,5),(-5,5)), env=FrodoGeneralEnvironment):
         super().__init__(Ts=Ts, limits=limits, env=env)
         
         self.mp_containers: dict[str, AgentMPContainer] = {}
@@ -127,10 +127,24 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         self.ta_containers[agent_id] = agent.tai.ta_container
 
         return agent
+    
 
-if __name__ == "__main__":
+def assignment_example_simple():
+     # create simulation (no web gui)
+    sim = FRODO_universal_Simulation(
+        Ts=0.1,
+    )
 
-    # Simulation Init
+    # spawn task and agents
+    sim.spawn_agents(n = 1, agent_class=FRODOUniversalAgent)
+    sim.spawn_tasks(1)
+
+    # assign task to agent
+    result = sim.tai.assign_tasks(HungarianStrategy(), verbose = True)
+    print(result)
+
+def assignment_example_less_simple():
+     # Simulation Init
     env_size = 10
     sim = FRODO_universal_Simulation(
         Ts=0.1,
@@ -167,4 +181,8 @@ if __name__ == "__main__":
 
     # Centralized (simulation computes assignments)
     sim.tai.assign_tasks(strategy=HungarianStrategy())
+
+if __name__ == "__main__":
+
+   assignment_example_simple()
 
