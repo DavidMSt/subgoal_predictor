@@ -2,7 +2,7 @@ import torch
 import math
 import numpy as np
 from testbed.software.RobotManager.master_thesis.task_assignment.ta_simulation import AssignmentSimulationModule, FRODO_AssignmentSimulation
-from master_thesis.task_assignment.ta_strategies import RandomStrategyCent, HungarianStrategy, StrategyABC
+from master_thesis.task_assignment.strategies.centralized_strategies import RandomStrategyCent, HungarianStrategyCent, BaseStrategy
 from testbed.software.RobotManager.master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
 from master_thesis.general.general_tasks import GeneralTask
 from torch.utils.data import Dataset, DataLoader as TorchDataLoader
@@ -61,7 +61,7 @@ class DataSetGenerator:
         self,
         *,
         specs: list[tuple[int, int]],
-        method: type["StrategyABC"] = HungarianStrategy,
+        method: type["BaseStrategy"] = HungarianStrategyCent,
         normalize_xy: bool = True,
         seed: int | None = 42,
         out_path: str | None = None,
@@ -170,7 +170,7 @@ if __name__ == "__main__":
     random_result = sim.asi.assign_tasks(method=RandomStrategyCent)
     # print(random_result.assignment_matrix)
 
-    hungarian_result = sim.asi.assign_tasks(method= HungarianStrategy)
+    hungarian_result = sim.asi.assign_tasks(method= HungarianStrategyCent)
     # print(hungarian_result.assignment_matrix)
 
     data_generator = DataSetGenerator(sim.asi)

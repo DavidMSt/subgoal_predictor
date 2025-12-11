@@ -150,11 +150,11 @@ class FRODO_general_Simulation(FRODO_Simulation):
         self.environment.environment_container.add_agents(agent.container)
 
         # Initialize local world container for agent if not already present
-        if not hasattr(agent, 'lw_cont') or agent.lw_cont is None:
+        if not hasattr(agent, 'lw_cont') or agent.lwr_cont is None:
             from master_thesis.containers.general_containers.local_world_container import (
                 LocalWorldContainer, LocalWorldConfig, LocalWorldState
             )
-            agent.lw_cont = LocalWorldContainer(
+            agent.lwr_cont = LocalWorldContainer(
                 config=LocalWorldConfig(),
                 state=LocalWorldState()
             )

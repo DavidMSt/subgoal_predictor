@@ -2,11 +2,13 @@ from extensions.cli.cli import CommandSet, Command, CommandArgument
 
 from core.utils.logging_utils import Logger
 
+from master_thesis.general.general_agents import FRODOGeneralAgent
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment #, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.motion_planning.mp_simulation_module import MPSimulationModule
 from master_thesis.task_assignment.ta_simulation_module import TASimulationModule
-from master_thesis.task_assignment.ta_strategies import HungarianStrategy, CBBAStrategy
+from master_thesis.task_assignment.strategies.centralized_strategies import HungarianStrategyCent
+from master_thesis.task_assignment.strategies.decentralized_strategies import CBBAStrategy, GreedyNearestStrategy
 
 from master_thesis.containers.module_containers.mp_container import AgentMPContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
@@ -128,6 +130,9 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
         return agent
     
+    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOUniversalAgent) -> list[FRODOGeneralAgent]:
+        return super().spawn_agents(n, configurations, agent_class)
+    
 
 def assignment_example_simple():
      # create simulation (no web gui)
@@ -142,7 +147,7 @@ def assignment_example_simple():
     sim.spawn_tasks(1)
 
     # assign task to agent
-    result = sim.tai.assign_tasks(HungarianStrategy(), verbose = True)
+    result = sim.tai.assign_tasks(HungarianStrategyCent)
     print(result)
 
 def general_example():
@@ -214,7 +219,7 @@ def general_example():
         time.sleep(1)
 
 def assignment_example_less_simple():
-    from master_thesis.task_assignment.ta_strategies import RandomStrategyCent
+    from master_thesis.task_assignment.strategies.centralized_strategies import RandomStrategyCent
      # Simulation Init
     env_size = 10
     sim = FRODO_universal_Simulation(
@@ -227,13 +232,13 @@ def assignment_example_less_simple():
     start_ag1 = (0.0, 0.0, 0.0)
 
     # === Add agents using the new API ===
-    agent_1 = sim.new_agent(
-        agent_id="vfrodo1",
-        start_config = start_ag1,
-    )
+    # agent_1 = sim.new_agent(
+    #     agent_id="vfrodo1",
+    #     start_config = start_ag1,
+    # )
 
     # to keep linter quiet
-    assert isinstance(agent_1, FRODOUniversalAgent)
+    # assert isinstance(agent_1, FRODOUniversalAgent)
 
     # === Add obstacle using new obstacle interface ===
     sim.new_wall(
@@ -245,13 +250,16 @@ def assignment_example_less_simple():
         width=0.3,
     )
 
-    sim.new_task('example_task', -1.0,-4.0, 0)
+    # sim.new_task('example_task', -1.0,-4.0, 0)
+
+    sim.spawn_agents(3)
+    sim.spawn_tasks(3)
 
     # Decentralized (agents decide themselves via actions)
     # print(sim.tai.assign_tasks(strategy=RandomStrategyCent))
 
     # Centralized (simulation computes assignments)
-    sim.tai.assign_tasks(strategy=HungarianStrategy)
+    sim.tai.assign_tasks(strategy=HungarianStrategyCent)
 
 if __name__ == "__main__":
 

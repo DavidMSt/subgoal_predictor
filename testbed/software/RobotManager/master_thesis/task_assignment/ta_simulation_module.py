@@ -1,12 +1,10 @@
 from core.utils.logging_utils import Logger
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
-from master_thesis.task_assignment.ta_strategies import (
-    StrategyABC,
-    CentralizedStrategyABC,
-    DecentralizedStrategyABC,
-    HungarianStrategy,
-    RandomStrategyCent,
-)
+
+from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy
+from master_thesis.task_assignment.strategies.centralized_strategies import CentralizedStrategyABC
+from master_thesis.task_assignment.strategies.decentralized_strategies import DecentralizedStrategyABC
+
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAContainer
@@ -31,7 +29,7 @@ class TASimulationModule():
         # To control the actual task assignment (publish tasks, assign them if central method)
         self.agent_ta_conts = agent_ta_conts
 
-    def assign_tasks(self, strategy: type[StrategyABC]):
+    def assign_tasks(self, strategy: type[BaseStrategy]):
         """
         Assign tasks to agents using the provided strategy.
 
@@ -48,32 +46,22 @@ class TASimulationModule():
 
         # For decentralized strategies: publish tasks to agents
         if issubclass(strategy, DecentralizedStrategyABC):
-            # 1. Write the available tasks for each agent in the agents' container
+            # Set the flaf such that agents will start decentralized assignment
             for agent_id, ta_cont in self.agent_ta_conts.items():
                 ta_cont.state.assignment_pending = True
 
-            # 2. Agent will now do indendent task prediction - Wait until each agent returned its result
-            
-
-            # Agents will handle assignment themselves via their actions
-            # Return empty result
             self.logger.error('decentralized  TA SIM not implemented')
             return None
-            # return AssignmentResult(
-            #     agent_containers=[],
-            #     task_containers=[],
-            #     strategy=strategy,
-            #     assignment_matrix=None,
-            #     matches=None
-            # )
 
-        elif issubclass(strategy, CentralizedStrategyABC):
-            strategy_instance = strategy()
-            result = strategy_instance.run(agent_containers= self.agent_conts, task_containers= self.task_conts)
-            print(result)
-
-        else:
-            self.logger.error('Selected TA strategy of unknown type, neither central nor decentral')
         # For centralized strategies: run strategy and get result
         # For universal agents in centralized mode, use this method directly
+        elif issubclass(strategy, CentralizedStrategyABC):
+            strategy_instance = strategy()
+            result = strategy_instance.solve(agent_containers= self.agent_conts, task_containers= self.task_conts)
+            print(result.get_assignment_matrix)
+            for container in self.agent_conts:
+                ...
+                
+        else:
+            self.logger.error('Selected TA strategy of unknown type, neither central nor decentral')
 

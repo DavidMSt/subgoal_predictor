@@ -1,12 +1,10 @@
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 from master_thesis.containers.base_container import BaseContainer
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 import numpy as np
 
-if TYPE_CHECKING:
-    from master_thesis.task_assignment.ta_strategies import StrategyABC
+# from master_thesis.task_assignment.strategies.centralized_strategies import BaseStrategy
 
 
 # ============================================================================
@@ -16,7 +14,7 @@ if TYPE_CHECKING:
 @dataclass(frozen=False, slots=True)
 class AssignmentContextStateBase:
     """Common state fields for both centralized and decentralized"""
-    strategy: "StrategyABC | None" = None
+    strategy: str | None = None
     computation_time: float | None = None
 
 
@@ -40,8 +38,7 @@ class SimTAState(AssignmentContextStateBase):
 @dataclass(frozen=True, slots=True)
 class SimTAConfig(AssignmentContextConfigBase):
     """Config for centralized assignment - full information"""
-    nearby_agents: dict[str, FRODOAgentContainer] = field(default_factory=dict)  # All agents
-    nearby_tasks: dict[str, TaskContainer] = field(default_factory=dict)  # All tasks
+    strategy: str
 
 
 @dataclass(slots=True)
@@ -59,9 +56,8 @@ class SimTAContainer(BaseContainer):
         Returns:
             Boolean matrix of shape (n_agents, n_tasks) where True indicates assignment
         """
-        n_agents = len(self.nearby_agents)
-        n_tasks = len(self.nearby_tasks)
-        assignment = np.zeros((n_agents, n_tasks), dtype=np.bool_)
+        n = len(self.matches)
+        assignment = np.zeros((n, n), dtype=np.bool_)
 
         if self.matches is not None:
             for i, j in self.matches:
