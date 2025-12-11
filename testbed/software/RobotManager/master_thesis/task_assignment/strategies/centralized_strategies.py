@@ -98,7 +98,7 @@ class HungarianStrategyCent(CentralizedStrategyABC):
         # Run Hungarian algorithm
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-        # Convert indices to ID pairs
+        # Convert indices to ID pairs # TODO: this should also be possible on lower level
         agent_ids = list(agent_containers.keys())
         task_ids = list(task_containers.keys())
 
