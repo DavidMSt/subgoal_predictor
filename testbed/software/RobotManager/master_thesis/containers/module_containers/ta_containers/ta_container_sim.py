@@ -31,7 +31,7 @@ class AssignmentContextConfigBase:
 @dataclass(frozen=False, slots=True)
 class SimTAState(AssignmentContextStateBase):
     """State for centralized assignment - global view"""
-    matches: list[tuple[int, int]] | None = None  # (agent_idx, task_idx) pairs
+    matches: list[tuple[str, str]] | None = None  # (agent_id, task_id) pairs
     scores: np.ndarray | None = None  # Cost matrix (n_agents, n_tasks)
 
 
@@ -50,17 +50,31 @@ class SimTAContainer(BaseContainer):
     config: SimTAConfig = field(default_factory=SimTAConfig)
     state: SimTAState = field(default_factory=SimTAState)
 
-    def get_assignment_matrix(self) -> np.ndarray:
+    def get_assignment_matrix(self, agent_containers: dict[str, 'FRODOAgentContainer'], task_containers: dict[str, 'TaskContainer']) -> np.ndarray:
         """Compute global assignment matrix from matches.
+
+        Args:
+            agent_containers: Dict of agent containers by object_id (for ordering)
+            task_containers: Dict of task containers by object_id (for ordering)
 
         Returns:
             Boolean matrix of shape (n_agents, n_tasks) where True indicates assignment
         """
-        n = len(self.matches)
-        assignment = np.zeros((n, n), dtype=np.bool_)
+        n_agents = len(agent_containers)
+        n_tasks = len(task_containers)
+        assignment = np.zeros((n_agents, n_tasks), dtype=np.bool_)
 
         if self.matches is not None:
-            for i, j in self.matches:
+            # Build index mappings from IDs
+            agent_ids = list(agent_containers.keys())
+            task_ids = list(task_containers.keys())
+            agent_id_to_idx = {aid: i for i, aid in enumerate(agent_ids)}
+            task_id_to_idx = {tid: j for j, tid in enumerate(task_ids)}
+
+            # Fill assignment matrix
+            for agent_id, task_id in self.matches:
+                i = agent_id_to_idx[agent_id]
+                j = task_id_to_idx[task_id]
                 assignment[i, j] = True
 
         return assignment

@@ -46,7 +46,7 @@ class CentralizedStrategyABC(BaseStrategy):
         )
 
         result_cont = self.run(result_cont= result_cont, agent_containers= agent_containers, task_containers= task_containers, logger= logger)
-        
+        print('now here', result_cont)
         return result_cont
 
         
@@ -70,9 +70,12 @@ class RandomStrategyCent(CentralizedStrategyABC):
         rows = rng.choice(n_agents, size=m, replace=False)
         cols = rng.choice(n_tasks, size=m, replace=False)
 
+        # Convert indices to ID pairs
+        agent_ids = list(agent_containers.keys())
+        task_ids = list(task_containers.keys())
 
-        # Store matches
-        result_cont.matches = list(zip(rows.tolist(), cols.tolist()))
+        # Store matches as (agent_id, task_id) pairs
+        result_cont.matches = [(agent_ids[i], task_ids[j]) for i, j in zip(rows, cols)]
         return result_cont
 
 
@@ -95,8 +98,12 @@ class HungarianStrategyCent(CentralizedStrategyABC):
         # Run Hungarian algorithm
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
-        # Store matches and cost matrix
-        result_cont.matches = list(zip(row_ind.tolist(), col_ind.tolist()))
+        # Convert indices to ID pairs
+        agent_ids = list(agent_containers.keys())
+        task_ids = list(task_containers.keys())
+
+        # Store matches as (agent_id, task_id) pairs and cost matrix
+        result_cont.matches = [(agent_ids[i], task_ids[j]) for i, j in zip(row_ind, col_ind)]
         result_cont.scores = cost_matrix
 
         return result_cont

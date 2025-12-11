@@ -58,7 +58,8 @@ class TASimulationModule():
         elif issubclass(strategy, CentralizedStrategyABC):
             strategy_instance = strategy()
             result = strategy_instance.solve(agent_containers= self.agent_conts, task_containers= self.task_conts)
-            print(result.get_assignment_matrix)
+            print("Matches (agent_id, task_id):", result.matches)
+            print("Assignment matrix:\n", result.get_assignment_matrix(self.agent_conts, self.task_conts))
             for container in self.agent_conts:
                 ...
                 
