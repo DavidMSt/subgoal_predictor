@@ -9,5 +9,9 @@
 
 - [ ] Splines for motion planning
 
+- [ ] Check if the environment grid in spawn task does what it should 
+
+- [ ] Let the motion plannign during intialization not get info from the environment directly but rather from lwr
+
 ## Low priority
 ...

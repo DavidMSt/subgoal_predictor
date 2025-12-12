@@ -25,7 +25,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         # ------------------------------------------------------------------
 
         # Create task assignment container with default config and state
-        ta_container = AgentTAContainer()
+        ta_container = AgentTAContainer() # TODO: Only ta container needed here the other two could also be used in modules directly
         mp_container = AgentMPContainer()
         exe_container = ExecutionContainer()
      
@@ -60,36 +60,41 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         # Attach motion planning action
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_motion_planning)
 
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
+
     def _action_task_assignment(self):
         """Decentralized task assignment action (greedy nearest).""" #TODO: check here if only for this strategy
-        if self.tai.ta_cont.assigned_task is not None:
+        if self.ta_cont.assigned_task is not None:
             return  # Already have task
         if not self.tai.assignment_pending:
             return  # No assignment requested
 
         # Greedy assignment: select nearest available task
-        available_tasks = self.tai.ta_cont.available_tasks
+        # Tasks come from local world representation (updated by environment)
+        available_tasks = self.lwr_cont.tasks if self.lwr_cont else {}
         if not available_tasks:
             return  # No tasks available
 
         min_distance = float('inf')
         nearest_task = None
 
-        for task_container in available_tasks:
+        for task_container in available_tasks.values():
             distance = self.tai.distance_fun(self.container, task_container)
             if distance < min_distance:
                 min_distance = distance
                 nearest_task = task_container
 
         if nearest_task:
-            self.tai.ta_cont.state.assigned_task = nearest_task
+            self.ta_cont.state.assigned_task = nearest_task
             self.tai.assignment_pending = False
             self.logger.info(f"Agent {self.agent_id} assigned task {nearest_task.object_id} (distance: {min_distance:.2f})")
 
     def _action_motion_planning(self):
         """Motion planning action - creates phase for assigned task."""
          # TODO: give the option here to not use current as starting position
-        if self.mpi.mp_container.start_planning == True:
+        if self.mp_cont.start_planning == True:
             task = self.assigned_task
 
             if task is None:
@@ -111,6 +116,18 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
                 self.runner.activate_phase(phase_key)
                 self.logger.info(f"Activated motion phase {phase_key}")
 
+    # ------------------------------------------------------------------
+    # MODULE related functions
+    # ------------------------------------------------------------------
+
+    @property
+    def ta_cont(self):
+        return self.tai.ta_cont
+    
+    @property
+    def mp_cont(self):
+        return self.mpi.mp_container
+
     @property
     def assigned_task(self):
         """Link to the task assigned by TA module."""
@@ -120,6 +137,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
     def assigned_task(self, value):
         """Set assigned task and trigger motion planning."""
         self.tai.ta_cont.assigned_task = value
+
 
 
 
@@ -140,8 +158,8 @@ def main():
     # Initialize Task
     task = GeneralTask(id='mock_task', x = 2, y = 2, psi = 0)
 
-    # publish task manually to the agents ta module
-    agent.tai.add_tasks(tuple([task]))
+    # Add task to simulation - it will be automatically visible to agent via lwr_cont
+    sim.add_task(task)
 
     sim.start()
 

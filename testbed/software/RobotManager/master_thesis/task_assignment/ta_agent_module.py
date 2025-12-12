@@ -58,21 +58,9 @@ class TAAgentModule():
 
         # TODO: Use metric, e.g. dubins distance which accounts for turning radius
         self.distance_fun = DistanceCalculator(self.ta_cont.distance_metric).measure  # set the cost function
-    
-    def add_tasks(self, tasks: tuple[GeneralTask,...]) -> None:
-        """Add tasks to the available tasks list."""
-        # Add only tasks with unique IDs to the available_tasks list
-        existing_ids = {t.object_id for t in self.ta_cont.state.available_tasks}
-        new_tasks = [task.container for task in tasks if task.object_id not in existing_ids]
-        duplicated_ids = [task.object_id for task in tasks if task.object_id in existing_ids]
 
-        if duplicated_ids:
-            self.logger.warning(f'Detected duplicated tasks with IDs: {duplicated_ids}, keeping only one instance')
-
-        self.ta_cont.state.available_tasks.extend(new_tasks)
-
-    def clear_tasks(self):
-        self.ta_cont.state.available_tasks.clear()
+    # NOTE: Available tasks now come from agent.lwr_cont.tasks (updated by environment)
+    # No need to manually add/clear tasks - they're managed by environment sensing updates
 
     def clear_assigned_task(self):
         """Clear the currently assigned task."""

@@ -255,6 +255,8 @@ def assignment_example_less_simple():
     sim.spawn_agents(3)
     sim.spawn_tasks(3)
 
+    sim.start()
+
     # Decentralized (agents decide themselves via actions)
     # print(sim.tai.assign_tasks(strategy=RandomStrategyCent))
 

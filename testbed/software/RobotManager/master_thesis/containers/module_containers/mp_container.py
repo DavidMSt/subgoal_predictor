@@ -12,7 +12,7 @@ class AgentMPState:
     goal: np.ndarray | None = None
 
     # flag for action
-    start_plannign: bool = False
+    start_planning: bool = False
     
     # did motion planning work? 
     success: bool = False
