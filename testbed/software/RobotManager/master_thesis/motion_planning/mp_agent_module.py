@@ -1,24 +1,14 @@
-import abc
-from dataclasses import dataclass, field, replace
-from time import sleep
-import math
-import threading
-import time
+# 3rd party
 import numpy as np
-from typing import Type, cast, List, Callable
-import logging
+from typing import Type
 
 # bilbolab
-from applications.FRODO.simulation.frodo_simulation import FRODO_ENVIRONMENT_ACTIONS
-import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
-from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment
 
-from master_thesis.general.general_agent import FRODOGeneralAgent
+# master thesis
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
-from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
-from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOGeo, OMPLPlannerFRODOBase
+from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOBase
 from master_thesis.general.general_agent import InputPhaseRunner, InputPhase
 from master_thesis.containers.module_containers.mp_container import AgentMPConfig, AgentMPContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
@@ -37,7 +27,7 @@ class MPAgentModule():
         self.logger = logger
         self.mp_type = mp_type
         self.motion_planner = None
-        self.mp_container = self.setup_mp_container()
+        self.mp_cont = self.setup_mp_container()
 
     def plan_motion(self, phase_key: str, goal_task: TaskContainer| None, start_task: TaskContainer | None = None):
         def extract_config_from_cont(container: BaseContainer):
@@ -65,8 +55,8 @@ class MPAgentModule():
         goal_config = np.array(extract_config_from_cont(goal_task))
         
         # update the mp container
-        self.mp_container.start = start_config
-        self.mp_container.goal = goal_config
+        self.mp_cont.start = start_config
+        self.mp_cont.goal = goal_config
 
         solved, path_length = self.motion_planner.solve_problem()
 
@@ -91,10 +81,10 @@ class MPAgentModule():
 
     def setup_mp_container(self):
         config = AgentMPConfig() # TODO: Offer choice to make more adjustments when calling the function
-        mp_container = AgentMPContainer(config = config)
+        mp_container = AgentMPContainer(config = config, logger=self.logger)
         return mp_container
 
     def setup_motion_planner(self):
         # TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
-        motion_planner = self.mp_type(mp_container=self.mp_container, agent_container= self.agent_cont, env_container= self.env_config)
+        motion_planner = self.mp_type(mp_container=self.mp_cont, agent_container= self.agent_cont, env_container= self.env_config)
         return motion_planner

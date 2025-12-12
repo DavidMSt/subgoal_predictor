@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 import numpy as np
-
+from core.utils.logging_utils import Logger
 from master_thesis.containers.base_container import BaseContainer
 
 
@@ -12,7 +12,7 @@ class AgentMPState:
     goal: np.ndarray | None = None
 
     # Phase name for motion planning action (None = no planning, string = plan with this phase name)
-    start_planning: str | None = None
+    _start_planning: str | None = None
 
     # did motion planning work?
     success: bool = False
@@ -58,3 +58,18 @@ class AgentMPConfig:
 class AgentMPContainer(BaseContainer):
     state: AgentMPState = field(default_factory=AgentMPState)
     config: AgentMPConfig | None = None
+    logger: Logger | None = None
+
+    @property
+    def start_planning(self) -> str | None:
+        return self.state._start_planning
+
+    @start_planning.setter
+    def start_planning(self, value: str | None):
+        self.state._start_planning = value
+
+        if self.logger is not None:
+            if value is None:
+                self.logger.info("Assigned task cleared")
+            else:
+                self.logger.info(f"Assigned task set to: {value}")

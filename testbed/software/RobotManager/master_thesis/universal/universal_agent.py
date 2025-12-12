@@ -5,6 +5,7 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from master_thesis.general.general_agent import FRODOGeneralAgent, FRODO_Agent_Config
 from master_thesis.motion_planning.mp_agent_module import MPAgentModule
 from master_thesis.task_assignment.ta_agent_module import TAAgentModule
+from master_thesis.execution.exe_agent_module import EXEAgentModule
 
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer, AgentTAConfig, AgentTAState
@@ -15,7 +16,7 @@ from master_thesis.containers.module_containers.exe_container import ExecutionCo
 class FRODOUniversalAgent(FRODOGeneralAgent):
     mpi: MPAgentModule
     tai: TAAgentModule
-    exe: ... 
+    exe: EXEAgentModule 
 
     def __init__(self, env_container, agent_id: str, Ts=0.1, start_config=(0.0,0.0,0.0), color: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
         super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, color=color)
@@ -48,7 +49,9 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
             logger=self.logger,
         )
 
-        self.exe = ... # TODO
+        self.exi = EXEAgentModule( # TODO: Implement this module
+            logger = self.logger
+        ) # TODO
 
     def setup_scheduling(self):
         """Override to add task assignment and motion planning actions"""
@@ -128,7 +131,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
     
     @property
     def mp_cont(self):
-        return self.mpi.mp_container
+        return self.mpi.mp_cont
 
     @property
     def assigned_task(self):

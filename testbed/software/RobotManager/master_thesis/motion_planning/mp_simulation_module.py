@@ -18,8 +18,11 @@ class MPSimulationModule():
         self.logger = logger
 
     def start_motion_planning(self, phase_name = 'example_mp_phase'):
-        for name, mp_cont in self.agent_mp_conts.items():
-            mp_cont.state.start_planning = phase_name
+        agent_mp_conts = self.agent_mp_conts
+        if not agent_mp_conts:
+            self.logger.error('MP Module coudld not find MP agent containers')
+        for name, mp_cont in agent_mp_conts.items():
+            mp_cont.start_planning = phase_name
 
     # def agent_motion_planning(self, agent: str | FRODOGeneralAgent, 
     #                           solution_phase_name: str, *, goal_task: TaskContainer, 

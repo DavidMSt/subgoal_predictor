@@ -51,10 +51,19 @@ class TAAgentModule():
 
     def __init__(self, agent_id: str, agent_container, ta_container: AgentTAContainer, logger):
 
+        # Set ID of corresponding agent
         self.agent_id = agent_id
-        self.ta_cont = ta_container
-        self.agent_cont = agent_container
+
+        # Use same logger as the agent
         self.logger = logger
+
+        # Set the task assignment container
+        self.ta_cont = ta_container
+
+        # Pass agents' logger (triggers info, when assigned_task setter used)
+        self.ta_cont.logger = logger
+
+        self.agent_cont = agent_container
 
         # TODO: Use metric, e.g. dubins distance which accounts for turning radius
         self.distance_fun = DistanceCalculator(self.ta_cont.distance_metric).measure  # set the cost function

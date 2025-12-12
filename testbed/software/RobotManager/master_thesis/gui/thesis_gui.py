@@ -426,6 +426,22 @@ class ThesisGUI:
         ))
         page1.addWidget(spawn_button, height=2, width=4)
 
+        # Start Task Assignment Button
+        ta_button = Button(text="Start Task Assignment", callback=Callback(
+            function=self.sim.start_ta,
+            inputs={},
+            discard_inputs=True,
+        ))
+        page1.addWidget(ta_button, height=2, width=4)
+
+        # Start Motion Planning Button
+        mp_button = Button(text="Start Motion Planning", callback=Callback(
+            function=self.sim.start_mp,
+            inputs={},
+            discard_inputs=True,
+        ))
+        page1.addWidget(mp_button, height=2, width=4)
+
     def _buildBabylonFloor(self):
 
         floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')

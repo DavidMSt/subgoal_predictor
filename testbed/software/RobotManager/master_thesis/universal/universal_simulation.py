@@ -16,6 +16,7 @@ from master_thesis.task_assignment.strategies.decentralized_strategies import Gr
 # Module Containers
 from master_thesis.containers.module_containers.mp_container import AgentMPContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
+from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAContainer
 from master_thesis.containers.module_containers.exe_container import ExecutionContainer
 
 
@@ -130,6 +131,8 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
         # keep references to the module specific containers
         self.ta_containers[agent_id] = agent.tai.ta_cont
+        self.mp_containers[agent_id] = agent.mpi.mp_cont
+        self.exe_containers[agent_id] = agent.exi.exe_cont
 
         return agent
 
@@ -195,8 +198,10 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
         self.logger.info("Simulation reset complete")
 
-    def start_ta(self, strategy: type[BaseStrategy] = HungarianStrategyCent):
-        self.tai.task_assignment(strategy=strategy)
+    def start_ta(self, strategy: type[BaseStrategy] = HungarianStrategyCent) -> SimTAContainer:
+        # start the task assignment, return the result
+        result = self.tai.task_assignment(strategy=strategy)
+        return result
 
     def start_mp(self, phase_name = 'example_mp_phase'):
         self.mpi.start_motion_planning(phase_name= phase_name)
@@ -208,7 +213,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 def assignment_example_simple():
      # create simulation (no web gui)
     sim = FRODO_universal_Simulation(
-        Ts=0.1,
+        # Ts=0.1,
         limits = ((-4, 4), (-6, 6))
     )
     sim.init()
@@ -328,11 +333,13 @@ def assignment_example_less_simple():
 
     sim.start()
 
-    # Decentralized (agents decide themselves via actions)
-    # print(sim.tai.assign_tasks(strategy=RandomStrategyCent))
-
     # Centralized (simulation computes assignments)
-    sim.tai.task_assignment(strategy=HungarianStrategyCent)
+    # result = sim.tai.task_assignment(strategy=HungarianStrategyCent)
+    sim.start_ta(strategy=HungarianStrategyCent)
+    sim.start_mp()
+    # print(result.matches)
+   
+
 
 if __name__ == "__main__":
 
