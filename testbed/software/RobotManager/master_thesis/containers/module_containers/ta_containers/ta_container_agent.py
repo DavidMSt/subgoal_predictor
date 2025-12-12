@@ -37,6 +37,9 @@ class AgentTAContainer(BaseContainer):
     @assigned_task.setter
     def assigned_task(self, value: TaskContainer | None):
         self.state._assigned_task = value
-        
+
         if self.logger is not None:
-            self.logger.info('Assigned task set to: ', value)
+            if value is None:
+                self.logger.info("Assigned task cleared")
+            else:
+                self.logger.info(f"Assigned task set to: {value.object_id}")

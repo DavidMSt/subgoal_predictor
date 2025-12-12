@@ -13,9 +13,6 @@ from master_thesis.containers.module_containers.ta_containers.ta_container_sim i
     SimTAConfig,
 )
 
-
-
-
 # ============================================================================
 # CENTRALIZED STRATEGIES
 # ============================================================================
@@ -46,7 +43,6 @@ class CentralizedStrategyABC(BaseStrategy):
         )
 
         result_cont = self.run(result_cont= result_cont, agent_containers= agent_containers, task_containers= task_containers, logger= logger)
-        print('now here', result_cont)
         return result_cont
 
         

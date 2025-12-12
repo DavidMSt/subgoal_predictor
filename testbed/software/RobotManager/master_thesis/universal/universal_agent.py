@@ -15,7 +15,7 @@ from master_thesis.containers.module_containers.exe_container import ExecutionCo
 class FRODOUniversalAgent(FRODOGeneralAgent):
     mpi: MPAgentModule
     tai: TAAgentModule
-    exe: ...
+    exe: ... 
 
     def __init__(self, env_container, agent_id: str, Ts=0.1, start_config=(0.0,0.0,0.0), color: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
         super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, color=color)
@@ -66,15 +66,15 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
 
     def _action_decentralized_task_assignment(self):
         """Decentralized task assignment action (greedy nearest).""" #TODO: check here if only for this strategy
-        if self.ta_cont.assigned_task is not None:
+        if self.ta_cont.assigned_task is not None or not self.tai.assignment_pending:
             return  # Already have task
-        if not self.tai.assignment_pending:
-            return  # No assignment requested
 
         # Tasks come from local world representation (updated by environment)
         available_tasks = self.lwr_cont.tasks if self.lwr_cont else {}
         if not available_tasks:
             return  # No tasks available
+        
+        self.logger.info('Doing decentralized task assignment')
 
         min_distance = float('inf')
         nearest_task = None

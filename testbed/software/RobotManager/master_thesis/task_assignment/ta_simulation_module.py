@@ -29,7 +29,7 @@ class TASimulationModule():
         # To control the actual task assignment (publish tasks, assign them if central method)
         self.agent_ta_conts = agent_ta_conts
 
-    def task_assignment(self, strategy: type[BaseStrategy]):
+    def task_assignment(self, strategy: type[BaseStrategy]) -> SimTAContainer:
         """
         Assign tasks to agents using the provided strategy.
 
@@ -71,6 +71,8 @@ class TASimulationModule():
                 task_cont.assigned_agent = agent_cont
                 # reset the assignment pending flag
                 agent_ta_cont.assignment_pending = False
+
+            return result
                 
                 
         else:
