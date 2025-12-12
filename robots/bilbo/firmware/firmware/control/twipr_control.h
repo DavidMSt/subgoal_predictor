@@ -84,8 +84,6 @@ typedef struct bilbo_logging_control_config_t {
 typedef struct twipr_logging_control_t {
 	twipr_control_status_t control_status;
 	twipr_control_mode_t control_mode;
-//	bilbo_logging_control_config_t config;
-	twipr_control_external_input_t external_input;
 	twipr_control_data_t data;
 } twipr_logging_control_t;
 
@@ -134,7 +132,9 @@ typedef BILBO_Message<control_event_message_data_t, MSG_EVENT,
 class TWIPR_ControlManager {
 
 public:
-	TWIPR_ControlManager();
+	TWIPR_ControlManager(){
+
+	};
 
 	void init(twipr_control_init_config_t config);
 	uint8_t start();
@@ -155,7 +155,7 @@ public:
 
 	void setExternalInput(twipr_control_external_input_t input);
 	void setDirectInput(twipr_control_direct_input_t input);
-	void setBalancingInput(twipr_balancing_control_input_t input);
+	bool setBalancingInput(twipr_balancing_control_input_t input);
 	void setSpeed(twipr_speed_control_input_t speed);
 
 	uint8_t setBalancingGain(float *K);

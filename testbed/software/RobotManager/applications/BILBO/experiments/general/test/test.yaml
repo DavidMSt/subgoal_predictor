@@ -1,0 +1,40 @@
+id: test
+description: Test experiment
+actions:
+  action1:
+    type: set_mode
+    mode: BALANCING
+    time: 1.0
+  move:
+    type: set_input
+    input: [ 0.4, 0.0 ]
+    time: 3.6
+    normalized: true
+  move2:
+    type: set_input
+    input: [ 0.0, 0.0 ]
+    time: 5.0
+    normalized: true
+  move3:
+    type: set_input
+    input: [ -0.7, 0.0 ]
+    time: 7.0
+    normalized: true
+  move4:
+    type: set_input
+    input: [ 0.0, 0.0 ]
+    time: 8.0
+    normalized: true
+  move5:
+    type: set_input
+    input: [ 0.1, 0.0 ]
+    time: 10.0
+    normalized: true
+  action2:
+    type: set_mode
+    mode: OFF
+    time: 10.1
+  action3:
+    after: action2
+    type: wait_ticks
+    ticks: 20

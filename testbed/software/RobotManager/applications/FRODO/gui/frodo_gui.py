@@ -286,6 +286,7 @@ class FRODO_Robots_Page:
             return 'medium'
         return 'low'
 
+
 #
 # # # === VISION PAGE ======================================================================================================
 # # class FRODO_Vision_Page:
@@ -1096,7 +1097,7 @@ class FRODO_Agents_Page:
         self._add_agent(agent)
 
 
-# === FRODO SIMULATION PAGE ==============================================================================================
+# === FRODO SIMULATION PAGE ============================================================================================
 class FRODO_Simulation_Page:
     page: Page
     gui: GUI

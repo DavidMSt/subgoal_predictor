@@ -16,8 +16,8 @@ from core.utils.network import check_internet
 from core.utils.os_utils import getOS
 from core.utils.pygame_utils import pygame
 from core.utils.files import (
-    get_script_path, relativeToFullPath, makeDir, joinPaths,
-    fileExists, deleteFile, listFilesInDir, splitExtension
+    get_script_path, get_absolute_path, makeDir, joinPaths,
+    file_exists, deleteFile, listFilesInDir, splitExtension
 )
 from core.utils.logging_utils import Logger
 
@@ -43,10 +43,10 @@ def playSound(file, volume=None, force=False, flush=False):
 
 
 def playFile(file):
-    if fileExists(file):
+    if file_exists(file):
         file_path = file
-    elif fileExists(relativeToFullPath(f'library/{file}.wav')):
-        file_path = relativeToFullPath(f'library/{file}.wav')
+    elif file_exists(get_absolute_path(f'library/{file}.wav')):
+        file_path = get_absolute_path(f'library/{file}.wav')
     else:
         return
 
@@ -125,12 +125,12 @@ if getOS() == "Windows":
 
 def cleanTTS():
     try:
-        for file in listFilesInDir(relativeToFullPath('tts_files')):
-            file_path = joinPaths(relativeToFullPath('tts_files'), file)
-            if fileExists(file_path):
+        for file in listFilesInDir(get_absolute_path('tts_files')):
+            file_path = joinPaths(get_absolute_path('tts_files'), file)
+            if file_exists(file_path):
                 deleteFile(file_path)
 
-        with open(relativeToFullPath('./tts_files/index.json'), "w") as f:
+        with open(get_absolute_path('./tts_files/index.json'), "w") as f:
             json.dump({}, f)
 
         logger.info("TTS files cleared.")
@@ -152,12 +152,12 @@ class SoundSystem:
 
         # Prepare directories
         self.script_dir = get_script_path()
-        self.tts_folder = relativeToFullPath('./tts_files')
+        self.tts_folder = get_absolute_path('./tts_files')
         makeDir(self.tts_folder)
-        self.sound_folder = relativeToFullPath('./sounds')
+        self.sound_folder = get_absolute_path('./sounds')
         makeDir(self.sound_folder)
         self.index_file = joinPaths(self.tts_folder, "index.json")
-        if not fileExists(self.index_file):
+        if not file_exists(self.index_file):
             with open(self.index_file, "w") as f:
                 json.dump({}, f)
 
@@ -239,19 +239,19 @@ class SoundSystem:
             )
 
     def _resolve_file_path(self, file):
-        if fileExists(file):
+        if file_exists(file):
             return file
         file_path = joinPaths(self.script_dir, file)
-        if fileExists(file_path):
+        if file_exists(file_path):
             return file_path
         file_in_sounds = joinPaths(self.sound_folder, file)
-        if fileExists(file_in_sounds):
+        if file_exists(file_in_sounds):
             return file_in_sounds
         file_base, _ = splitExtension(file)
         for ext in ['.wav', '.mp3', '.ogg']:
             file_with_ext = file_base + ext
             file_in_sounds = joinPaths(self.sound_folder, file_with_ext)
-            if fileExists(file_in_sounds):
+            if file_exists(file_in_sounds):
                 return file_in_sounds
         return None
 
@@ -308,7 +308,7 @@ class SoundSystem:
             index[text] = {}
         if engine_name in index[text]:
             file_path = index[text][engine_name]
-            if await asyncio.to_thread(fileExists, file_path):
+            if await asyncio.to_thread(file_exists, file_path):
                 logger.debug(f"Found file for \"{text}\" using engine \"{engine_name}\"")
                 return file_path
             else:

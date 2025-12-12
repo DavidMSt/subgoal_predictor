@@ -5,7 +5,7 @@ import time
 
 from applications.FRODO.agent_manager import FRODO_AgentManager
 from applications.FRODO.algorithm.algorithm_manager import FRODO_AlgorithmManager, AlgorithmSettings
-from applications.FRODO.experiments.frodo_experiment_new import FRODO_Experiment_Handler, ExperimentSettings
+from applications.FRODO.experiments.frodo_experiment import FRODO_ExperimentManager, ExperimentSettings
 from applications.FRODO.gui.frodo_gui import FRODO_GUI
 from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation
 from applications.FRODO.testbed.testbed_manager import FRODO_TestbedManager
@@ -30,7 +30,7 @@ class FRODO_Application:
     simulation: FRODO_Simulation
     testbed: FRODO_TestbedManager
     agent_manager: FRODO_AgentManager
-    experiment_manager: FRODO_Experiment_Handler
+    experiment_manager: FRODO_ExperimentManager
     algorithm_manager: FRODO_AlgorithmManager
 
     gui: FRODO_GUI
@@ -50,7 +50,7 @@ class FRODO_Application:
             settings=AlgorithmSettings(Ts=self.settings.update_time_algorithm)
         )
 
-        self.experiment_manager = FRODO_Experiment_Handler(
+        self.experiment_manager = FRODO_ExperimentManager(
             agent_manager=self.agent_manager,
             algorithm_manager=self.algorithm_manager,
             settings=ExperimentSettings(

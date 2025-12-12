@@ -1,3 +1,5 @@
+from __future__ import annotations
+import os
 import json
 import time
 from queue import Queue
@@ -14,7 +16,8 @@ import numpy as np
 from core.utils.network.network import check_internet
 from core.utils.os_utils import getOS
 from core.utils.pygame_utils import pygame
-from core.utils.files import get_script_path, get_absolute_path, makeDir, joinPaths, fileExists, deleteFile, listFilesInDir, \
+from core.utils.files import get_script_path, get_absolute_path, makeDir, joinPaths, file_exists, deleteFile, \
+    listFilesInDir, \
     splitExtension
 from core.utils.logging_utils import Logger
 
@@ -22,7 +25,105 @@ from core.utils.logging_utils import Logger
 logger = Logger('Sound')
 logger.setLevel('INFO')
 
-active_sound_system = None
+active_sound_system: SoundSystem | None = None
+
+_beep_cache_files = {}
+
+
+def beep(
+        frequency: int = 440,
+        time_ms: int = 250,
+        repeats: int = 1,
+        volume: float = 1.0,
+        force: bool = False,
+        flush: bool = False,
+        gap_ms: int = 40,
+):
+    """
+    Non-blocking beep tone played through the active SoundSystem.
+
+    - Reuses cached beep files from previous runs if found.
+    - For repeats > 1, generates a single file containing all beeps with small gaps.
+    - `force` and `flush` are forwarded to SoundSystem.play().
+    """
+    global active_sound_system
+
+    if active_sound_system is None:
+        logger.warning("No active sound system for beep()")
+        return
+
+    # Clamp parameters
+    volume = max(0.0, min(1.0, float(volume)))  # pygame expects 0..1
+    repeats = max(1, int(repeats))
+    gap_ms = max(0, int(gap_ms))
+
+    # Cache key must include repeats + gap for multi-beep variants
+    key = (int(frequency), int(time_ms), int(repeats), int(gap_ms))
+
+    # Path where beep files are stored
+    sound_path = get_absolute_path(
+        f"./sounds/beep_{frequency}_{time_ms}_{repeats}_{gap_ms}.wav"
+    )
+
+    # Check in-memory cache first
+    if key in _beep_cache_files:
+        sound_file = _beep_cache_files[key]
+
+    # If not in memory, check if file already exists from a previous run
+    elif file_exists(sound_path):
+        _beep_cache_files[key] = sound_path
+        sound_file = sound_path
+
+    else:
+        # === Generate the base single-beep segment ===
+        sample_rate = 44100
+        duration_sec = time_ms / 1000.0
+        n_samples = int(sample_rate * duration_sec)
+
+        t = np.linspace(0, duration_sec, n_samples, endpoint=False)
+        waveform = np.sin(2 * np.pi * frequency * t)
+
+        max_int16 = np.iinfo(np.int16).max
+
+        # Add headroom so we can boost without nasty clipping:
+        # 0.3 * max_int16 (~ -10 dB) + apply_gain(+10 dB) ≈ full scale
+        headroom_factor = 0.3
+        samples = (waveform * max_int16 * headroom_factor).astype(np.int16)
+
+        # Stereo (pygame mixer.music typically handles stereo files fine)
+        stereo = np.column_stack((samples, samples))
+
+        # Create AudioSegment
+        base_beep = AudioSegment(
+            stereo.tobytes(),
+            frame_rate=sample_rate,
+            sample_width=2,
+            channels=2,
+        )
+
+        # Make it "loud" without starting already at clipping
+        base_beep = base_beep.apply_gain(10)  # +10 dB
+
+        # === Build full segment with repeats + gaps ===
+        if repeats == 1:
+            full_segment = base_beep
+        else:
+            gap = AudioSegment.silent(duration=gap_ms)
+            segments = []
+            for i in range(repeats):
+                segments.append(base_beep)
+                if i < repeats - 1 and gap_ms > 0:
+                    segments.append(gap)
+            full_segment = sum(segments)
+
+        # Export once and reuse forever
+        full_segment.export(sound_path, format="wav")
+
+        _beep_cache_files[key] = sound_path
+        sound_file = sound_path
+
+    # Queue non-blocking playback (single file that already includes repeats)
+    active_sound_system.play(sound_file, volume=volume, force=force, flush=flush)
 
 
 def speak(text, volume=None, force=False, flush=False):
@@ -45,9 +146,9 @@ def playFile(file):
 
     :param file: Path or name of the sound file.
     """
-    if fileExists(file):
+    if file_exists(file):
         file_path = file
-    elif fileExists(get_absolute_path(f'library/{file}.wav')):
+    elif file_exists(get_absolute_path(f'library/{file}.wav')):
         file_path = get_absolute_path(f'library/{file}.wav')
     else:
         return
@@ -201,7 +302,7 @@ def cleanTTS():
     try:
         for file in listFilesInDir(get_absolute_path('tts_files')):
             file_path = joinPaths(get_absolute_path('tts_files'), file)
-            if fileExists(file_path):
+            if file_exists(file_path):
                 deleteFile(file_path)
 
         # Reset the index.json structure
@@ -247,7 +348,7 @@ class SoundSystem:
 
         # Index file to store mapping of text to generated TTS files
         self.index_file = joinPaths(self.tts_folder, "index.json")
-        if not fileExists(self.index_file):
+        if not file_exists(self.index_file):
             with open(self.index_file, "w") as f:
                 json.dump({}, f)
 
@@ -285,7 +386,7 @@ class SoundSystem:
         else:
             self.queue.put((filename, volume))
 
-    def play(self, file,volume=None, force=False,flush=False):
+    def play(self, file, volume=None, force=False, flush=False):
         """
         Play a given sound file.
 
@@ -395,7 +496,7 @@ class SoundSystem:
 
         if engine_name in index[text]:
             file_path = index[text][engine_name]
-            if fileExists(file_path):
+            if file_exists(file_path):
                 logger.debug(f"Found file for \"{text}\" using engine \"{engine_name}\"")
                 return file_path
             else:
@@ -432,22 +533,22 @@ class SoundSystem:
         :param file: File name or path to resolve.
         :return: Resolved file path or None if not found.
         """
-        if fileExists(file):
+        if file_exists(file):
             return file
 
         file_path = joinPaths(self.script_dir, file)
-        if fileExists(file_path):
+        if file_exists(file_path):
             return file_path
 
         file_in_sounds = joinPaths(self.sound_folder, file)
-        if fileExists(file_in_sounds):
+        if file_exists(file_in_sounds):
             return file_in_sounds
 
         file_base, _ = splitExtension(file)
         for ext in ['.wav', '.mp3', '.ogg']:
             file_with_ext = file_base + ext
             file_in_sounds = joinPaths(self.sound_folder, file_with_ext)
-            if fileExists(file_in_sounds):
+            if file_exists(file_in_sounds):
                 return file_in_sounds
 
         return None
@@ -458,13 +559,14 @@ if __name__ == "__main__":
     # primary_engine = GTTSVoiceEngine()
     primary_engine = EdgeTTSVoiceEngine()
     sound_system = SoundSystem(volume=0.5, primary_engine=primary_engine, add_robot_filter=False)
-    cleanTTS()
+    # cleanTTS()
     sound_system.start()
     try:
-        playSound('warning')
-        speak("BILBO 1 disconnected")
-        # speak("Experiment with ID f-e-x-1-2-3-4 finished")
-        # playSound('startup')¥
+        # beep(frequency=1000, volume=2)
+        # playSound('warning')
+        # speak("BILBO 1 disconnected")
+        # # speak("Experiment with ID f-e-x-1-2-3-4 finished")
+        # # playSound('startup')¥
         time.sleep(10)
     finally:
         sound_system.close()

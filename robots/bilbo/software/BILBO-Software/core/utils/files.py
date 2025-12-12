@@ -5,28 +5,36 @@ from pathlib import Path
 import tempfile
 
 
-# File Path Utilities
-def relativeToFullPath(relative_path):
+def get_absolute_path(path_str):
     """
-    Resolve the absolute path from a relative path, relative to the caller's module.
+    Resolve the absolute path from a relative, absolute, or home path.
 
-    :param relative_path: Relative path to resolve.
-    :return: Absolute path.
+    If path_str starts with '~', it is expanded to the user's home directory.
+    If path_str is absolute (including after home expansion), it is resolved and returned.
+    Otherwise, it is resolved relative to the caller's module directory.
+
+    :param path_str: The path to resolve.
+    :return: The absolute, resolved path as a string.
     """
+    # Expand the home directory (if the path starts with '~')
+    path_obj = Path(path_str).expanduser()
+
+    # If the path is absolute, return its resolved version
+    if path_obj.is_absolute():
+        return str(path_obj.resolve())
+
     # Get the caller's frame
     caller_frame = inspect.stack()[1]
     caller_module = inspect.getmodule(caller_frame[0])
 
-    # Get the caller's directory
+    # Determine the caller's directory, or fallback to current working directory
     if caller_module and caller_module.__file__:
         caller_dir = Path(caller_module.__file__).parent.resolve()
     else:
-        # Fallback to the current working directory if module info is not available
         caller_dir = Path().cwd()
 
-    # Resolve the full path
-    full_path = (caller_dir / relative_path).resolve()
-
+    # Resolve the full path relative to the caller's directory
+    full_path = (caller_dir / path_obj).resolve()
     return str(full_path)
 
 
@@ -77,7 +85,7 @@ def get_script_name(remove_extension=False):
 
 
 # File Operations
-def fileExists(file_path):
+def file_exists(file_path):
     """
     Check if a file exists.
 
@@ -166,7 +174,7 @@ def deleteFile(file_path):
 
     :param file_path: Path to the file.
     """
-    if fileExists(file_path):
+    if file_exists(file_path):
         os.remove(file_path)
 
 
@@ -174,31 +182,11 @@ def copyFile(src, dest):
     """
     Copy a file from source to destination.
 
-    If the destination is a directory, the file will be copied into that directory
-    using the source filename.
-
     :param src: Source file path.
-    :param dest: Destination file path or directory.
+    :param dest: Destination file path.
     """
-    dest = os.path.expanduser(dest)
-    src = os.path.expanduser(src)
-
-    if os.path.isdir(dest):
-        filename = os.path.basename(src)
-        dest = os.path.join(dest, filename)
-
     shutil.copy2(src, dest)
 
-def copyFolder(src, dest):
-
-    dest = os.path.expanduser(dest)
-    src = os.path.expanduser(src)
-
-    shutil.copytree(
-        src,
-        dest,
-        dirs_exist_ok=True
-    )
 
 def moveFile(src, dest):
     """
@@ -302,28 +290,3 @@ def splitExtension(file_path):
             - extension: The file extension, including the leading dot (e.g., '.txt').
     """
     return os.path.splitext(file_path)
-
-
-def createFile(file_name: str, extension: str = "") -> str:
-    """
-    Creates an empty file with the given name and optional extension.
-
-    Args:
-        file_name (str): The name of the file (without extension).
-        extension (str): The optional extension for the file (e.g., 'txt', 'json').
-
-    Returns:
-        str: The full path of the created file.
-    """
-    # Add the extension to the filename if provided
-    if extension:
-        file_name = f"{file_name}.{extension.lstrip('.')}"
-
-    try:
-        # Create the empty file
-        with open(file_name, 'w') as file:
-            pass
-        return os.path.abspath(file_name)
-    except Exception as e:
-        print(f"An error occurred while creating the file: {e}")
-        raise

@@ -1,4 +1,4 @@
-from core.utils.files import fileExists, copyFile
+from core.utils.files import file_exists, copyFile
 from core.utils.network import get_own_hostname
 from hardware.board_config import generateBoardConfig
 from robot.config import get_bilbo_config
@@ -14,7 +14,7 @@ def setup():
 
     # 2. Check if there is a config file for the specified ID
     config_file = f"{SOFTWARE_PATH}configs/{robot_id}.yaml"
-    if not fileExists(config_file):
+    if not file_exists(config_file):
         raise FileNotFoundError(f"Config file for robot ID '{robot_id}' not found.")
     else:
         print(f"Config file for robot ID '{robot_id}' found: {config_file}")
@@ -36,7 +36,7 @@ def setup():
     # 7. Copy the testbed config file to the robot's config folder
     testbed_file = f"{SOFTWARE_PATH}configs/testbed.yaml"
 
-    if not fileExists(testbed_file):
+    if not file_exists(testbed_file):
         raise FileNotFoundError(f"Testbed config file not found: {testbed_file}")
     else:
         copyFile(testbed_file, f"{CONFIG_PATH}/testbed.yaml")

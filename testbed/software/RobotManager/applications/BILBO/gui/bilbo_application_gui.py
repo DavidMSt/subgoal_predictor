@@ -34,9 +34,9 @@ from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
 from robots.bilbo.robot.bilbo import BILBO
 from robots.bilbo.robot.bilbo_data import BILBO_Sample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
-from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandler_Status, BILBO_Experiment_Status
+from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandler_Status
 from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory
-from robots.bilbo.robot.experiment.experiments import DILC_Experiment
+# from robots.bilbo.robot.experiment.experiments import DILC_Experiment
 
 # === GLOBAL VARIABLES =================================================================================================
 js_control: Optional[BILBO_JoystickControl] = None
@@ -641,7 +641,7 @@ class BILBO_Application_GUI_Robot_Category:
 
         set_experiment_status()
 
-        self.robot.experiment_handler.events.experiment_status_changed.on(set_experiment_status)
+        # self.robot.experiment_handler.events.experiment_status_changed.on(set_experiment_status)
 
         # Text Widget Showing current trajectory info
         self.trajectory_info_widget = TextWidget(widget_id='trajectory_info_widget',
@@ -721,7 +721,7 @@ class BILBO_Application_GUI_Robot_Category:
         self.abort_button.disable()
 
         self.stop_button = Button(widget_id='stop_button', text='Stop Exp', color=[0.4, 0, 0])
-        self.stop_button.callbacks.click.register(self.robot.experiment_handler.stopExperiment, discard_inputs=True)
+        # self.stop_button.callbacks.click.register(self.robot.experiment_handler.stopExperiment, discard_inputs=True)
         self.experiment_control_group.addWidget(self.stop_button, row=1, column=5, width=1, height=1)
 
         self.experiment_apps_group = Widget_Group(
@@ -1029,7 +1029,12 @@ class BILBO_GUI_TestbedPage:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_testbed_robot_disconnected(self, robot: BILBO_TestbedAgent):
-        ...
+        if robot.id not in self.robots:
+            self.logger.warning(f'Testbed robot {robot.id} not found. Skipping.')
+            return
+
+        self.babylon_visualization.removeObject(self.robots[robot.id].babylon)
+        del self.robots[robot.id]
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_new_tracker_sample(self, *args, **kwargs):
@@ -1114,6 +1119,7 @@ class BILBO_Application_GUI:
 
     # ------------------------------------------------------------------------------------------------------------------
     def removeRobot(self, robot: BILBO):
+        self.logger.important(f'Removing robot {robot.id} from GUI')
         if robot.id in self.robot_categories:
             self._removeRobotCategory(robot.id)
             self._removeRobotFolder_App(robot.id)

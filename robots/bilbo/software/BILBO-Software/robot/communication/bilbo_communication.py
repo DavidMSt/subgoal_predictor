@@ -99,7 +99,7 @@ class BILBO_Communication:
 
         # Set the events
         self.events.rx_stm32_sample.set(sample)
-        self.events.stm32_tick.set(sample.general.tick)
+        self.events.stm32_tick.set(sample.tick)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _log_redirection(self, log_entry, log, logger: Logger, level):

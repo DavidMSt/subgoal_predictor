@@ -22,7 +22,7 @@ from core.utils.events import wait_for_events, AND, TIMEOUT, OR
 from core.utils.callbacks import callback_definition, CallbackContainer, Callback
 from core.utils.events import Event, event_definition, EventFlag, pred_flag_equals
 from core.utils.exit import register_exit_callback
-from core.utils.files import fileExists
+from core.utils.files import file_exists
 from core.utils.logging_utils import Logger
 from core.utils.loop import infinite_loop
 from core.utils.time import IntervalTimer, TimeoutTimer, setTimeout
@@ -955,7 +955,7 @@ class NavigatorPlan:
         return True
 
     # ------------------------------------------------------------------------------------------------------------------
-    def run(self, blocking: bool = False) -> bool:
+    def run(self) -> None:
         """
         Start the plan. If non-empty, we register a combined finished listener so
         the plan can resolve when all actions report finished.
@@ -966,19 +966,14 @@ class NavigatorPlan:
         # If there are no actions, finish immediately.
         if not self.actions:
             self._on_last_action_finished()
-            return True
+            return
 
         # Register the finished callback for the last action group (all actions finished)
         finished_events = AND(*[action.events.finished for action in self.actions])
         finished_events.on(callback=self._on_last_action_finished, once=True)
 
-        if blocking:
-            self._task()
-            return True
-        else:
-            self._thread = threading.Thread(target=self._task, daemon=True)
-            self._thread.start()
-            return True
+        self._thread = threading.Thread(target=self._task, daemon=True)
+        self._thread.start()
 
     # ------------------------------------------------------------------------------------------------------------------
     @classmethod
@@ -1007,7 +1002,7 @@ class NavigatorPlan:
     # ------------------------------------------------------------------------------------------------------------------
     @classmethod
     def from_yaml(cls, yaml_file: str) -> 'NavigatorPlan':
-        if not fileExists(yaml_file):
+        if not file_exists(yaml_file):
             raise FileNotFoundError(f"File not found: {yaml_file}")
         with open(yaml_file, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
@@ -1116,17 +1111,17 @@ class MultiAgentNavigator:
         self.logger.info(f"Removed agent {agent}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def load_plan(self, plan: NavigatorPlan, start: bool = False):
+    def load_plan(self, plan: NavigatorPlan, start: bool = False) -> bool:
         """
         Load a plan (replacing the current plan once it's finished), clear the bus, and optionally start it.
         """
         if self.state == MultiAgentNavigator_State.RUNNING:
             self.logger.warning("Cannot load a plan while the navigator is running.")
-            return
+            return False
 
         if self.current_plan is not None and self.current_plan.state != NavigatorPlanState.FINISHED:
             self.logger.warning(f"Plan {plan.id} not finished. Exiting plan.")
-            return
+            return False
 
         # Clear the event bus
         self.bus.clear()
@@ -1135,14 +1130,17 @@ class MultiAgentNavigator:
         result = plan.initialize(self)
         if not result:
             self.logger.warning(f"Plan {plan.id} initialization failed. Exiting plan.")
-            return
+            return False
         self.current_plan = plan
         self.current_plan.callbacks.finished.register(self._plan_finished_callback)
         self.current_plan.callbacks.error.register(self._plan_error_callback)
 
         self.logger.info(f"Loaded plan {self.current_plan.id} with {len(self.current_plan.actions)} actions.")
+
         if start:
             self.run_current_plan()
+
+        return True
 
     # ------------------------------------------------------------------------------------------------------------------
     def load_plan_from_file(self, plan_file: str, start: bool = False):
@@ -1150,7 +1148,7 @@ class MultiAgentNavigator:
         Load a plan from a YAML file (replacing the current plan once it's finished), clear the bus, and optionally
         start it.
         """
-        if not fileExists(plan_file):
+        if not file_exists(plan_file):
             self.logger.warning(f"File {plan_file} not found. Exiting.")
             return
         plan = NavigatorPlan.from_yaml(plan_file)
@@ -1161,17 +1159,36 @@ class MultiAgentNavigator:
         raise NotImplementedError
 
     # ------------------------------------------------------------------------------------------------------------------
-    def run_current_plan(self):
+    def run_current_plan(self, blocking: bool = False, timeout: float | None = None) -> bool:
         if not self.current_plan:
             self.logger.warning("No current plan to start.")
-            return
+            return False
 
         if self.current_plan.state != NavigatorPlanState.IDLE:
             self.logger.warning(f"Plan {self.current_plan.id} not idle. Exiting plan.")
-            return
+            return False
 
         self.logger.info(f"Starting plan {self.current_plan.id}")
+
+        plan = self.current_plan
         self.current_plan.run()
+
+        if blocking:
+            data, trace = wait_for_events(
+                events=OR(
+                    plan.events.finished,
+                    plan.events.error,
+                ),
+                timeout=timeout
+            )
+            if data is TIMEOUT:
+                self.logger.warning(f"Plan {plan.id} timed out.")
+                return False
+            if trace.caused_by(self.current_plan.events.error):
+                self.logger.error(f"Plan {plan.id} failed.")
+                return False
+
+        return True
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_agent_by_id(self, agent_id: str) -> agent_navigator.NavigatedObject | None:

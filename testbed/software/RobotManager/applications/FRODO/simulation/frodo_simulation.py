@@ -440,6 +440,7 @@ class FRODO_Static(FRODO_SimulationObject):
         self.set_state(x, y, psi)
         print(f"Created static {static_id} at ({self.state.x}, {self.state.y})")
 
+    # ------------------------------------------------------------------------------------------------------------------
     def set_state(self, x: float = None, y: float = None, psi: float = None):
         if x is not None:
             self.state.x = x
@@ -615,9 +616,9 @@ class FRODO_Simulation:
 
     # ------------------------------------------------------------------------------------------------------------------
     def clear(self):
-        for agent in SIMULATED_AGENTS.values():
+        for agent in list(SIMULATED_AGENTS.values()):
             self.remove_agent(agent)
-        for static in SIMULATED_STATICS.values():
+        for static in list(SIMULATED_STATICS.values()):
             self.remove_static(static)
     # === PRIVATE METHODS ==============================================================================================
 

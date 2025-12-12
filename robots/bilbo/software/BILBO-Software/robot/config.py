@@ -3,7 +3,7 @@ import enum
 import yaml
 
 from core.utils.dataclass_utils import from_dict_auto
-from core.utils.files import fileExists
+from core.utils.files import file_exists
 from core.utils.network import get_own_hostname
 from robot.paths import CONFIG_PATH
 
@@ -112,7 +112,7 @@ class BILBO_Config:
 # ======================================================================================================================
 def bilbo_config_from_file(file_name: str) -> BILBO_Config:
     file_path = f"{CONFIG_PATH}/{file_name}"
-    if not fileExists(file_path):
+    if not file_exists(file_path):
         raise FileNotFoundError(f"File '{file_path}' not found")
 
     with open(file_path, 'r') as file:

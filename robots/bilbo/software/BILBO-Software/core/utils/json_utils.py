@@ -1,7 +1,7 @@
 import warnings
 import orjson
 import numpy as np
-from core.utils.files import fileExists
+from core.utils.files import file_exists
 
 
 def _default(obj):
@@ -22,7 +22,7 @@ def jsonEncode(obj):
 
 
 def readJSON(file) -> dict | None:
-    if not fileExists(file):
+    if not file_exists(file):
         warnings.warn(f"File {file} does not exist", UserWarning)
         return None
     with open(file, "rb") as f:  # must read bytes

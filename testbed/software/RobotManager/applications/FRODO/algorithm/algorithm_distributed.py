@@ -166,7 +166,9 @@ class DistributedAlgorithm(LocalizationAlgorithm):
 
     # === METHODS ======================================================================================================
     def initialize(self, agents: list[DistributedAgent]):
-        self.agents = {}
+
+        self.reset()
+
         for agent in agents:
             self.agents[agent.id] = agent
 
@@ -174,6 +176,9 @@ class DistributedAlgorithm(LocalizationAlgorithm):
             f"Initialized distributed algorithm with {len(agents)} agents: "
             f"{[agent.id for agent in self.agents.values()]}")
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def reset(self):
+        self.agents = {}
         self.step = 0
 
     # ------------------------------------------------------------------------------------------------------------------

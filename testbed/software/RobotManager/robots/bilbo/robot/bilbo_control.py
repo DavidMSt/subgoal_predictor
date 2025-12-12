@@ -82,7 +82,6 @@ class BILBO_Control:
 
     # ------------------------------------------------------------------------------------------------------------------
     def handleEventMessage(self, message):
-        self.logger.important(f"Robot {self.id}: Received control event message: {message.data['event']}")
         match message.data['event']:
             case 'mode_change':
                 self._handleModeChangeEvent(message.data)

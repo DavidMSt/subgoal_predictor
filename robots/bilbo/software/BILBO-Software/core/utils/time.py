@@ -1,4 +1,5 @@
 import ctypes
+from contextlib import contextmanager
 from typing import Callable
 import time
 import threading
@@ -432,6 +433,13 @@ def clearInterval(timer: Timer) -> None:
     """
     if timer is not None:
         timer.stop()
+
+
+@contextmanager
+def measure_time(label="Operation"):
+    start = time.perf_counter()
+    yield
+    print(f"{label} took {(time.perf_counter()-start)*1000:.1f} ms")
 
 
 # ======================================================================================================================

@@ -9,7 +9,7 @@ import time
 from hardware.board_config import getBoardConfig
 from hardware.stm32.stm32 import resetSTM32
 from core.hardware.sx1508 import SX1508, SX1508_GPIO_MODE
-from core.utils.files import relativeToFullPath, copyFile
+from core.utils.files import get_absolute_path, copyFile
 
 # Set the allowed flash region for STM32H745
 FLASH_START = 0x08000000
@@ -153,7 +153,7 @@ class STM32_FirmwareUpdater:
 
     def flash_firmware(self, firmware_path) -> bool:
         # Define the path to stm32flash executable
-        stm32flash_path = relativeToFullPath("./stm32flash/stm32flash")
+        stm32flash_path = get_absolute_path("./stm32flash/stm32flash")
 
         # Check if the stm32flash executable exists
         if not os.path.exists(stm32flash_path):
@@ -188,7 +188,7 @@ class STM32_FirmwareUpdater:
 def compileSTM32Flash() -> bool:
     try:
         # Run the make command in the stm32flash subdirectory
-        stm32flash_path = relativeToFullPath('./stm32flash')
+        stm32flash_path = get_absolute_path('./stm32flash')
         make_result = subprocess.run(["make"], cwd=stm32flash_path, check=True)
         print("Build successful.")
         return True

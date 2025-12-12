@@ -2,9 +2,7 @@ import math
 import time
 
 from core.utils.exit import register_exit_callback
-from core.utils.plotting import RealTimePlot
 from robots.bilbo.robot.bilbo_core import BILBO_Core
-from robots.bilbo.robot.bilbo_data import BILBO_STATE_DATA_DEFINITIONS
 
 
 # ======================================================================================================================
@@ -33,43 +31,7 @@ class BILBO_Utilities:
             data = None
         return data
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def openLivePlot(self, state_name: str):
-        if state_name not in BILBO_STATE_DATA_DEFINITIONS:
-            self.core.logger.error(f"State '{state_name}' not a valid state name.")
-            return
 
-        # Check if we already have a live plot with this state
-        for live_plot in self.live_plots:
-            if live_plot["state_name"] == state_name:
-                self.core.logger.warning(f"Live plot for state '{state_name}' already exists.")
-                return
-
-        if BILBO_STATE_DATA_DEFINITIONS[state_name]['unit'] == 'rad':
-            min_val = math.degrees(BILBO_STATE_DATA_DEFINITIONS[state_name]['min'])
-        else:
-            min_val = BILBO_STATE_DATA_DEFINITIONS[state_name]['min']
-
-        if BILBO_STATE_DATA_DEFINITIONS[state_name]['unit'] == 'rad':
-            max_val = math.degrees(BILBO_STATE_DATA_DEFINITIONS[state_name]['max'])
-        else:
-            max_val = BILBO_STATE_DATA_DEFINITIONS[state_name]['max']
-
-        plot = RealTimePlot(window_length=10,
-                            signals_info=[
-                                {"name": state_name, "ymin": min_val,
-                                 "ymax": max_val}],
-                            title=f"{self.core.id}: {state_name}",
-                            value_format=BILBO_STATE_DATA_DEFINITIONS[state_name]['display_resolution'])
-
-        plot.start()
-
-        plot.callbacks.close.register(self._livePlotClosed_callback, inputs={"plot": plot})
-
-        self.live_plots.append({
-            "state_name": state_name,
-            "plot": plot
-        })
 
     # ------------------------------------------------------------------------------------------------------------------
     def closeLivePlots(self, state_name: str = None):

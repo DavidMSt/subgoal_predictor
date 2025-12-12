@@ -637,8 +637,9 @@ class Environment(scheduling.ScheduledObject):
 
             # Check if the simulation times match
             if (hasattr(obj, 'Ts') and obj.Ts != self.Ts) or (hasattr(obj, 'dynamics') and obj.dynamics.Ts != self.Ts):
-                self.logger.warning(f"The simulation time step of object \"{obj.object_id}\" ({type(obj)}) does not match the "
-                                    f"world's time step ({self.Ts}).")
+                self.logger.warning(
+                    f"The simulation time step of object \"{obj.object_id}\" ({type(obj)}) does not match the "
+                    f"world's time step ({self.Ts}).")
 
             # Register the object with the world's scheduler and set its world and space.
             obj.scheduling.parent = self
@@ -658,7 +659,6 @@ class Environment(scheduling.ScheduledObject):
                                                                                   default_action
                                                                                   in
                                                                                   scheduling.SCHEDULING_DEFAULT_ACTIONS)):
-                    print(f"Adding action \"{action_name}\" to own action list.")
                     obj.scheduling.actions[action_name].addParent(action)
 
             logging.info(f"Added Object \"{obj.object_id}\" ({type(obj)}) to the world.")

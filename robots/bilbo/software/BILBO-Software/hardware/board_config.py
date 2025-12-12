@@ -4,7 +4,7 @@ import enum
 from dacite import Config
 
 from core.utils.dataclass_utils import from_dict
-from core.utils.files import fileExists, deleteFile
+from core.utils.files import file_exists, deleteFile
 from core.utils.json_utils import readJSON, writeJSON
 from robot.paths import CONFIG_PATH
 
@@ -157,7 +157,7 @@ def generateBoardConfig(board_rev: str, cm_type: str):
 # ======================================================================================================================
 def getBoardConfig() -> RobotControlBoardConfig | None:
     file = f"{CONFIG_PATH}/board.json"
-    if not fileExists(file):
+    if not file_exists(file):
         return None
 
     data_dict = readJSON(file)

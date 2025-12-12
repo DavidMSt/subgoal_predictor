@@ -1,3 +1,4 @@
+import copy
 import threading
 from ctypes import sizeof
 
@@ -103,6 +104,7 @@ class BILBO_SPI_Interface:
             return
 
         samples, latest_sample = self._readSamples()
+        samples = copy.deepcopy(samples)
         for callback in self.callbacks.rx_samples:
             callback(samples)
 

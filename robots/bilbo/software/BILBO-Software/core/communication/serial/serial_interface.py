@@ -41,7 +41,7 @@ class SerialMessage:
     address: int = None
     command: SerialCommandType = None
     flag: int = None
-    data: dict = None
+    data: dict | None = None
     callback: Callback = None
     data_type: type = None
 

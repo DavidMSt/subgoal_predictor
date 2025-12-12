@@ -53,7 +53,7 @@ def generate_time_vector(start, end, dt):
         numpy.ndarray: Time vector from start to end (inclusive) with spacing equal to sample_time.
     """
     # Calculate the number of points needed. Adding 1 ensures the endpoint is included.
-    num_points = int((end - start) / dt) + 1
+    num_points = int((end - start) / dt)
     return np.linspace(start, end, num_points)
 
 
@@ -123,4 +123,3 @@ def generate_random_input(t_vector, f_cutoff, sigma_I):
 
     start_idx = idx_candidates[0]
     return u[start_idx:start_idx + N]
-

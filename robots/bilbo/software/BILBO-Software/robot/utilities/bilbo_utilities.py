@@ -29,7 +29,7 @@ class BILBO_Utilities:
         config = self.core.config
 
         if config.electronics.sound.active:
-            self.sound_system = SoundSystem(config.electronics.sound.gain, add_robot_filter=False)
+            self.sound_system = SoundSystem(config.electronics.sound.gain*0.25, add_robot_filter=False)
         else:
             self.sound_system = None
 

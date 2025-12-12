@@ -40,12 +40,10 @@ class BILBO_Drive:
 
     # ------------------------------------------------------------------------------------------------------------------
     def getSample(self) -> TWIPR_Drive_Sample:
+        raise NotImplementedError
 
-        # sample = TWIPR_Drive_Sample(
-        #     left=self.left,
-        #     right=self.right
-        # )
-
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_sample_dict(self) -> dict:
         sample = {
             'left': {
                 'speed': self.left.speed,

@@ -99,40 +99,18 @@ class BILBO_Control_Status(enum.IntEnum):
 
 
 @dataclasses.dataclass
-class BILBO_Control_Input_Direct:
-    u_left: float = 0.0
-    u_right: float = 0.0
-
-
-@dataclasses.dataclass
-class BILBO_Control_Input_Balancing:
-    u_left: float = 0.0
-    u_right: float = 0.0
-
-
-@dataclasses.dataclass
-class BILBO_Control_Input_Velocity:
-    forward: float = 0.0
-    turn: float = 0.0
-
-
-@dataclasses.dataclass
 class BILBO_Control_Input:
-    direct: BILBO_Control_Input_Direct = dataclasses.field(default_factory=BILBO_Control_Input_Direct)
-    balancing: BILBO_Control_Input_Balancing = dataclasses.field(default_factory=BILBO_Control_Input_Balancing)
-    velocity: BILBO_Control_Input_Velocity = dataclasses.field(default_factory=BILBO_Control_Input_Velocity)
+    u_ext: list = dataclasses.field(default_factory=lambda: [0.0, 0.0])
+    v: list = dataclasses.field(default_factory=lambda: [0.0, 0.0])
 
 
 @dataclasses.dataclass(frozen=True)
-class TWIPR_Control_Sample:
-    status: BILBO_Control_Status = dataclasses.field(
-        default=BILBO_Control_Status(BILBO_Control_Status.ERROR)
-    )
+class BILBO_Control_Sample:
+    status: BILBO_Control_Status = dataclasses.field(default=BILBO_Control_Status(BILBO_Control_Status.NORMAL))
     mode: BILBO_Control_Mode = dataclasses.field(default=BILBO_Control_Mode(BILBO_Control_Mode.OFF))
-    vic_enabled: bool = False
     tic_enabled: bool = False
     configuration: str = ''
-    input: BILBO_Control_Input = dataclasses.field(default_factory=BILBO_Control_Input)
+    # input: BILBO_Control_Input = dataclasses.field(default_factory=BILBO_Control_Input)
 
 
 class BILBO_Control_Event_Type(enum.IntEnum):
@@ -141,4 +119,3 @@ class BILBO_Control_Event_Type(enum.IntEnum):
     CONFIGURATION_CHANGED = 2
     VIC_CHANGED = 3
     TIC_CHANGED = 4
-

@@ -69,7 +69,6 @@ class BILBO(MainProvider):
     lock: SingletonLock
 
     loop_time: float
-    tick: int = 0
 
     _initialized: bool = False
     _last_update_time: float = 0
@@ -99,7 +98,6 @@ class BILBO(MainProvider):
         self.loop_time = 0
         self.update_time = 0
         self._last_update_time = 0
-        self.tick = 0
 
         self._initialized = False
 
@@ -124,8 +122,8 @@ class BILBO(MainProvider):
                                                           utilities=self.utilities,
                                                           control=self.control, )
 
-        self.logging = BILBO_Logging(core=self.common,
-                                     comm=self.communication,
+        self.logging = BILBO_Logging(common=self.common,
+                                     communication=self.communication,
                                      control=self.control,
                                      estimation=self.estimation,
                                      drive=self.drive,
@@ -151,6 +149,12 @@ class BILBO(MainProvider):
 
         self._startup_phase = True
 
+
+        def on_new_timecode(timecode):
+            self.board.status_led.toggle()
+
+        self.common.timecode_listener.callbacks.new_timecode.register(on_new_timecode)
+
     # === METHODS ======================================================================================================
     def init(self):
 
@@ -165,6 +169,8 @@ class BILBO(MainProvider):
         self.sensors.init()
         self.logging.init()
         self.experiment_handler.init()
+
+
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
@@ -193,7 +199,7 @@ class BILBO(MainProvider):
         self.utilities.speak(f'Start {self.id}')
 
         self.communication.startSampleListener()
-        self._eventListener = self.communication.events.rx_stm32_sample.on(self.update)
+        self._eventListener = self.communication.events.rx_stm32_sample.on(self.update, spawn_new_threads=False)
         self.interfaces.start()
 
         delayed_execution(lambda: setattr(self, '_startup_phase', False), 1)
@@ -211,13 +217,16 @@ class BILBO(MainProvider):
         self.update_time = time.perf_counter() - self._last_update_time
         self._last_update_time = time.perf_counter()
 
+        # Update the logging
+        self.logging.update()
+
+        # Update the experiment handler
+        self.experiment_handler.step()
+
         # Update the control
         self.control.update()
 
-        self._setExternalLEDs()
-
-        # Update the logging
-        self.logging.update()
+        # self._setExternalLEDs()
 
         # Callbacks
         self.callbacks.update.call()
@@ -228,7 +237,6 @@ class BILBO(MainProvider):
         if not self._first_sample_user_message_sent:
             self._sendFirstSampleMessage()
 
-        self.tick += 10
         self.loop_time = time.perf_counter() - time_loop_start
         # print(f"Loop time {self.loop_time:.4f} s, Update time {self.update_time:.4f} s, Tick {self.tick}")
 
@@ -238,6 +246,8 @@ class BILBO(MainProvider):
         if self.update_time > 0.2 and self._startup_phase == False:
             self.logger.warning(f"Update took {self.update_time * 1000:.2f} ms")
 
+        self.common.end_of_step()
+        
     # === PRIVATE METHODS ==============================================================================================
     def _resetLowLevel(self):
         # self.board.beep()
@@ -252,7 +262,7 @@ class BILBO(MainProvider):
 
     def _shutdownInit(self):
         self.logger.important(f"Shutdown {self.id}")
-        self.control.setMode(BILBO_Control_Mode.OFF)
+        self.control.set_mode(BILBO_Control_Mode.OFF)
         self._eventListener.stop()
         self.utilities.playTone('warning')
         self.board.setRGBLEDExtern([2, 2, 2])
@@ -287,25 +297,7 @@ class BILBO(MainProvider):
 
     # ------------------------------------------------------------------------------------------------------------------
     def getSample(self):
-        sample = BILBO_Sample_General()
-        # sample.status = 'ok'
-        # sample.id = self.id
-        # sample.configuration = ''
-        # sample.time_global = self.communication.wifi.getTime()
-        # sample.tick = self.tick
-        # sample.sample_time = 0.1
-        # sample.sample_time_ll = 0.01
-        sample = {
-            'status': 'ok',
-            'id': self.id,
-            'time': 0.0,
-            'configuration': '',
-            'time_global': self.communication.wifi.getTime(),
-            'tick': self.tick,
-            'sample_time': 0.1,
-            'sample_time_ll': 0.01,
-        }
-        return sample
+        raise NotImplementedError
 
     # ------------------------------------------------------------------------------------------------------------------
     def _setExternalLEDs(self):
@@ -368,10 +360,11 @@ class BILBO(MainProvider):
 
         # Fallback for other modes: turn everything off (adjust if you prefer)
         self.board.setAllLEDsExtern([(0, 0, 0)] * 16)
+
     # ------------------------------------------------------------------------------------------------------------------
     def _sendFirstSampleMessage(self):
         self.logger.info(f"BILBO is running!")
-        self.logger.info(f"Battery Voltage: {self.logging.sample.sensors.power.bat_voltage:.2f} V")
+        # self.logger.info(f"Battery Voltage: {self.logging.sample.sensors.power.bat_voltage:.2f} V")
         self._first_sample_user_message_sent = True
 
     # ------------------------------------------------------------------------------------------------------------------

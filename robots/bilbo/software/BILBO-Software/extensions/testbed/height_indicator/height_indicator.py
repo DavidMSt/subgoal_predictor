@@ -20,7 +20,7 @@ DEFAULT_HEIGHT_COLOR = (0, 0, 255)  # color for "height" indicator pixels
 DEFAULT_BLUE = (0, 0, 255)
 DEFAULT_OFF = (0, 0, 0)
 
-PIN = board.D10  # board.D18
+PIN =  board.D18
 
 
 @dataclasses.dataclass

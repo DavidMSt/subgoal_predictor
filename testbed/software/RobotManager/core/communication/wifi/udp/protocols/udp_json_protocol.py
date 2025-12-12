@@ -17,7 +17,7 @@ class UDP_JSON_Message(Message):
     meta: dict = dataclasses.field(default_factory=dict)
     event: str | None = None
 
-    def __init__(self):
+    def __post_init__(self):
         self.meta = {
             'time': time.time(),
             'id': id(self),

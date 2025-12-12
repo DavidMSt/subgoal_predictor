@@ -248,17 +248,6 @@ class BILBO_CLI_CommandSet(CommandSet):
                                      function=self.control.getControlState,
                                      description='Reads the current control state and mode', )
 
-        plot_state_command = Command(name='plot',
-                                     function=self.utilities.openLivePlot,
-                                     allow_positionals=True,
-                                     arguments=[
-                                         CommandArgument(name='state',
-                                                         short_name='s',
-                                                         type=str,
-                                                         description='State to plot',
-                                                         optional=False,
-                                                         )
-                                     ], )
 
         test_communication = Command(name='testComm',
                                      function=Callback(
@@ -365,15 +354,27 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                               default=0.1),
                                           ])
 
+        test_experiment_command = Command(name='exp',
+                                          function=self.experiments.run_experiment_from_file,
+                                          allow_positionals=True,
+                                          execute_in_thread=True,
+                                          arguments=[
+                                              CommandArgument(name='file',
+                                                              short_name='f',
+                                                              type=str,
+                                                              description='File to run the experiment from',
+                                                              optional=False, )
+
+                                          ])
+
         experiment_command_set = CommandSet(name='experiment',
-                                            commands=[test_trajectory_command])
+                                            commands=[test_trajectory_command, test_experiment_command])
 
         super().__init__(name=f"{self.core.id}", commands=[beep_command,
                                                            speak_command,
                                                            mode_command,
                                                            stop_command,
                                                            read_state_command,
-                                                           plot_state_command,
                                                            test_communication],
 
                          children=[control_command_set, experiment_command_set])

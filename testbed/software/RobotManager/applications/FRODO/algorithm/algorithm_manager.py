@@ -85,7 +85,7 @@ class FRODO_AlgorithmManager:
             centralized_agent = CentralizedAgent(
                 id=agent_config.id,
                 Ts=self.settings.Ts,
-                state=agent_config.initial_state,
+                state=AlgorithmAgentState.from_array(agent_config.initial_state),
                 covariance=agent_config.initial_covariance,
                 is_anchor=agent_config.anchor,
                 settings=agent_config.settings
@@ -94,7 +94,7 @@ class FRODO_AlgorithmManager:
             distributed_agent = DistributedAgent(
                 id=agent_config.id,
                 Ts=self.settings.Ts,
-                state=agent_config.initial_state,
+                state=AlgorithmAgentState.from_array(agent_config.initial_state),
                 covariance=agent_config.initial_covariance,
                 is_anchor=agent_config.anchor,
                 settings=agent_config.settings
@@ -108,6 +108,21 @@ class FRODO_AlgorithmManager:
 
             self.agents[agent_config.id] = agent_container
             self.logger.info(f"Added agent {agent_config.id} to algorithm manager")
+
+        self.initialize_algorithms()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def reset_algorithms(self):
+        self.algorithm_centralized.reset()
+        self.algorithm_distributed.reset()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def initialize_algorithms(self):
+        self.algorithm_centralized.reset()
+        self.algorithm_distributed.reset()
+
+        self.algorithm_centralized.initialize([container.centralized_agent for container in self.agents.values()])
+        self.algorithm_distributed.initialize([container.distributed_agent for container in self.agents.values()])
 
     # ------------------------------------------------------------------------------------------------------------------
     def restart(self):

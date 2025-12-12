@@ -6,9 +6,11 @@ from applications.BILBO.settings import AUTOSTOP_ROBOTS, AUTOSTART_ROBOTS
 from applications.BILBO.tracker.bilbo_tracker import BILBO_Tracker, TrackedBILBO, BILBO_Tracker_Status
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.events import event_definition, Event, EventFlag
-from core.utils.files import fileExists, get_absolute_path
+from core.utils.files import file_exists, get_absolute_path
 from core.utils.logging_utils import Logger
 from core.utils.sound.sound import speak
+from core.utils.timecode.timecode_server import UDP_MTC_TimeServer
+# from core.utils.timecode.timecode_server_sync import TimecodeMasterServer
 from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
 from robots.bilbo.manager.bilbo_manager import BILBO_Manager
 from robots.bilbo.robot.bilbo import BILBO
@@ -33,6 +35,7 @@ class BILBO_TestbedManager:
     robot_manager: BILBO_Manager
     tracker: BILBO_Tracker
     bilbos: dict[str, BILBO_TestbedAgent]
+    # timecode_server: UDP_MTC_TimeServer
 
     # === INIT =========================================================================================================
     def __init__(self):
@@ -49,6 +52,9 @@ class BILBO_TestbedManager:
 
         self.bilbos = {}
 
+        # self.timecode_server = UDP_MTC_TimeServer()
+        # self.timecode_server = TimecodeMasterServer()
+
         self.robot_manager.events.new_robot.on(self._on_new_robot)
         self.robot_manager.events.robot_disconnected.on(self._on_robot_disconnected)
 
@@ -61,6 +67,7 @@ class BILBO_TestbedManager:
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
         self.tracker.start()
+        # self.timecode_server.start()
         self.robot_manager.start()
         self.joystick_control.start()
 
@@ -93,12 +100,15 @@ class BILBO_TestbedManager:
                                        tracked_object=tracked_object)
 
         self.bilbos[robot.id] = container
+
+        # self.timecode_server.add_target(robot.device.address)
+
         self.events.new_robot.set(container, flags={'type': 'robot', 'id': robot.id})
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_robot_disconnected(self, robot: BILBO):
         self.logger.info(f"Robot disconnected: {robot.id}")
-
+        speak(f"Robot {robot.id} disconnected")
         if robot.id not in self.bilbos:
             self.logger.warning(f"Robot {robot.id} does not exist in bilbos")
             return
@@ -106,6 +116,7 @@ class BILBO_TestbedManager:
         container = self.bilbos[robot.id]
         del self.bilbos[robot.id]
         self.tracker.remove_robot(robot.id)
+        self.timecode_server.remove_target(robot.device.address)
         self.events.robot_disconnected.set(container, flags={'type': 'robot', 'id': robot.id})
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -113,7 +124,7 @@ class BILBO_TestbedManager:
         # 1. Load the testbed config
         testbed_config_file = get_absolute_path('./configs/testbed.yaml')
 
-        if not fileExists(testbed_config_file):
+        if not file_exists(testbed_config_file):
             self.logger.warning(f"Testbed config file '{testbed_config_file}' does not exist.")
             return
 

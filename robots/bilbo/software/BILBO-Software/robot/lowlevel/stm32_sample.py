@@ -8,14 +8,15 @@ SAMPLE_BUFFER_LL_SIZE = 10
 
 
 class bilbo_ll_sample_general_struct(ctypes.Structure):
-    _fields_ = [("tick", ctypes.c_uint32),
-                ("status", ctypes.c_int8)]
+    _fields_ = [
+        ("status", ctypes.c_int8)
+    ]
 
 
 @dataclasses.dataclass
 class BILBO_LL_Sample_General:
-    tick: int = 0
     status: int = 0
+
 
 class bilbo_ll_sample_errors_struct(ctypes.Structure):
     _fields_ = [("state", ctypes.c_int8),
@@ -97,26 +98,6 @@ class BILBO_LL_Sample_Estimation:
     state: BILBO_LL_Estimation_Data = dataclasses.field(default_factory=BILBO_LL_Estimation_Data)
 
 
-class bilbo_ll_control_external_input_struct(ctypes.Structure):
-    _fields_ = [("u_direct_1", ctypes.c_float),
-                ("u_direct_2", ctypes.c_float),
-                ("u_balancing_1", ctypes.c_float),
-                ("u_balancing_2", ctypes.c_float),
-                ("u_velocity_forward", ctypes.c_float),
-                ("u_velocity_turn", ctypes.c_float),
-                ]
-
-
-@dataclasses.dataclass
-class BILBO_LL_Control_External_Input:
-    u_direct_1: float = 0.0
-    u_direct_2: float = 0.0
-    u_balancing_1: float = 0.0
-    u_balancing_2: float = 0.0
-    u_velocity_forward: float = 0.0
-    u_velocity_turn: float = 0.0
-
-
 class bilbo_ll_control_data_struct(ctypes.Structure):
     _fields_ = [("input_velocity_forward", ctypes.c_float),
                 ("input_velocity_turn", ctypes.c_float),
@@ -144,7 +125,6 @@ class BILBO_LL_Control_Data:
 class bilbo_ll_sample_control_struct(ctypes.Structure):
     _fields_ = [('status', ctypes.c_int8),
                 ('mode', ctypes.c_int8),
-                ("external_input", bilbo_ll_control_external_input_struct),
                 ("data", bilbo_ll_control_data_struct),
                 ]
 
@@ -153,7 +133,6 @@ class bilbo_ll_sample_control_struct(ctypes.Structure):
 class BILBO_LL_Sample_Control:
     status: int = 0
     mode: int = 0
-    external_input: BILBO_LL_Control_External_Input = dataclasses.field(default_factory=BILBO_LL_Control_External_Input)
     data: BILBO_LL_Control_Data = dataclasses.field(default_factory=BILBO_LL_Control_Data)
 
 
@@ -171,40 +150,44 @@ class BILBO_LL_Sample_Sequence:
 
 class bilbo_ll_sample_debug_struct(ctypes.Structure):
     _fields_ = [("debug1", ctypes.c_uint8),
-                ("debug2", ctypes.c_uint8),
-                ("debug3", ctypes.c_int8),
-                ("debug4", ctypes.c_int8),
-                ("debug5", ctypes.c_uint16),
-                ("debug6", ctypes.c_int16),
-                ("debug7", ctypes.c_float),
-                ("debug8", ctypes.c_float),
+                # ("debug2", ctypes.c_uint8),
+                # ("debug3", ctypes.c_int8),
+                # ("debug4", ctypes.c_int8),
+                # ("debug5", ctypes.c_uint16),
+                # ("debug6", ctypes.c_int16),
+                # ("debug7", ctypes.c_float),
+                # ("debug8", ctypes.c_float),
                 ]
 
 
 @dataclasses.dataclass
 class BILBO_LL_Sample_Debug:
     debug1: int = 0
-    debug2: int = 0
-    debug3: int = 0
-    debug4: int = 0
-    debug5: int = 0
-    debug6: int = 0
-    debug7: float = 0.0
-    debug8: float = 0.0
+    # debug2: int = 0
+    # debug3: int = 0
+    # debug4: int = 0
+    # debug5: int = 0
+    # debug6: int = 0
+    # debug7: float = 0.0
+    # debug8: float = 0.0
 
 
 class bilbo_ll_sample_struct(ctypes.Structure):
-    _fields_ = [("general", bilbo_ll_sample_general_struct),
-                ("errors", bilbo_ll_sample_errors_struct),
-                ("control", bilbo_ll_sample_control_struct),
-                ("estimation", bilbo_ll_sample_estimation_struct),
-                ("sensors", bilbo_ll_sensor_data_struct),
-                ("sequence", bilbo_ll_sample_sequence_struct),
-                ("debug", bilbo_ll_sample_debug_struct), ]
+    _fields_ = [
+        ("tick", ctypes.c_uint32),
+        ("general", bilbo_ll_sample_general_struct),
+        ("errors", bilbo_ll_sample_errors_struct),
+        ("control", bilbo_ll_sample_control_struct),
+        ("estimation", bilbo_ll_sample_estimation_struct),
+        ("sensors", bilbo_ll_sensor_data_struct),
+        ("sequence", bilbo_ll_sample_sequence_struct),
+        ("debug", bilbo_ll_sample_debug_struct),
+    ]
 
 
 @dataclasses.dataclass
 class BILBO_LL_Sample:
+    tick: int = 0
     general: BILBO_LL_Sample_General = dataclasses.field(default_factory=BILBO_LL_Sample_General)
     errors: BILBO_LL_Sample_Errors = dataclasses.field(default_factory=BILBO_LL_Sample_Errors)
     control: BILBO_LL_Sample_Control = dataclasses.field(default_factory=BILBO_LL_Sample_Control)

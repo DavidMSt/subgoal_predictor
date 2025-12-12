@@ -824,8 +824,6 @@ class Subscriber:
         container.finished = True
         container.payload = _EventPayload(data=event_data, trace_data=trace_data, flags=flags)
 
-        self.logger.debug(f"Match: {event_uid}, flags: {flags}, data: {data}")
-
         if self._is_satisfied():
             self._fire()
 

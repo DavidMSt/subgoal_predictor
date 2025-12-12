@@ -36,11 +36,11 @@ class TWIPR_Sensors_Distance:
 
 
 @dataclasses.dataclass(frozen=True)
-class TWIPR_Sensors_Sample:
+class BILBO_Sensors_Sample:
     imu: TWIPR_Sensors_IMU = dataclasses.field(default_factory=TWIPR_Sensors_IMU)
     power: TWIPR_Sensors_Power = dataclasses.field(default_factory=TWIPR_Sensors_Power)
-    drive: TWIPR_Sensors_Drive = dataclasses.field(default_factory=TWIPR_Sensors_Drive)
-    distance: TWIPR_Sensors_Distance = dataclasses.field(default_factory=TWIPR_Sensors_Distance)
+    # drive: TWIPR_Sensors_Drive = dataclasses.field(default_factory=TWIPR_Sensors_Drive)
+    # distance: TWIPR_Sensors_Distance = dataclasses.field(default_factory=TWIPR_Sensors_Distance)
 
 
 class BILBO_Sensors:
@@ -70,12 +70,10 @@ class BILBO_Sensors:
 
     # ------------------------------------------------------------------------------------------------------------------
     def getSample(self):
-        # sample = TWIPR_Sensors_Sample(
-        #     imu=self.imu,
-        #     power=self.power,
-        #     drive=self.drive,
-        #     distance=self.distance
-        # )
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_sample_dict(self) -> dict:
 
         sample = {
             'imu': {
@@ -93,22 +91,6 @@ class BILBO_Sensors:
             'power': {
                 'bat_voltage': self.power.bat_voltage,
                 'bat_current': self.power.bat_current
-            },
-            'drive': {
-                'left': {
-                    'speed': self.drive.left.speed,
-                    'torque': self.drive.left.torque,
-                    'slip': self.drive.left.slip
-                },
-                'right': {
-                    'speed': self.drive.right.speed,
-                    'torque': self.drive.right.torque,
-                    'slip': self.drive.right.slip
-                }
-            },
-            'distance': {
-                'front': self.distance.front,
-                'back': self.distance.back
             }
         }
         return sample

@@ -1,6 +1,6 @@
 from applications.BILBO.definitions import EXPERIMENT_DIR
 from core.utils.exit import register_exit_callback
-from core.utils.files import fileExists
+from core.utils.files import file_exists
 from extensions.gui.src.lib.objects.python.buttons import Button
 from extensions.gui.src.lib.objects.python.directory import DirectoryWidget
 from extensions.gui.src.lib.objects.python.popup import Popup
@@ -78,7 +78,7 @@ class InputViewerApplication(GUI_Popup_Application):
 
         # 1. Check if the file exists
         file_path = f"{EXPERIMENT_DIR}/{file}"
-        if not fileExists(file_path):
+        if not file_exists(file_path):
             self.logger.error(f"File does not exist: {file_path}")
             return
 

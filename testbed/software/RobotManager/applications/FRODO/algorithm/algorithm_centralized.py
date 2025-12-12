@@ -149,7 +149,7 @@ class CentralizedAlgorithm(LocalizationAlgorithm):
 
     # === METHODS ======================================================================================================
     def initialize(self, agents: list[CentralizedAgent]):
-        self.agents = {}
+        self.reset()
 
         # Build the agent dictionary
         for index, agent in enumerate(agents):
@@ -172,6 +172,15 @@ class CentralizedAlgorithm(LocalizationAlgorithm):
             f"Algorithm initialized with {len(agents)} agents: {[agent.id for agent in self.agents.values()]}")
 
         self.step = 0
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def reset(self):
+        self.state = None
+        self.covariance = None
+        self.state_prediction = None
+        self.covariance_prediction = None
+        self.step = 0
+        self.agents = {}
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_sample(self) -> CentralizedAlgorithm_Sample:

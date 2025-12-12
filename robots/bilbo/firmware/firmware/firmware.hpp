@@ -28,7 +28,8 @@
 class TWIPR_Firmware {
 
 public:
-	TWIPR_Firmware();
+	TWIPR_Firmware(){
+	};
 	HAL_StatusTypeDef init();
 	HAL_StatusTypeDef start();
 

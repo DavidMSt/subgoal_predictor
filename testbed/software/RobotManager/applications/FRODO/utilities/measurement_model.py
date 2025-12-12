@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import yaml
 
-from core.utils.files import fileExists, get_absolute_path
+from core.utils.files import file_exists, get_absolute_path
 
 
 @dataclass
@@ -229,7 +229,7 @@ def measurement_model_from_file(file) -> FRODO_MeasurementModel:
     Supports either 'fov_rad' or 'fov_deg' in the YAML.
     """
 
-    if not fileExists(file):
+    if not file_exists(file):
         raise FileNotFoundError(f"File not found: {file}")
 
     data = yaml.safe_load(file) if hasattr(file, "read") else yaml.safe_load(open(file, "r"))
@@ -532,13 +532,13 @@ def analyze_measurement_model(
             Z[i, j] = dof_model.get_std(distance=D[i, j], bearing=B[i, j], psi=0.0, v=0.0, psi_dot=0.0)
     Z *= sigma_scale  # apply display scaling to surface as well
 
-    surf = ax3d.plot_surface(D, np.rad2deg(B), Z, linewidth=0, antialiased=True, alpha=0.95)
+    surf = ax3d.plot_surface(D, np.rad2deg(B), Z, linewidth=0, antialiased=True, alpha=0.95)  # type: ignore
     ax3d.set_title(f"Total σ_{target}(distance, bearing)", pad=8)
     ax3d.set_xlabel("distance [m]", labelpad=6)
     ax3d.set_ylabel("bearing [deg]", labelpad=6)
-    ax3d.set_zlabel(f"σ_{target} [{sigma_unit_label}]", labelpad=6)
-    ax3d.set_box_aspect((1.2, 1.0, 0.6))
-    ax3d.set_zlim(bottom=0.0)  # min value 0 on z-axis
+    ax3d.set_zlabel(f"σ_{target} [{sigma_unit_label}]", labelpad=6)  # type: ignore
+    ax3d.set_box_aspect((1.2, 1.0, 0.6)) # type: ignore
+    ax3d.set_zlim(bottom=0.0)  # type: ignore
 
     mappable = mpl.cm.ScalarMappable(cmap=surf.cmap)
     mappable.set_array(Z)
@@ -550,7 +550,7 @@ def analyze_measurement_model(
         f"Measurement Error Model — σ_{target} components and surface",
         fontsize=small, y=0.97
     )
-    fig.tight_layout(rect=[0, 0.02, 1, 0.93])
+    fig.tight_layout(rect=(0, 0.02, 1, 0.93))
     plt.show()
 
 

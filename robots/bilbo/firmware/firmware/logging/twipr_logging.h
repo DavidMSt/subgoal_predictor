@@ -21,17 +21,11 @@ class TWIPR_Firmware;
 
 typedef struct twipr_debug_sample_t {
 	uint8_t debug1;
-	uint8_t debug2;
-	int8_t debug3;
-	int8_t debug4;
-	uint16_t debug5;
-	int16_t debug6;
-	float debug7;
-	float debug8;
 } twipr_debug_sample_t;
 
 
 typedef struct twipr_logging_sample_t {
+	uint32_t tick;
 	twipr_logging_general_t general;
 	twipr_logging_error_t errors;
 	twipr_logging_control_t control;

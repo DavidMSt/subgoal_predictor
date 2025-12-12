@@ -8,7 +8,7 @@ from scipy.signal import find_peaks
 import numpy as np
 
 from core.utils.dataclass_utils import from_dict_auto
-from core.utils.files import fileExists
+from core.utils.files import file_exists
 from core.utils.json_utils import writeJSON, readJSON
 from robot.bilbo_common import BILBO_Config
 from robot.bilbo_definitions import BILBO_DynamicState
@@ -58,6 +58,13 @@ class BILBO_InputTrajectory:
         from robot.experiment.helpers import trajectory_inputs_to_vector
 
         return trajectory_inputs_to_vector(self.inputs, single_input=single_input)
+
+    @classmethod
+    def from_file(cls, file):
+        ...
+
+    def to_file(self, file):
+        ...
 
 
 @dataclasses.dataclass
@@ -147,7 +154,7 @@ def write_input_file(file_name, folder, data: BILBO_InputFileData):
 
 
 def read_input_file(file) -> BILBO_InputFileData | None:
-    if not fileExists(file):
+    if not file_exists(file):
         raise FileNotFoundError(f"Input file not found: {file}")
 
     try:
@@ -157,3 +164,22 @@ def read_input_file(file) -> BILBO_InputFileData | None:
     except Exception as e:
         print(f"Error reading input file: {e}")
         return None
+
+
+
+
+
+@dataclasses.dataclass(kw_only=True, frozen=True)
+class ExperimentSample:
+    id: str = ""
+    tick: int = -1
+    actions: list[str] = dataclasses.field(default_factory=lambda: [""])
+
+
+@dataclasses.dataclass
+class BILBO_ExperimentHandler_Sample:
+    status: str = ""
+    markers_json: str = ''
+    experiment: ExperimentSample = dataclasses.field(default_factory=ExperimentSample)
+    experiment_id: str = ""
+    trajectory_id: str = ""

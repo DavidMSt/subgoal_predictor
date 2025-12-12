@@ -26,7 +26,6 @@ typedef enum twipr_firmware_state_t {
 } twipr_firmware_state_t;
 
 typedef struct twipr_logging_general_t {
-	uint32_t tick;
 	twipr_firmware_state_t state;
 } twipr_logging_general_t;
 

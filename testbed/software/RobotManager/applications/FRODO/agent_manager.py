@@ -21,7 +21,7 @@ from applications.FRODO.utilities.measurements import agent_is_in_fov, generate_
     generate_ideal_measurement
 from core.utils.events import Event, event_definition, EventFlag
 from core.utils.exit import register_exit_callback
-from core.utils.files import fileExists
+from core.utils.files import file_exists
 from core.utils.logging_utils import Logger
 from core.utils.states import State
 from extensions.cli.cli import CommandSet, Command, CommandArgument
@@ -379,7 +379,7 @@ class FRODO_AgentManager:
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_plan_from_file(self, plan_file):
-        if not fileExists(plan_file):
+        if not file_exists(plan_file):
             self.logger.error(f"Plan file {plan_file} does not exist")
             return
 

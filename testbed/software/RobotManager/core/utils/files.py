@@ -85,7 +85,7 @@ def get_script_name(remove_extension=False):
 
 
 # File Operations
-def fileExists(file_path):
+def file_exists(file_path):
     """
     Check if a file exists.
 
@@ -174,7 +174,7 @@ def deleteFile(file_path):
 
     :param file_path: Path to the file.
     """
-    if fileExists(file_path):
+    if file_exists(file_path):
         os.remove(file_path)
 
 

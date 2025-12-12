@@ -9,12 +9,14 @@ from core.utils.dataclass_utils import from_dict_auto
 # ======================================================================================================================
 from core.utils.exit import register_exit_callback
 from core.utils.network import getSignalStrength, check_internet
+from core.utils.timecode.timecode import Timecode
+from core.utils.timecode.timecode_client import TimecodeClient
 from .bilbo_definitions import BILBO_TestbedConfig
 from .config import BILBO_Config, get_bilbo_config
 from .core import get_logging_provider
-from core.utils.callbacks import callback_definition
+from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.events import event_definition, Event
-from core.utils.files import fileExists
+from core.utils.files import file_exists
 from core.utils.json_utils import readJSON
 from core.utils.logging_utils import Logger
 from robot.paths import CONFIG_PATH, ROBOT_PATH
@@ -49,7 +51,7 @@ class BILBO_Common_Events:
 
 @callback_definition
 class BILBO_Common_Callbacks:
-    ...
+    end_of_step: CallbackContainer
 
 
 # ======================================================================================================================
@@ -57,6 +59,8 @@ class BILBO_Common:
     interaction_events: BILBO_Common_Interaction_Events
     events: BILBO_Common_Events
     callbacks: BILBO_Common_Callbacks
+
+    # timecode_listener: TimecodeListener
 
     information: BILBO_Config
 
@@ -83,6 +87,10 @@ class BILBO_Common:
         self.internet_connected = False
 
         self.logger = Logger("CORE", "INFO")
+        self.timecode_listener = TimecodeClient()
+        self.timecode_listener.callbacks.sync.register(self._on_timecode_sync)
+        self.timecode_listener.start()
+
 
         self._thread = threading.Thread(target=self._connection_check_task)
         self._thread.start()
@@ -92,9 +100,11 @@ class BILBO_Common:
     # === PROPERTIES ===================================================================================================
     @property
     def tick(self):
-        return get_logging_provider().tick
+        return get_logging_provider().get_tick()
 
     # === METHODS ======================================================================================================
+    def get_timecode(self) -> Timecode | None:
+        return self.timecode_listener.get_timecode()
 
     # ------------------------------------------------------------------------------------------------------------------
     def stop(self):
@@ -103,14 +113,21 @@ class BILBO_Common:
             self._thread.join()
 
     # ------------------------------------------------------------------------------------------------------------------
-    @staticmethod
-    def get_data(self, signals, start_tick, end_tick):
-        # Instance method so you can log if needed
-        try:
-            return get_logging_provider().getData(signals, start_tick, end_tick)
-        except RuntimeError as e:
-            self.logger.error(str(e))
-            return None
+    def get_data(self,
+                 index: int | None = None,
+                 start: int | None = None,
+                 end: int | None = None,
+                 signals: list[str] | None = None,
+                 add_intermediate_samples: bool = False) -> list | None:
+        return get_logging_provider().get_data(index, start, end, signals, add_intermediate_samples)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_lowlevel_data(self,
+                          index: int | None = None,
+                          start: int | None = None,
+                          end: int | None = None,
+                          signals: list[str] | None = None) -> dict | None:
+        return get_logging_provider().get_lowlevel_data(index, start, end, signals)
 
     # ------------------------------------------------------------------------------------------------------------------
     def getConnectionStatus(self, as_dict: bool = False):
@@ -129,6 +146,31 @@ class BILBO_Common:
     def setAbortEvent(self, data):
         self.interaction_events.abort.set(data=data)
 
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_general_sample_dict(self) -> dict:
+
+        current_timecode = self.timecode_listener.get_timecode()
+
+        # Adapt the timecode for the time of the LL sample. Since this is 0.1 seconds in the past, we have to adjust it
+        # timecode = current_timecode - 0.1
+
+        sample = {
+            'status': 'none',
+            'time': 0,
+            'time_global': time.monotonic(),
+            'tick': self.tick,
+            'connection_strength': self.connection_strength,
+            'timecode': current_timecode.to_string(),
+            'timecode_fps': current_timecode.fps
+        }
+
+        return sample
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def end_of_step(self):
+        self.callbacks.end_of_step.call()
+
     # === PRIVATE METHODS ==============================================================================================
     def _get_config(self) -> BILBO_Config:
         config = get_bilbo_config(self._get_id())
@@ -145,7 +187,7 @@ class BILBO_Common:
     def _get_testbed_config(self) -> BILBO_TestbedConfig:
         testbed_file = f"{CONFIG_PATH}/testbed.yaml"
 
-        if not fileExists(testbed_file):
+        if not file_exists(testbed_file):
             raise FileNotFoundError("Testbed file not found. Run Bilbo Setup first")
 
         with open(testbed_file, 'r') as file:
@@ -158,9 +200,17 @@ class BILBO_Common:
     @staticmethod
     def _get_id() -> str:
         id_file = f"{ROBOT_PATH}/ID"
-        if not fileExists(id_file):
+        if not file_exists(id_file):
             raise FileNotFoundError("ID file not found. Run Bilbo Setup first")
         else:
             with open(id_file, 'r') as file:
                 id = file.read()
             return id
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_timecode_sync(self, timecode: Timecode):
+        if timecode.fps != 25.0:
+            self.logger.warning(f"Timecode FPS is not 25.0. Got {timecode.fps}")
+        else:
+            self.timecode_listener.internal_fps = 50.0
+            self.logger.info(f"Timecode synced: {timecode}. Set to 50 FPS internally.")

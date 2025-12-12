@@ -14,10 +14,6 @@ TWIPR_ControlManager *manager;
 osSemaphoreId_t semaphore_external_input;
 
 
-TWIPR_ControlManager::TWIPR_ControlManager() {
-
-}
-
 /* ======================================================== */
 void TWIPR_ControlManager::init(twipr_control_init_config_t config) {
 	manager = this;
@@ -233,6 +229,7 @@ uint8_t TWIPR_ControlManager::setMode(twipr_control_mode_t mode) {
 //		if (this->config.drive->status != TWIPR_DRIVE_STATUS_RUNNING) {
 //			this->config.drive->start();
 //		}
+		send_info("Set mode to balancing. Tick: %d", tick_global);
 		this->_balancing_control.setMode(TWIPR_BALANCING_CONTROL_MODE_ON);
 		break;
 	}
@@ -288,14 +285,15 @@ void TWIPR_ControlManager::setExternalInput(
 	osSemaphoreRelease(semaphore_external_input);
 }
 /* ======================================================== */
-void TWIPR_ControlManager::setBalancingInput(
+bool TWIPR_ControlManager::setBalancingInput(
 		twipr_balancing_control_input_t input) {
 
 	if (this->_externalInputEnabled == false) {
-		return;
+		return false;
 	}
 
 	this->_setBalancingInput(input);
+	return true;
 }
 
 /* ======================================================== */
@@ -622,12 +620,6 @@ twipr_logging_control_t TWIPR_ControlManager::getSample() {
 	twipr_logging_control_t sample;
 	sample.control_mode = this->mode;
 	sample.control_status = this->status;
-
-//	sample.config.control_mode = this->mode;
-//	sample.config.vic_enabled = this->control_config.vic_enabled;
-//	sample.config.tic_enabled = this->control_config.tic_enabled;
-
-	sample.external_input = this->_external_input;
 	sample.data = this->_data;
 
 	return sample;

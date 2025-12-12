@@ -31,6 +31,7 @@ void TWIPR_Logging::reset() {
 
 
 twipr_logging_buffer_status_t TWIPR_Logging::collectSamples(){
+	this->sample_buffer[this->sample_index].tick = tick_global;
 	this->sample_buffer[this->sample_index].general = this->config.firmware->getSample();
 	this->sample_buffer[this->sample_index].errors = this->config.error_handler->getSample();
 	this->sample_buffer[this->sample_index].control = this->config.control->getSample();

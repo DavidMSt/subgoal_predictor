@@ -42,11 +42,16 @@ def agent_is_in_fov(agent_from_state: FRODO_State | np.ndarray,
                     agent_from_fov: float,
                     agent_from_min_distance: float = 0.0,
                     agent_from_max_distance: float | None = None) -> bool:
+
     if isinstance(agent_from_state, np.ndarray):
         agent_from_state = FRODO_State.fromarray(agent_from_state)
 
     if isinstance(agent_to_state, np.ndarray):
-        agent_to_state = FRODO_State.fromarray(agent_to_state)
+        if agent_to_state.shape[0] == 3:
+            agent_to_state = FRODO_State(x=agent_to_state[0], y=agent_to_state[1], psi=agent_to_state[2])
+        else:
+            agent_to_state = FRODO_State.fromarray(agent_to_state)
+
 
     agent_from_position = np.array([agent_from_state.x, agent_from_state.y])
     agent_to_position = np.array([agent_to_state.x, agent_to_state.y])
@@ -72,7 +77,10 @@ def generate_ideal_measurement(agent_from_state: FRODO_State | np.ndarray,
         agent_from_state = FRODO_State.fromarray(agent_from_state)
 
     if isinstance(agent_to_state, np.ndarray):
-        agent_to_state = FRODO_State.fromarray(agent_to_state)
+        if agent_to_state.shape[0] == 3:
+            agent_to_state = FRODO_State(x=agent_to_state[0], y=agent_to_state[1], psi=agent_to_state[2])
+        else:
+            agent_to_state = FRODO_State.fromarray(agent_to_state)
 
     position_agent_from = np.array([agent_from_state.x, agent_from_state.y])
     position_agent_to = np.array([agent_to_state.x, agent_to_state.y])

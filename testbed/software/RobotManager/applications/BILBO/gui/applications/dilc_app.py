@@ -3,7 +3,6 @@ import numpy as np
 from core.utils.colors import get_segmented_progression_colors
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import redirections, addLogRedirection, LOGGING_COLORS
-from core.utils.plotting import quick_line_plot_data_uri, new_figure_agg
 from extensions.gui.src.lib.objects.objects import Widget_Group
 from extensions.gui.src.lib.objects.python.buttons import Button
 from extensions.gui.src.lib.objects.python.image import UpdatableImageWidget
@@ -11,12 +10,12 @@ from extensions.gui.src.lib.objects.python.popup import Popup
 from extensions.gui.src.lib.objects.python.popup_application import GUI_Popup_Application
 from extensions.gui.src.lib.objects.python.text import TextWidget, StatusWidget, StatusWidgetElement, LineScrollWidget
 from robots.bilbo.robot.bilbo import BILBO
-from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_Experiment_Status
-from robots.bilbo.robot.experiment.experiments import DILC_Experiment
+# from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_Experiment_Status
+# from robots.bilbo.robot.experiment.experiments import DILC_Experiment
 
 
 class DILC_App(GUI_Popup_Application):
-    experiment: DILC_Experiment
+    # experiment: DILC_Experiment
 
     # === INIT =========================================================================================================
     def __init__(self, robot: BILBO, config: dict = None):

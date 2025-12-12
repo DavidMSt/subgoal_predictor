@@ -2,7 +2,7 @@ import json
 
 from control import tf
 
-from core.utils.files import fileExists
+from core.utils.files import file_exists
 from robot.paths import calibrations_path
 
 
@@ -13,7 +13,7 @@ class BILBO_Dynamics:
         self.transfer_function = tf()
 
         # Check if there is a file with dat in it
-        if fileExists(f"{(calibrations_path / 'system_dynamics.json')}"):
+        if file_exists(f"{(calibrations_path / 'system_dynamics.json')}"):
             data = json.load(f"{(calibrations_path / 'system_dynamics.json')}")
 
     def getTransitionMatrix(self, N: int):

@@ -22,7 +22,7 @@ def main():
     time.sleep(2)
 
 
-    bilbo.control.setMode(BILBO_Control_Mode.BALANCING)
+    bilbo.control.set_mode(BILBO_Control_Mode.BALANCING)
     time.sleep(5)
 
     N = 5

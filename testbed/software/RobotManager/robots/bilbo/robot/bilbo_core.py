@@ -2,8 +2,9 @@ import time
 
 from core.communication.protocol import JSON_Message
 from core.communication.device_server import Device
+from core.utils.remote_file.remote_file import RemoteFileClient
 from robots.bilbo.robot.bilbo_data import BILBO_Sample, bilboSampleFromDict
-from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_PASSWORD, BILBO_USER_NAME
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals
 from core.utils.logging_utils import Logger, LOG_LEVELS
@@ -42,6 +43,8 @@ class BILBO_Core:
     tick: int | None = None
     data: BILBO_Sample | None = None
 
+    file_handler: RemoteFileClient
+
     # ==================================================================================================================
     def __init__(self, robot_id: str, device: Device):
         self.device = device
@@ -60,6 +63,13 @@ class BILBO_Core:
 
         # self.device.events.stream.on(self._handleStream, input_data=True)
         self.device.callbacks.stream.register(self._handleStream)
+
+        self.file_handler = RemoteFileClient(
+            host=device.address,
+            username=BILBO_USER_NAME,
+            password=BILBO_PASSWORD
+        )
+        self.file_handler.connect()
 
     # ------------------------------------------------------------------------------------------------------------------
     def beep(self, frequency=1000, time_ms=250, repeats=1):
@@ -102,13 +112,13 @@ class BILBO_Core:
             return
 
         if log_data['level'] == LOG_LEVELS['ERROR']:
-            self.logger.error(f"({log_data['logger']}): {log_data['message']}")
+            self.logger.error(f"(from {log_data['logger']}): {log_data['message']}")
         elif log_data['level'] == LOG_LEVELS['WARNING']:
-            self.logger.warning(f"({log_data['logger']}): {log_data['message']}")
+            self.logger.warning(f"(from {log_data['logger']}): {log_data['message']}")
         elif log_data['level'] == LOG_LEVELS['INFO']:
-            self.logger.info(f"({log_data['logger']}): {log_data['message']}")
+            self.logger.info(f"(from {log_data['logger']}): {log_data['message']}")
         elif log_data['level'] == LOG_LEVELS['DEBUG']:
-            self.logger.debug(f"({log_data['logger']}): {log_data['message']}")
+            self.logger.debug(f"(from {log_data['logger']}): {log_data['message']}")
 
         if log_data.get('speak', False):
             speak(f"{self.id}: {log_data['message']}")

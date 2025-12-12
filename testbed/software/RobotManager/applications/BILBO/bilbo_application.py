@@ -32,13 +32,14 @@ from core.utils.files import get_absolute_path
 
 # ======================================================================================================================
 ENABLE_SPEECH_OUTPUT = True
+
+
 # EXPERIMENT_DIR = relativeToFullPath('~/bilbolab/experiments/bilbo')
 
 
 # ======================================================================================================================
 class BILBO_Application:
     manager: BILBO_TestbedManager
-
     soundsystem: SoundSystem
 
     def __init__(self):
@@ -50,9 +51,8 @@ class BILBO_Application:
 
         self.manager = BILBO_TestbedManager()
         self.manager.events.new_robot.on(self._newRobot_callback)
+        self.manager.events.robot_disconnected.on(self._robotDisconnected_callback)
         # self.manager.robot_manager.callbacks.stream.register(self.gui.sendRawStream)
-
-
 
         # CLI
         self.cli = CLI(id='bilbo_app_cli')
@@ -106,10 +106,10 @@ class BILBO_Application:
         # Wait until the first sample is received
         if not bilbo.robot.core.initialized:
             bilbo.robot.core.events.initialized.on(callback=Callback(function=self.gui.addRobot,
-                                                               inputs={'robot': bilbo.robot},
-                                                               discard_inputs=True),
-                                             once=True,
-                                             discard_data=True)
+                                                                     inputs={'robot': bilbo.robot},
+                                                                     discard_inputs=True),
+                                                   once=True,
+                                                   discard_data=True)
         else:
             self.gui.addRobot(bilbo.robot)
 

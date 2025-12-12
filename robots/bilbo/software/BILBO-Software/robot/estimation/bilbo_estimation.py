@@ -20,13 +20,12 @@ class TWIPR_Estimation_Status(enum.IntEnum):
 
 @dataclasses.dataclass(frozen=True)
 class TWIPR_Estimation_Sample:
-    status: TWIPR_Estimation_Status = TWIPR_Estimation_Status.ERROR
+    status: TWIPR_Estimation_Status = dataclasses.field(default=TWIPR_Estimation_Status.NORMAL)
     state: BILBO_DynamicState = dataclasses.field(default_factory=BILBO_DynamicState)
-    state_optitrack: BILBO_ConfigurationState | None = dataclasses.field(default_factory=BILBO_ConfigurationState)
+    state_optitrack: BILBO_ConfigurationState = dataclasses.field(default_factory=BILBO_ConfigurationState)
 
 
 # ======================================================================================================================
-
 class BILBO_Estimation:
     _comm: BILBO_Communication
 
@@ -60,11 +59,10 @@ class BILBO_Estimation:
 
     # ------------------------------------------------------------------------------------------------------------------
     def getSample(self) -> TWIPR_Estimation_Sample | dict:
-        # sample = TWIPR_Estimation_Sample(
-        #     mode=self.mode,
-        #     status=self.status,
-        #     state=self.state
-        # )
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_sample_dict(self) -> dict:
         tracker_state = self.tracker.get_state()
 
         if tracker_state is None:
@@ -77,7 +75,6 @@ class BILBO_Estimation:
             'state': dataclasses.asdict(self.state),
             'state_optitrack': tracker_state,
         }
-
         return sample
 
     # ------------------------------------------------------------------------------------------------------------------

@@ -16,7 +16,7 @@ class bilbo_debug_message_data_type(ctypes.Structure):
 
 
 def debugprint(data: bilbo_debug_message_data_type, *args, **kwargs):
-    logger = Logger("BILBO DEBUG", "DEBUG")
+    logger = Logger("LL", "DEBUG")
     try:
         flag = data['flag']
         text = data['text'].decode("utf-8")

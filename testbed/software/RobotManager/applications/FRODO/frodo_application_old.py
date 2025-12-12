@@ -20,7 +20,7 @@ from applications.FRODO.testbed.tracker.frodo_tracker import FRODO_Tracker
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.events import event_definition, Event
 from core.utils.exit import register_exit_callback
-from core.utils.files import fileExists
+from core.utils.files import file_exists
 from core.utils.logging_utils import Logger
 from core.utils.network.network import getHostIP
 from core.utils.sound.sound import SoundSystem, speak
@@ -511,9 +511,9 @@ class FRODO_Application:
     # ------------------------------------------------------------------------------------------------------------------
     def run_plan(self, plan_file: str):
 
-        if not fileExists(plan_file):
+        if not file_exists(plan_file):
             extended_plan_file = f"{PLANS_DIR}/{plan_file}"
-            if not fileExists(extended_plan_file):
+            if not file_exists(extended_plan_file):
                 self.logger.error(f"Plan file {plan_file} does not exist")
                 return
             plan_file = extended_plan_file

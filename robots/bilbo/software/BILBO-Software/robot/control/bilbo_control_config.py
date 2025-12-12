@@ -1,6 +1,6 @@
 import math
 
-from core.utils.files import fileExists
+from core.utils.files import file_exists
 
 from robot.control.bilbo_control_data import BILBO_ControlConfig, BILBO_Control_Mode, General_Control_Config, \
     ExternalInputsConfig, TWIPR_Balancing_Control_Config, TIC_Config, VIC_Config
@@ -170,7 +170,7 @@ config_bilbo_small = BILBO_ControlConfig(
 
 def load_config(name: str) -> BILBO_ControlConfig:
     # Check if the file exists
-    if not fileExists(f"{CONTROL_PATH}{name}.json"):
+    if not file_exists(f"{CONTROL_PATH}{name}.json"):
         raise FileNotFoundError(f"Config file '{name}.json' not found in '{CONTROL_PATH}'")
 
     control_config_dict = readJSON(f"{CONTROL_PATH}{name}.json")

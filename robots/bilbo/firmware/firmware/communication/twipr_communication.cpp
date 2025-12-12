@@ -357,7 +357,7 @@ void TWIPR_CommunicationManager::sampleBufferDMATransfer_callback() {
     // Toggle the GPIO to notify that sample data has been transferred.
     this->config.sample_notification_gpio.toggle();
 
-    if (_sample_buffer_tx[0].general.tick > 0){
+    if (_sample_buffer_tx[0].tick > 0){
         rc_status_led_2.toggle();
     }
 }

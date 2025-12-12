@@ -172,9 +172,9 @@ class BILBO_Interfaces:
     def _onJoystickPress(self, button=None, *args, **kwargs):
         self.logger.debug(f'Joystick button pressed: {button}')
         if button == JOYSTICK_MAPPING['CONTROL_MODE_BALANCING']:
-            self.control.setMode(self.control.mode.BALANCING)
+            self.control.set_mode(self.control.mode.BALANCING)
         elif button == JOYSTICK_MAPPING['CONTROL_MODE_OFF']:
-            self.control.setMode(self.control.mode.OFF)
+            self.control.set_mode(self.control.mode.OFF)
         elif button == JOYSTICK_MAPPING['TIC_ENABLE']:
             self.control.enableTIC(True)
         elif button == JOYSTICK_MAPPING['TIC_DISABLE']:

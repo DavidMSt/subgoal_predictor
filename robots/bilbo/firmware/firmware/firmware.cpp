@@ -89,7 +89,7 @@ core_utils_RegisterEntry<void, twipr_control_direct_input_t> reg_set_direct(
 		&twipr_firmware.control, &TWIPR_ControlManager::setDirectInput);
 
 /* Set Balancing Input Register Entry */
-core_utils_RegisterEntry<void, twipr_balancing_control_input_t> reg_set_balancing(
+core_utils_RegisterEntry<bool, twipr_balancing_control_input_t> reg_set_balancing(
 		&register_map, REG_ADDRESS_F_CONTROL_SET_BALANCING_INPUT,
 		&twipr_firmware.control, &TWIPR_ControlManager::setBalancingInput);
 
@@ -179,20 +179,13 @@ void firmware() {
  *
  * This function casts the argument to a TWIPR_Firmware pointer and calls the helperTask.
  */
+
 void start_firmware_task(void *argument) {
 	TWIPR_Firmware *firmware = (TWIPR_Firmware*) argument;
 	// Start the helper task (core firmware loop)
 	firmware->helperTask();
 }
 
-/**
- * @brief Constructor for TWIPR_Firmware.
- *
- * Constructor logic can be extended if necessary.
- */
-TWIPR_Firmware::TWIPR_Firmware() {
-	// Currently empty - add initialization if needed
-}
 
 /**
  * @brief Main firmware task logic.
@@ -226,16 +219,32 @@ void TWIPR_Firmware::helperTask() {
 	rc_rgb_led_side_1.setColor(0, 0, 0);
 	rc_rgb_led_side_1.state(1);
 
-	extender.rgbLEDStrip_extern_setColor( { .red = 10, .green = 0, .blue = 10 });
+	extender.rgbLEDStrip_extern_setColor(
+			{ .red = 10, .green = 0, .blue = 10 });
 
 	elapsedMillis debug_timer;
 
 	// Main task loop
 	while (true) {
 		// Update control mode LED if timer exceeds 250ms
-		if (this->timer_control_mode_led > 250) {
+		if (this->timer_control_mode_led >= 100) {
 			this->timer_control_mode_led.reset();
 			this->setControlModeLed();
+
+			// Set the external LED strip based on control mode and TIC
+
+			if (this->control.mode == TWIPR_CONTROL_MODE_OFF) {
+				extender.rgbLEDStrip_extern_setColor( { 2, 2, 2 }); // Dim White
+			} else if (this->control.mode == TWIPR_CONTROL_MODE_BALANCING) {
+				if (this->control.control_config.tic_enabled) {
+					extender.rgbLEDStrip_extern_setColor( { 0, 10, 10 }); // Cyan for balancing with TIC
+				} else {
+					extender.rgbLEDStrip_extern_setColor( { 0, 10, 0 }); // Green for balancing without TIC
+				}
+			} else if (this->control.mode == TWIPR_CONTROL_MODE_VELOCITY) {
+				extender.rgbLEDStrip_extern_setColor( { 10, 10, 0 }); // Yellow for velocity with TIC
+			}
+
 		}
 
 		// Debug timer reset every 1000ms
@@ -358,7 +367,6 @@ HAL_StatusTypeDef TWIPR_Firmware::init() {
 
 	// Initialize debug data
 	this->debugData = twipr_debug_sample_t { 0 };
-	this->debugData.debug2 = 55;
 
 	return HAL_OK;
 }
@@ -530,8 +538,7 @@ void start_firmware_control_task(void *argument) {
  * @return A logging structure containing the current tick, state, and error code.
  */
 twipr_logging_general_t TWIPR_Firmware::getSample() {
-	twipr_logging_general_t sample = { .tick = this->tick, .state =
-			this->firmware_state };
+	twipr_logging_general_t sample = { .state = this->firmware_state };
 	return sample;
 }
 

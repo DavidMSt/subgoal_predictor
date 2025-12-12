@@ -254,6 +254,8 @@ class BILBO_Tracker:
 
     # ------------------------------------------------------------------------------------------------------------------
     def add_robot(self, robot_id: str, config: BILBO_Config) -> TrackedBILBO | None:
+        if self.status == BILBO_Tracker_Status.DISABLED:
+            return None
 
         if robot_id in self.robots:
             self.logger.error(f"BILBO robot {robot_id} already exists")
@@ -273,6 +275,10 @@ class BILBO_Tracker:
 
     # ------------------------------------------------------------------------------------------------------------------
     def remove_robot(self, robot_id: str):
+
+        if self.status == BILBO_Tracker_Status.DISABLED:
+            return
+
         if robot_id in self.robots:
             del self.robots[robot_id]
             self.logger.info(f"BILBO robot {robot_id} removed from tracker")
@@ -281,6 +287,9 @@ class BILBO_Tracker:
 
     # ------------------------------------------------------------------------------------------------------------------
     def add_origin(self, origin_id: str, config: BILBO_OriginConfig) -> TrackedOrigin | None:
+
+        if self.status == BILBO_Tracker_Status.DISABLED:
+            return None
 
         if self.origin is not None:
             self.logger.error(f"Origin {origin_id} already exists")
