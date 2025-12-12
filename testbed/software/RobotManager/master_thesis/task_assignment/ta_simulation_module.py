@@ -21,7 +21,7 @@ class TASimulationModule():
         self.logger = logger
 
         # To get current agent configurations
-        self.agent_conts = env_cont.agent_conts
+        self.agentc_conts = env_cont.agent_conts
 
         # to get current task configurations
         self.task_conts = env_cont.task_conts
@@ -58,10 +58,16 @@ class TASimulationModule():
         elif issubclass(strategy, CentralizedStrategyABC):
             strategy_instance = strategy()
             result = strategy_instance.solve(agent_containers= self.agent_conts, task_containers= self.task_conts)
-            print("Matches (agent_id, task_id):", result.matches)
-            print("Assignment matrix:\n", result.get_assignment_matrix(self.agent_conts, self.task_conts))
-            for container in self.agent_conts:
-                ...
+
+            # Assign tasks to agents based on matches
+            for agent_id, task_id in result.matches:
+                # Get the corresponding containers using the IDs as keys
+                agent_ta_cont = self.agent_ta_conts[agent_id]
+                task_cont = self.task_conts[task_id]
+
+                # Assign the task to the agent's TA container
+                agent_ta_cont.assigned_task = task_cont
+                
                 
         else:
             self.logger.error('Selected TA strategy of unknown type, neither central nor decentral')
