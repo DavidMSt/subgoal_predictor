@@ -11,10 +11,10 @@ class AgentMPState:
     start: np.ndarray| None = None
     goal: np.ndarray | None = None
 
-    # flag for action
-    start_planning: bool = False
-    
-    # did motion planning work? 
+    # Phase name for motion planning action (None = no planning, string = plan with this phase name)
+    start_planning: str | None = None
+
+    # did motion planning work?
     success: bool = False
 
     # raw planner output

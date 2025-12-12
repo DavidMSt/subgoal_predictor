@@ -36,6 +36,10 @@ from master_thesis.gui.demo_scenarios.simple_maze import setup_simple_maze
 from master_thesis.general.general_task import GeneralTask
 # from master_thesis.task_assignment.assignment_strategies import HungarianStrategy, RandomStrategy
 
+from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy
+from master_thesis.task_assignment.strategies.centralized_strategies import HungarianStrategyCent
+from master_thesis.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
+
 # TODO: implement babylon-only method that colors a task once it is assigned in the agetns color 
 
 class BabylonTask(Box):
@@ -341,67 +345,25 @@ class ThesisGUI:
         """
         self.logger.info("Resetting simulation...")
 
-        # Remove all robots
         for robot_id, robot_container in list(self.robots.items()):
-            try:
-                # Remove from Babylon
+            if robot_container.babylon is not None:
                 self.babylon_visualization.removeObject(robot_container.babylon)
                 self.logger.debug(f'Robot {robot_id} removed from Babylon')
-                # Remove from simulation environment
-                self.sim.environment.removeObject(robot_container.sim_agent)
-                self.logger.debug(f'Robot {robot_id} removed from simulation')
-            except Exception as e:
-                self.logger.error(f'Error removing robot {robot_id}: {e}')
         self.robots.clear()
         self.logger.debug(f'Robots dict cleared')
 
-        # Remove all obstacles
         for obstacle_id, obstacle_container in list(self.obstacles.items()):
-            # Remove from Babylon (if visualization exists)
             if obstacle_container.babylon is not None:
                 self.babylon_visualization.removeObject(obstacle_container.babylon)
-            # Remove from simulation environment
-            self.sim.environment.removeObject(obstacle_container.sim_obstacle)
-            self.logger.debug(f'Obstacle {obstacle_id} removed')
         self.obstacles.clear()
 
-        # Remove all tasks
         for task_id, task_container in list(self.tasks.items()):
-            # Remove from Babylon (if visualization exists)
             if task_container.babylon is not None:
                 self.babylon_visualization.removeObject(task_container.babylon)
-            # Remove from simulation environment
-            self.sim.environment.removeObject(task_container.sim_task)
-            self.logger.debug(f'Task {task_id} removed')
         self.tasks.clear()
 
-        # Clear global simulation dicts
-        from master_thesis.general.general_simulation import SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
-        SIMULATED_AGENTS.clear()
-        SIMULATED_TASKS.clear()
-        SIMULATED_OBSTACLES.clear()
-
-        # Clear environment container dicts
-        self.sim.environment.environment_container.agents.clear()
-        self.sim.environment.environment_container.obstacles.clear()
-        self.sim.environment.environment_container.tasks.clear()
-
-        # Clear environment's agents dict (separate from objects dict)
-        if hasattr(self.sim.environment, 'agents'):
-            self.sim.environment.agents.clear()
-
-        # Debug: verify all environment dicts are clear
-        self.logger.debug(f"Environment objects remaining: {len(self.sim.environment.objects)}")
-        self.logger.debug(f"Environment agents remaining: {len(getattr(self.sim.environment, 'agents', {}))}")
-
-        # Reinitialize collision checker (clears agent_objs and obstacle_objs)
-        self.sim.environment.collision_checker = self.sim.environment.setup_collision_checker()
-
-        # Re-initialize occupancy grids
-        self.sim.environment.initialize_occupancy_grids()
-
-        # Unfreeze entity creation so we can add new entities
-        self.sim.environment.environment_container.entities_creation_frozen = False
+        # Reset simulation (removes all simulation objects and clears internal state)
+        self.sim.reset_simulation()
 
         self.logger.info("Simulation reset complete")
 

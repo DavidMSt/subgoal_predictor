@@ -55,7 +55,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         super().setup_scheduling()
 
         # Attach task assignment action
-        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_task_assignment)
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_decentralized_task_assignment)
 
         # Attach motion planning action
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_motion_planning)
@@ -64,14 +64,13 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
     # Actions
     # ------------------------------------------------------------------
 
-    def _action_task_assignment(self):
+    def _action_decentralized_task_assignment(self):
         """Decentralized task assignment action (greedy nearest).""" #TODO: check here if only for this strategy
         if self.ta_cont.assigned_task is not None:
             return  # Already have task
         if not self.tai.assignment_pending:
             return  # No assignment requested
 
-        # Greedy assignment: select nearest available task
         # Tasks come from local world representation (updated by environment)
         available_tasks = self.lwr_cont.tasks if self.lwr_cont else {}
         if not available_tasks:
@@ -94,27 +93,30 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
     def _action_motion_planning(self):
         """Motion planning action - creates phase for assigned task."""
          # TODO: give the option here to not use current as starting position
-        if self.mp_cont.start_planning == True:
+        if self.mp_cont.start_planning is not None:
+            phase_key = self.mp_cont.start_planning
             task = self.assigned_task
 
             if task is None:
-                self.logger.warning('MP planning flag set to True, but no assigned tasks')
+                self.logger.warning(f'MP planning requested for phase "{phase_key}", but no assigned task')
+                self.mp_cont.start_planning = None
                 return
 
-            phase_key = f"{task.object_id}"
-
-            self.logger.info(f"Planning motion from to task {task.object_id} at {task.configuration}")
+            self.logger.info(f"Planning motion to task {task.object_id} at {task.configuration} (phase: {phase_key})")
 
             # Call motion planner (this adds the phase to runner)
             self.mpi.plan_motion(
                 phase_key=phase_key,
-                goal_task= task
+                goal_task=task
             )
 
             # Activate the phase if planning succeeded
             if phase_key in self.runner._phases:
                 self.runner.activate_phase(phase_key)
                 self.logger.info(f"Activated motion phase {phase_key}")
+
+            # Reset the planning flag
+            self.mp_cont.start_planning = None
 
     # ------------------------------------------------------------------
     # MODULE related functions
