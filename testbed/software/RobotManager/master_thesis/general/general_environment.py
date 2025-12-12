@@ -11,11 +11,11 @@ import extensions.simulation.src.core.environment as core_env
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 
 # master thesis
-from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
-from master_thesis.general.general_obstacles import GeneralObstacle
+from master_thesis.general.general_agent import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
+from master_thesis.general.general_obstacle import GeneralObstacle
 from master_thesis.motion_planning.helper.collisions_fcl import WorldCollisionChecker
 from master_thesis.containers.general_containers.environment_container import EnvironmentConfig, EnvironmentContainer
-from master_thesis.general.general_tasks import GeneralTask
+from master_thesis.general.general_task import GeneralTask
 
 from master_thesis.containers.base_container import BaseContainer
 from master_thesis.containers.general_containers.local_world_container import (

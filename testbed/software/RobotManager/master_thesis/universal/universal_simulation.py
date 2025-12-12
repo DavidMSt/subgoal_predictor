@@ -2,7 +2,7 @@ from extensions.cli.cli import CommandSet, Command, CommandArgument
 
 from core.utils.logging_utils import Logger
 
-from master_thesis.general.general_agents import FRODOGeneralAgent
+from master_thesis.general.general_agent import FRODOGeneralAgent
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment #, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.motion_planning.mp_simulation_module import MPSimulationModule
@@ -126,7 +126,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         assert isinstance(agent, FRODOUniversalAgent)
 
         # keep references to the module specific containers
-        self.ta_containers[agent_id] = agent.tai.ta_container
+        self.ta_containers[agent_id] = agent.tai.ta_cont
 
         return agent
     
@@ -153,7 +153,7 @@ def assignment_example_simple():
 def general_example():
     import numpy as np
     import time
-    from master_thesis.general.general_agents import FRODOGeneralAgent
+    from master_thesis.general.general_agent import FRODOGeneralAgent
 
     env_size = 10
     sim = FRODO_universal_Simulation(

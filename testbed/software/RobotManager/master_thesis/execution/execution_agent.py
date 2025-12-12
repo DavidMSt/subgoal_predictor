@@ -1,7 +1,7 @@
 from typing import Type, TypeVar, overload, cast
 import numpy as np
 
-from general.general_agents import FRODOGeneralAgent
+from master_thesis.general.general_agent import FRODOGeneralAgent
 from general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment
 from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRODO_ENVIRONMENT_ACTIONS
 from applications.FRODO.simulation.frodo_simulation import FrodoEnvironment

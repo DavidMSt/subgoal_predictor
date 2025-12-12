@@ -4,7 +4,7 @@ import numpy as np
 from testbed.software.RobotManager.master_thesis.task_assignment.ta_simulation import AssignmentSimulationModule, FRODO_AssignmentSimulation
 from master_thesis.task_assignment.strategies.centralized_strategies import RandomStrategyCent, HungarianStrategyCent, BaseStrategy
 from testbed.software.RobotManager.master_thesis.task_assignment.ta_agent import FRODO_AssignmentAgent
-from master_thesis.general.general_tasks import GeneralTask
+from master_thesis.general.general_task import GeneralTask
 from torch.utils.data import Dataset, DataLoader as TorchDataLoader
 
 class DataSetGenerator:

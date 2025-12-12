@@ -2,7 +2,7 @@ from typing import List
 
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 
-from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config
+from master_thesis.general.general_agent import FRODOGeneralAgent, FRODO_Agent_Config
 from master_thesis.motion_planning.mp_agent_module import MPAgentModule
 from master_thesis.task_assignment.ta_agent_module import TAAgentModule
 
@@ -61,14 +61,14 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_motion_planning)
 
     def _action_task_assignment(self):
-        """Decentralized task assignment action (greedy nearest)."""
-        if self.tai.ta_container.state.assigned_task is not None:
+        """Decentralized task assignment action (greedy nearest).""" #TODO: check here if only for this strategy
+        if self.tai.ta_cont.assigned_task is not None:
             return  # Already have task
         if not self.tai.assignment_pending:
             return  # No assignment requested
 
         # Greedy assignment: select nearest available task
-        available_tasks = self.tai.ta_container.state.available_tasks
+        available_tasks = self.tai.ta_cont.available_tasks
         if not available_tasks:
             return  # No tasks available
 
@@ -82,44 +82,52 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
                 nearest_task = task_container
 
         if nearest_task:
-            self.tai.ta_container.state.assigned_task = nearest_task
+            self.tai.ta_cont.state.assigned_task = nearest_task
             self.tai.assignment_pending = False
             self.logger.info(f"Agent {self.agent_id} assigned task {nearest_task.object_id} (distance: {min_distance:.2f})")
 
     def _action_motion_planning(self):
         """Motion planning action - creates phase for assigned task."""
-        if self.tai.ta_container.state.assigned_task is None:
-            return  # No task to plan for
-        if self.runner.active != "idle":
-            return  # Already executing a phase
+         # TODO: give the option here to not use current as starting position
+        if self.mpi.mp_container.start_planning == True:
+            task = self.assigned_task
 
-        # Plan motion to assigned task
-        task = self.tai.ta_container.state.assigned_task
-        start_config = (self.state.x, self.state.y, self.state.psi)
-        goal_config = (task.x, task.y, task.psi)
+            if task is None:
+                self.logger.warning('MP planning flag set to True, but no assigned tasks')
+                return
 
-        phase_key = f"task_{task.object_id}"
+            phase_key = f"{task.object_id}"
 
-        self.logger.info(f"Planning motion from {start_config} to task {task.object_id} at {goal_config}")
+            self.logger.info(f"Planning motion from to task {task.object_id} at {task.configuration}")
 
-        # Call motion planner (this adds the phase to runner)
-        self.mpi.plan_motion(
-            phase_key=phase_key,
-            start_config=start_config,
-            goal_config=goal_config
-        )
+            # Call motion planner (this adds the phase to runner)
+            self.mpi.plan_motion(
+                phase_key=phase_key,
+                goal_task= task
+            )
 
-        # Activate the phase if planning succeeded
-        if phase_key in self.runner._phases:
-            self.runner.activate_phase(phase_key)
-            self.logger.info(f"Activated motion phase {phase_key}")
+            # Activate the phase if planning succeeded
+            if phase_key in self.runner._phases:
+                self.runner.activate_phase(phase_key)
+                self.logger.info(f"Activated motion phase {phase_key}")
+
+    @property
+    def assigned_task(self):
+        """Link to the task assigned by TA module."""
+        return self.tai.ta_cont.assigned_task
+
+    @assigned_task.setter
+    def assigned_task(self, value):
+        """Set assigned task and trigger motion planning."""
+        self.tai.ta_cont.assigned_task = value
+
 
 
 
 def main():
     import time
     from master_thesis.general.general_simulation import FRODO_general_Simulation
-    from master_thesis.general.general_tasks import GeneralTask
+    from master_thesis.general.general_task import GeneralTask
 
     # Initialize Sim
     sim = FRODO_general_Simulation()

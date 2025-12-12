@@ -3,7 +3,7 @@ from core.utils.logging_utils import Logger
 
 # master thesis
 from master_thesis.motion_planning.mp_agent_module import MPAgentModule
-from master_thesis.general.general_agents import FRODOGeneralAgent
+from master_thesis.general.general_agent import FRODOGeneralAgent
 from master_thesis.containers.general_containers.task_container import TaskContainer
 
 class MPSimulationModule():

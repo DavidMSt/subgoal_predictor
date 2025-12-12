@@ -21,7 +21,7 @@ class TASimulationModule():
         self.logger = logger
 
         # To get current agent configurations
-        self.agentc_conts = env_cont.agent_conts
+        self.agent_conts = env_cont.agent_conts
 
         # to get current task configurations
         self.task_conts = env_cont.task_conts
@@ -62,11 +62,15 @@ class TASimulationModule():
             # Assign tasks to agents based on matches
             for agent_id, task_id in result.matches:
                 # Get the corresponding containers using the IDs as keys
+                agent_cont = self.agent_conts[agent_id]
                 agent_ta_cont = self.agent_ta_conts[agent_id]
                 task_cont = self.task_conts[task_id]
 
                 # Assign the task to the agent's TA container
                 agent_ta_cont.assigned_task = task_cont
+                task_cont.assigned_agent = agent_cont
+                # reset the assignment pending flag
+                agent_ta_cont.assignment_pending = False
                 
                 
         else:

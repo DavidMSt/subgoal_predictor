@@ -23,3 +23,7 @@ class TaskContainer(BaseContainer):
     object_id: str = field(kw_only=True)
     config: Task_Config = field(default_factory=Task_Config)
     state: TaskState = field(default_factory=TaskState)
+
+    @property
+    def configuration(self):
+        return self.x, self.y, self.psi

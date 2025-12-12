@@ -16,10 +16,10 @@ from core.utils.dataclass_utils import update_dataclass_from_dict
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 
 # master thesis
-from master_thesis.general.general_agents import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
-from master_thesis.general.general_obstacles import GeneralObstacle
+from master_thesis.general.general_agent import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
+from master_thesis.general.general_obstacle import GeneralObstacle
 from master_thesis.general.general_environment import FrodoGeneralEnvironment
-from master_thesis.general.general_tasks import GeneralTask
+from master_thesis.general.general_task import GeneralTask
 
 # # Global registries
 # SIMULATED_AGENTS: dict[str, FRODOGeneralAgent] = {}

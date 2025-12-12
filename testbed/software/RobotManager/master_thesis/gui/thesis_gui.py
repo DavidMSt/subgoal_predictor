@@ -31,9 +31,9 @@ from extensions.joystick.joystick_manager import JoystickManager, Joystick
 # thesis imports
 from master_thesis.universal.universal_simulation import FRODO_universal_Simulation
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
-from master_thesis.general.general_obstacles import GeneralObstacle
+from master_thesis.general.general_obstacle import GeneralObstacle
 from master_thesis.gui.demo_scenarios.simple_maze import setup_simple_maze
-from master_thesis.general.general_tasks import GeneralTask
+from master_thesis.general.general_task import GeneralTask
 # from master_thesis.task_assignment.assignment_strategies import HungarianStrategy, RandomStrategy
 
 # TODO: implement babylon-only method that colors a task once it is assigned in the agetns color 

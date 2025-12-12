@@ -4,7 +4,7 @@ from stable_baselines3 import PPO
 
 from master_thesis.general.general_simulation import FRODO_general_Simulation
 from master_thesis.execution.reinforcement_learning.rl_gym_wrapper import FrodoRLEnv
-from master_thesis.general.general_obstacles import Obstacle_Config
+from master_thesis.general.general_obstacle import Obstacle_Config
 
 
 def main():
