@@ -124,22 +124,31 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
             self.mp_cont.start_planning = None
 
     def _action_execution(self):
-        """Execution action - transfers planned phases to execution module."""
-        # Check if there are planned phases to execute
         if not self.planned_phases or not self.exe_cont.start_execution:
             return
 
-        # Get the first planned phase 
-        for phase_name, phase_container in self.planned_phases.items():
-            # Check if this phase is not already in execution
+        # Get list of phase names to avoid dict modification during iteration
+        phase_names = list(self.planned_phases.keys())
+        
+        for phase_name in phase_names:
             if phase_name not in self.exi.phases:
-                # Transfer phase to execution module
+                phase_container = self.planned_phases[phase_name]
+                
+                # Transfer to execution
                 self.exi.add_phase(phase_name, phase_container)
-                self.logger.info(f"Phase '{phase_name}' transferred to execution module")
 
-                # Activate it for execution
+                # Remove from MP module (phase has been transferred)
+                del self.mp_cont.phases[phase_name]
+                
+                self.logger.info(f"Phase '{phase_name}' transferred to execution module")
+                
+                # Activate
                 self.exi.activate_phase(phase_name)
-                break  # Only transfer and activate one phase at a time
+                
+
+                
+                break
+
 
     def _input_function(self):
         """Override parent to use execution module for control inputs."""

@@ -426,6 +426,14 @@ class ThesisGUI:
         ))
         page1.addWidget(spawn_button, height=2, width=4)
 
+        # Spawn Agents & Tasks Button
+        spawn_button = Button(text="Spawn Agent & Task", callback=Callback(
+            function=self.spawnAgentsAndTasks,
+            inputs={'n': 1},
+            discard_inputs=True,
+        ))
+        page1.addWidget(spawn_button, height=2, width=4)
+
         # Start Task Assignment Button
         ta_button = Button(text="Start Task Assignment", callback=Callback(
             function=self.sim.start_ta,
@@ -437,6 +445,14 @@ class ThesisGUI:
         # Start Motion Planning Button
         mp_button = Button(text="Start Motion Planning", callback=Callback(
             function=self.sim.start_mp,
+            inputs={},
+            discard_inputs=True,
+        ))
+        page1.addWidget(mp_button, height=2, width=4)
+
+        # Start Execution Button
+        mp_button = Button(text="Start Execution", callback=Callback(
+            function=self.sim.start_exe,
             inputs={},
             discard_inputs=True,
         ))
