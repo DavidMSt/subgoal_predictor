@@ -312,9 +312,10 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
             # Get the duration (number of timesteps) each input is applied
 
             dur = self._solution_path.getControlDuration(i) # type: ignore[attr-defined]
+            dur_in_time = float(dur) * self._si.getPropagationStepSize()
 
             inputs.append(np.array([s, theta]))
-            durations.append(dur)
+            durations.append(dur_in_time)
 
         return tuple(inputs), tuple(durations)
     

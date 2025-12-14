@@ -140,11 +140,11 @@ class EXEAgentModule:
         if self._queued_phases:
             next_phase = self._queued_phases.pop(0)
             self._active_phase = next_phase
-            self.logger.info(f"Phase '{active_phase_name}' ended, transitioning to '{next_phase}'")
+            self.logger.info(f"Phase '{active_phase_name}' ended ({self.agent_cont.state}), transitioning to '{next_phase}'")
         else:
             self._active_phase = 'idle'
             self.exe_cont.state.execution_mode = 'idle'
-            self.logger.info(f"Phase '{active_phase_name}' ended, transitioning to idle")
+            self.logger.info(f"Phase '{active_phase_name}' ended ({self.agent_cont.state}), transitioning to idle")
 
     def _create_idle_phase(self):
         """Create the default idle phase (zero inputs)."""

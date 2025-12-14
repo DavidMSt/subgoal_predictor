@@ -406,12 +406,12 @@ class ThesisGUI:
         page1.addWidget(maze_button, height=2, width=4)
 
         # Add Task Button
-        task_button = Button(text="Add Task (0, 0)", callback=Callback(
+        task_button = Button(text="Add Task (1, 1)", callback=Callback(
             function=self.newTask,
             inputs={
                 'task_id': 'task1',
-                'x': 0.0,
-                'y': 0.0,
+                'x': 1.0,
+                'y': 1.0,
                 'color': [1, 1, 0]  # Yellow
             },
             discard_inputs=True,
