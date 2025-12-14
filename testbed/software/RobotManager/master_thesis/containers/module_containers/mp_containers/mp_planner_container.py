@@ -1,37 +1,20 @@
 from dataclasses import dataclass, field
 import numpy as np
+from collections import OrderedDict
+
 from core.utils.logging_utils import Logger
 from master_thesis.containers.base_container import BaseContainer
-
+from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer
 
 @dataclass(frozen = False, slots=True)
 class AgentMPPlannerState:
 
-    # start/ goal configurations
-    start: np.ndarray| None = None
-    goal: np.ndarray | None = None
+    # keep all planned phases
+    _phases: OrderedDict[str, MPPhaseContainer] = field(default_factory=OrderedDict)
 
     # Phase name for motion planning action (None = no planning, string = plan with this phase name)
     _start_planning: str | None = None
-
-    # did motion planning work?
-    success: bool = False
-
-    # raw planner output
-    raw_states: list[np.ndarray] | None = None
-    raw_inputs: list[np.ndarray] | None = None
-    raw_durations: list[float] | None = None
-    raw_delta_t: float | None = None
-
-    # optional post-processing, e.g. spline creation
-    smoothed_states: list[np.ndarray] | None = None
-    smoothed_inputs: list[np.ndarray] | None = None
-    smoothed_delta_t: float | None = None
-
-    # timing / metrics
-    computation_time: float | None = None
-    path_length: float | None = None
-    cost: float | None = None
+    
 
 @dataclass(frozen = True, slots = True)
 class AgentMPPlannerConfig:
@@ -73,3 +56,13 @@ class AgentMPPlannerContainer(BaseContainer):
                 self.logger.info("Assigned task cleared")
             else:
                 self.logger.info(f"Assigned task set to: {value}")
+
+    # prohibit reassignment of the phases dict and make sure input types are correct
+    @property
+    def phases(self) -> dict[str, MPPhaseContainer]:
+        for k, v in self.state._phases.items():
+            if not isinstance(k, str):
+                raise TypeError("Phase keys must be str")
+            if not isinstance(v, MPPhaseContainer):
+                raise TypeError("Phase values must be MPPhaseContainer")
+        return self.state._phases

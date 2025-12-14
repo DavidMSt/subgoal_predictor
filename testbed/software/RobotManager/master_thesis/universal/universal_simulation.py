@@ -5,8 +5,10 @@ from core.utils.logging_utils import Logger
 from master_thesis.general.general_agent import FRODOGeneralAgent
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment #, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
+
 from master_thesis.motion_planning.mp_simulation_module import MPSimulationModule
 from master_thesis.task_assignment.ta_simulation_module import TASimulationModule
+from master_thesis.execution.exe_sim_module import ExeSimulationModule
 
 # Assignment Strategies
 from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy
@@ -17,7 +19,7 @@ from master_thesis.task_assignment.strategies.decentralized_strategies import Gr
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAContainer
-from master_thesis.containers.module_containers.exe_containers.exe_container import ExecutionContainer
+from master_thesis.containers.module_containers.exe_containers.exe_container import AgentExeContainer
 
 
 class FRODO_General_CommandSet(CommandSet):
@@ -98,7 +100,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         
         self.mp_containers: dict[str, AgentMPPlannerContainer] = {}
         self.ta_containers: dict[str, AgentTAContainer] = {}
-        self.exe_containers: dict[str, ExecutionContainer] = {}
+        self.exe_containers: dict[str, AgentExeContainer] = {}
 
         env_cont = self.environment.environment_container
 
@@ -106,6 +108,8 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
         self.mpi = MPSimulationModule(self.mp_containers, self.logger) # TODO: modify the mp simulation module to use containers as well
         self.tai = TASimulationModule(env_cont=env_cont, agent_ta_conts= self.ta_containers, logger = self.logger) # TODO: is environment here really needed - rahter obstacles, task constainer individually passed?
+
+        self.exi = ExeSimulationModule(agent_exe_conts=self.exe_containers, logger = self.logger)
         
         self.cli = FRODO_General_CommandSet(self)
 
@@ -131,7 +135,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
         # keep references to the module specific containers
         self.ta_containers[agent_id] = agent.tai.ta_cont
-        self.mp_containers[agent_id] = agent.mpi.mp_cont
+        self.mp_containers[agent_id] = agent.mpi.planner_cont
         self.exe_containers[agent_id] = agent.exi.exe_cont
 
         return agent
@@ -207,7 +211,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         self.mpi.start_motion_planning(phase_name= phase_name)
 
     def start_exe(self):
-        ...
+        self.exi.start_execution()
     
 
 def assignment_example_simple():
@@ -328,8 +332,8 @@ def assignment_example_less_simple():
 
     # sim.new_task('example_task', -1.0,-4.0, 0)
 
-    sim.spawn_agents(3)
-    sim.spawn_tasks(3)
+    sim.spawn_agents(1)
+    sim.spawn_tasks(1)
 
     sim.start()
     sim.logger.warning(f'this is the current agent position: {sim.agents['vfrodo0'].container.state}')
@@ -337,6 +341,7 @@ def assignment_example_less_simple():
     # result = sim.tai.task_assignment(strategy=HungarianStrategyCent)
     sim.start_ta(strategy=HungarianStrategyCent)
     sim.start_mp()
+    sim.start_exe()
     # print(result.matches)
     sim.logger.warning(f'this is the current agent position: {sim.agents['vfrodo0'].configuration}')
 

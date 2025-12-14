@@ -21,18 +21,37 @@ class MPPhaseConfig:
         ValueError: If the inputs and durations do not match.
         ValueError: If the states do not match the inputs.
     """
-    inputs: tuple[np.ndarray, ...] = field(default_factory=tuple)      # shape (2,) each
-    states: tuple[np.ndarray, ...] | None = field(default=None)        # State objects at segment boundaries
-    durations: tuple[float, ...] = field(default_factory=tuple)        # duration per input
-    delta_t: float = 0.1  # time increment used during the planned phase
+    # Required execution data - must be provided
+    inputs: list[np.ndarray]  # Control inputs, shape (2,) each
+    durations: list[float]  # Duration per input
+    delta_t: float  # Time increment used during planning
+    states: list[np.ndarray]  # State objects at segment boundaries
+
+    # Planning problem metadata (optional)
+    start: np.ndarray | None = None
+    goal: np.ndarray | None = None
+    success: bool = False
+
+    # Optional: raw states for debugging/visualization
+    raw_states: list[np.ndarray] | None = None
+
+    # Timing / metrics (optional)
+    computation_time: float | None = None
+    path_length: float | None = None
+    cost: float | None = None
 
     def __post_init__(self):
+        # Validate required execution data
         if len(self.inputs) != len(self.durations):
-            raise ValueError("len(inputs) must equal len(durations).")
-        if self.states is not None and len(self.states) != len(self.inputs) + 1:
             raise ValueError(
-                f"len(states) must be len(inputs)+1 (or None if unknown). "
-                f"States has length: {len(self.states)}, Inputs has length: {len(self.inputs)}."
+                f"len(inputs) must equal len(durations). "
+                f"Got inputs={len(self.inputs)}, durations={len(self.durations)}"
+            )
+
+        if len(self.states) != len(self.inputs) + 1:
+            raise ValueError(
+                f"len(states) must be len(inputs)+1. "
+                f"Got states={len(self.states)}, inputs={len(self.inputs)}"
             )
 
 @dataclass(frozen=False, slots=False)

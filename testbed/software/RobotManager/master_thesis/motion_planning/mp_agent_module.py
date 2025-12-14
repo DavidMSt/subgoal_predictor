@@ -7,7 +7,6 @@ from core.utils.logging_utils import Logger
 
 # master thesis
 from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOBase
-from master_thesis.execution.exe_agent_module import InputPhaseRunner
 
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
@@ -22,22 +21,18 @@ class MPAgentModule():
     env_config: EnvironmentContainer
     agent_cont: FRODOAgentContainer
 
-    def __init__(self,agent_cont: FRODOAgentContainer, env_container: EnvironmentContainer, runner: InputPhaseRunner, logger: Logger, mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino) -> None:
+    def __init__(self,agent_cont: FRODOAgentContainer, env_container: EnvironmentContainer, logger: Logger, mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino) -> None:
         self.agent_cont = agent_cont
         self.env_config = env_container
-        self.runner = runner
         self.logger = logger
         self.mp_type = mp_type
         self.motion_planner = None
-        self.mp_cont = self.setup_mp_container()
+        self.planner_cont = self.setup_mp_container()
 
     def plan_motion(self, phase_key: str, goal_task: TaskContainer| None, start_task: TaskContainer | None = None):
         def extract_config_from_cont(container: BaseContainer):
             state = [container.x, container.y, container.psi]
             return state
-
-        if self.runner is None:
-            self.logger.warning("Runner not initialized, Solution is not added as executable phase")
 
         if self.motion_planner is None:
             self.motion_planner = self.setup_motion_planner()
@@ -57,15 +52,15 @@ class MPAgentModule():
         goal_config = np.array(extract_config_from_cont(goal_task))
         
         # update the mp container
-        self.mp_cont.start = start_config
-        self.mp_cont.goal = goal_config
+        self.planner_cont.start = start_config
+        self.planner_cont.goal = goal_config
 
         solved, path_length = self.motion_planner.solve_problem()
 
         if solved:
             solution_cont = self.motion_planner._create_solution_cont()
             
-            self.runner.add_phase(phase_key, solution_cont)
+            self.planner_cont.phases[phase_key] = solution_cont
 
             self.logger.info(
                 f"Found solution with {len(solution_cont.states)} states, "
@@ -81,5 +76,5 @@ class MPAgentModule():
 
     def setup_motion_planner(self):
         # TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
-        motion_planner = self.mp_type(mp_container=self.mp_cont, agent_container= self.agent_cont, env_container= self.env_config)
+        motion_planner = self.mp_type(mp_container=self.planner_cont, agent_container= self.agent_cont, env_container= self.env_config)
         return motion_planner

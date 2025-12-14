@@ -10,7 +10,8 @@ from master_thesis.execution.exe_agent_module import EXEAgentModule
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer, AgentTAConfig, AgentTAState
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
-from master_thesis.containers.module_containers.exe_containers.exe_container import ExecutionContainer
+from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer
+from master_thesis.containers.module_containers.exe_containers.exe_container import AgentExeContainer
 
 
 class FRODOUniversalAgent(FRODOGeneralAgent):
@@ -28,7 +29,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         # Create task assignment container with default config and state
         ta_container = AgentTAContainer() # TODO: Only ta container needed here the other two could also be used in modules directly
         mp_container = AgentMPPlannerContainer()
-        exe_container = ExecutionContainer()
+        exe_container = AgentExeContainer()
      
         # ------------------------------------------------------------------
         # MODULES
@@ -38,7 +39,6 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         self.mpi = MPAgentModule(
             agent_cont=self.container, 
             env_container=env_container, 
-            runner=self.runner, 
             logger=self.logger)
 
         # TAAgent module
@@ -49,12 +49,13 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
             logger=self.logger,
         )
 
-        self.exi = EXEAgentModule( # TODO: Implement this module
-            logger = self.logger
+        self.exi = EXEAgentModule(
+            agent_cont= self.container,
+            logger = self.logger,
         ) # TODO
 
     def setup_scheduling(self):
-        """Override to add task assignment and motion planning actions"""
+        """Override to add task assignment, motion planning, and execution actions"""
         super().setup_scheduling()
 
         # Attach task assignment action
@@ -63,8 +64,11 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         # Attach motion planning action
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_motion_planning)
 
-        # Attach execution action
-        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._action_execution)
+        # Attach execution transfer action (moves planned phases to execution)
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_execution)
+
+        # Attach input function (provides control inputs from execution module)
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._input_function)
 
     # ------------------------------------------------------------------
     # Actions
@@ -92,7 +96,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
                 nearest_task = task_container
 
         if nearest_task:
-            self.ta_cont.state.assigned_task = nearest_task
+            self.ta_cont.assigned_task = nearest_task
             self.tai.assignment_pending = False
             self.logger.info(f"Agent {self.agent_id} assigned task {nearest_task.object_id} (distance: {min_distance:.2f})")
 
@@ -116,21 +120,30 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
                 goal_task=task
             )
 
-            # Activate the phase if planning succeeded
-            if phase_key in self.runner._phases:
-                self.runner.activate_phase(phase_key)
-                self.logger.info(f"Activated motion phase {phase_key}")
-
             # Reset the planning flag
             self.mp_cont.start_planning = None
 
     def _action_execution(self):
-        """
-        Custom input logic:
-        1. If runner exists → use its control
-        2. else → fallback to parent behavior (usually joystick/no-op)
-        """
-        u = self.runner.step()
+        """Execution action - transfers planned phases to execution module."""
+        # Check if there are planned phases to execute
+        if not self.planned_phases or not self.exe_cont.start_execution:
+            return
+
+        # Get the first planned phase 
+        for phase_name, phase_container in self.planned_phases.items():
+            # Check if this phase is not already in execution
+            if phase_name not in self.exi.phases:
+                # Transfer phase to execution module
+                self.exi.add_phase(phase_name, phase_container)
+                self.logger.info(f"Phase '{phase_name}' transferred to execution module")
+
+                # Activate it for execution
+                self.exi.activate_phase(phase_name)
+                break  # Only transfer and activate one phase at a time
+
+    def _input_function(self):
+        """Override parent to use execution module for control inputs."""
+        u = self.exi.step()
         self.input.v = float(u[0])
         self.input.psi_dot = float(u[1])
 
@@ -138,14 +151,11 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
     # MODULE related functions
     # ------------------------------------------------------------------
 
+    # ---------- Task Assignment ----------
     @property
     def ta_cont(self):
         return self.tai.ta_cont
     
-    @property
-    def mp_cont(self):
-        return self.mpi.mp_cont
-
     @property
     def assigned_task(self):
         """Link to the task assigned by TA module."""
@@ -156,7 +166,24 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         """Set assigned task and trigger motion planning."""
         self.tai.ta_cont.assigned_task = value
 
-
+    # ---------- Motion Planning ----------
+    @property
+    def mp_cont(self):
+        return self.mpi.planner_cont
+    
+    @property
+    def planned_phases(self):
+        return self.mpi.planner_cont.phases
+    
+    @planned_phases.setter #TODO: write access could be removed here? 
+    def planned_phases(self, name: str, phase: MPPhaseContainer):
+        self.mpi.planner_cont.phases[name] = phase
+    
+    # ---------- Phase Execution ----------
+    
+    @property
+    def exe_cont(self):
+        return self.exi.exe_cont
 
 
 
