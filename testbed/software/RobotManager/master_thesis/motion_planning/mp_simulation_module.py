@@ -3,16 +3,16 @@ from core.utils.logging_utils import Logger
 
 # master thesis
 from master_thesis.motion_planning.mp_agent_module import MPAgentModule
-from master_thesis.containers.module_containers.mp_container import AgentMPContainer
+from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
 from master_thesis.general.general_agent import FRODOGeneralAgent
 from master_thesis.containers.general_containers.task_container import TaskContainer
 
 class MPSimulationModule():
-    agent_mp_conts : dict[str, AgentMPContainer]
+    agent_mp_conts : dict[str, AgentMPPlannerContainer]
     logger: Logger
 
     def __init__(self,
-                 agent_mp_conts : dict[str, AgentMPContainer], 
+                 agent_mp_conts : dict[str, AgentMPPlannerContainer], 
                  logger: Logger) -> None: #TODO: should not receive agents here directly? 
         self.agent_mp_conts = agent_mp_conts
         self.logger = logger

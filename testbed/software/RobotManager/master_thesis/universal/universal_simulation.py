@@ -14,10 +14,10 @@ from master_thesis.task_assignment.strategies.centralized_strategies import Hung
 from master_thesis.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
 
 # Module Containers
-from master_thesis.containers.module_containers.mp_container import AgentMPContainer
+from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAContainer
-from master_thesis.containers.module_containers.exe_container import ExecutionContainer
+from master_thesis.containers.module_containers.exe_containers.exe_container import ExecutionContainer
 
 
 class FRODO_General_CommandSet(CommandSet):
@@ -96,7 +96,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
     def __init__(self, Ts=0.1, limits=((-5,5),(-5,5)), env=FrodoGeneralEnvironment):
         super().__init__(Ts=Ts, limits=limits, env=env)
         
-        self.mp_containers: dict[str, AgentMPContainer] = {}
+        self.mp_containers: dict[str, AgentMPPlannerContainer] = {}
         self.ta_containers: dict[str, AgentTAContainer] = {}
         self.exe_containers: dict[str, ExecutionContainer] = {}
 
@@ -332,13 +332,13 @@ def assignment_example_less_simple():
     sim.spawn_tasks(3)
 
     sim.start()
-
+    sim.logger.warning(f'this is the current agent position: {sim.agents['vfrodo0'].container.state}')
     # Centralized (simulation computes assignments)
     # result = sim.tai.task_assignment(strategy=HungarianStrategyCent)
     sim.start_ta(strategy=HungarianStrategyCent)
     sim.start_mp()
     # print(result.matches)
-   
+    sim.logger.warning(f'this is the current agent position: {sim.agents['vfrodo0'].configuration}')
 
 
 if __name__ == "__main__":

@@ -19,20 +19,21 @@ from ompl import control as oc
 from ompl import util as ou # used to supress OMPL outputs
 from typing import Any
 from numpy.typing import NDArray
-from master_thesis.motion_planning.helper.nearest_neighbor import NearestNeighbor # TODO: Use scikit-learn kd tree here
-from master_thesis.motion_planning.helper.collisions_fcl import AgentCollisionChecker
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
-from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
-from master_thesis.containers.module_containers.mp_container import AgentMPContainer
-
 from enum import Enum, auto
 from abc import ABC, abstractmethod
 from ompl.base import PathLengthOptimizationObjective
 from typing import List
 
-
 import numpy as np
 import argparse
+
+from master_thesis.motion_planning.helper.nearest_neighbor import NearestNeighbor # TODO: Use scikit-learn kd tree here
+from master_thesis.motion_planning.helper.collisions_fcl import AgentCollisionChecker
+
+from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
+from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
+from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer, MPPhaseConfig
 
 
 class SamplerType(Enum):
@@ -54,7 +55,7 @@ class SamplerType(Enum):
 
     
 class OMPLPlannerFRODOBase(ABC):
-    def __init__(self, mp_container: AgentMPContainer, 
+    def __init__(self, mp_container: AgentMPPlannerContainer, 
                  agent_container: FRODOAgentContainer, 
                  env_container: EnvironmentContainer, 
                  sampler: SamplerType = SamplerType.UNIFORM):
@@ -171,9 +172,6 @@ class OMPLPlannerFRODOBase(ABC):
             path_states.append(extracted_state)
         return tuple(path_states)
 
-    def export_solution_dict(self) -> dict[str, tuple[np.ndarray, ...]]:
-        return self._create_solution_dict()
-
     @abstractmethod
     def _create_space_info(self) -> ob.SpaceInformation: # type: ignore[attr-defined]
         ...
@@ -209,7 +207,7 @@ class OMPLPlannerFRODOBase(ABC):
         return [float(x), float(y), float(yaw)]
 
     @abstractmethod
-    def _create_solution_dict(self) -> dict[str, tuple[np.ndarray, ...]| float]:
+    def _create_solution_cont(self) -> MPPhaseContainer:
         ...
 
     def getCost(self, si: ob.SpaceInformation) -> ob.OptimizationObjective: # type: ignore[attr-defined]
@@ -230,7 +228,7 @@ class OMPLPlannerFRODOBase(ABC):
     
 
 class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
-    def __init__(self, mp_container: AgentMPContainer, 
+    def __init__(self, mp_container: AgentMPPlannerContainer, 
                  agent_container: FRODOAgentContainer, 
                  env_container: EnvironmentContainer, 
                  sampler: SamplerType = SamplerType.UNIFORM):
@@ -326,18 +324,20 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
     #     yaw = ompl_state.getYaw()
     #     return [float(x), float(y), float(yaw)]
     
-    def _create_solution_dict(self)-> dict[str, tuple[np.ndarray, ...]| float]:
+    def _create_solution_cont(self)-> MPPhaseContainer:
         path_states = self._solution_path_states
         path_actions, path_durations = self._solution_inputs_durations
 
-        # print(f'these are inputs and durations: {path_actions}, {path_durations}')
-        solution_dict = {
-            "states": path_states,
-            "actions": path_actions,
-            "durations": path_durations,
-            "delta_t": self.agent_container.Ts
-        }
-        return solution_dict
+        config = MPPhaseConfig(
+            inputs = path_actions,
+            states = path_states,
+            durations = path_durations,
+            delta_t= self.agent_container.Ts
+        )
+        
+        cont = MPPhaseContainer(config=config)
+
+        return cont
     
     def solve_problem(self, verbose = False) -> tuple[bool, float]:
         self._pdef = self._create_pdef() # update the pdef with current start goal from the container
@@ -366,7 +366,7 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
 
 class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
 
-    def __init__(self, mp_container: AgentMPContainer, 
+    def __init__(self, mp_container: AgentMPPlannerContainer, 
                  agent_container: FRODOAgentContainer, 
                  env_container: EnvironmentContainer, 
                  sampler: SamplerType = SamplerType.UNIFORM):
@@ -426,14 +426,13 @@ class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
     #     # Extract joint angles from flat RealVectorStateSpace
     #     return [float(ompl_state[i]) for i in range(len(self.mp["L"]))]
     
-    def _create_solution_dict(self)-> dict:
+    def _create_solution_cont(self)-> MPPhaseContainer:
         path_states = self._solution_path_states
-        solution_dict = {
-            "plan": {
-                "states": path_states
-            }
-        }
-        return solution_dict
+
+        config = MPPhaseConfig(states=path_states)
+        cont = MPPhaseContainer(config=config)
+
+        return cont
     
     def solve_problem(self, verbose = False) -> tuple[bool, float]:
 

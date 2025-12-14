@@ -9,8 +9,8 @@ from master_thesis.execution.exe_agent_module import EXEAgentModule
 
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer, AgentTAConfig, AgentTAState
-from master_thesis.containers.module_containers.mp_container import AgentMPContainer
-from master_thesis.containers.module_containers.exe_container import ExecutionContainer
+from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
+from master_thesis.containers.module_containers.exe_containers.exe_container import ExecutionContainer
 
 
 class FRODOUniversalAgent(FRODOGeneralAgent):
@@ -27,7 +27,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
 
         # Create task assignment container with default config and state
         ta_container = AgentTAContainer() # TODO: Only ta container needed here the other two could also be used in modules directly
-        mp_container = AgentMPContainer()
+        mp_container = AgentMPPlannerContainer()
         exe_container = ExecutionContainer()
      
         # ------------------------------------------------------------------
@@ -62,6 +62,9 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
 
         # Attach motion planning action
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_motion_planning)
+
+        # Attach execution action
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._action_execution)
 
     # ------------------------------------------------------------------
     # Actions
@@ -120,6 +123,16 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
 
             # Reset the planning flag
             self.mp_cont.start_planning = None
+
+    def _action_execution(self):
+        """
+        Custom input logic:
+        1. If runner exists → use its control
+        2. else → fallback to parent behavior (usually joystick/no-op)
+        """
+        u = self.runner.step()
+        self.input.v = float(u[0])
+        self.input.psi_dot = float(u[1])
 
     # ------------------------------------------------------------------
     # MODULE related functions

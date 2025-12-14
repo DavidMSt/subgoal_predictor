@@ -6,11 +6,13 @@ from typing import Type
 from core.utils.logging_utils import Logger
 
 # master thesis
+from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOBase
+from master_thesis.execution.exe_agent_module import InputPhaseRunner
+
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
-from master_thesis.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOBase
-from master_thesis.general.general_agent import InputPhaseRunner, InputPhase
-from master_thesis.containers.module_containers.mp_container import AgentMPConfig, AgentMPContainer
+from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer, MPPhaseConfig
+from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerConfig, AgentMPPlannerContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 from master_thesis.containers.base_container import BaseContainer
 
@@ -61,27 +63,20 @@ class MPAgentModule():
         solved, path_length = self.motion_planner.solve_problem()
 
         if solved:
-            solution_dict = self.motion_planner.export_solution_dict()
-            phase = InputPhase(
-                inputs=solution_dict["actions"],
-                states=solution_dict["states"],
-                durations=solution_dict["durations"],
-                delta_t=float(solution_dict["delta_t"]),
-            )
-
-            self.runner.add_phase(phase_key, phase)
-
+            solution_cont = self.motion_planner._create_solution_cont()
+            
+            self.runner.add_phase(phase_key, solution_cont)
 
             self.logger.info(
-                f"Found solution with {len(phase.states)} states, "
-                f"total length {path_length}, end config: {phase.states[-1]}"
+                f"Found solution with {len(solution_cont.states)} states, "
+                f"total length {path_length}, end config: {solution_cont.states[-1]}"
             )
         else:
             self.logger.warning(f"No solution found! timeout reached")
 
     def setup_mp_container(self):
-        config = AgentMPConfig() # TODO: Offer choice to make more adjustments when calling the function
-        mp_container = AgentMPContainer(config = config, logger=self.logger)
+        config = AgentMPPlannerConfig() # TODO: Offer choice to make more adjustments when calling the function
+        mp_container = AgentMPPlannerContainer(config = config, logger=self.logger)
         return mp_container
 
     def setup_motion_planner(self):

@@ -5,7 +5,7 @@ from master_thesis.containers.base_container import BaseContainer
 
 
 @dataclass(frozen = False, slots=True)
-class AgentMPState:
+class AgentMPPlannerState:
 
     # start/ goal configurations
     start: np.ndarray| None = None
@@ -34,7 +34,7 @@ class AgentMPState:
     cost: float | None = None
 
 @dataclass(frozen = True, slots = True)
-class AgentMPConfig:
+class AgentMPPlannerConfig:
 
     # hyperparameters
     # timelimit for each motion planning problem
@@ -55,9 +55,9 @@ class AgentMPConfig:
     v_bounds: tuple = (-1.0, 1.0)
 
 @dataclass(slots = True)
-class AgentMPContainer(BaseContainer):
-    state: AgentMPState = field(default_factory=AgentMPState)
-    config: AgentMPConfig | None = None
+class AgentMPPlannerContainer(BaseContainer):
+    state: AgentMPPlannerState = field(default_factory=AgentMPPlannerState)
+    config: AgentMPPlannerConfig | None = None
     logger: Logger | None = None
 
     @property
