@@ -6,6 +6,7 @@ import time
 import os
 import signal
 import subprocess
+from scipy.spatial.transform import Rotation as R
 
 import numpy as np
 
@@ -32,7 +33,7 @@ from extensions.joystick.joystick_manager import JoystickManager, Joystick
 from master_thesis.universal.universal_simulation import FRODO_universal_Simulation
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.general.general_obstacle import GeneralObstacle
-from master_thesis.gui.demo_scenarios.simple_maze import setup_simple_maze
+from master_thesis.gui.demo_scenarios.maze_examples import maze_single_2x2, maze_single_3x3_three_agents
 from master_thesis.general.general_task import GeneralTask
 # from master_thesis.task_assignment.assignment_strategies import HungarianStrategy, RandomStrategy
 
@@ -182,7 +183,8 @@ class ThesisGUI:
                 x: float = 0.0,
                 y: float = 0.0,
                 length: float = 1.0,
-                width: float = 0.3) -> ObstacleGUIContainer | None:
+                width: float = 0.3,
+                psi: float = 0.0) -> ObstacleGUIContainer | None:
 
         # Check if it already exists
         if obstacle_id in self.obstacles:
@@ -192,6 +194,10 @@ class ThesisGUI:
         # babylon visualization
         wall_babylon = WallFancy(obstacle_id, length=length, include_end_caps=True)
         wall_babylon.setPosition(x=x, y=y)
+
+
+        qx, qy, qz, qw = R.from_euler('z', psi).as_quat()
+        wall_babylon.setOrientation(quat = (qw, qx, qy, qz))
         self.babylon_visualization.addObject(wall_babylon)
 
         # simulation
@@ -199,7 +205,7 @@ class ThesisGUI:
             obstacle_id=obstacle_id,
             x=x,
             y=y,
-            psi=0.0,
+            psi=psi,
             length=length,
             width=width,
             height=1.0
@@ -399,12 +405,20 @@ class ThesisGUI:
         page1.addWidget(bilbo1_button, height=2, width=4)
 
         # Simple Maze Button
-        maze_button = Button(text="Load Simple Maze", callback=Callback(
-            function=setup_simple_maze,
+        single_maze_button = Button(text="2x2_maze", callback=Callback(
+            function=maze_single_2x2,
             inputs={'demo': self},
             discard_inputs=True,
         ))
-        page1.addWidget(maze_button, height=2, width=4)
+        page1.addWidget(single_maze_button, height=2, width=4)
+
+                # Simple Maze Button
+        multi_maze_button = Button(text="3x3_maze", callback=Callback(
+            function=maze_single_3x3_three_agents,
+            inputs={'demo': self},
+            discard_inputs=True,
+        ))
+        page1.addWidget(multi_maze_button, height=2, width=4)
 
         # Add Task Button
         task_button = Button(text="Add Task (1, 1)", callback=Callback(
