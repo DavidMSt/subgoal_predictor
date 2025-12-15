@@ -116,7 +116,7 @@ class ThesisGUI:
             'title': 'HHI demo'})
 
         # Simulation
-        self.sim = FRODO_universal_Simulation(Ts=0.01)
+        self.sim = FRODO_universal_Simulation(Ts=0.01, limits= ((-2,2), (-2,2)))
 
         # Attach output callback to the simulation's environment
         self.sim.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT].addAction(self._simulationOutputStep)
@@ -137,6 +137,7 @@ class ThesisGUI:
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
+
         self.free_port(8098)
         self.free_port(8400)
         self.gui.start()

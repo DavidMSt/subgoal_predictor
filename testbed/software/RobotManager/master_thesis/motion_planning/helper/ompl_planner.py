@@ -286,7 +286,12 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
         # set the state sampler for this space
         si.setValidStateSamplerAllocator(ob.ValidStateSamplerAllocator(self._get_state_sampler)) # type: ignore[attr-defined]
         si.setStatePropagator(oc.StatePropagatorFn(self._state_propagator))  # type: ignore[attr-defined]
-        si.setMinMaxControlDuration(1, 1)
+        
+        # Set min and max duration for the planning, always have max duration #timesteps equal one second
+        min_duration = 1
+        max_duration = int(1.0 / self.agent_container.Ts)
+        assert(min_duration <= max_duration)
+        si.setMinMaxControlDuration(min_duration, max_duration) # TODO: keep it like this? 
         si.setPropagationStepSize(self.agent_container.Ts)
 
         return si
