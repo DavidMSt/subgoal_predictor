@@ -117,8 +117,8 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
                   agent_id: str,
                   agent_class: type[FRODOUniversalAgent] = FRODOUniversalAgent,
                   start_config: tuple[float, float, float]  = (0.0, 0.0, 0.0),
-                  color:tuple[float, float, float] = (1.0,1.0,1.0),
-                  Ts = 0.1) -> FRODOUniversalAgent | None:
+                  color:tuple[float, float, float] = (1.0,1.0,1.0)
+                  ) -> FRODOUniversalAgent | None:
 
         # Pass env_container as kwarg to FRODOUniversalAgent
         agent = super().new_agent(
@@ -126,7 +126,6 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
             agent_class=agent_class,
             start_config=start_config,
             color=color,
-            Ts=Ts,
             env_container=self.environment.environment_container  # Add env_container
         )
 
@@ -307,6 +306,7 @@ def assignment_example_less_simple():
         limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
     )
     sim.init()
+    sim.logger.setLevel('debug')
 
     # === Initial agent poses ===
     start_ag1 = (0.0, 0.0, 0.0)
@@ -332,22 +332,23 @@ def assignment_example_less_simple():
 
     # sim.new_task('example_task', -1.0,-4.0, 0)
 
-    sim.spawn_agents(1)
-    sim.spawn_tasks(1)
+    # sim.spawn_agents(1)
+    # sim.spawn_tasks(1)
+    sim.new_task('test task', 1.0, 0, 0)
+    sim.new_agent('vfrodo0')
 
     sim.start()
-    sim.logger.warning(f'this is the current agent position: {sim.agents['vfrodo0'].container.state}')
+    sim.logger.warning(f'this is the current agent position: {sim.agents["vfrodo0"].container.state}')
     # Centralized (simulation computes assignments)
     # result = sim.tai.task_assignment(strategy=HungarianStrategyCent)
     sim.start_ta(strategy=HungarianStrategyCent)
     sim.start_mp()
     sim.start_exe()
     # print(result.matches)
-    sim.logger.warning(f'this is the current agent position: {sim.agents['vfrodo0'].configuration}')
+    sim.logger.warning(f'this is the current agent position: {sim.agents["vfrodo0"].configuration}')
 
 
 if __name__ == "__main__":
 
 #    general_example()
     assignment_example_less_simple()
-

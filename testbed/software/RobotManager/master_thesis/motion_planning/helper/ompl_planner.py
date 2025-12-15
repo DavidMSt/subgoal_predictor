@@ -311,19 +311,12 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
             theta = float(c[1])
             # Get the duration (number of timesteps) each input is applied
 
-            dur = self._solution_path.getControlDuration(i) # type: ignore[attr-defined]
-            dur_in_time = float(dur) * self._si.getPropagationStepSize()
+            dur_in_time = self._solution_path.getControlDuration(i) # type: ignore[attr-defined]
 
             inputs.append(np.array([s, theta]))
             durations.append(dur_in_time)
 
         return tuple(inputs), tuple(durations)
-    
-    # def _extract_ompl_state(self, ompl_state) -> list:
-    #     x = ompl_state.getX()
-    #     y = ompl_state.getY()
-    #     yaw = ompl_state.getYaw()
-    #     return [float(x), float(y), float(yaw)]
     
     def _create_solution_cont(self)-> MPPhaseContainer:
         path_states = self._solution_path_states

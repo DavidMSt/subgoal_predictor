@@ -179,7 +179,6 @@ class FRODO_general_Simulation(FRODO_Simulation):
                   agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent,
                   start_config: tuple[float, float, float]  = (0.0, 0.0, 0.0),
                   color:tuple[float, float, float] = (1.0,1.0,1.0),
-                  Ts = 0.1,
                   **kwargs) -> FRODOGeneralAgent | None:
 
         if agent_id in self.agents:
@@ -197,7 +196,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         agent = agent_class(
             agent_id=agent_id,
-            Ts= Ts,
+            Ts= self.Ts,
             start_config= start_config,
             color= color,
             **kwargs  # Pass through any additional kwargs (e.g., env_container)

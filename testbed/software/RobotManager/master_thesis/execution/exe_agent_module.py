@@ -19,6 +19,7 @@ class EXEAgentModule:
         self.agent_cont = agent_cont
         self.simulation_dt = agent_cont.Ts
         self.logger = logger
+        self.logger.info(f"EXE module initialized with simulation_dt={self.simulation_dt}")
 
         # Execution container for high-level state
         self.exe_cont = AgentExeContainer()
@@ -50,6 +51,8 @@ class EXEAgentModule:
         if name not in self._phases:
             raise KeyError(f"Unknown phase '{name}'")
 
+        self.logger.info(f"activate_phase called: name={name}, current_active={self._active_phase}, pending_end={self._pending_end}, reset={reset}")
+
         if reset:
             self._phases[name].state.reset()
 
@@ -58,24 +61,16 @@ class EXEAgentModule:
         if cut_current or self._active_phase == 'idle':
             self._active_phase = name
             self.exe_cont.state.execution_mode = 'phase'
-            self.logger.info(f"Active phase set to '{name}'")
+            self.logger.info(f"Active phase set to '{name}', mode={self.exe_cont.state.execution_mode}")
         else:
             self._queued_phases.append(name)
             self.logger.info(f"Phase '{name}' queued for execution")
-    
+
     def step(self) -> np.ndarray:
-        """Execute one timestep, return control input based on current mode."""
-        mode = self.exe_cont.state.execution_mode
-
-        if mode == 'phase':
-            return self._step_phase_execution()
-        elif mode == 'waypoint':
-            return self._step_waypoint_mode()
-        else:  # 'idle' or any unknown mode defaults to idle
-            return np.zeros(2)
-
-    def _step_phase_execution(self) -> np.ndarray:
         """Execute pre-planned phase mode."""
+        if self._active_phase != 'idle':
+            self.logger.info(f"step() called: active_phase={self._active_phase}, index={self._phases[self._active_phase].state.index}, pending_end={self._pending_end}, mode={self.exe_cont.state.execution_mode}")
+
         # Handle phase transitions
         if self._pending_end:
             self._pending_end = False
@@ -87,12 +82,6 @@ class EXEAgentModule:
         u = self._step_phase(phase)
 
         return u
-
-    def _step_waypoint_mode(self) -> np.ndarray:
-        """Execute waypoint following mode (stub for future implementation)."""
-        self.logger.warning("Waypoint mode not yet implemented, switching to idle")
-        self.exe_cont.state.execution_mode = 'idle'
-        return np.zeros(2)
     
     def _step_phase(self, phase: MPPhaseContainer) -> np.ndarray:
         """Step through a single phase using its state."""
@@ -103,9 +92,11 @@ class EXEAgentModule:
         
         # Initialize ticks if needed
         if state.ticks_left is None or state.ticks_left == 0:
-            ratio = config.delta_t / self.simulation_dt
-            ratio_int = round(ratio)
-            state.ticks_left = max(1, math.ceil(config.durations[state.index] * ratio_int))
+            # durations are in seconds, convert to simulation ticks
+            duration_in_seconds = config.durations[state.index]
+            state.ticks_left = max(1, math.ceil(duration_in_seconds / self.simulation_dt))
+            if self._active_phase != 'idle':
+                self.logger.info(f'Input {state.index}: duration={duration_in_seconds}s, sim_dt={self.simulation_dt}, ticks_left={state.ticks_left}, total_inputs={len(config.inputs)}')
         
         u = config.inputs[state.index]
         
@@ -142,8 +133,13 @@ class EXEAgentModule:
             self._active_phase = next_phase
             self.logger.info(f"Phase '{active_phase_name}' ended ({self.agent_cont.state}), transitioning to '{next_phase}'")
         else:
+            # Set to idle phase
             self._active_phase = 'idle'
+
             self.exe_cont.state.execution_mode = 'idle'
+
+            # reset flag, to keep agent from immediately starting again
+            self.exe_cont.start_execution = False
             self.logger.info(f"Phase '{active_phase_name}' ended ({self.agent_cont.state}), transitioning to idle")
 
     def _create_idle_phase(self):
@@ -181,4 +177,3 @@ class EXEAgentModule:
     def phases(self) -> dict[str, MPPhaseContainer]:
         """Get read-only access to registered phases."""
         return self._phases
-
