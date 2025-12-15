@@ -51,11 +51,8 @@ class AgentMPPlannerContainer(BaseContainer):
     def start_planning(self, value: str | None):
         self.state._start_planning = value
 
-        if self.logger is not None:
-            if value is None:
-                self.logger.info("Assigned task cleared")
-            else:
-                self.logger.info(f"Assigned task set to: {value}")
+        if self.logger is not None and value is not None:
+            self.logger.debug(f"Motion planning triggered (phase name: {value})")
 
     # prohibit reassignment of the phases dict and make sure input types are correct
     @property

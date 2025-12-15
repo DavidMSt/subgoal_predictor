@@ -68,8 +68,6 @@ class EXEAgentModule:
 
     def step(self) -> np.ndarray:
         """Execute pre-planned phase mode."""
-        if self._active_phase != 'idle':
-            self.logger.info(f"step() called: active_phase={self._active_phase}, index={self._phases[self._active_phase].state.index}, pending_end={self._pending_end}, mode={self.exe_cont.state.execution_mode}")
 
         # Handle phase transitions
         if self._pending_end:
@@ -95,9 +93,7 @@ class EXEAgentModule:
             # durations are in seconds, convert to simulation ticks
             duration_in_seconds = config.durations[state.index]
             state.ticks_left = max(1, math.ceil(duration_in_seconds / self.simulation_dt))
-            if self._active_phase != 'idle':
-                self.logger.info(f'Input {state.index}: duration={duration_in_seconds}s, sim_dt={self.simulation_dt}, ticks_left={state.ticks_left}, total_inputs={len(config.inputs)}')
-        
+            
         u = config.inputs[state.index]
         
         # Advance state
