@@ -33,9 +33,8 @@ from extensions.joystick.joystick_manager import JoystickManager, Joystick
 from master_thesis.universal.universal_simulation import FRODO_universal_Simulation
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.general.general_obstacle import GeneralObstacle
-from master_thesis.gui.demo_scenarios.maze_examples import maze_single_2x2, maze_single_3x3_three_agents
+from master_thesis.gui.demo_scenarios.maze_examples import maze_single_2x2, maze_multi_4x4
 from master_thesis.general.general_task import GeneralTask
-# from master_thesis.task_assignment.assignment_strategies import HungarianStrategy, RandomStrategy
 
 from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy
 from master_thesis.task_assignment.strategies.centralized_strategies import HungarianStrategyCent
@@ -412,13 +411,13 @@ class ThesisGUI:
         ))
         page1.addWidget(single_maze_button, height=2, width=4)
 
-                # Simple Maze Button
-        multi_maze_button = Button(text="3x3_maze", callback=Callback(
-            function=maze_single_3x3_three_agents,
+        # 4x4 Multi-Agent Maze Button
+        multi_4x4_button = Button(text="4x4_maze", callback=Callback(
+            function=maze_multi_4x4,
             inputs={'demo': self},
             discard_inputs=True,
         ))
-        page1.addWidget(multi_maze_button, height=2, width=4)
+        page1.addWidget(multi_4x4_button, height=2, width=4)
 
         # Add Task Button
         task_button = Button(text="Add Task (1, 1)", callback=Callback(
@@ -449,13 +448,21 @@ class ThesisGUI:
         ))
         page1.addWidget(spawn_button, height=2, width=4)
 
-        # Start Task Assignment Button
-        ta_button = Button(text="Start Task Assignment", callback=Callback(
+        # Start Centralized Task Assignment Button
+        ta_central_button = Button(text="Central Task Assignment", callback=Callback(
             function=self.sim.start_ta,
-            inputs={},
+            inputs={'strategy': HungarianStrategyCent},
             discard_inputs=True,
         ))
-        page1.addWidget(ta_button, height=2, width=4)
+        page1.addWidget(ta_central_button, height=2, width=4)
+
+        # Start Decentralized Task Assignment Button
+        ta_local_button = Button(text="Local Task Assignment", callback=Callback(
+            function=self.sim.start_ta,
+            inputs={'strategy': GreedyNearestStrategy},
+            discard_inputs=True,
+        ))
+        page1.addWidget(ta_local_button, height=2, width=4)        
 
         # Start Motion Planning Button
         mp_button = Button(text="Start Motion Planning", callback=Callback(
