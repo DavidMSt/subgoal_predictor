@@ -42,7 +42,7 @@ class SimTAConfig(AssignmentContextConfigBase):
 
 
 @dataclass(slots=True)
-class SimTAContainer(BaseContainer):
+class SimTAResultContainer(BaseContainer):
     """Container for centralized assignment strategy context and results.
 
     Used when a central coordinator has full information about all agents and tasks.

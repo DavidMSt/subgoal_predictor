@@ -15,6 +15,9 @@ class AgentTAState:
     # scores for each visible task
     task_scores: list[float] | None = None  # Scores for each visible task
     bid_values: dict[str, float] | None = None  # For auction-based strategies (CBBA)
+    
+    # sim dict who was assigned what - check length 
+    local_decisions: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,7 +3,7 @@ from typing import Any
 
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
-from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAContainer
+from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAResultContainer
 from core.utils.logging_utils import Logger
 
 
@@ -17,7 +17,7 @@ class BaseStrategy(ABC):
     def __init__(self) -> None:
         super().__init__()
 
-    def solve(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer | None:
+    def solve(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAResultContainer | None:
         return None
 
     @abstractmethod

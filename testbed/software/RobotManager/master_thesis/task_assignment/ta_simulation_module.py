@@ -7,7 +7,7 @@ from master_thesis.task_assignment.strategies.decentralized_strategies import De
 
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
-from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAContainer
+from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAResultContainer
 
 class TASimulationModule():
     """Module for handling task assignment logic only. Object spawning handled by simulation."""
@@ -29,7 +29,7 @@ class TASimulationModule():
         # To control the actual task assignment (publish tasks, assign them if central method)
         self.agent_ta_conts = agent_ta_conts
 
-    def task_assignment(self, strategy: type[BaseStrategy]) -> SimTAContainer:
+    def task_assignment(self, strategy: type[BaseStrategy]) -> SimTAResultContainer:
         """
         Assign tasks to agents using the provided strategy.
 
@@ -43,14 +43,16 @@ class TASimulationModule():
         Returns:
             AssignmentResult containing matches and assignment matrix
         """
-
+        local_decisions = {}
+        self.logger.error(f'strategy: {strategy}')
         # For decentralized strategies: publish tasks to agents
         if issubclass(strategy, DecentralizedStrategyABC):
+            self.logger.error(f'strategy: {strategy}')
             # Set the flaf such that agents will start decentralized assignment
             for agent_id, ta_cont in self.agent_ta_conts.items():
-                ta_cont.state.assignment_pending = True
+                ta_cont.assignment_pending = True
+                ta_cont.local_decisions = local_decisions # TODO: Subscriber/ pulisher implementation
 
-            self.logger.error('decentralized  TA SIM not implemented')
             return None
 
         # For centralized strategies: run strategy and get result

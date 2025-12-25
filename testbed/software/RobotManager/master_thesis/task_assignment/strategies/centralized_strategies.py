@@ -9,7 +9,7 @@ from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_sim import (
-    SimTAContainer,
+    SimTAResultContainer,
     SimTAConfig,
 )
 
@@ -21,7 +21,7 @@ class CentralizedStrategyABC(BaseStrategy):
     """Base class for centralized assignment strategies."""
     name: str = 'CentralizedBase'
 
-    def solve(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer:
+    def solve(self, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAResultContainer:
         """Centralized solver - implemented by subclasses.
 
         Args:
@@ -38,7 +38,7 @@ class CentralizedStrategyABC(BaseStrategy):
             if logger:
                 logger.error(msg)
 
-        result_cont = SimTAContainer(
+        result_cont = SimTAResultContainer(
             config=SimTAConfig(strategy=self.name)
         )
 
@@ -47,13 +47,13 @@ class CentralizedStrategyABC(BaseStrategy):
 
         
     @abstractmethod
-    def run(self, result_cont: SimTAContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer:
+    def run(self, result_cont: SimTAResultContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAResultContainer:
         ...
 
 class RandomStrategyCent(CentralizedStrategyABC):
     name: str = 'RandomStrategyCent'
 
-    def run(self, result_cont: SimTAContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer:
+    def run(self, result_cont: SimTAResultContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAResultContainer:
         """Run centralized random assignment."""
 
         # Extract counts from context
@@ -78,7 +78,7 @@ class RandomStrategyCent(CentralizedStrategyABC):
 class HungarianStrategyCent(CentralizedStrategyABC):
     name: str = 'HungarianStrategyCent'
 
-    def run(self, result_cont: SimTAContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAContainer:
+    def run(self, result_cont: SimTAResultContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAResultContainer:
         """Centralized Hungarian assignment using Euclidean distance cost."""
         n_agents = len(agent_containers)
         n_tasks = len(task_containers)

@@ -13,6 +13,7 @@ from master_thesis.containers.module_containers.mp_containers.mp_planner_contain
 from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer
 from master_thesis.containers.module_containers.exe_containers.exe_container import AgentExeContainer
 
+import master_thesis.task_assignment.strategies.centralized_strategies 
 
 class FRODOUniversalAgent(FRODOGeneralAgent):
     mpi: MPAgentModule
@@ -99,6 +100,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
             self.ta_cont.assigned_task = nearest_task
             self.tai.assignment_pending = False
             self.logger.info(f"Agent {self.agent_id} assigned task {nearest_task.object_id} (distance: {min_distance:.2f})")
+        # TODO: put here the writing to the sim central dict 
 
     def _action_motion_planning(self):
         """Motion planning action - creates phase for assigned task."""

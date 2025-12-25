@@ -18,7 +18,7 @@ from master_thesis.task_assignment.strategies.decentralized_strategies import Gr
 # Module Containers
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
-from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAContainer
+from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAResultContainer
 from master_thesis.containers.module_containers.exe_containers.exe_container import AgentExeContainer
 
 
@@ -201,7 +201,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
         self.logger.info("Simulation reset complete")
 
-    def start_ta(self, strategy: type[BaseStrategy] = HungarianStrategyCent) -> SimTAContainer:
+    def start_ta(self, strategy: type[BaseStrategy] = HungarianStrategyCent) -> SimTAResultContainer:
         # start the task assignment, return the result
         result = self.tai.task_assignment(strategy=strategy)
         return result
@@ -229,75 +229,7 @@ def assignment_example_simple():
     result = sim.tai.task_assignment(HungarianStrategyCent)
     print(result)
 
-def general_example():
-    import numpy as np
-    import time
-    from master_thesis.general.general_agent import FRODOGeneralAgent
-
-    env_size = 10
-    sim = FRODO_universal_Simulation(
-        Ts=0.1,
-        # limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
-        limits = ((-5, 5), (-6, 6))
-    )
-    sim.init()
-
-    # === Initial agent poses ===
-    start_ag1 = (0.0, 0.0, 0.0)
-    start_ag2 = (3.0, 3.5, 0.0)
-
-    # === Colors ===
-    color_ag1 = (0.7, 0, 0)
-    color_ag2 = (0, 0, 0.7)
-
-    # === Add agents using the new API ===
-    agent_a = sim.new_agent(
-        agent_id="vfrodo1",
-        start_config = start_ag1,
-        color= color_ag1
-    )
-
-    agent_b = sim.new_agent(
-        agent_id="vfrodo2",
-        start_config=start_ag2,
-        color= color_ag2,
-    )
-
-    # type checker related
-    assert isinstance(agent_a, FRODOGeneralAgent)
-    assert isinstance(agent_b, FRODOGeneralAgent)
-
-    # === Add obstacle using new obstacle interface ===
-    sim.new_wall(
-        obstacle_id="wall1",
-        x=5.0,
-        y=0.0,
-        psi=0.0,
-        length=4.0,
-        width=0.3,
-    )
-
-    # === Example input phases ===
-    inputs_forward = (np.array([1.0, 0.0]),)
-    inputs_backward = (np.array([-1.0, 0.0]),)
-    durations = (20,)
-
-    agent_a.add_input_phase("forward", inputs=inputs_forward, durations=durations, delta_t=0.4)
-    agent_b.add_input_phase("forward", inputs=inputs_forward, durations=durations, delta_t=0.4)
-    agent_a.add_input_phase("backward", inputs=inputs_backward, durations=durations, delta_t=0.4)
-    agent_b.add_input_phase("backward", inputs=inputs_backward, durations=durations, delta_t=0.4)
-
-    sim.activate_phase_all_agents("forward")
-    sim.activate_phase_all_agents("backward")
-
-    # === Start simulation ===
-    sim.start()
-
-    # === Keep alive ===
-    while True:
-        time.sleep(1)
-
-def assignment_example_less_simple():
+def central_ta_example():
     from master_thesis.task_assignment.strategies.centralized_strategies import RandomStrategyCent
      # Simulation Init
     env_size = 10
@@ -307,18 +239,6 @@ def assignment_example_less_simple():
     )
     sim.init()
     sim.logger.setLevel('debug')
-
-    # === Initial agent poses ===
-    start_ag1 = (0.0, 0.0, 0.0)
-
-    # === Add agents using the new API ===
-    # agent_1 = sim.new_agent(
-    #     agent_id="vfrodo1",
-    #     start_config = start_ag1,
-    # )
-
-    # to keep linter quiet
-    # assert isinstance(agent_1, FRODOUniversalAgent)
 
     # === Add obstacle using new obstacle interface ===
     sim.new_wall(
@@ -338,7 +258,6 @@ def assignment_example_less_simple():
     sim.new_agent('vfrodo0')
 
     sim.start()
-    sim.logger.warning(f'this is the current agent position: {sim.agents["vfrodo0"].container.state}')
     # Centralized (simulation computes assignments)
     # result = sim.tai.task_assignment(strategy=HungarianStrategyCent)
     sim.start_ta(strategy=HungarianStrategyCent)
@@ -347,8 +266,48 @@ def assignment_example_less_simple():
     # print(result.matches)
     sim.logger.warning(f'this is the current agent position: {sim.agents["vfrodo0"].configuration}')
 
+def local_ta_example():
+    from master_thesis.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
+     # Simulation Init
+    env_size = 10
+    sim = FRODO_universal_Simulation(
+        Ts=0.1,
+        limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
+    )
+    sim.init()
+    # sim.logger.setLevel('debug')
+
+    # === Initial agent poses ===
+    start_ag1 = (0.0, 0.0, 0.0)
+
+    # === Add agents using the new API ===
+
+    # === Add obstacle using new obstacle interface ===
+    sim.new_wall(
+        obstacle_id="wall1",
+        x=5.0,
+        y=0.0,
+        psi=0.0,
+        length=4.0,
+        width=0.3,
+    )
+
+    # === Add Task at (1.0, 0.0, 0.0) ===
+    sim.new_task('test task', 1.0, 0, 0)
+
+    # === Add agent at (0,0,0) ===
+    sim.new_agent('vfrodo0')
+
+    sim.start()
+
+    sim.start_ta(strategy=GreedyNearestStrategy)
+    sim.start_mp()
+    sim.start_exe()
+    sim.logger.warning(f'this is the current agent position: {sim.agents["vfrodo0"].configuration}')
+
 
 if __name__ == "__main__":
 
 #    general_example()
-    assignment_example_less_simple()
+    # central_ta_example()
+    local_ta_example()
