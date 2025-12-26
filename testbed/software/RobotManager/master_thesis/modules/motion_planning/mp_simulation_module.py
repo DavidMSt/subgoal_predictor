@@ -10,7 +10,7 @@ class MPSimulationModule():
 
     def __init__(self,
                  agent_mp_conts : dict[str, AgentMPPlannerContainer], 
-                 logger: Logger) -> None: #TODO: should not receive agents here directly? 
+                 logger: Logger) -> None:
         self.agent_mp_conts = agent_mp_conts
         self.logger = logger
 
