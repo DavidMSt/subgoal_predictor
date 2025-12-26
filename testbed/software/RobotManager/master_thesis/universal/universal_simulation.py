@@ -107,10 +107,10 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
         assert isinstance(self.logger, Logger)
 
-        self.mpi = MPSimulationModule(self.mp_containers, self.logger) # TODO: modify the mp simulation module to use containers as well
-        self.tai = TASimulationModule(env_cont=env_cont, agent_ta_conts= self.ta_containers, logger = self.logger) # TODO: is environment here really needed - rahter obstacles, task constainer individually passed?
+        self.mpm = MPSimulationModule(self.mp_containers, self.logger) # TODO: modify the mp simulation module to use containers as well
+        self.tam = TASimulationModule(env_cont=env_cont, agent_ta_conts= self.ta_containers, logger = self.logger) # TODO: is environment here really needed - rahter obstacles, task constainer individually passed?
 
-        self.exi = ExeSimulationModule(agent_exe_conts=self.exe_containers, logger = self.logger)
+        self.exm = ExeSimulationModule(agent_exe_conts=self.exe_containers, logger = self.logger)
         
         self.cli = FRODO_General_CommandSet(self)
 
@@ -134,11 +134,11 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         assert isinstance(agent, FRODOUniversalAgent)
 
         # Set lwr_cont reference in TAAgentModule (now that it's been created by parent's add_agent)
-        agent.tai.lwr = agent.lwr_cont
+        agent.tam.lwr = agent.lwr_cont
 
         # keep references to the module specific containers
-        self.ta_containers[agent_id] = agent.tai.ta_container
-        self.mp_containers[agent_id] = agent.mpi.planner_cont
+        self.ta_containers[agent_id] = agent.tam.ta_container
+        self.mp_containers[agent_id] = agent.mpm.planner_cont
         self.exe_containers[agent_id] = agent.exi.exe_cont
 
         return agent
@@ -207,14 +207,14 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
     def start_ta(self, strategy: StrategyType | str = StrategyType.HUNGARIAN) -> SimTAResultContainer | None:
         # start the task assignment, return the result
-        result = self.tai.task_assignment(strategy=strategy)
+        result = self.tam.task_assignment(strategy=strategy)
         return result
 
     def start_mp(self, phase_name = 'example_mp_phase'):
-        self.mpi.start_motion_planning(phase_name= phase_name)
+        self.mpm.start_motion_planning(phase_name= phase_name)
 
     def start_exe(self):
-        self.exi.start_execution()
+        self.exm.start_execution()
     
 
 def assignment_example_simple():
@@ -230,7 +230,7 @@ def assignment_example_simple():
     sim.spawn_tasks(1)
 
     # assign task to agent
-    result = sim.tai.task_assignment(HungarianStrategyCent)
+    result = sim.tam.task_assignment(HungarianStrategyCent)
     print(result)
 
 def central_ta_example():
@@ -254,16 +254,11 @@ def central_ta_example():
         width=0.3,
     )
 
-    # sim.new_task('example_task', -1.0,-4.0, 0)
-
-    # sim.spawn_agents(1)
-    # sim.spawn_tasks(1)
     sim.new_task('test task', 1.0, 0, 0)
     sim.new_agent('vfrodo0')
 
     sim.start()
-    # Centralized (simulation computes assignments)
-    # result = sim.tai.task_assignment(strategy=HungarianStrategyCent)
+    # Decentralized - agent compute their solution independently of simulation instance
     sim.start_ta(strategy=HungarianStrategyCent)
     sim.start_mp()
     sim.start_exe()
@@ -304,10 +299,12 @@ def local_ta_example():
 
     sim.start()
 
-    sim.start_ta(strategy=StrategyType.GREEDY_NEAREST)
+    result_decent = sim.start_ta(strategy=StrategyType.GREEDY_NEAREST)
+    print(result_decent)
     sim.start_mp()
     sim.start_exe()
     sim.logger.warning(f'this is the current agent position: {sim.agents["vfrodo0"].configuration}')
+
 
 
 if __name__ == "__main__":

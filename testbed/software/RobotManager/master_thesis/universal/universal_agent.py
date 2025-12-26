@@ -16,9 +16,9 @@ from master_thesis.containers.module_containers.exe_containers.exe_container imp
 import master_thesis.task_assignment.strategies.centralized_strategies 
 
 class FRODOUniversalAgent(FRODOGeneralAgent):
-    mpi: MPAgentModule
-    tai: TAAgentModule
-    exe: EXEAgentModule 
+    mpm: MPAgentModule
+    tam: TAAgentModule
+    exm: EXEAgentModule 
 
     def __init__(self, env_container, agent_id: str, Ts=0.1, start_config=(0.0,0.0,0.0), color: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
         super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, color=color)
@@ -28,13 +28,13 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         # ------------------------------------------------------------------
 
         # MPAgent module
-        self.mpi = MPAgentModule(
+        self.mpm = MPAgentModule(
             agent_cont=self.container, 
             env_container=env_container, 
             logger=self.logger)
 
         # TAAgent module (lwr_cont will be set by simulation after agent is added)
-        self.tai = TAAgentModule(
+        self.tam = TAAgentModule(
             agent_id=agent_id,
             agent_container = self.container,
             lwr_cont = None,  # Will be set after agent is added to simulation
@@ -68,18 +68,18 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
 
     def _action_decentralized_task_assignment(self):
         """Decentralized task assignment action - uses strategy from container state."""
-        if self.ta_cont.assigned_task is not None or not self.tai.assignment_pending:
+        if self.ta_cont.assigned_task is not None or not self.tam.assignment_pending:
             return  # Already have task or assignment not pending
 
         self.logger.info('Performing decentralized task assignment')
 
         # Execute strategy (set by simulation via container state)
-        chosen_task = self.tai.perform_task_assignment()
+        chosen_task = self.tam.perform_task_assignment()
 
         if chosen_task:
             # Assign task to agent
             self.ta_cont.assigned_task = chosen_task
-            self.tai.assignment_pending = False
+            self.tam.assignment_pending = False
 
             # Also update task's assigned agent (bidirectional)
             chosen_task.assigned_agent = self.container
@@ -107,7 +107,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
             self.logger.info(f"Planning motion to task {task.object_id} at {task.configuration} (phase: {phase_key})")
 
             # Call motion planner (this adds the phase to runner)
-            self.mpi.plan_motion(
+            self.mpm.plan_motion(
                 phase_key=phase_key,
                 goal_task=task
             )
@@ -155,30 +155,30 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
     # ---------- Task Assignment ----------
     @property
     def ta_cont(self):
-        return self.tai.ta_container
+        return self.tam.ta_container
 
     @property
     def assigned_task(self):
         """Link to the task assigned by TA module."""
-        return self.tai.ta_container.assigned_task
+        return self.tam.ta_container.assigned_task
 
     @assigned_task.setter
     def assigned_task(self, value):
         """Set assigned task and trigger motion planning."""
-        self.tai.ta_container.assigned_task = value
+        self.tam.ta_container.assigned_task = value
 
     # ---------- Motion Planning ----------
     @property
     def mp_cont(self):
-        return self.mpi.planner_cont
+        return self.mpm.planner_cont
     
     @property
     def planned_phases(self):
-        return self.mpi.planner_cont.phases
+        return self.mpm.planner_cont.phases
     
     @planned_phases.setter #TODO: write access could be removed here? 
     def planned_phases(self, name: str, phase: MPPhaseContainer):
-        self.mpi.planner_cont.phases[name] = phase
+        self.mpm.planner_cont.phases[name] = phase
     
     # ---------- Phase Execution ----------
     

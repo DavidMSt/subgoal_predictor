@@ -1,3 +1,4 @@
+import time
 from core.utils.logging_utils import Logger
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 
@@ -8,7 +9,11 @@ from master_thesis.task_assignment.strategies.strategy_registry import StrategyR
 
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
-from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAResultContainer
+from master_thesis.containers.module_containers.ta_containers.ta_container_sim import (
+    SimTAResultContainer,
+    SimTAConfig,
+    SimTAState
+)
 
 class TASimulationModule():
     """Module for handling task assignment logic only. Object spawning handled by simulation."""
@@ -86,8 +91,72 @@ class TASimulationModule():
                 ta_cont.state.local_decisions = local_decisions
 
             self.logger.info(f'Decentralized task assignment initiated with {strategy}')
-            return None
+
+            # Wait for all agents to make their decisions and return result
+            result = self._wait_for_decentralized_decisions(local_decisions, strategy_name)
+            return result
 
         else:
             raise ValueError(f"Unknown strategy: {strategy}")
+
+    def _wait_for_decentralized_decisions(
+        self,
+        local_decisions: dict[str, str],
+        strategy_name: str,
+        timeout: float = 10.0,
+        poll_interval: float = 0.01
+    ) -> SimTAResultContainer:
+        """Wait for all agents to write their decisions to local_decisions dict.
+
+        Args:
+            local_decisions: Shared dict where agents write their decisions
+            strategy_name: Name of the strategy being used
+            timeout: Maximum time to wait in seconds
+            poll_interval: How often to check if all decisions are in
+
+        Returns:
+            SimTAResultContainer with the decentralized assignment results
+        """
+        n_agents = len(self.agent_ta_conts)
+        start_time = time.time()
+
+        self.logger.debug(f'Waiting for {n_agents} agents to make decisions...')
+
+        # Poll until all agents have made decisions or timeout
+        while len(local_decisions) < n_agents:
+            if time.time() - start_time > timeout:
+                self.logger.warning(
+                    f'Timeout waiting for decentralized decisions. '
+                    f'Got {len(local_decisions)}/{n_agents} decisions'
+                )
+                break
+            time.sleep(poll_interval)
+
+        # Compile results into SimTAResultContainer format
+        matches = [(agent_id, task_id) for agent_id, task_id in local_decisions.items()]
+
+        # Apply bidirectional assignment (like centralized version)
+        for agent_id, task_id in matches:
+            agent_cont = self.agent_conts[agent_id]
+            task_cont = self.task_conts[task_id]
+
+            # Update task's assigned agent (agent already updated in their action)
+            task_cont.assigned_agent = agent_cont
+
+        # Create result container with matches in state
+        result = SimTAResultContainer(
+            config=SimTAConfig(strategy=strategy_name),
+            state=SimTAState(
+                strategy=strategy_name,
+                matches=matches,
+                scores=None  # Decentralized doesn't have a global cost matrix
+            )
+        )
+
+        self.logger.info(
+            f'Decentralized task assignment complete using {strategy_name}. '
+            f'Matched {len(matches)} agents to tasks'
+        )
+
+        return result
 
