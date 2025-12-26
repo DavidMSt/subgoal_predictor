@@ -14,6 +14,7 @@ from master_thesis.execution.exe_sim_module import ExeSimulationModule
 from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy
 from master_thesis.task_assignment.strategies.centralized_strategies import HungarianStrategyCent
 from master_thesis.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
+from master_thesis.task_assignment.strategies.strategy_registry import StrategyType
 
 # Module Containers
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
@@ -132,8 +133,11 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         # keep linter quiet
         assert isinstance(agent, FRODOUniversalAgent)
 
+        # Set lwr_cont reference in TAAgentModule (now that it's been created by parent's add_agent)
+        agent.tai.lwr = agent.lwr_cont
+
         # keep references to the module specific containers
-        self.ta_containers[agent_id] = agent.tai.task_containers
+        self.ta_containers[agent_id] = agent.tai.ta_container
         self.mp_containers[agent_id] = agent.mpi.planner_cont
         self.exe_containers[agent_id] = agent.exi.exe_cont
 
@@ -201,7 +205,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
         self.logger.info("Simulation reset complete")
 
-    def start_ta(self, strategy: type[BaseStrategy] = HungarianStrategyCent) -> SimTAResultContainer:
+    def start_ta(self, strategy: StrategyType | str = StrategyType.HUNGARIAN) -> SimTAResultContainer | None:
         # start the task assignment, return the result
         result = self.tai.task_assignment(strategy=strategy)
         return result
@@ -300,7 +304,7 @@ def local_ta_example():
 
     sim.start()
 
-    sim.start_ta(strategy=GreedyNearestStrategy)
+    sim.start_ta(strategy=StrategyType.GREEDY_NEAREST)
     sim.start_mp()
     sim.start_exe()
     sim.logger.warning(f'this is the current agent position: {sim.agents["vfrodo0"].configuration}')

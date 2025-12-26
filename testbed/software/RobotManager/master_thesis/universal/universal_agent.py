@@ -42,11 +42,11 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
             env_container=env_container, 
             logger=self.logger)
 
-        # TAAgent module
+        # TAAgent module (lwr_cont will be set by simulation after agent is added)
         self.tai = TAAgentModule(
             agent_id=agent_id,
             agent_container = self.container,
-            lwr_cont = self.lwr_cont,
+            lwr_cont = None,  # Will be set after agent is added to simulation
             logger=self.logger,
         )
 
@@ -76,33 +76,26 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
     # ------------------------------------------------------------------
 
     def _action_decentralized_task_assignment(self):
-        """Decentralized task assignment action (greedy nearest).""" #TODO: check here if only for this strategy
+        """Decentralized task assignment action - uses strategy from container state."""
         if self.ta_cont.assigned_task is not None or not self.tai.assignment_pending:
-            return  # Already have task
+            return  # Already have task or assignment not pending
 
-        # # Tasks come from local world representation (updated by environment)
-        # available_tasks = self.lwr_cont.tasks if self.lwr_cont else {}
-        # if not available_tasks:
-        #     return  # No tasks available
-        
-        self.logger.info('Doing decentralized task assignment')
+        self.logger.info('Performing decentralized task assignment')
 
-        self.tai.assign_task()
+        # Execute strategy (set by simulation via container state)
+        chosen_task = self.tai.perform_task_assignment()
 
-        # min_distance = float('inf')
-        # nearest_task = None
+        if chosen_task:
+            # Assign task to agent
+            self.ta_cont.assigned_task = chosen_task
+            self.tai.assignment_pending = False
 
-        # for task_container in available_tasks.values():
-        #     distance = self.tai.distance_fun(self.container, task_container)
-        #     if distance < min_distance:
-        #         min_distance = distance
-        #         nearest_task = task_container
+            # Also update task's assigned agent (bidirectional)
+            chosen_task.assigned_agent = self.container
 
-        # if nearest_task:
-        #     self.ta_cont.assigned_task = nearest_task
-        #     self.tai.assignment_pending = False
-        #     self.logger.info(f"Agent {self.agent_id} assigned task {nearest_task.object_id} (distance: {min_distance:.2f})")
-        # TODO: put here the writing to the sim central dict 
+            self.logger.info(f"Agent {self.agent_id} assigned task {chosen_task.object_id}")
+
+            # TODO: Write to shared decision dict for conflict resolution
 
     def _action_motion_planning(self):
         """Motion planning action - creates phase for assigned task."""
@@ -167,17 +160,17 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
     # ---------- Task Assignment ----------
     @property
     def ta_cont(self):
-        return self.tai.task_containers
-    
+        return self.tai.ta_container
+
     @property
     def assigned_task(self):
         """Link to the task assigned by TA module."""
-        return self.tai.task_containers.assigned_task
+        return self.tai.ta_container.assigned_task
 
     @assigned_task.setter
     def assigned_task(self, value):
         """Set assigned task and trigger motion planning."""
-        self.tai.task_containers.assigned_task = value
+        self.tai.ta_container.assigned_task = value
 
     # ---------- Motion Planning ----------
     @property

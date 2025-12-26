@@ -10,13 +10,16 @@ class AgentTAState:
     assignment_pending: bool = False
 
     # Task assignment
-    _assigned_task: TaskContainer| None = None 
+    _assigned_task: TaskContainer| None = None
+
+    # Strategy to use for decentralized assignment (set at runtime by simulation)
+    current_strategy: str | None = None
 
     # scores for each visible task
     task_scores: list[float] | None = None  # Scores for each visible task
     bid_values: dict[str, float] | None = None  # For auction-based strategies (CBBA)
-    
-    # sim dict who was assigned what - check length 
+
+    # sim dict who was assigned what - check length
     local_decisions: dict | None = None
 
 

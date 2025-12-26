@@ -4,6 +4,7 @@ from master_thesis.containers.general_containers.environment_container import En
 from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy
 from master_thesis.task_assignment.strategies.centralized_strategies import CentralizedStrategyABC
 from master_thesis.task_assignment.strategies.decentralized_strategies import DecentralizedStrategyABC
+from master_thesis.task_assignment.strategies.strategy_registry import StrategyRegistry, StrategyType
 
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
@@ -29,54 +30,64 @@ class TASimulationModule():
         # To control the actual task assignment (publish tasks, assign them if central method)
         self.agent_ta_conts = agent_ta_conts
 
-    def task_assignment(self, strategy: type[BaseStrategy]) -> SimTAResultContainer:
-        """
-        Assign tasks to agents using the provided strategy.
+    def task_assignment(self, strategy: StrategyType | str) -> SimTAResultContainer | None:
+        """Assign tasks to agents using the specified strategy.
 
         For centralized strategies: Computes assignments and applies them to agents.
-        For decentralized strategies: Publishes tasks to agents, agents decide themselves.
+        For decentralized strategies: Sets strategy in agent containers, agents decide locally.
 
         Args:
-            strategy: Assignment strategy instance (e.g., HungarianStrategy())
-            verbose: Print assignment matrix
+            strategy: Strategy to use (StrategyType enum or string name)
 
         Returns:
-            AssignmentResult containing matches and assignment matrix
+            SimTAResultContainer: Assignment result for centralized strategies
+            None: For decentralized strategies (agents decide locally)
         """
-        local_decisions = {}
-        self.logger.error(f'strategy: {strategy}')
-        # For decentralized strategies: publish tasks to agents
-        if issubclass(strategy, DecentralizedStrategyABC):
-            self.logger.error(f'strategy: {strategy}')
-            # Set the flaf such that agents will start decentralized assignment
-            for agent_id, ta_cont in self.agent_ta_conts.items():
-                ta_cont.assignment_pending = True
-                ta_cont.local_decisions = local_decisions # TODO: Subscriber/ pulisher implementation
+        # Check if centralized or decentralized
+        if StrategyRegistry.is_centralized(strategy):
+            # Get strategy class and instantiate
+            strategy_class = StrategyRegistry.get_centralized(strategy)
+            strategy_instance = strategy_class()
 
-            return None
+            # Run centralized assignment
+            result = strategy_instance.solve(
+                agent_containers=self.agent_conts,
+                task_containers=self.task_conts
+            )
 
-        # For centralized strategies: run strategy and get result
-        # For universal agents in centralized mode, use this method directly
-        elif issubclass(strategy, CentralizedStrategyABC):
-            strategy_instance = strategy()
-            result = strategy_instance.solve(agent_containers= self.agent_conts, task_containers= self.task_conts)
-
-            # Assign tasks to agents based on matches
+            # Apply assignments to agents
             for agent_id, task_id in result.matches:
-                # Get the corresponding containers using the IDs as keys
                 agent_cont = self.agent_conts[agent_id]
                 agent_ta_cont = self.agent_ta_conts[agent_id]
                 task_cont = self.task_conts[task_id]
 
-                # Assign the task to the agent's TA container
+                # Bidirectional assignment
                 agent_ta_cont.assigned_task = task_cont
                 task_cont.assigned_agent = agent_cont
-                # reset the assignment pending flag
-                agent_ta_cont.assignment_pending = False
+                agent_ta_cont.state.assignment_pending = False
 
+            self.logger.info(f'Centralized task assignment complete using {strategy}')
             return result
-                
-                
+
+        elif StrategyRegistry.is_decentralized(strategy):
+            # Convert enum to string if needed
+            if isinstance(strategy, StrategyType):
+                strategy_name = strategy.value
+            else:
+                strategy_name = strategy
+
+            # Create shared decision dict
+            local_decisions = {}
+
+            # Set strategy and flags in agent containers
+            for agent_id, ta_cont in self.agent_ta_conts.items():
+                ta_cont.state.current_strategy = strategy_name
+                ta_cont.state.assignment_pending = True
+                ta_cont.state.local_decisions = local_decisions
+
+            self.logger.info(f'Decentralized task assignment initiated with {strategy}')
+            return None
+
         else:
-            self.logger.error('Selected TA strategy of unknown type, neither central nor decentral')
+            raise ValueError(f"Unknown strategy: {strategy}")
 

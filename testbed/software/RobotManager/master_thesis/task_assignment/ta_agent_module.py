@@ -11,6 +11,7 @@ from master_thesis.containers.general_containers.task_container import TaskConta
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer, AgentTAConfig, AgentTAState
 from master_thesis.task_assignment.strategies.decentralized_strategies import DecentralizedStrategyABC
+from master_thesis.task_assignment.strategies.strategy_registry import StrategyRegistry
 
 
 class DistanceCalculator:
@@ -72,11 +73,37 @@ class TAAgentModule():
 
         self.ta_container = AgentTAContainer(logger= logger)
 
-        # TODO: Use metric, e.g. dubins distance which accounts for turning radius - also make this more elegant? 
-        self.distance_fun = DistanceCalculator(self.ta_container.distance_metric).measure  # set the cost function
+        # TODO: Use metric, e.g. dubins distance which accounts for turning radius - also make this more elegant?
+        self.distance_fun = DistanceCalculator(self.ta_container.config.distance_metric).measure  # set the cost function
 
-    def perform_task_assignment():
-        strategy = self.
+    def perform_task_assignment(self) -> TaskContainer | None:
+        """Execute task assignment using strategy from container state.
+
+        Returns:
+            TaskContainer: Chosen task, or None if no assignment made
+        """
+        # Get strategy from state (set by simulation)
+        strategy_name = self.ta_container.state.current_strategy
+        if not strategy_name:
+            self.logger.warning("No strategy set in ta_container.state.current_strategy")
+            return None
+
+        # Get strategy instance from registry
+        strategy = StrategyRegistry.get_decentralized(strategy_name)
+
+        # Get live data from local world
+        visible_tasks = self.lwr.state.tasks
+        visible_neighbors = self.lwr.state.neighbors
+
+        # Execute strategy
+        chosen_task = strategy.solve(
+            agent_container=self.agent_cont,
+            task_containers=visible_tasks,
+            visible_agent_containers=visible_neighbors,
+            logger=self.logger
+        )
+
+        return chosen_task
 
     def clear_assigned_task(self):
         """Clear the currently assigned task."""
