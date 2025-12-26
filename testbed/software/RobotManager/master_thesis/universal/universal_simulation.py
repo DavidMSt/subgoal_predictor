@@ -6,15 +6,15 @@ from master_thesis.general.general_agent import FRODOGeneralAgent
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment #, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 
-from master_thesis.motion_planning.mp_simulation_module import MPSimulationModule
-from master_thesis.task_assignment.ta_simulation_module import TASimulationModule
-from master_thesis.execution.exe_sim_module import ExeSimulationModule
+from master_thesis.modules.motion_planning.mp_simulation_module import MPSimulationModule
+from master_thesis.modules.task_assignment.ta_simulation_module import TASimulationModule
+from master_thesis.modules.execution.exe_sim_module import ExeSimulationModule
 
 # Assignment Strategies
-from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy
-from master_thesis.task_assignment.strategies.centralized_strategies import HungarianStrategyCent
-from master_thesis.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
-from master_thesis.task_assignment.strategies.strategy_registry import StrategyType
+from master_thesis.modules.task_assignment.strategies.base_strategy import BaseStrategy
+from master_thesis.modules.task_assignment.strategies.centralized_strategies import HungarianStrategyCent
+from master_thesis.modules.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
+from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyType
 
 # Module Containers
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
@@ -266,7 +266,7 @@ def central_ta_example():
     sim.logger.warning(f'this is the current agent position: {sim.agents["vfrodo0"].configuration}')
 
 def local_ta_example():
-    from master_thesis.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
+    from master_thesis.modules.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
      # Simulation Init
     env_size = 10
     sim = FRODO_universal_Simulation(

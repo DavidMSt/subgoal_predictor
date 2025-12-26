@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from core.utils.logging_utils import Logger
 
-from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy 
+from master_thesis.modules.task_assignment.strategies.base_strategy import BaseStrategy 
 
 
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer

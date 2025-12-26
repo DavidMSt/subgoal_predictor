@@ -27,8 +27,8 @@ from typing import List
 import numpy as np
 import argparse
 
-from master_thesis.motion_planning.helper.nearest_neighbor import NearestNeighbor # TODO: Use scikit-learn kd tree here
-from master_thesis.motion_planning.helper.collisions_fcl import AgentCollisionChecker
+from master_thesis.modules.motion_planning.helper.nearest_neighbor import NearestNeighbor # TODO: Use scikit-learn kd tree here
+from master_thesis.modules.motion_planning.helper.collisions_fcl import AgentCollisionChecker
 
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer

@@ -1,9 +1,9 @@
 from enum import Enum
-from master_thesis.task_assignment.strategies.centralized_strategies import (
+from master_thesis.modules.task_assignment.strategies.centralized_strategies import (
     HungarianStrategyCent, 
     RandomStrategyCent
 )
-from master_thesis.task_assignment.strategies.decentralized_strategies import (
+from master_thesis.modules.task_assignment.strategies.decentralized_strategies import (
     GreedyNearestStrategy,
     CBBAStrategy,
     GNNStrategy,

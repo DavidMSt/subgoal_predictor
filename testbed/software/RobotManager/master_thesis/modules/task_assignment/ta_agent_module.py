@@ -10,8 +10,8 @@ from master_thesis.containers.general_containers.agent_container import FRODOAge
 from master_thesis.containers.general_containers.task_container import TaskContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer, AgentTAConfig, AgentTAState
-from master_thesis.task_assignment.strategies.decentralized_strategies import DecentralizedStrategyABC
-from master_thesis.task_assignment.strategies.strategy_registry import StrategyRegistry
+from master_thesis.modules.task_assignment.strategies.decentralized_strategies import DecentralizedStrategyABC
+from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyRegistry
 
 
 class DistanceCalculator:

@@ -2,10 +2,10 @@ import time
 from core.utils.logging_utils import Logger
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 
-from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy
-from master_thesis.task_assignment.strategies.centralized_strategies import CentralizedStrategyABC
-from master_thesis.task_assignment.strategies.decentralized_strategies import DecentralizedStrategyABC
-from master_thesis.task_assignment.strategies.strategy_registry import StrategyRegistry, StrategyType
+from master_thesis.modules.task_assignment.strategies.base_strategy import BaseStrategy
+from master_thesis.modules.task_assignment.strategies.centralized_strategies import CentralizedStrategyABC
+from master_thesis.modules.task_assignment.strategies.decentralized_strategies import DecentralizedStrategyABC
+from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyRegistry, StrategyType
 
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
