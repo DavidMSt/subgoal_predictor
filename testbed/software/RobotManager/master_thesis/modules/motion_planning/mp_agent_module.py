@@ -9,7 +9,7 @@ from core.utils.logging_utils import Logger
 from master_thesis.modules.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOBase
 
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
-from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
+from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer, MPPhaseConfig
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerConfig, AgentMPPlannerContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
@@ -18,12 +18,12 @@ from master_thesis.containers.base_container import BaseContainer
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)
 
 class MPAgentModule():
-    env_config: EnvironmentContainer
+    lwr_cont: LocalWorldContainer
     agent_cont: FRODOAgentContainer
 
-    def __init__(self,agent_cont: FRODOAgentContainer, env_container: EnvironmentContainer, logger: Logger, mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino) -> None:
+    def __init__(self,agent_cont: FRODOAgentContainer, lwr_cont: LocalWorldContainer, logger: Logger, mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino) -> None:
         self.agent_cont = agent_cont
-        self.env_config = env_container
+        self.lwr_cont = lwr_cont
         self.logger = logger
         self.mp_type = mp_type
         self.motion_planner = None
@@ -76,5 +76,19 @@ class MPAgentModule():
 
     def setup_motion_planner(self):
         # TODO: initialize the planner once, but still be able to dynamically handle obstacles in the environment to enable obstacle creation after agent creation
-        motion_planner = self.mp_type(mp_container=self.planner_cont, agent_container= self.agent_cont, env_container= self.env_config)
+        motion_planner = self.mp_type(mp_container=self.planner_cont, agent_container=self.agent_cont, lwr_container=self.lwr_cont)
         return motion_planner
+
+if __name__ == "__main__":
+
+    from extensions.simulation.src.objects.frodo.frodo import FRODO_State
+    from master_thesis.containers.general_containers.task_container import Task_Config
+    from master_thesis.containers.general_containers.obstacle_container import Obstacle_Config, ObstacleContainer
+    from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
+
+    agent_cont = FRODOAgentContainer(agent_id='mpm_mock_frodo', state=FRODO_State(0.0, 0.0, 0.0, 0.0, 0.0))
+    task_cont =TaskContainer(object_id = 'mpm_mock_task', config= Task_Config(5.0, 0.0, 0.0))
+    obstacle_cont = ObstacleContainer(object_id = 'mpm_mock_obstacle', config = Obstacle_Config(x = 2.0, length= 1.0, width = 1.0, height = 1.0))
+    env_cont = ...
+
+    mpm = MPAgentModule(agent_cont=agent_cont, task_cont = task_cont)

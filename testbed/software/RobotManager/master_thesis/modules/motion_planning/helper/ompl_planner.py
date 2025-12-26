@@ -31,7 +31,7 @@ from master_thesis.modules.motion_planning.helper.nearest_neighbor import Neares
 from master_thesis.modules.motion_planning.helper.collisions_fcl import AgentCollisionChecker
 
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
-from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
+from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
 from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer, MPPhaseConfig
 
@@ -55,15 +55,15 @@ class SamplerType(Enum):
 
     
 class OMPLPlannerFRODOBase(ABC):
-    def __init__(self, mp_container: AgentMPPlannerContainer, 
-                 agent_container: FRODOAgentContainer, 
-                 env_container: EnvironmentContainer, 
+    def __init__(self, mp_container: AgentMPPlannerContainer,
+                 agent_container: FRODOAgentContainer,
+                 lwr_container: LocalWorldContainer,
                  sampler: SamplerType = SamplerType.UNIFORM):
-        
+
         self.mp_container = mp_container
         self.agent_container = agent_container
         self.sampler = sampler
-        self.env_container = env_container
+        self.lwr_container = lwr_container
 
         # self._solution_exporter = SolutionExporter(self.agent_type, path_out_yaml, path_out_tree)
         self._collision_checker = self._create_checker()
@@ -177,11 +177,11 @@ class OMPLPlannerFRODOBase(ABC):
         ...
 
     def _create_space(self):
-        # extract limits of the environment
+        # Extract limits from local world container config
         env_min = []
         env_max = []
 
-        for limit in self.env_container.limits:
+        for limit in self.lwr_container.config.limits:
             env_min.append(limit[0])
             env_max.append(limit[1])
 
@@ -190,8 +190,6 @@ class OMPLPlannerFRODOBase(ABC):
         bounds = ob.RealVectorBounds(2) # type: ignore[attr-defined]
         # set lower and upper bounds
         for i in range(2):
-            # bounds.setLow(i, self.config.env_min[i])
-            # bounds.setHigh(i, self.config.env_max[i])
             bounds.setLow(i, env_min[i])
             bounds.setHigh(i, env_max[i])
         space.setBounds(bounds)
@@ -222,18 +220,18 @@ class OMPLPlannerFRODOBase(ABC):
         if L is None or W is None or H is None or L <= 0 or W <= 0 or H <= 0:
             raise ValueError("Dimensions L, W, H must be provided for FRODO collision checking and must be valid positive numbers.")
 
-        checker = AgentCollisionChecker(env_container = self.env_container, agent_container=self.agent_container)
-        checker.initialize_env_manager(self.env_container)
+        checker = AgentCollisionChecker(lwr_container=self.lwr_container, agent_container=self.agent_container)
+        checker.initialize_env_manager(self.lwr_container)
         return checker
     
 
 class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
-    def __init__(self, mp_container: AgentMPPlannerContainer, 
-                 agent_container: FRODOAgentContainer, 
-                 env_container: EnvironmentContainer, 
+    def __init__(self, mp_container: AgentMPPlannerContainer,
+                 agent_container: FRODOAgentContainer,
+                 lwr_container: LocalWorldContainer,
                  sampler: SamplerType = SamplerType.UNIFORM):
-        
-        super().__init__(mp_container=mp_container, agent_container=agent_container, env_container=env_container, sampler=sampler)
+
+        super().__init__(mp_container=mp_container, agent_container=agent_container, lwr_container=lwr_container, sampler=sampler)
     
     def select_planner_type(self, si) -> Any:
         try:
@@ -365,12 +363,12 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
 
 class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
 
-    def __init__(self, mp_container: AgentMPPlannerContainer, 
-                 agent_container: FRODOAgentContainer, 
-                 env_container: EnvironmentContainer, 
+    def __init__(self, mp_container: AgentMPPlannerContainer,
+                 agent_container: FRODOAgentContainer,
+                 lwr_container: LocalWorldContainer,
                  sampler: SamplerType = SamplerType.UNIFORM):
-        
-        super().__init__(mp_container = mp_container, agent_container=agent_container, env_container = env_container, sampler= sampler)
+
+        super().__init__(mp_container=mp_container, agent_container=agent_container, lwr_container=lwr_container, sampler=sampler)
 
     def select_planner_type(self, si) -> Any:
         L, W, H = self.agent_container.length, self.agent_container.width, self.agent_container.height

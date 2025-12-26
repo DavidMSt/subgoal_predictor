@@ -6,19 +6,19 @@ from master_thesis.containers.general_containers.task_container import TaskConta
 
 # ---------------------------------------------------------------------------
 # LocalWorldConfig:
-# Controls what the agent is able to perceive.
-# None = infinite range (see all)
+# Stores invariant parameters
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class LocalWorldConfig:
-    ...
+    limits: tuple[float, float]
 
 
 # ---------------------------------------------------------------------------
 # LocalWorldState:
 # What the agent *perceives* about the external world.
 # No self-agent duplication. Only external entities.
+# Supposed to be updated by the environment
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=False, slots=False)
@@ -35,5 +35,5 @@ class LocalWorldState:
 
 @dataclass(frozen=False, slots=False)
 class LocalWorldContainer(BaseContainer):
-    config: LocalWorldConfig = field(default_factory= LocalWorldConfig)
+    config: LocalWorldConfig
     state: LocalWorldState = field(default_factory=LocalWorldState)

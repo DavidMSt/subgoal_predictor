@@ -133,8 +133,9 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         # keep linter quiet
         assert isinstance(agent, FRODOUniversalAgent)
 
-        # Set lwr_cont reference in TAAgentModule (now that it's been created by parent's add_agent)
+        # Set lwr_cont reference in both TA and MP modules (now that it's been created by parent's add_agent)
         agent.tam.lwr = agent.lwr_cont
+        agent.mpm.lwr_cont = agent.lwr_cont
 
         # keep references to the module specific containers
         self.ta_containers[agent_id] = agent.tam.ta_container

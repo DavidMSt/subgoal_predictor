@@ -150,7 +150,7 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
 
             # Initialize local world container for agent
             objects.lwr_cont = LocalWorldContainer(
-                config=LocalWorldConfig(),
+                config=LocalWorldConfig(limits=self.environment_container.limits),
                 state=LocalWorldState()
             )
 

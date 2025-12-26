@@ -154,8 +154,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
             from master_thesis.containers.general_containers.local_world_container import (
                 LocalWorldContainer, LocalWorldConfig, LocalWorldState
             )
+            # Pass environment limits to the local world config
             agent.lwr_cont = LocalWorldContainer(
-                config=LocalWorldConfig(),
+                config=LocalWorldConfig(limits=self.environment.environment_container.limits),
                 state=LocalWorldState()
             )
 

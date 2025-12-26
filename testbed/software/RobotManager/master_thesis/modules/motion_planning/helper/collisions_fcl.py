@@ -1,6 +1,7 @@
 import numpy as np
 import fcl
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.general_containers.obstacle_container import ObstacleContainer
 from master_thesis.general.general_obstacle import GeneralObstacle
@@ -8,11 +9,11 @@ from master_thesis.general.general_obstacle import GeneralObstacle
 
 class AgentCollisionChecker():
 
-    def __init__(self, agent_container: FRODOAgentContainer, env_container: EnvironmentContainer):
-        self.env_config: EnvironmentContainer = env_container  
+    def __init__(self, agent_container: FRODOAgentContainer, lwr_container: LocalWorldContainer):
+        self.lwr_config: LocalWorldContainer = lwr_container
         self.agent_config: FRODOAgentContainer = agent_container
         self.collisions_list = [] # initialize dynamic collison list
-        self.initialize_collision_manager(env_container, agent_container)
+        self.initialize_collision_manager(lwr_container, agent_container)
 
     def check_agent_state(self):
         ...
@@ -20,8 +21,8 @@ class AgentCollisionChecker():
     def check_env_state(self):
         ...
 
-    def initialize_collision_manager(self, env_container, agent_container):
-        self.initialize_env_manager(env_container)
+    def initialize_collision_manager(self, lwr_container, agent_container):
+        self.initialize_env_manager(lwr_container)
         self.initialize_agent_manager(agent_container)
 
     def initialize_agent_manager(self, agent_container):
@@ -31,9 +32,9 @@ class AgentCollisionChecker():
         self.agent_manager = self.create_collision_manager(self.agent_objs)
 
 
-    def initialize_env_manager(self, env_container: EnvironmentContainer):
-        if not isinstance(env_container, EnvironmentContainer):
-            raise TypeError('Did not pass valid environment container, argument of type: ', type(env_container))
+    def initialize_env_manager(self, lwr_container: LocalWorldContainer):
+        if not isinstance(lwr_container, LocalWorldContainer):
+            raise TypeError('Did not pass valid local world container, argument of type: ', type(lwr_container))
         obstacle_objects_list = self.create_environment_objects()
         self.env_manager = self.create_collision_manager(obstacle_objects_list)
     
@@ -91,7 +92,7 @@ class AgentCollisionChecker():
 
     def create_environment_objects(self):
         obstacle_list = []
-        for obstacle in self.env_config.state.obstacle_conts.values():
+        for obstacle in self.lwr_config.state.obstacles.values():
             _obs = self.create_env_collision_object(obstacle)
             obstacle_list.append(_obs)
         return obstacle_list

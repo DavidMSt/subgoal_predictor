@@ -27,17 +27,17 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         # MODULES
         # ------------------------------------------------------------------
 
-        # MPAgent module
+        # MPAgent module (lwr_cont will be set by simulation after agent is added)
         self.mpm = MPAgentModule(
-            agent_cont=self.container, 
-            env_container=env_container, 
+            agent_cont=self.container,
+            lwr_cont=None,  # Will be set after agent is added to simulation
             logger=self.logger)
 
         # TAAgent module (lwr_cont will be set by simulation after agent is added)
         self.tam = TAAgentModule(
             agent_id=agent_id,
-            agent_container = self.container,
-            lwr_cont = None,  # Will be set after agent is added to simulation
+            agent_container=self.container,
+            lwr_cont=None,  # Will be set after agent is added to simulation
             logger=self.logger,
         )
 
