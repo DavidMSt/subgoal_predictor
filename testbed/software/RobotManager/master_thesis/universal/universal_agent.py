@@ -22,15 +22,6 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
 
     def __init__(self, env_container, agent_id: str, Ts=0.1, start_config=(0.0,0.0,0.0), color: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
         super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, color=color)
-
-        # ------------------------------------------------------------------
-        # MODULE RELATED CONTAINERS
-        # ------------------------------------------------------------------
-
-        # Create task assignment container with default config and state
-        ta_container = AgentTAContainer() # TODO: Only ta container needed here the other two could also be used in modules directly
-        mp_container = AgentMPPlannerContainer()
-        exe_container = AgentExeContainer()
      
         # ------------------------------------------------------------------
         # MODULES
@@ -93,9 +84,13 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
             # Also update task's assigned agent (bidirectional)
             chosen_task.assigned_agent = self.container
 
-            self.logger.info(f"Agent {self.agent_id} assigned task {chosen_task.object_id}")
+            # Write decision to shared dict (for simulation to detect completion and conflicts)
+            local_decisions = self.ta_cont.state.local_decisions
+            if local_decisions is not None:
+                local_decisions[self.agent_id] = chosen_task.object_id
+                self.logger.debug(f"Wrote decision to local_decisions: {self.agent_id} -> {chosen_task.object_id}")
 
-            # TODO: Write to shared decision dict for conflict resolution
+            self.logger.info(f"Agent {self.agent_id} assigned task {chosen_task.object_id}")
 
     def _action_motion_planning(self):
         """Motion planning action - creates phase for assigned task."""
