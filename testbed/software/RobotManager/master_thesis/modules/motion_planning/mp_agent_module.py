@@ -84,11 +84,15 @@ if __name__ == "__main__":
     from extensions.simulation.src.objects.frodo.frodo import FRODO_State
     from master_thesis.containers.general_containers.task_container import Task_Config
     from master_thesis.containers.general_containers.obstacle_container import Obstacle_Config, ObstacleContainer
-    from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
+    from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer, LocalWorldConfig, LocalWorldState
 
     agent_cont = FRODOAgentContainer(agent_id='mpm_mock_frodo', state=FRODO_State(0.0, 0.0, 0.0, 0.0, 0.0))
     task_cont =TaskContainer(object_id = 'mpm_mock_task', config= Task_Config(5.0, 0.0, 0.0))
     obstacle_cont = ObstacleContainer(object_id = 'mpm_mock_obstacle', config = Obstacle_Config(x = 2.0, length= 1.0, width = 1.0, height = 1.0))
-    env_cont = ...
+
+    lwr_cont = LocalWorldContainer(
+        config=LocalWorldConfig(limits=((-5.0, 5.0), (-5.0, 5.0))),
+        state= LocalWorldState(neighbors= {}, obstacles={obstacle_cont.object_id, obstacle_cont}, tasks= {task_cont.object_id, task_cont})
+        )
 
     mpm = MPAgentModule(agent_cont=agent_cont, task_cont = task_cont)

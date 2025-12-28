@@ -11,7 +11,7 @@ from master_thesis.containers.general_containers.task_container import TaskConta
 
 @dataclass(frozen=True, slots=True)
 class LocalWorldConfig:
-    limits: tuple[float, float]
+    limits: tuple[tuple[float, float], ...]
 
 
 # ---------------------------------------------------------------------------

@@ -57,10 +57,10 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_motion_planning)
 
         # Attach execution transfer action (moves planned phases to execution)
-        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_execution)
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_activate_exe_phase)
 
         # Attach input function (provides control inputs from execution module)
-        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._input_function)
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._action_exe_step)
 
     # ------------------------------------------------------------------
     # Actions
@@ -115,7 +115,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
             # Reset the planning flag
             self.mp_cont.start_planning = None
 
-    def _action_execution(self):
+    def _action_activate_exe_phase(self):
         if not self.planned_phases or not self.exe_cont.start_execution:
             return
 
@@ -137,12 +137,10 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
                 # Activate
                 self.exi.activate_phase(phase_name)
                 
-
-                
                 break
 
 
-    def _input_function(self):
+    def _action_exe_step(self):
         """Override parent to use execution module for control inputs."""
         u = self.exi.step()
         self.input.v = float(u[0])
