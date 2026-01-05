@@ -95,6 +95,72 @@ class GreedyNearestStrategy(DecentralizedStrategyABC):
         return nearest_task
 
 
+class RLPolicyStrategy(DecentralizedStrategyABC):
+    """Use trained RL policy for task assignment."""
+    
+    def __init__(self, model_path: str):
+        self.policy = PPO.load(model_path)  # Load trained model
+    
+    def run(self, agent_container, task_containers, visible_agent_containers, logger):
+        """
+        Execute strategy (same observation construction as training).
+        """
+        # ✅ You STILL construct observations the same way!
+        obs = self._construct_observation(
+            agent_container, 
+            task_containers, 
+            visible_agent_containers
+        )
+        
+        # Use trained policy
+        action, _ = self.policy.predict(obs, deterministic=True)
+        
+        # Map action to task
+        if action < len(task_containers):
+            chosen_task = list(task_containers.values())[action]
+            return chosen_task
+        else:
+            return None
+    
+    def _construct_observation(self, agent_cont, task_conts, neighbor_conts):
+        """
+        Same observation construction as training!
+        
+        This must match _get_obs() from RLEnvMLP exactly.
+        """
+        obs = []
+        
+        # Own agent: [x, y, v, psi, psi_dot]
+        obs.extend([
+            agent_cont.x,
+            agent_cont.y,
+            agent_cont.v,
+            agent_cont.psi,
+            agent_cont.psi_dot
+        ])
+        
+        # Neighbors (padded to max_n - 1)
+        neighbors = list(neighbor_conts.values())
+        for i in range(self.max_n - 1):
+            if i < len(neighbors):
+                n = neighbors[i]
+                obs.extend([n.x, n.y, n.v, n.psi, n.psi_dot])
+            else:
+                obs.extend([0.0, 0.0, 0.0, 0.0, 0.0])  # Padding
+        
+        # Tasks (padded to max_n)
+        tasks = list(task_conts.values())
+        for i in range(self.max_n):
+            if i < len(tasks):
+                t = tasks[i]
+                obs.extend([t.x, t.y, 0.0])  # [x, y, psi=0 for tasks]
+            else:
+                obs.extend([0.0, 0.0, 0.0])  # Padding
+        
+        return np.array(obs, dtype=np.float32)
+
+
+
 class CBBAStrategy(DecentralizedStrategyABC):
     """Consensus-Based Bundle Algorithm (decentralized auction-based)."""
     name: str = 'CBBA'
