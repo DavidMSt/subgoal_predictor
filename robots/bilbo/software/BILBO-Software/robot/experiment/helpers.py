@@ -83,7 +83,7 @@ def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain) -> 
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-def get_state_trajectory_from_logging_samples(samples: dict) -> list[BILBO_DynamicState]:
+def get_state_trajectory_from_lowlevel_samples(samples: dict) -> list[BILBO_DynamicState]:
     """
     Build a list of BILBO_DynamicState from flat-list logging samples.
 
@@ -100,11 +100,11 @@ def get_state_trajectory_from_logging_samples(samples: dict) -> list[BILBO_Dynam
     """
     # Mapping from dataclass field -> logging key
     keymap = {
-        "v": 'lowlevel.estimation.state.v',
-        "theta": 'lowlevel.estimation.state.theta',
-        "theta_dot": 'lowlevel.estimation.state.theta_dot',
-        "psi": 'lowlevel.estimation.state.psi',  # psi_key from your prep is None -> leave default if missing
-        "psi_dot": 'lowlevel.estimation.state.psi_dot',
+        "v": 'estimation.state.v',
+        "theta": 'estimation.state.theta',
+        "theta_dot": 'estimation.state.theta_dot',
+        "psi": 'estimation.state.psi',  # psi_key from your prep is None -> leave default if missing
+        "psi_dot": 'estimation.state.psi_dot',
         # x_key, y_key are intentionally None -> default to 0.0
         "x": None,
         "y": None,

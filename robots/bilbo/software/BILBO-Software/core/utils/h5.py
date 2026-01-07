@@ -146,130 +146,6 @@ class H5PyDictLogger:
                 self.file.flush()  # Ensure data is written to disk.
 
     # ------------------------------------------------------------------------------------------------------------------
-    # def get_samples(self, index, signals=None):
-    #     """
-    #     Retrieves a sample from the dataset.
-    #
-    #     Accepts either an integer (for a single sample) or a slice (for a range of samples).
-    #     If 'signals' is provided as a list of field names or prefixes, the function will
-    #     return a dictionary. For each signal:
-    #       - If the signal exactly matches a stored field, its value is returned.
-    #       - If the signal is a prefix (e.g., 'subdict1.subdict2'), all flattened keys starting
-    #         with that prefix are collected and unflattened into a nested dict.
-    #     """
-    #     with self.lock:
-    #         if signals is None:
-    #             rec = self.dataset[index]
-    #         else:
-    #             # Build set of actual fields to retrieve.
-    #             dtype_fields = self.dtype.names
-    #             actual_fields = set()
-    #             for s in signals:
-    #                 if s in dtype_fields:
-    #                     actual_fields.add(s)
-    #                 else:
-    #                     # Find keys that start with the prefix plus a dot.
-    #                     matched = [field for field in dtype_fields if field.startswith(s + '.')]
-    #                     actual_fields.update(matched)
-    #             # Retrieve only the matching fields (if any; otherwise the full record).
-    #             if actual_fields:
-    #                 rec = self.dataset[index][list(actual_fields)]
-    #             else:
-    #                 rec = self.dataset[index]
-    #
-    #     # Process record.
-    #     # If signals is None, convert the full record to the original nested dict.
-    #     if signals is None:
-    #         return self.record_to_dict(rec)
-    #
-    #     # Convert the retrieved record to a flat dictionary.
-    #     if isinstance(rec, np.void) or (hasattr(rec, "dtype") and rec.shape == ()):
-    #         rec_dict = {field: rec[field] for field in rec.dtype.names}
-    #     else:
-    #         rec_dict = {field: rec[field] for field in rec.dtype.names}
-    #
-    #     result = {}
-    #     for s in signals:
-    #         if s in rec_dict:
-    #             result[s] = rec_dict[s]
-    #         else:
-    #             # Collect keys that match the prefix and remove the prefix from the key name.
-    #             subfields = {field[len(s) + 1:]: rec_dict[field] for field in rec_dict if field.startswith(s + '.')}
-    #             if subfields:
-    #                 result[s] = unflatten_dict_baseline(subfields)
-    #     return result
-    #
-    # # ------------------------------------------------------------------------------------------------------------------
-    # def get_samples_batch(self, index, signals=None, batch_size=100):
-    #     """
-    #     Retrieves samples from the dataset in batches when using a slice.
-    #
-    #     Accepts either:
-    #       - an integer (for a single sample) or
-    #       - a slice (for a range of samples).
-    #
-    #     If 'signals' is provided as a list of field names or prefixes, for each sample the function
-    #     will construct a dictionary where each key corresponds to the signal:
-    #       - A direct match returns the value.
-    #       - A prefix (e.g., 'subdict1.subdict2') returns an unflattened nested dict of all matching fields.
-    #     """
-    #     # Case 1: Single sample access.
-    #     if isinstance(index, int):
-    #         return self.get_samples(index, signals)
-    #
-    #     # Case 2: Slice access – process indices in batches.
-    #     start = index.start if index.start is not None else 0
-    #     stop = index.stop if index.stop is not None else len(self.dataset)
-    #     step = index.step if index.step is not None else 1
-    #     indices = list(range(start, stop, step))
-    #     total_samples = len(indices)
-    #
-    #     if signals is None:
-    #         batches = []
-    #         for i in range(0, total_samples, batch_size):
-    #             batch_indices = indices[i:i + batch_size]
-    #             with self.lock:
-    #                 batch_data = self.dataset[batch_indices]
-    #             batches.append(batch_data)
-    #         return np.concatenate(batches)
-    #     else:
-    #         # Build mapping from each requested signal to the actual fields in the dataset.
-    #         dtype_fields = self.dtype.names
-    #         mapping = {}
-    #         actual_fields = set()
-    #         for s in signals:
-    #             if s in dtype_fields:
-    #                 mapping[s] = [s]
-    #                 actual_fields.add(s)
-    #             else:
-    #                 matched = [field for field in dtype_fields if field.startswith(s + '.')]
-    #                 mapping[s] = matched
-    #                 actual_fields.update(matched)
-    #         # Initialize result dict with each signal mapping to an empty list.
-    #         result = {s: [] for s in signals}
-    #         for i in range(0, total_samples, batch_size):
-    #             batch_indices = indices[i:i + batch_size]
-    #             with self.lock:
-    #                 batch_data = self.dataset[batch_indices][list(actual_fields)]
-    #             if batch_data.shape == ():
-    #                 batch_data = np.array([batch_data], dtype=batch_data.dtype)
-    #             # Process each record in the batch.
-    #             for rec in batch_data:
-    #                 for s in signals:
-    #                     if mapping[s] == [s]:
-    #                         result[s].append(rec[s])
-    #                     else:
-    #                         subdict = {field[len(s) + 1:]: rec[field] for field in mapping[s]}
-    #                         result[s].append(unflatten_dict_baseline(subdict))
-    #         return result
-
-    # # ------------------------------------------------------------------------------------------------------------------
-    # def get_samples_dict(self, index: int | slice, signals: list[str] | None = None):
-    #     raw = self.get_samples_batch(index, signals=signals)
-    #
-    #     if signals is not None:
-    #         return raw
-
     def get_samples(self, index, signals=None, to_dict: bool = False):
         """
         Unified sample retrieval.
@@ -497,6 +373,251 @@ class H5PyDictLogger:
             return result
 
     # ------------------------------------------------------------------------------------------------------------------
+
+    # def get_samples(self, index, signals=None, to_dict: bool = False):
+    #     """
+    #     Unified sample retrieval.
+    #
+    #     Parameters
+    #     ----------
+    #     index : int | slice | Sequence[int]
+    #         - int      → single sample
+    #         - slice    → range of samples
+    #         - sequence → explicit indices
+    #     signals : list[str] | None
+    #         - None → full record(s)
+    #         - list of signals / prefixes
+    #     to_dict : bool
+    #         - Only used when signals is None.
+    #         - If True, convert to nested dict(s) via record_to_dict in batches.
+    #
+    #     Behavior for missing signals/prefixes
+    #     ------------------------------------
+    #     - If a requested signal is not found:
+    #         * exact-field signal → returns None
+    #         * prefix signal      → returns {}
+    #       A warning is emitted once per call listing missing requests.
+    #     """
+    #     import warnings
+    #
+    #     if self.dataset is None:
+    #         raise RuntimeError("Dataset is not open. Call start() first.")
+    #
+    #     # ----------------------------
+    #     # Helper to normalize indices
+    #     # ----------------------------
+    #     def _indices_from_slice(s: slice):
+    #         start = s.start if s.start is not None else 0
+    #         stop = s.stop if s.stop is not None else len(self.dataset)
+    #         step = s.step if s.step is not None else 1
+    #         return list(range(start, stop, step))
+    #
+    #     # -------------------------------------
+    #     # Helper: build mapping + warn once
+    #     # -------------------------------------
+    #     def _build_signal_mapping(req_signals: list[str]):
+    #         """
+    #         Returns:
+    #             mapping: dict[str, list[str]]   # each requested signal -> list of actual fields
+    #             actual_fields: set[str]         # union of all matched fields
+    #             missing: list[tuple[str, str]]  # list of (signal, kind) where kind in {"field","prefix"}
+    #         """
+    #         dtype_fields = self.dtype.names
+    #         mapping: dict[str, list[str]] = {}
+    #         actual_fields: set[str] = set()
+    #         missing: list[tuple[str, str]] = []
+    #
+    #         for s in req_signals:
+    #             if s in dtype_fields:
+    #                 mapping[s] = [s]
+    #                 actual_fields.add(s)
+    #                 continue
+    #
+    #             matched = [field for field in dtype_fields if field.startswith(s + ".")]
+    #             mapping[s] = matched
+    #             actual_fields.update(matched)
+    #
+    #             if not matched:
+    #                 # Determine whether the user likely intended an exact field or a prefix:
+    #                 # - if it contains a dot, user probably meant a prefix
+    #                 # - otherwise ambiguous, but treat as "field" intent (most common)
+    #                 kind = "prefix" if "." in s else "field"
+    #                 missing.append((s, kind))
+    #
+    #         if missing:
+    #             missing_names = [m[0] for m in missing]
+    #             warnings.warn(
+    #                 f"Requested signal(s)/prefix(es) not found in dataset: {missing_names}",
+    #                 category=UserWarning,
+    #                 stacklevel=2,
+    #             )
+    #
+    #         return mapping, actual_fields, missing
+    #
+    #     # -------------------------------------
+    #     # Case 1: integer index (no batching)
+    #     # -------------------------------------
+    #     is_int_index = isinstance(index, int)
+    #     is_slice_index = isinstance(index, slice)
+    #
+    #     if is_int_index:
+    #         idx = index
+    #
+    #         # signals branch: return dict per requested signal
+    #         if signals is not None:
+    #             mapping, actual_fields, missing = _build_signal_mapping(signals)
+    #
+    #             # If nothing matched, avoid reading full record
+    #             if not actual_fields:
+    #                 out = {}
+    #                 for s in signals:
+    #                     # If it was an exact field intent → None; prefix intent → {}
+    #                     kind = "prefix" if "." in s else "field"
+    #                     out[s] = {} if kind == "prefix" else None
+    #                 return out
+    #
+    #             field_list = list(actual_fields)
+    #
+    #             with self.lock:
+    #                 rec = self.dataset[idx][field_list]
+    #
+    #             result = {}
+    #             for s in signals:
+    #                 fields_for_s = mapping[s]
+    #
+    #                 # Missing
+    #                 if not fields_for_s:
+    #                     kind = "prefix" if "." in s else "field"
+    #                     result[s] = {} if kind == "prefix" else None
+    #                     continue
+    #
+    #                 # Direct field
+    #                 if len(fields_for_s) == 1 and fields_for_s[0] == s:
+    #                     result[s] = rec[s]
+    #                     continue
+    #
+    #                 # Prefix → nested dict
+    #                 subdict = {field[len(s) + 1:]: rec[field] for field in fields_for_s}
+    #                 result[s] = unflatten_dict_baseline(subdict)
+    #
+    #             return result
+    #
+    #         # signals is None → full record
+    #         with self.lock:
+    #             rec = self.dataset[idx]
+    #
+    #         if to_dict:
+    #             return self.record_to_dict(rec)
+    #         return rec
+    #
+    #     # -------------------------------------
+    #     # Case 2: slice or sequence of indices
+    #     # -------------------------------------
+    #     if is_slice_index:
+    #         indices = _indices_from_slice(index)
+    #     else:
+    #         indices = list(index)
+    #
+    #     total = len(indices)
+    #     if total == 0:
+    #         if signals is None:
+    #             return [] if to_dict else np.array([], dtype=self.dtype)
+    #         return {s: [] for s in signals}
+    #
+    #     use_batches = total >= self.batch_size
+    #
+    #     # ============================================================
+    #     # signals is None → full records (raw or nested dicts)
+    #     # ============================================================
+    #     if signals is None:
+    #         # --------- Small read, no batching ----------
+    #         if not use_batches:
+    #             with self.lock:
+    #                 data = self.dataset[index] if is_slice_index else self.dataset[indices]
+    #             return self.record_to_dict(data) if to_dict else data
+    #
+    #         # --------- Large read, batched ----------
+    #         if not to_dict:
+    #             batches = []
+    #             for i in range(0, total, self.batch_size):
+    #                 batch_indices = indices[i:i + self.batch_size]
+    #                 with self.lock:
+    #                     batch_data = self.dataset[batch_indices]
+    #                 batches.append(batch_data)
+    #             return batches[0] if len(batches) == 1 else np.concatenate(batches)
+    #
+    #         # to_dict=True: convert each batch separately to nested dicts
+    #         all_dicts = []
+    #         for i in range(0, total, self.batch_size):
+    #             batch_indices = indices[i:i + self.batch_size]
+    #             with self.lock:
+    #                 batch_data = self.dataset[batch_indices]
+    #             batch_dicts = self.record_to_dict(batch_data)
+    #             time.sleep(0.003)
+    #             all_dicts.extend(batch_dicts)
+    #         return all_dicts
+    #
+    #     # ============================================================
+    #     # signals is not None → dict[signal] = list[values or subdict]
+    #     # ============================================================
+    #     mapping, actual_fields, _missing = _build_signal_mapping(signals)
+    #
+    #     # If nothing matched, avoid reading full records
+    #     if not actual_fields:
+    #         out = {}
+    #         for s in signals:
+    #             kind = "prefix" if "." in s else "field"
+    #             fill = {} if kind == "prefix" else None
+    #             out[s] = [fill] * total
+    #         return out
+    #
+    #     field_list = list(actual_fields)
+    #
+    #     def _accumulate_from_batch(batch_data, result_dict):
+    #         # Ensure iterable of records
+    #         if getattr(batch_data, "shape", ()) == ():
+    #             batch_data = np.array([batch_data], dtype=batch_data.dtype)
+    #
+    #         for rec in batch_data:
+    #             for s in signals:
+    #                 fields_for_s = mapping[s]
+    #
+    #                 # Missing
+    #                 if not fields_for_s:
+    #                     kind = "prefix" if "." in s else "field"
+    #                     result_dict[s].append({} if kind == "prefix" else None)
+    #                     continue
+    #
+    #                 # Direct
+    #                 if len(fields_for_s) == 1 and fields_for_s[0] == s:
+    #                     result_dict[s].append(rec[s])
+    #                     continue
+    #
+    #                 # Prefix → nested dict
+    #                 subdict = {field[len(s) + 1:]: rec[field] for field in fields_for_s}
+    #                 result_dict[s].append(unflatten_dict_baseline(subdict))
+    #
+    #     result = {s: [] for s in signals}
+    #
+    #     # ---------- Non-batched ----------
+    #     if not use_batches:
+    #         with self.lock:
+    #             if is_slice_index:
+    #                 batch_data = self.dataset[index][field_list]
+    #             else:
+    #                 batch_data = self.dataset[indices][field_list]
+    #         _accumulate_from_batch(batch_data, result)
+    #         return result
+    #
+    #     # ---------- Batched ----------
+    #     for i in range(0, total, self.batch_size):
+    #         batch_indices = indices[i:i + self.batch_size]
+    #         with self.lock:
+    #             batch_data = self.dataset[batch_indices][field_list]
+    #         _accumulate_from_batch(batch_data, result)
+    #
+    #     return result
+
     def close(self):
         """
         Closes the HDF5 file.
@@ -549,7 +670,6 @@ class H5PyDictLogger:
             record.append(value)
 
         return tuple(record)
-
 
     def create_dtype_and_record_from_flat_dict(self, flat_dict):
         """

@@ -85,6 +85,9 @@ def setTimeout(func: Callable, timeout: float, *args, **kwargs):
     delayed_execution(func, timeout, *args, **kwargs)
 
 
+def set_timeout(func: Callable, timeout: float, *args, **kwargs):
+    setTimeout(func, timeout, *args, **kwargs)
+
 
 # ======================================================================================================================
 
@@ -342,8 +345,6 @@ class IntervalTimer:
         ...
 
 
-
-
 # ======================================================================================================================
 class TimeoutTimer:
     def __init__(self, timeout_time, timeout_callback):
@@ -432,6 +433,42 @@ def clearInterval(timer: Timer) -> None:
     """
     if timer is not None:
         timer.stop()
+
+
+# ======================================================================================================================
+def wait_until(
+        predicate: Callable[[], bool],
+        timeout_s: float,
+        poll_period_s: float = 0.1,
+) -> bool:
+    """
+    Wait until `predicate()` becomes True or timeout expires.
+
+    Args:
+        predicate: zero-argument callable returning bool
+        timeout_s: timeout in seconds
+        poll_period_s: sleep time between evaluations
+
+    Returns:
+        True  -> predicate became True before timeout
+        False -> timeout expired first
+    """
+    deadline = time.monotonic() + timeout_s
+
+    while True:
+        if predicate():
+            return True
+
+        if time.monotonic() >= deadline:
+            return False
+
+        time.sleep(poll_period_s)
+
+
+# ======================================================================================================================
+def get_timestamp_string() -> str:
+    date = time.strftime("%Y-%m-%d_%H:%M:%S")
+    return date
 
 
 # ======================================================================================================================

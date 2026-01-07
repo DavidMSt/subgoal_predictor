@@ -18,7 +18,7 @@ from robot.core import get_logging_provider
 from robot.experiment.definitions import BILBO_InputTrajectory, BILBO_InputTrajectoryStep, \
     BILBO_LL_Sequencer_Event_Type, BILBO_StateTrajectory, BILBO_TrajectoryData
 
-from robot.experiment.helpers import get_state_trajectory_from_logging_samples
+from robot.experiment.helpers import get_state_trajectory_from_lowlevel_samples
 from robot.lowlevel.stm32_general import MAX_STEPS_TRAJECTORY, LOOP_TIME_CONTROL
 from robot.lowlevel.stm32_sequencer import bilbo_sequence_input_t, bilbo_sequence_description_t, BILBO_Sequence_LL
 import robot.lowlevel.stm32_addresses as addresses
@@ -227,7 +227,7 @@ class BILBO_ExperimentHandler:
         output_data = BILBO_TrajectoryData(
             input_trajectory=trajectory,
             state_trajectory=BILBO_StateTrajectory(
-                states=get_state_trajectory_from_logging_samples(output_signals)
+                states=get_state_trajectory_from_lowlevel_samples(output_signals)
             )
         )
 

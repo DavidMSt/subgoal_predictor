@@ -4,6 +4,7 @@ import abc
 import dataclasses
 import enum
 import json
+import tempfile
 import threading
 from dataclasses import asdict
 from typing import Any, Union
@@ -26,7 +27,7 @@ from robots.bilbo.robot.bilbo_control import BILBO_Control
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 from robots.bilbo.robot.bilbo_definitions import MAX_STEPS_TRAJECTORY, HOST_EXPERIMENT_FOLDER
 from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory, BILBO_TrajectoryData, \
-    ExperimentDefinition, ExperimentData
+    ExperimentDefinition, ExperimentData, ExperimentActionDefinition
 from robots.bilbo.robot.experiment.experiment_helpers import generate_random_input_trajectory
 
 
@@ -140,6 +141,8 @@ class BILBO_ExperimentHandler_Events:
     experiment_error: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
     experiment_timeout: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
 
+    dilc_experiment_started: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
+
 
 @event_definition
 class BILBO_ExperimentHandler_InternalEvents:
@@ -180,6 +183,7 @@ class BILBO_ExperimentHandler:
     # === METHODS ======================================================================================================
     def run_experiment(self,
                        experiment_definition: ExperimentDefinition,
+                       experiment_file_folder: str | None = None,
                        blocking: bool = False) -> ExperimentData | None | bool:
 
         self.logger.info(f"Starting experiment \"{experiment_definition.id}\"...")
@@ -243,78 +247,86 @@ class BILBO_ExperimentHandler:
             self.logger.info(f"Experiment data: {data}")
 
             # Download the file
-            filename = self.core.file_handler.download_file(data, '~/Desktop/')
+            if experiment_file_folder is None:
+                with tempfile.TemporaryDirectory(prefix="experiment_") as tmpdir:
+                    filename = self.core.file_handler.download_file(data, tmpdir)
 
-            with open(filename, 'r') as f:
-                experiment_data = json.load(f)
+                    with open(filename, 'r') as f:
+                        experiment_data = json.load(f)
 
-            samples = experiment_data['samples']
-            theta = [sample['lowlevel']['estimation']['state']['theta'] for sample in samples]
-            mode = [sample['control']['mode'] for sample in samples]
-            input = [sample['lowlevel']['control']['data']['input_left'] for sample in samples]
-            mode_ll = [sample['lowlevel']['control']['mode'] for sample in samples]
-            v = [sample['lowlevel']['estimation']['state']['v'] for sample in samples]
+                    return experiment_data
+            else:
+                filename = self.core.file_handler.download_file(data, experiment_file_folder)
 
-            tick_ll = [sample['lowlevel']['tick'] for sample in samples]
+                with open(filename, 'r') as f:
+                    experiment_data = json.load(f)
 
-            t = generate_time_vector_by_length(start=0, num_samples=len(theta), dt=0.01)
-
-            quick_plot(
-                x=t,
-                y=theta,
-                xlabel='Time [s]',
-                ylabel='Theta [rad]',
-                ylim=(-2, 2),
-            )
-
-            quick_plot(
-                x=t,
-                y=mode,
-                xlabel='Time [s]',
-                ylabel='Mode',
-                title='Mode',
-            )
-
-            quick_plot(
-                x=t,
-                y=input,
-                xlabel='Time [s]',
-                ylabel='Input',
-                title='Input',
-            )
-            quick_plot(
-                x=t,
-                y=mode_ll,
-                xlabel='Time [s]',
-                ylabel='Mode LL',
-                title='Mode LL',
-            )
-
-            quick_plot(
-                x=t,
-                y=v,
-                xlabel='Time [s]',
-                ylabel='v [m/s]',
-                title='v',
-            )
-
-            quick_plot(
-                x=t,
-                y=tick_ll,
-                xlabel='Time [s]',
-                ylabel='Tick LL',
-                title='Tick LL',
-            )
-
-            return data
+                return experiment_data
+            # samples = experiment_data['samples']
+            # theta = [sample['lowlevel']['estimation']['state']['theta'] for sample in samples]
+            # mode = [sample['control']['mode'] for sample in samples]
+            # input = [sample['lowlevel']['control']['data']['input_left'] for sample in samples]
+            # mode_ll = [sample['lowlevel']['control']['mode'] for sample in samples]
+            # v = [sample['lowlevel']['estimation']['state']['v'] for sample in samples]
+            #
+            # tick_ll = [sample['lowlevel']['tick'] for sample in samples]
+            #
+            # t = generate_time_vector_by_length(start=0, num_samples=len(theta), dt=0.01)
+            #
+            # quick_plot(
+            #     x=t,
+            #     y=theta,
+            #     xlabel='Time [s]',
+            #     ylabel='Theta [rad]',
+            #     ylim=(-2, 2),
+            # )
+            #
+            # quick_plot(
+            #     x=t,
+            #     y=mode,
+            #     xlabel='Time [s]',
+            #     ylabel='Mode',
+            #     title='Mode',
+            # )
+            #
+            # quick_plot(
+            #     x=t,
+            #     y=input,
+            #     xlabel='Time [s]',
+            #     ylabel='Input',
+            #     title='Input',
+            # )
+            # quick_plot(
+            #     x=t,
+            #     y=mode_ll,
+            #     xlabel='Time [s]',
+            #     ylabel='Mode LL',
+            #     title='Mode LL',
+            # )
+            #
+            # quick_plot(
+            #     x=t,
+            #     y=v,
+            #     xlabel='Time [s]',
+            #     ylabel='v [m/s]',
+            #     title='v',
+            # )
+            #
+            # quick_plot(
+            #     x=t,
+            #     y=tick_ll,
+            #     xlabel='Time [s]',
+            #     ylabel='Tick LL',
+            #     title='Tick LL',
+            # )
 
         return True
 
-    # ---------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
     def stop_experiment(self):
         ...
 
-    # ---------------------------------------------------------------------------------------------------------------
+    # ------------------------------------------------------------------------------------------------------------------
     def run_experiment_from_file(self, file: str, blocking: bool = True) -> ExperimentData | None:
 
         if not file.endswith(".yaml"):
@@ -333,44 +345,6 @@ class BILBO_ExperimentHandler:
         definition = ExperimentDefinition.from_file(file)
         return self.run_experiment(definition, blocking=blocking)
 
-    # ---------------------------------------------------------------------------------------------------------------
-    # def runExperiment(self, experiment_type: type, *args, **kwargs) -> bool:
-    #     if self.experiment is not None:
-    #         self.logger.error(f"Experiment of type {type(self.experiment)} already running")
-    #         return False
-    #
-    #     self.experiment = experiment_type(self.core, self, self.control, *args, **kwargs)
-    #     self.logger.important(f"Start Experiment of type {type(self.experiment).__name__}...")
-    #
-    #     self.experiment.start()
-    #     self.experiment.callbacks.stopped.register(self._currentExperimentStopped)
-    #     self.experiment.events.status_changed.on(self.events.experiment_status_changed.set)
-    #
-    #     self.events.experiment_started.set()
-    #     self.status = BILBO_ExperimentHandler_Status.EXPERIMENT_RUNNING
-    #     self.events.status_changed.set(data=self.status, flags={'status': self.status})
-    #
-    #     return True
-
-    # # ------------------------------------------------------------------------------------------------------------------
-    # def stopExperiment(self):
-    #     self.logger.info("Aborting Experiment ...")
-    #     if self.experiment is None:
-    #         self.logger.warning("No experiment running")
-    #         return
-    #
-    #     self.experiment.stop(aborted=True)
-    #
-    # # ------------------------------------------------------------------------------------------------------------------
-    # def _currentExperimentStopped(self):
-    #     self.experiment = None
-    #     self.logger.info("Experiment stopped")
-    #     self.events.experiment_finished.set()
-    #     self.status = BILBO_ExperimentHandler_Status.IDLE
-    #
-    #     self.events.status_changed.set(data=self.status, flags={'status': self.status})
-    #     self.events.experiment_status_changed.set(data=None)
-
     # ------------------------------------------------------------------------------------------------------------------
     def run_trajectory(self, trajectory: BILBO_InputTrajectory) -> BILBO_TrajectoryData | None:
         assert len(trajectory.inputs) <= MAX_STEPS_TRAJECTORY
@@ -382,7 +356,7 @@ class BILBO_ExperimentHandler:
         self._loadedTrajectory = trajectory
         # Kick off on the device
         self.device.executeFunction(
-            function_name='runTrajectory',
+            function_name='run_trajectory',
             arguments={'trajectory_data': asdict(trajectory)},
         )
 
@@ -409,12 +383,13 @@ class BILBO_ExperimentHandler:
         if output_data_dict is None:
             self.logger.error(f"Trajectory \"{trajectory.name}\" failed due to missing data")
             return None
-        experiment_data = self.getTrajectoryExperimentDataFromDict(output_data_dict)
 
-        self.events.trajectory_finished.set(data=experiment_data.data, flags={'trajectory_id': trajectory.id})
+        trajectory_data = from_dict_auto(BILBO_TrajectoryData, output_data_dict['data'])
+
+        self.events.trajectory_finished.set(data=trajectory_data, flags={'trajectory_id': trajectory.id})
 
         self.logger.important(f"Trajectory \"{trajectory.name}\" finished.")
-        return experiment_data.data
+        return trajectory_data
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_random_trajectory(self, time_s, frequency=2, gain=0.25):
@@ -538,6 +513,35 @@ class BILBO_ExperimentHandler:
     # ------------------------------------------------------------------------------------------------------------------
     def getLoadedTrajectory(self) -> BILBO_InputTrajectory | None:
         return self._loadedTrajectory
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def test_trajectory_experiment(self):
+
+        u = -0.5 * np.ones(100 * 1)
+        traj = BILBO_InputTrajectory.from_vector(vector=u, name='test_trajectory', id=1)
+
+        exp_definition = ExperimentDefinition(
+            id='test_experiment',
+            description='Test experiment',
+            actions=[
+                ExperimentActionDefinition(
+                    id='traj',
+                    type='run_trajectory',
+                    parameters={
+                        'input_trajectory': traj,
+                    }
+                )
+            ]
+        )
+
+        data = self.run_experiment(exp_definition, blocking=True)
+
+        if data is None:
+            self.logger.error("Experiment \"test_trajectory\" failed")
+        else:
+            self.logger.important(f"Experiment \"test_trajectory\" succeeded.")
+
+        pass
 
     # ------------------------------------------------------------------------------------------------------------------
     # @staticmethod

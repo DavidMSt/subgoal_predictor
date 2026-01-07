@@ -17,10 +17,11 @@ from core.utils.events import event_definition, Event, pred_flag_contains, Subsc
 from core.utils.exit import register_exit_callback
 from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
 from robots.bilbo.robot.bilbo_utilities import BILBO_Utilities
+from robots.bilbo.robot.experiment.examples import dilc_example
 
 # ======================================================================================================================
 
-JOYSTICK_UPDATE_TIME = 0.05
+JOYSTICK_UPDATE_TIME = 0.075
 
 
 # ======================================================================================================================
@@ -45,6 +46,7 @@ class BILBO_Interfaces:
     _exit_joystick_thread: bool
 
     _joystick_event_listeners: list[SubscriberListener]
+    joystick_enabled: bool = True
 
     # ------------------------------------------------------------------------------------------------------------------
     def __init__(self, core: BILBO_Core,
@@ -120,8 +122,19 @@ class BILBO_Interfaces:
                                                   predicate=pred_flag_contains('button', 'X'),
                                                   discard_data=True,
                                                   )
+
+        self.set_input_source('WIFI_JOYSTICK')
+
         self._joystick_event_listeners.append(listener)
         self._startJoystickThread()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def enable_joystick(self):
+        self.joystick_enabled = True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def disable_joystick(self):
+        self.joystick_enabled = False
 
     # ------------------------------------------------------------------------------------------------------------------
     def removeJoystick(self):
@@ -143,6 +156,18 @@ class BILBO_Interfaces:
             self.joystick_thread = None
             self.core.logger.info("Joystick thread closed.")
 
+        self.set_input_source('NONE')
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_input_source(self, input_source: str):
+        if input_source not in ['NONE', 'JOYSTICK', 'WIFI_JOYSTICK']:
+            raise ValueError(f"Invalid input source: {input_source}. Must be 'NONE', 'JOYSTICK', or 'WIFI_JOYSTICK'")
+
+        self.core.device.executeFunction(
+            function_name='set_input_source',
+            arguments={'source': input_source}
+        )
+
     # ------------------------------------------------------------------------------------------------------------------
     def _startJoystickThread(self):
         self.joystick_thread = threading.Thread(target=self._joystick_task, daemon=True)
@@ -155,6 +180,14 @@ class BILBO_Interfaces:
     def _joystick_task(self):
         self._exit_joystick_thread = False
         while not self._exit_joystick_thread:
+            if self.joystick is None:
+                self._exit_joystick_thread = True
+                return
+
+            if not self.joystick_enabled:
+                time.sleep(JOYSTICK_UPDATE_TIME)
+                continue
+
             # Raw inputs still expected in [-1, 1]
             raw_forward = -self.joystick.getAxis('LEFT_VERTICAL')
             raw_turn = -self.joystick.getAxis('RIGHT_HORIZONTAL')
@@ -164,8 +197,10 @@ class BILBO_Interfaces:
             turn_joystick = shape_joystick(raw_turn, JoystickCurve.POWER, 2)
 
             # Send normalized, shaped inputs to the controller
-            self.control.setNormalizedBalancingInput(forward_joystick, turn_joystick)
-
+            self.core.device.executeFunction(
+                function_name='set_joystick_input',
+                arguments={'forward': forward_joystick, 'turn': turn_joystick}
+            )
             time.sleep(JOYSTICK_UPDATE_TIME)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -244,10 +279,14 @@ class BILBO_CLI_CommandSet(CommandSet):
                                description='Deactivates the control on the robot',
                                arguments=[])
 
+        stable_command = Command(name='stable',
+                                 description='Checks if the robot is stable',
+                                 function = self._check_stable,
+                                 )
+
         read_state_command = Command(name='read',
                                      function=self.control.getControlState,
                                      description='Reads the current control state and mode', )
-
 
         test_communication = Command(name='testComm',
                                      function=Callback(
@@ -367,14 +406,38 @@ class BILBO_CLI_CommandSet(CommandSet):
 
                                           ])
 
+        test_trajectory_experiment_command = Command(name='tte',
+                                                     function=self.experiments.test_trajectory_experiment,
+                                                     execute_in_thread=True,
+                                                     )
+
+        dilc_example_command = Command(name='dilc',
+                                       function=Callback(
+                                           function=dilc_example,
+                                           inputs={'bilbo': self.core.get_robot()}
+                                       )
+                                       )
+
         experiment_command_set = CommandSet(name='experiment',
-                                            commands=[test_trajectory_command, test_experiment_command])
+                                            commands=[test_trajectory_command,
+                                                      test_trajectory_experiment_command,
+                                                      dilc_example_command,
+                                                      test_experiment_command])
 
         super().__init__(name=f"{self.core.id}", commands=[beep_command,
                                                            speak_command,
                                                            mode_command,
                                                            stop_command,
+                                                           stable_command,
                                                            read_state_command,
                                                            test_communication],
 
                          children=[control_command_set, experiment_command_set])
+
+
+    def _check_stable(self):
+        stable = self.core.is_upright_and_static()
+        if stable:
+            self.core.logger.info("Robot is stable.")
+        else:
+            self.core.logger.warning("Robot is not stable.")

@@ -18,8 +18,8 @@ from robot.control.bilbo_control_data import *
 from core.utils.data import limit, are_lists_approximately_equal
 from core.utils.delayed_executor import delayed_execution
 
-# import robot.control.config as control_config
 
+# import robot.control.config as control_config
 
 
 # === BILBO Control Callbacks ==========================================================================================
@@ -156,6 +156,11 @@ class BILBO_Control:
                                    arguments=['enable'],
                                    description='Enabled Theta Integral Control')
 
+        self._comm.wifi.newCommand(identifier='get_control_config',
+                                   function=self.get_control_config,
+                                   arguments=[],
+                                   description='Returns the current control configuration')
+
         self._comm.serial.callbacks.event.register(self._ll_control_event_callback,
                                                    parameters={'messages': [BILBO_Control_Event_Message]})
 
@@ -256,6 +261,16 @@ class BILBO_Control:
         """
         raise NotImplementedError
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_control_config(self):
+        """
+        Retrieve the current control configuration.
+
+        Returns:
+            dict: The current control configuration.
+        """
+        return self.config
+    
     # ------------------------------------------------------------------------------------------------------------------
     def set_mode(self, mode: int | BILBO_Control_Mode):
         """
@@ -652,7 +667,7 @@ class BILBO_Control:
             self.logger.warning(f"Failed to parse low-level configuration: {e}")
             return
 
-        self.logger.info(f"Received changed low-level configuration: {configuration}")
+        # self.logger.info(f"Received changed low-level configuration: {configuration}")
 
         self._updateControlConfigFromLL(control_config_ll)
 

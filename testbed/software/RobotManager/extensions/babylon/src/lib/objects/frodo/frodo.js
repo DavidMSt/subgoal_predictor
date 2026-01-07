@@ -158,7 +158,6 @@ export class BabylonFrodo extends BabylonObject {
         }
 
 
-
         if (this.config.occlusionEnabled) {
             this._initVisibilityFov();
         } else {

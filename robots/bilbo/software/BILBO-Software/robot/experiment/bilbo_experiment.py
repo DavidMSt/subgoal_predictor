@@ -21,6 +21,7 @@ from core.utils.events import event_definition, EventContainer, Event, EventFlag
     TIMEOUT, SubscriberListener
 from core.utils.logging_utils import Logger
 from core.utils.sound.sound import speak
+from core.utils.thread_utils import run_in_thread
 from core.utils.time import precise_sleep, measure_time
 from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
@@ -32,7 +33,8 @@ from robot.core import get_logging_provider
 from robot.experiment.definitions import BILBO_InputTrajectory, BILBO_TrajectoryData, BILBO_InputTrajectoryStep, \
     BILBO_StateTrajectory, BILBO_TrajectoryExperimentData, \
     BILBO_TrajectoryExperimentMeta, BILBO_LL_Sequencer_Event_Type, ExperimentSample, BILBO_ExperimentHandler_Sample
-from robot.experiment.helpers import get_state_trajectory_from_logging_samples
+from robot.experiment.helpers import get_state_trajectory_from_lowlevel_samples
+from robot.interfaces.bilbo_interfaces import BILBO_Interfaces
 from robot.logging.bilbo_sample import BILBO_Sample
 # from robot.logging.bilbo_sample import BILBO_Sample
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
@@ -42,10 +44,10 @@ import robot.lowlevel.stm32_addresses as addresses
 from robot.control.bilbo_control import BILBO_ControlConfig
 
 LOWLEVEL_STATE_SIGNALS = [
-    'lowlevel.estimation.state.v',
-    'lowlevel.estimation.state.theta',
-    'lowlevel.estimation.state.theta_dot',
-    'lowlevel.estimation.state.psi_dot'
+    'estimation.state.v',
+    'estimation.state.theta',
+    'estimation.state.theta_dot',
+    'estimation.state.psi_dot'
 ]
 
 UPDATE_LOOP_TIME = 0.1
@@ -350,12 +352,57 @@ class SetMarkerAction(ExperimentAction):
 
 # ----------------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass(kw_only=True)
+class EnableExternalInputAction(ExperimentAction):
+    enabled: bool = True
+
+    def execute(self):
+        self._on_started()
+        if self.enabled:
+            self.experiment.experiment_handler.interfaces.enable_external_input()
+        else:
+            self.experiment.experiment_handler.interfaces.disable_external_input()
+        self._on_finished()
+        return True
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> EnableExternalInputAction:
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(
+            **kwargs,
+            enabled=definition.parameters.get('enabled', True),
+        )
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass(kw_only=True)
+class ResetAction(ExperimentAction):
+
+    def execute(self):
+        self._on_started()
+
+        # Reenable the external input interface
+        self.experiment.experiment_handler.interfaces.enable_external_input()
+
+        self._on_finished()
+        return True
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> ResetAction:
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(
+            **kwargs,
+        )
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass(kw_only=True)
 class RunTrajectoryAction(ExperimentAction):
     input_trajectory: BILBO_InputTrajectory | str | dict
     data: BILBO_TrajectoryExperimentData | None = None
 
     # ------------------------------------------------------------------------------------------------------------------
     def __post_init__(self):
+        super().__post_init__()
         # Check if the trajectory is either a trajectory or a file
         if isinstance(self.input_trajectory, str):
             if not file_exists(self.input_trajectory):
@@ -559,6 +606,8 @@ EXPERIMENT_ACTION_TYPE_MAPPING = {
     "wait_until_tick": WaitUntilTickAction,
     "wait_event": WaitEventAction,
     "set_input": SetInputAction,
+    "enable_external_input": EnableExternalInputAction,
+    "reset": ResetAction,
 }
 
 
@@ -670,7 +719,6 @@ class ExperimentDefinition:
 
 
 # ----------------------------------------------------------------------------------------------------------------------
-
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -1014,7 +1062,6 @@ class Experiment:
                      action_id, container in self.action_containers.items()},
         )
 
-
         data_dict = asdict_optimized(data)
         data.samples = samples
         data_dict['samples'] = samples
@@ -1075,7 +1122,6 @@ class Experiment:
         return sample
 
 
-
 @event_definition
 class BILBO_ExperimentHandler_Events(EventContainer):
     experiment_started: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
@@ -1099,9 +1145,6 @@ class BILBO_ExperimentHandler_Status(enum.StrEnum):
 class BILBO_ExperimentHandler_TrajectoryStatus(enum.StrEnum):
     IDLE = 'IDLE'
     RUNNING = 'RUNNING'
-
-
-
 
 
 @dataclasses.dataclass
@@ -1133,12 +1176,14 @@ class BILBO_ExperimentHandler:
     # === INIT =========================================================================================================
     def __init__(self, common: BILBO_Common,
                  communication: BILBO_Communication,
+                 interfaces: BILBO_Interfaces,
                  utilities: BILBO_Utilities,
                  control: BILBO_Control
                  ):
         # Process Inputs
         self.common = common
         self.communication = communication
+        self.interfaces = interfaces
         self.utilities = utilities
         self.control = control
 
@@ -1164,6 +1209,19 @@ class BILBO_ExperimentHandler:
                     type=dict,
                     optional=False,
                     description="Experiment definition"
+                )
+            ]
+        )
+
+        self.communication.wifi.newCommand(
+            identifier='run_trajectory',
+            function=self._run_trajectory_external,
+            arguments=[
+                CommandArgument(
+                    name='trajectory_data',
+                    type=dict,
+                    optional=False,
+                    description="Trajectory definition"
                 )
             ]
         )
@@ -1304,140 +1362,142 @@ class BILBO_ExperimentHandler:
 
         self.logger.info(f"Running trajectory {trajectory.id} ...")
         self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.RUNNING
-        start_time_stamp = datetime.now().isoformat()
 
-        # 1) Load onto the low-level (STM32)
-        if not self._load_trajectory_to_lowlevel(trajectory):
-            self.logger.warning(f"Failed to load trajectory {trajectory.id}")
-            self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
-            return None
+        try:
+            # 1) Load onto the low-level (STM32)
+            if not self._load_trajectory_to_lowlevel(trajectory):
+                self.logger.warning(f"Failed to load trajectory {trajectory.id}")
+                self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
+                return None
 
-        # 2) Start on the low level
-        if not self._start_loaded_trajectory_on_lowlevel(trajectory.id):
-            self.logger.warning(f"Failed to start trajectory {trajectory.id}")
-            self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
-            return None
+            # 2) Start on the low level
+            if not self._start_loaded_trajectory_on_lowlevel(trajectory.id):
+                self.logger.warning(f"Failed to start trajectory {trajectory.id}")
+                self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
+                return None
 
-        # 3) Wait for STARTED or ABORTED (early abort handling)
-        data, trace = wait_for_events(
-            events=OR(
-                (self._internal_events.trajectory_started, pred_flag_equals('trajectory_id', trajectory.id)),
-                (self._internal_events.trajectory_aborted, pred_flag_equals('trajectory_id', trajectory.id))
-            ),
-            timeout=1,
-            stale_event_time=0.2,
-        )
-
-        if data is TIMEOUT:
-            self.logger.warning(f"Failed to start trajectory {trajectory.id}: No start/abort event received")
-            try:
-                self._send_trajectory_stop_signal_to_lowlevel()
-            except Exception as e:
-                self.logger.error(f"Failed to send stop signal to low-level: {e}")
-                pass
-            self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
-            return None
-
-        if trace.caused_by(self._internal_events.trajectory_aborted):
-            self.logger.warning(f"Trajectory {trajectory.id} aborted before start")
-            self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
-            return None
-
-        self.utilities.beep(1000, 250, 1)
-        start_tick = data.get('tick')
-
-        if start_tick is None:
-            self.logger.warning(f"Trajectory {trajectory.id}: STARTED tick missing")
-            self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
-
-            return None
-
-        self.events.trajectory_started.set(data=start_tick, flags={'trajectory_id': trajectory.id})
-
-        self.logger.info(f"Trajectory {trajectory.id} started at tick {start_tick}")
-        # 4) Wait for FINISHED or ABORTED during execution
-        run_timeout = trajectory.length * LOOP_TIME_CONTROL + 2.0
-
-        data, trace = wait_for_events(
-            events=OR(
-                (self._internal_events.trajectory_finished, pred_flag_equals('trajectory_id', trajectory.id)),
-                (self._internal_events.trajectory_aborted, pred_flag_equals('trajectory_id', trajectory.id))
-            ),
-            timeout=run_timeout,
-            stale_event_time=0.2,
-        )
-
-        if data is TIMEOUT:
-            self.logger.warning(f"Trajectory {trajectory.id} timeout: No finish/abort event received")
-            try:
-                self._send_trajectory_stop_signal_to_lowlevel()
-            except Exception as e:
-                self.logger.error(f"Failed to send stop signal to low-level: {e}")
-                pass
-            self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
-            return None
-
-        if trace.caused_by(self._internal_events.trajectory_aborted):
-            self.logger.warning(f"Trajectory {trajectory.id} aborted during execution")
-            self.events.trajectory_aborted.set(flags={'trajectory_id': trajectory.id})
-            self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
-            return None
-
-        self.utilities.beep(1000, 250, 2)
-        end_tick = data.get('tick')
-        if end_tick is None:
-            self.logger.warning(f"Trajectory {trajectory.id}: FINISHED tick missing")
-            self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
-            return None
-
-        # 5) Let the logger catch up a little beyond end_tick
-        while self.common.tick < (end_tick + 100):
-            time.sleep(0.1)
-
-        # 6) Read signals from the logging provider
-        output_signals = get_logging_provider().get_lowlevel_data(
-            signals=LOWLEVEL_STATE_SIGNALS,
-            start=start_tick,
-            end=end_tick
-        )
-
-        output_data = BILBO_TrajectoryData(
-            input_trajectory=trajectory,
-            state_trajectory=BILBO_StateTrajectory(
-                states=get_state_trajectory_from_logging_samples(output_signals)
+            # 3) Wait for STARTED or ABORTED (early abort handling)
+            data, trace = wait_for_events(
+                events=OR(
+                    (self._internal_events.trajectory_started, pred_flag_equals('trajectory_id', trajectory.id)),
+                    (self._internal_events.trajectory_aborted, pred_flag_equals('trajectory_id', trajectory.id))
+                ),
+                timeout=1,
+                stale_event_time=0.2,
             )
-        )
 
-        trajectory_experiment_data = BILBO_TrajectoryExperimentData(
-            id=str(trajectory.id),
-            data=output_data,
-            meta=BILBO_TrajectoryExperimentMeta(
-                robot_id=self.common.id,
-                description='',
-                time_stamp=datetime.now().isoformat(),
-                robot_config=self.common.config,
-                control_config=self.control.config,
-                start_tick=start_tick,
-                end_tick=end_tick,
-            ),
+            if data is TIMEOUT:
+                self.logger.warning(f"Failed to start trajectory {trajectory.id}: No start/abort event received")
+                try:
+                    self._send_trajectory_stop_signal_to_lowlevel()
+                except Exception as e:
+                    self.logger.error(f"Failed to send stop signal to low-level: {e}")
+                self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
+                return None
 
-        )
+            if trace.caused_by(self._internal_events.trajectory_aborted):
+                self.logger.warning(f"Trajectory {trajectory.id} aborted before start")
+                self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
+                return None
 
-        self.events.trajectory_finished.set(data=trajectory_experiment_data, flags={'trajectory_id': trajectory.id})
+            self.utilities.beep(1000, 250, 1)
+            start_tick = data.get('tick')
 
-        self.logger.info(f"Trajectory {trajectory.id} finished at tick {end_tick}")
-        # 7.) Send the trajectory-finished event via Wi-Fi
-        self.communication.wifi.sendEvent(
-            event='trajectory',
-            data={
-                'event': 'finished',
-                'trajectory_id': trajectory.id,
-                'data': trajectory_experiment_data
-            }
-        )
+            if start_tick is None:
+                self.logger.warning(f"Trajectory {trajectory.id}: STARTED tick missing")
+                self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
+                return None
 
-        self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
-        return trajectory_experiment_data
+            self.events.trajectory_started.set(data=start_tick, flags={'trajectory_id': trajectory.id})
+
+            self.logger.info(f"Trajectory {trajectory.id} started at tick {start_tick}")
+
+            # 4) Wait for FINISHED or ABORTED during execution
+            run_timeout = trajectory.length * LOOP_TIME_CONTROL + 2.0
+
+            data, trace = wait_for_events(
+                events=OR(
+                    (self._internal_events.trajectory_finished, pred_flag_equals('trajectory_id', trajectory.id)),
+                    (self._internal_events.trajectory_aborted, pred_flag_equals('trajectory_id', trajectory.id))
+                ),
+                timeout=run_timeout,
+                stale_event_time=0.2,
+            )
+
+            if data is TIMEOUT:
+                self.logger.warning(f"Trajectory {trajectory.id} timeout: No finish/abort event received")
+                try:
+                    self._send_trajectory_stop_signal_to_lowlevel()
+                except Exception as e:
+                    self.logger.error(f"Failed to send stop signal to low-level: {e}")
+                self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
+                return None
+
+            if trace.caused_by(self._internal_events.trajectory_aborted):
+                self.logger.warning(f"Trajectory {trajectory.id} aborted during execution")
+                self.events.trajectory_aborted.set(flags={'trajectory_id': trajectory.id})
+                self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
+                return None
+
+            self.utilities.beep(1000, 250, 2)
+            end_tick = data.get('tick')
+            if end_tick is None:
+                self.logger.warning(f"Trajectory {trajectory.id}: FINISHED tick missing")
+                self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
+                return None
+
+            # 5) Let the logger catch up a little beyond end_tick
+            while self.common.tick < (end_tick + 100):
+                time.sleep(0.1)
+
+            # 6) Read signals from the logging provider
+            lowlevel_signals = get_logging_provider().get_lowlevel_data(
+                signals=LOWLEVEL_STATE_SIGNALS,
+                start=start_tick,
+                end=end_tick
+            )
+
+            output_data = BILBO_TrajectoryData(
+                input_trajectory=trajectory,
+                state_trajectory=BILBO_StateTrajectory(
+                    states=get_state_trajectory_from_lowlevel_samples(lowlevel_signals)
+                )
+            )
+
+            trajectory_experiment_data = BILBO_TrajectoryExperimentData(
+                id=str(trajectory.id),
+                data=output_data,
+                meta=BILBO_TrajectoryExperimentMeta(
+                    robot_id=self.common.id,
+                    description='',
+                    time_stamp=datetime.now().isoformat(),
+                    robot_config=self.common.config,
+                    control_config=self.control.config,
+                    start_tick=start_tick,
+                    end_tick=end_tick,
+                ),
+            )
+
+            self.events.trajectory_finished.set(data=trajectory_experiment_data, flags={'trajectory_id': trajectory.id})
+
+            self.logger.info(f"Trajectory {trajectory.id} finished at tick {end_tick}")
+
+            # 7.) Send the trajectory-finished event via Wi-Fi
+            self.communication.wifi.sendEvent(
+                event='trajectory',
+                data={
+                    'event': 'finished',
+                    'trajectory_id': trajectory.id,
+                    'data': trajectory_experiment_data
+                }
+            )
+
+            self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
+            return trajectory_experiment_data
+
+        finally:
+            # Always re-enable external input, no matter which return path or exception happens.
+            self.control.enable_external_input = True
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_action_event(self, event: str):
@@ -1488,8 +1548,15 @@ class BILBO_ExperimentHandler:
         return sample
 
     # === EXTERNAL METHODS =============================================================================================
-    def _run_trajectory_external(self, trajectory_data) -> bool:
-        ...
+    def _run_trajectory_external(self, trajectory_data: dict) -> bool:
+        try:
+            trajectory = from_dict_auto(BILBO_InputTrajectory, trajectory_data)
+        except Exception as e:
+            self.logger.error(f"Failed to parse trajectory: {e}")
+            return False
+
+        run_in_thread(self.run_trajectory, trajectory)
+        return True
 
     # ------------------------------------------------------------------------------------------------------------------
     def _run_experiment_external(self, experiment: dict) -> bool:

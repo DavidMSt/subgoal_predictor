@@ -1,7 +1,6 @@
 import {OBJECT_MAPPING} from './mapping.js';
 import {Widget} from "./objects.js";
 import {getColor, isObject, splitPath} from '../helpers.js';
-import {TableWidget} from "./js/table.js";
 
 /* ================================================================================================================== */
 export class WidgetGroup extends Widget {

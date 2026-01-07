@@ -6,9 +6,7 @@ import time
 import numpy as np
 
 from core.utils.colors import random_color, random_color_from_palette
-from core.utils.plotting import run_periodic, safe_close, new_figure_agg, quick_line_plot_data_uri, fig_to_data_uri, \
-    save_figure
-from core.utils.time import delayed_execution, setInterval, setTimeout
+from core.utils.time import delayed_execution, setInterval, setTimeout, set_timeout
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.map.map import MapWidget
 from extensions.gui.src.lib.map.map_objects import Point, Agent, VisionAgent, CoordinateSystem, MapObjectGroup, Line
@@ -29,7 +27,7 @@ from extensions.gui.src.lib.objects.python.number import DigitalNumberWidget
 from extensions.gui.src.lib.objects.python.sliders import SliderWidget, ClassicSliderWidget
 from extensions.gui.src.lib.objects.python.select import MultiSelectWidget
 from extensions.gui.src.lib.objects.python.dial import RotaryDialWidget
-from extensions.gui.src.lib.objects.python.table import TableWidget
+from extensions.gui.src.lib.objects.python.table import Table
 from extensions.gui.src.lib.objects.python.text import TextWidget, StatusWidget, StatusWidgetElement
 from extensions.gui.src.lib.objects.python.text_input import InputWidget
 from core.utils.network.network import getHostIP
@@ -343,18 +341,18 @@ def main():
 
     page_data.addWidget(status_widget_1, width=7, height=5)
 
-    table = TableWidget(widget_id="my_table")
+    table = Table(widget_id="my_table")
 
     # 2. Register a callback to listen for edits
-
-    # 3. Add two columns
-    table.addColumn(id="first_name", title="First Name", width=0.5)
-    table.addColumn(id="age", title="Age", width=0.25, type='number', default_value=0, number_increment=0.1,
-                    text_align='right', )
-    table.addColumn(id="Check", title="Check", width=0.25, type='checkbox', default_value=True, disabled=True)
-    table.addColumn("button", title="Button", width=0.25, type='button', default_value="Click", )
-    table.addColumn("select", title="Select", width=0.25, type='select',
-                    default_select_options=['', 'Option 1', 'Option 2', 'Option 3'], default_value='', disabled=True)
+    #
+    # # 3. Add two columns
+    # table.addColumn(id="first_name", title="First Name", width=0.5)
+    # table.addColumn(id="age", title="Age", width=0.25, type='number', default_value=0, number_increment=0.1,
+    #                 text_align='right', )
+    # table.addColumn(id="Check", title="Check", width=0.25, type='checkbox', default_value=True, disabled=True)
+    # table.addColumn("button", title="Button", width=0.25, type='button', default_value="Click", )
+    # table.addColumn("select", title="Select", width=0.25, type='select',
+    #                 default_select_options=['', 'Option 1', 'Option 2', 'Option 3'], default_value='', disabled=True)
 
     def checkInput(input_value):
         print("Checking input:", input_value)
@@ -364,46 +362,49 @@ def main():
         except ValueError:
             return False
 
-    table.addColumn("input", title="Input", width=0.5, type='input', default_value=None, text_align='center',
-                    font_family='monospace', input_validator=checkInput)
-
-    # 4. Add some rows (with initial cell values)
-    row1 = table.addRow(id="row1", cells=["Alice", 30], text_color=[1, 0, 0])
-
-    table.addRow(id="row2", cells=["Bob", 25])
-    table.addRow(id="row3", cells=["Charlie", 28], text_color=[0, 0, 1])
-    table.addRow(id="row4", cells=["Diana", 32], text_color=[0, 0.5, 0])
-    table.addRow(id="row5", cells=["Ethan", 27])
-    table.addRow(id="row6", cells=["Fiona", 29], text_color=[0.5, 0, 0.5])
-    table.addRow(id="row7", cells=["George", 35], )
-    table.addRow(id="row8", cells=["Hannah", 24], text_color=[0.2, 0.2, 0.2])
-    table.addRow(id="row9", cells=["Ian", 31])
-    table.addRow(id="row10", cells=["Jenna", 26], text_color=[0, 0.7, 0.7])
-    table.addRow(id="row11", cells=["Kevin", 33], text_color=[1, 0.5, 0])
-
-    row12 = table.addRow(id="row12", cells=["Laura", 22], text_color=[0.3, 0.3, 1])
-
-    c11 = row12.getCell("age")
-    c11.set(5889)
-    c11.background_color = [0.5, 0.5, 0.5]
-    c11.font_family = 'monospace'
-
-    cell_for_select = row12.getCell("select")
-    cell_for_select.select_options = ['Option 1', 'Option 2', 'Option 3']
-
-    cell_for_check = row12.getCell("Check")
-    cell_for_check.set(False)
-
-    # page_data.addWidget(table, width=25, height=5)
-
-    # time.sleep(5)
-    cell1 = row1.getCell("button")
-    # cell1.set('Option 2')
-    cell1.callbacks.cell_button_clicked.register(lambda *args, **kwargs: print(f"Button clicked in cell 1"))
-    cell1.set("A")
-    cell1.button_disabled = True
-
-    cell1.update()
+    # # table.addColumn("input", title="Input", width=0.5, type='input', default_value=None, text_align='center',
+    # #                 font_family='monospace', input_validator=checkInput)
+    # #
+    # # # 4. Add some rows (with initial cell values)
+    # # row1 = table.addRow(id="row1", cells=["Alice", 30], text_color=[1, 0, 0])
+    # #
+    # # table.addRow(id="row2", cells=["Bob", 25])
+    # # table.addRow(id="row3", cells=["Charlie", 28], text_color=[0, 0, 1])
+    # # table.addRow(id="row4", cells=["Diana", 32], text_color=[0, 0.5, 0])
+    # # table.addRow(id="row5", cells=["Ethan", 27])
+    # # table.addRow(id="row6", cells=["Fiona", 29], text_color=[0.5, 0, 0.5])
+    # # table.addRow(id="row7", cells=["George", 35], )
+    # # table.addRow(id="row8", cells=["Hannah", 24], text_color=[0.2, 0.2, 0.2])
+    # # table.addRow(id="row9", cells=["Ian", 31])
+    # # table.addRow(id="row10", cells=["Jenna", 26], text_color=[0, 0.7, 0.7])
+    # # row12 = table.addRow(id="row12", cells=["Laura", 22], text_color=[0.3, 0.3, 1])
+    # #
+    # # def add_kevin():
+    # #     table.addRow(id="row11", cells=["Kevin", 33], text_color=[1, 0.5, 0])
+    # #
+    # # set_timeout(add_kevin, 5)
+    # #
+    # # c11 = row12.getCell("age")
+    # # c11.set(5889)
+    # # c11.background_color = [0.5, 0.5, 0.5]
+    # # c11.font_family = 'monospace'
+    # #
+    # # cell_for_select = row12.getCell("select")
+    # # cell_for_select.select_options = ['Option 1', 'Option 2', 'Option 3']
+    # #
+    # # cell_for_check = row12.getCell("Check")
+    # # cell_for_check.set(False)
+    # #
+    # # page_data.addWidget(table, width=25, height=5)
+    #
+    # # time.sleep(5)
+    # cell1 = row1.getCell("button")
+    # # cell1.set('Option 2')
+    # cell1.callbacks.cell_button_clicked.register(lambda *args, **kwargs: print(f"Button clicked in cell 1"))
+    # cell1.set("A")
+    # cell1.button_disabled = True
+    #
+    # cell1.update()
 
     # ------------------------------------------------------------------------------------------------------------------
     # Plots
@@ -482,82 +483,82 @@ def main():
 
     x = np.linspace(0, 2 * np.pi, 400)
     y = np.sin(x ** 2)
-
-    # One-liner: build Agg fig → data-URI → set on widget
-    up_image_1.updateImage(
-        quick_line_plot_data_uri(
-            x, y,
-            figsize=(5, 4), dpi=120,
-            title="Example: Sine of $x^2$",
-            xlabel="x", ylabel="sin(x²)",
-            color="royalblue", label=r"$\sin(x^2)$",
-        )
-    )
+    #
+    # # One-liner: build Agg fig → data-URI → set on widget
+    # up_image_1.updateImage(
+    #     quick_line_plot_data_uri(
+    #         x, y,
+    #         figsize=(5, 4), dpi=120,
+    #         title="Example: Sine of $x^2$",
+    #         xlabel="x", ylabel="sin(x²)",
+    #         color="royalblue", label=r"$\sin(x^2)$",
+    #     )
+    # )
 
     # ── LIVE PLOT (thread-safe, headless Agg) ─────────────────────────────────────
-    up_image_live2 = UpdatableImageWidget(widget_id='up_image_live2', title="Live (Agg backend)")
-    page_media.addWidget(up_image_live2, width=10, height=10)
-
-    def live_sine(widget: UpdatableImageWidget, stop_evt: threading.Event, fps: float = 8.0):
-        # Build a headless (Agg) figure
-        fig, ax = new_figure_agg(figsize=(5, 4), dpi=120)
-        x = np.linspace(0, 2 * np.pi, 400)
-        phase = 0.0
-        (line,) = ax.plot(x, np.sin(x + phase), lw=2, label="sin(x + phase)")
-        ax.set_title("Live: sin(x + phase)")
-        ax.set_xlabel("x")
-        ax.set_ylabel("Amplitude")
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc="upper right")
-
-        # Push first frame
-        up_image_live2.setFromMatplotLib(fig, dpi=120)
-
-        def tick():
-            nonlocal phase
-            phase += 0.2
-            line.set_ydata(np.sin(x + phase))
-            up_image_live2.setFromMatplotLib(fig, dpi=120)
-
-        try:
-            run_periodic(stop_evt.is_set, 1.0 / max(fps, 1e-6), tick)
-        finally:
-            safe_close(fig)
-
-    # Start/stop controls
-    stop_event2 = threading.Event()
-    threading.Thread(target=live_sine, args=(up_image_live2, stop_event2), daemon=True).start()
-
-    up_image_plotbg = UpdatableImageWidget(
-        widget_id="up_image_plotbg",
-        title="Sine Plot with Blue Background",
-        fit="contain"
-    )
-    page_media.addWidget(up_image_plotbg, width=8, height=8)
+    # up_image_live2 = UpdatableImageWidget(widget_id='up_image_live2', title="Live (Agg backend)")
+    # page_media.addWidget(up_image_live2, width=10, height=10)
+    #
+    # def live_sine(widget: UpdatableImageWidget, stop_evt: threading.Event, fps: float = 8.0):
+    #     # Build a headless (Agg) figure
+    #     fig, ax = new_figure_agg(figsize=(5, 4), dpi=120)
+    #     x = np.linspace(0, 2 * np.pi, 400)
+    #     phase = 0.0
+    #     (line,) = ax.plot(x, np.sin(x + phase), lw=2, label="sin(x + phase)")
+    #     ax.set_title("Live: sin(x + phase)")
+    #     ax.set_xlabel("x")
+    #     ax.set_ylabel("Amplitude")
+    #     ax.grid(True, alpha=0.3)
+    #     ax.legend(loc="upper right")
+    #
+    #     # Push first frame
+    #     up_image_live2.setFromMatplotLib(fig, dpi=120)
+    #
+    #     def tick():
+    #         nonlocal phase
+    #         phase += 0.2
+    #         line.set_ydata(np.sin(x + phase))
+    #         up_image_live2.setFromMatplotLib(fig, dpi=120)
+    #
+    #     try:
+    #         run_periodic(stop_evt.is_set, 1.0 / max(fps, 1e-6), tick)
+    #     finally:
+    #         safe_close(fig)
+    #
+    # # Start/stop controls
+    # stop_event2 = threading.Event()
+    # threading.Thread(target=live_sine, args=(up_image_live2, stop_event2), daemon=True).start()
+    #
+    # up_image_plotbg = UpdatableImageWidget(
+    #     widget_id="up_image_plotbg",
+    #     title="Sine Plot with Blue Background",
+    #     fit="contain"
+    # )
+    # page_media.addWidget(up_image_plotbg, width=8, height=8)
 
     # ── Make the figure with a background color ───────────────────────────────────
     x = np.linspace(0, 2 * np.pi, 400)
     y = np.sin(x)
 
-    fig, ax = new_figure_agg(figsize=(5, 4), dpi=120)
-    ax.plot(x, y, color="white", lw=2, label="sin(x)")
+    # fig, ax = new_figure_agg(figsize=(5, 4), dpi=120)
+    # ax.plot(x, y, color="white", lw=2, label="sin(x)")
 
-    # Set plot backgrounds directly in Matplotlib
-    fig.patch.set_facecolor("#1e1e2f")  # overall figure background
-    ax.set_facecolor("#2e2e4f")  # plotting area background
-
-    ax.set_title("Dark Plot with Colored Line", color="white")
-    ax.set_xlabel("x", color="white")
-    ax.set_ylabel("sin(x)", color="white")
-    ax.tick_params(colors="white")
-    ax.grid(True, alpha=0.3, color="lightgray")
-    ax.legend(facecolor="#2e2e4f", edgecolor="white", labelcolor="white")
-
-    # ── Push to the widget ───────────────────────────────────────────────────────
-    up_image_plotbg.updateImage(fig_to_data_uri(fig, dpi=120, transparent=False))
-
-    save_figure(fig, filepath='/Users/lehmann/Desktop/test2', fmt='pdf', dpi=120)
-    safe_close(fig)
+    # # Set plot backgrounds directly in Matplotlib
+    # fig.patch.set_facecolor("#1e1e2f")  # overall figure background
+    # ax.set_facecolor("#2e2e4f")  # plotting area background
+    #
+    # ax.set_title("Dark Plot with Colored Line", color="white")
+    # ax.set_xlabel("x", color="white")
+    # ax.set_ylabel("sin(x)", color="white")
+    # ax.tick_params(colors="white")
+    # ax.grid(True, alpha=0.3, color="lightgray")
+    # ax.legend(facecolor="#2e2e4f", edgecolor="white", labelcolor="white")
+    #
+    # # ── Push to the widget ───────────────────────────────────────────────────────
+    # up_image_plotbg.updateImage(fig_to_data_uri(fig, dpi=120, transparent=False))
+    #
+    # save_figure(fig, filepath='/Users/lehmann/Desktop/test2', fmt='pdf', dpi=120)
+    # safe_close(fig)
 
     # ==================================================================================================================
     # Groups Page
@@ -873,7 +874,7 @@ def main():
         ds2.set_value(random.random() * 10 - 5)
         # dataseries_1.setValue(random.random() * 10 - 5)
 
-        c11.set(random.randint(0, 10000))
+        # c11.set(random.randint(0, 10000))
 
         # progress_indicator.sendUpdate({'value': i % 100 / 100, 'label': f"{i % 100}%"})
         i += 1

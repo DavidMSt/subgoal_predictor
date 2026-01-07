@@ -31,8 +31,6 @@ class BILBO_Utilities:
             data = None
         return data
 
-
-
     # ------------------------------------------------------------------------------------------------------------------
     def closeLivePlots(self, state_name: str = None):
 

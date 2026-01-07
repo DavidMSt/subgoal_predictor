@@ -437,3 +437,44 @@ function getCircularReplacer() {
         return value;
     };
 }
+
+
+
+
+export function formatNumberWithIncrement(number, increment, method = "round") {
+  if (increment <= 0) {
+    throw new Error("Increment must be a positive number");
+  }
+
+  // Determine decimal precision of the increment
+  const incrementStr = increment.toString();
+  const decimals = incrementStr.includes(".")
+    ? incrementStr.split(".")[1].length
+    : 0;
+
+  const scale = Math.pow(10, decimals);
+
+  // Scale values to integers to avoid floating point issues
+  const scaledNumber = Math.round(number * scale);
+  const scaledIncrement = Math.round(increment * scale);
+
+  let adjusted;
+  switch (method) {
+    case "floor":
+      adjusted =
+        Math.floor(scaledNumber / scaledIncrement) * scaledIncrement;
+      break;
+    case "ceil":
+      adjusted =
+        Math.ceil(scaledNumber / scaledIncrement) * scaledIncrement;
+      break;
+    case "round":
+    default:
+      adjusted =
+        Math.round(scaledNumber / scaledIncrement) * scaledIncrement;
+      break;
+  }
+
+  // Scale back down and format with fixed decimals
+  return (adjusted / scale).toFixed(decimals);
+}

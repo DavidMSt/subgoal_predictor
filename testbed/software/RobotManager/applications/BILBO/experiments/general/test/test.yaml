@@ -1,6 +1,10 @@
 id: test
 description: Test experiment
 actions:
+  action0:
+    time: 0.1
+    type: enable_external_input
+    enabled: false
   action1:
     type: set_mode
     mode: BALANCING
@@ -38,3 +42,6 @@ actions:
     after: action2
     type: wait_ticks
     ticks: 20
+  reset:
+    type: reset
+    after: action3

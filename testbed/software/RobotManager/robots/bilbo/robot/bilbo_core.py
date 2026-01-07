@@ -1,14 +1,24 @@
+import collections
+import dataclasses
+import enum
+import math
 import time
+from typing import Deque, Optional, Tuple
+
+import dacite
+import numpy as np
+from dacite import from_dict
 
 from core.communication.protocol import JSON_Message
 from core.communication.device_server import Device
 from core.utils.remote_file.remote_file import RemoteFileClient
-from robots.bilbo.robot.bilbo_data import BILBO_Sample, bilboSampleFromDict
-from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_PASSWORD, BILBO_USER_NAME
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals
 from core.utils.logging_utils import Logger, LOG_LEVELS
 from core.utils.sound.sound import speak, playSound
+
+from robots.bilbo.robot.bilbo_data import BILBO_Sample, bilboSampleFromDict
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_PASSWORD, BILBO_USER_NAME
 
 
 @callback_definition
@@ -35,6 +45,13 @@ class BILBO_Interface_Events:
     start: Event
 
 
+@dataclasses.dataclass
+class _UprightStaticEntry:
+    t: float  # monotonic time [s]
+    theta: float  # pitch [rad]
+    v: float  # forward velocity [m/s]
+
+
 class BILBO_Core:
     device: Device
 
@@ -45,8 +62,13 @@ class BILBO_Core:
 
     file_handler: RemoteFileClient
 
+    # ---- Upright/static checker state ----
+    _upright_static_buf: Deque[_UprightStaticEntry]
+    _upright_static_last: Optional[Tuple[float, float]]  # (theta, v)
+
     # ==================================================================================================================
-    def __init__(self, robot_id: str, device: Device):
+    def __init__(self, robot_id: str, device: Device, robot):
+        self.bilbo = robot
         self.device = device
         self.id = robot_id
         self.logger = Logger(f"{self.id}")
@@ -70,6 +92,107 @@ class BILBO_Core:
             password=BILBO_PASSWORD
         )
         self.file_handler.connect()
+
+        self._init_upright_static_checker()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _init_upright_static_checker(self) -> None:
+        """Initialize rolling buffer used by is_upright_and_static()."""
+        self._upright_static_buf = collections.deque()
+        self._upright_static_last = None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _feed_upright_static_checker(self, sample: BILBO_Sample, now: Optional[float] = None) -> None:
+        """
+        Feed one sample into the rolling buffer.
+        Uses:
+          - sample.lowlevel.estimation.state.theta (rad)
+          - sample.lowlevel.estimation.state.v (m/s)
+        """
+        if now is None:
+            now = time.monotonic()
+
+        try:
+            theta = float(sample.lowlevel.estimation.state.theta)
+            v = float(sample.lowlevel.estimation.state.v)
+        except Exception:
+            # If structure missing or not castable for some reason, ignore this sample.
+            return
+
+        self._upright_static_last = (theta, v)
+        self._upright_static_buf.append(_UprightStaticEntry(t=now, theta=theta, v=v))
+
+        # Prevent unbounded growth: keep last N seconds of history.
+        horizon_s = 10.0
+        cutoff = now - horizon_s
+        while self._upright_static_buf and self._upright_static_buf[0].t < cutoff:
+            self._upright_static_buf.popleft()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def is_upright_and_static(
+            self,
+            upright_threshold_rad: float = np.deg2rad(0.15),
+            static_threshold_mps: float = 0.02,
+            time_window_s: float = 2.0,
+            allowed_outlier_fraction: float = 0.10,  # ignore worst 10% spikes
+            min_samples: int = 8,  # must have enough samples in window
+    ) -> bool:
+        """
+        Returns True if, over the last `time_window_s`, the robot was:
+          - upright: |theta| <= upright_threshold_rad
+          - static:  |v|     <= static_threshold_mps
+        while robustly ignoring up to `allowed_outlier_fraction` of worst samples.
+
+        Tip: If you meant 0.1 deg and 0.25 cm/s (as in your comments), use:
+          upright_threshold_rad = 0.1 * math.pi / 180.0
+          static_threshold_mps  = 0.25 / 100.0
+        """
+
+        def _trimmed_max_abs(values, trim_fraction: float) -> float:
+            """
+            Robust 'max' that ignores a fraction of the worst outliers.
+            Example: trim_fraction=0.1 ignores the largest 10% |values|.
+            """
+            if not values:
+                return float("inf")
+
+            abs_vals = sorted(abs(x) for x in values)
+            n = len(abs_vals)
+            if n == 0:
+                return float("inf")
+
+            keep = int(n * (1.0 - trim_fraction))
+            keep = max(1, min(keep, n))
+            return abs_vals[keep - 1]
+
+        if not hasattr(self, "_upright_static_buf") or self._upright_static_buf is None:
+            self._init_upright_static_checker()
+
+        if not self._upright_static_buf:
+            return False
+
+        now = time.monotonic()
+        cutoff = now - float(time_window_s)
+
+        # Prune outside the window
+        while self._upright_static_buf and self._upright_static_buf[0].t < cutoff:
+            self._upright_static_buf.popleft()
+
+        window = list(self._upright_static_buf)
+        if len(window) < int(min_samples):
+            return False
+
+        thetas = [e.theta for e in window]
+        vs = [e.v for e in window]
+
+        theta_robust_max = _trimmed_max_abs(thetas, trim_fraction=allowed_outlier_fraction)
+        v_robust_max = _trimmed_max_abs(vs, trim_fraction=allowed_outlier_fraction)
+
+        return (theta_robust_max <= upright_threshold_rad) and (v_robust_max <= static_threshold_mps)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_robot(self):
+        return self.bilbo
 
     # ------------------------------------------------------------------------------------------------------------------
     def beep(self, frequency=1000, time_ms=250, repeats=1):
@@ -159,3 +282,6 @@ class BILBO_Core:
             self.events.initialized.set(data=self.data)
 
         self.events.stream.set(data=self.data)
+
+        # Feed the upright/static calculation thingy
+        self._feed_upright_static_checker(self.data, now=current_time)

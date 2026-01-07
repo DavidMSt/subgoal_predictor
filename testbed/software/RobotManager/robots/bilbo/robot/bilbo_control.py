@@ -1,7 +1,8 @@
 from core.utils.callbacks import callback_definition, CallbackContainer
+from core.utils.dataclass_utils import from_dict_auto
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 from robots.bilbo.robot.bilbo_data import BILBO_Sample
-from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_ControlConfig
 from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals
 
 
@@ -48,6 +49,18 @@ class BILBO_Control:
 
         self.logger.info(f"Robot {self.id}: Set Control Mode to {mode.name}")
         self.device.executeFunction(function_name='setControlMode', arguments={'mode': mode})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_control_config(self) -> BILBO_ControlConfig | None:
+        config = self.device.executeFunction(function_name='get_control_config',
+                                             arguments=None,
+                                             return_type=dict,
+                                             request_response=True)
+        if config is None:
+            self.logger.error(f"Could not read control configuration from robot {self.id}")
+
+        config = from_dict_auto(BILBO_ControlConfig, config)
+        return config
 
     # ------------------------------------------------------------------------------------------------------------------
     def setNormalizedBalancingInput(self, forward, turn, *args, **kwargs):

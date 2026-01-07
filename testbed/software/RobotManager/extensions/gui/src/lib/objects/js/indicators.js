@@ -80,9 +80,25 @@ export class CircleIndicator extends Widget {
         // no dynamic data updates
     }
 
+    singleBlink(time = 200) {
+        const el = this.element;
+
+        el.classList.remove("pulse"); // reset if already running
+        void el.offsetWidth;          // force reflow (important)
+        el.classList.add("pulse");
+
+        setTimeout(() => {
+            el.classList.remove("pulse");
+        }, time);
+    }
+
+
     updateConfig(data) {
         this.configuration = {...this.configuration, ...data};
         this.configureElement(this.element);
+    }
+
+    resize() {
     }
 }
 
@@ -352,7 +368,7 @@ export class ProgressIndicator extends Widget {
         this.configureElement(this.element);
     }
 
-    showBar(show){
+    showBar(show) {
         this.barContainer.style.display = show ? 'block' : 'none';
     }
 

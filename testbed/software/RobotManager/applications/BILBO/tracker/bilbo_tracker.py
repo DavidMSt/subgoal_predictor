@@ -202,6 +202,18 @@ class BILBO_Tracker_Callbacks:
 class BILBO_Tracker_Events:
     new_sample: Event
     description_received: Event
+    initialized: Event
+    error: Event
+    new_rigid_body: Event
+    new_tracked_object: Event = Event(copy_data_on_set=False)
+    tracked_object_removed: Event = Event(copy_data_on_set=False)
+
+
+@callback_definition
+class BILBO_Tracker_Callbacks:
+    new_sample: CallbackContainer
+    description_received: CallbackContainer
+    new_rigid_body: CallbackContainer
 
 
 class BILBO_Tracker_Status(enum.StrEnum):
@@ -220,16 +232,20 @@ class BILBO_Tracker:
     origin: TrackedOrigin | None = None
     events: BILBO_Tracker_Events
 
+    samples: int = 0
+
     # === INIT =========================================================================================================
     def __init__(self):
         self.logger = Logger('BILBO Tracker', 'DEBUG')
 
         self.rigid_bodies = {}
+        self.sample = None
 
         self.robots = {}
         self.origin = None
 
         self.events = BILBO_Tracker_Events()
+        self.callbacks = BILBO_Tracker_Callbacks()
 
         self.optitrack = OptiTrack(server_address='palantir.lan')
         self.optitrack.events.sample.on(self._onSample)
@@ -246,10 +262,10 @@ class BILBO_Tracker:
         if not success:
             self.logger.error("Could not start OptiTrack. Tracking disabled")
             self.status = BILBO_Tracker_Status.DISABLED
+            self.events.error.set()
             return False
         self.logger.info("Starting Tracker")
 
-        self.status = BILBO_Tracker_Status.RUNNING
         return True
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -271,6 +287,7 @@ class BILBO_Tracker:
 
         self.robots[robot_id] = robot
         self.logger.info(f"BILBO robot {robot_id} added to tracker")
+        self.events.new_tracked_object.set(robot)
         return robot
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -284,6 +301,8 @@ class BILBO_Tracker:
             self.logger.info(f"BILBO robot {robot_id} removed from tracker")
         else:
             self.logger.error(f"BILBO robot {robot_id} does not exist")
+
+        self.events.tracked_object_removed.set(robot_id)
 
     # ------------------------------------------------------------------------------------------------------------------
     def add_origin(self, origin_id: str, config: BILBO_OriginConfig) -> TrackedOrigin | None:
@@ -305,6 +324,9 @@ class BILBO_Tracker:
         for robot in self.robots.values():
             if robot.origin is None:
                 robot.origin = self.origin
+
+
+        self.events.new_tracked_object.set(self.origin)
         return self.origin
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -320,6 +342,11 @@ class BILBO_Tracker:
 
     # === PRIVATE METHODS ==============================================================================================
     def _onSample(self, sample: dict[str, RigidBodySample]):
+
+
+        self.sample = sample
+        self.samples += 1
+
         for robot in self.robots.values():
             robot.tracking_valid = False
 
@@ -331,13 +358,18 @@ class BILBO_Tracker:
                 self.origin.tracking_valid = False
 
         for name, data in sample.items():
+
+            if name not in self.rigid_bodies:
+                self.logger.info(f"New rigid body found: {name}")
+                self.callbacks.new_rigid_body.call(name)
+                self.events.new_rigid_body.set(name)
+
             if name in self.robots:
                 self.robots[name].update(data)
                 self.robots[name].tracking_valid = data.valid
 
+        self.callbacks.new_sample.call()
         self.events.new_sample.set()
-
-    # ------------------------------------------------------------------------------------------------------------------
 
     # ------------------------------------------------------------------------------------------------------------------
     def _onDescriptionReceived(self, rigid_bodies: dict):
@@ -357,7 +389,10 @@ class BILBO_Tracker:
         #             self.robots[id] = robot
         #             self.logger.info(f"BILBO robot {id} added to tracker")
 
+        self.status = BILBO_Tracker_Status.RUNNING
+        self.callbacks.description_received.call(rigid_bodies)
         self.events.description_received.set()
+        self.events.initialized.set()
 
 
 if __name__ == '__main__':

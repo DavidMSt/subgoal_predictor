@@ -699,6 +699,426 @@ export class DigitalNumberWidget extends Widget {
     }
 }
 
+
+export class DigitalClockWidget extends Widget {
+    constructor(id, config = {}) {
+        super(id, config);
+
+        const defaults = {
+            visible: true,
+            color: [0, 0, 0, 0],
+            text_color: '#fff',
+
+            // Relative timer formatting (fixed width)
+            // Supported tokens: HH, mm, ss, S, SS, SSS (subset)
+            display_format: 'HH:mm:ss.SS',
+
+            // persisted state
+            running: false,
+
+            // value in seconds, OR null => placeholder
+            value: null,
+
+            // increment = discrete step size in seconds (important!)
+            increment: 0.1,
+
+            allow_negative: false,
+        };
+
+        this.configuration = {...defaults, ...this.configuration, ...config};
+
+        this._timer = null;
+        this._lastRendered = null;
+
+        // Monotonic/perf-based timing:
+        // baseSeconds = accumulated seconds at last start (or stopped value)
+        // t0 = performance.now() when started; elapsed is quantized by increment
+        this._t0 = null;
+        this._baseSeconds = this._coerceSeconds(this.configuration.value);
+
+        this.element = this.initializeElement();
+        this.configureElement(this.element);
+        this.assignListeners(this.element);
+
+        if (this.configuration.running && this._baseSeconds !== null) this._startInternal();
+        else this._renderFromState();
+
+        setTimeout(() => this.resize(), 250);
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    initializeElement() {
+        const el = document.createElement('div');
+        el.id = this.id;
+        el.classList.add('widget', 'highlightable', 'digitalClockWidget');
+
+        el.style.backgroundColor = getColor(this.configuration.color);
+        el.style.color = getColor(this.configuration.text_color);
+
+        this.value_container = document.createElement('div');
+        this.value_container.classList.add('dcValueContainer');
+        el.appendChild(this.value_container);
+
+        this.value = document.createElement('div');
+        this.value.classList.add('dcValue');
+        this.value_container.appendChild(this.value);
+
+        return el;
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    configureElement(element = this.element) {
+        super.configureElement(element);
+
+        const c = this.configuration;
+        element.style.display = c.visible ? '' : 'none';
+        element.style.backgroundColor = getColor(c.color);
+        element.style.color = getColor(c.text_color);
+
+        // Sync internal base from config.value (null allowed)
+        const cfgValue = this._coerceSeconds(c.value);
+        this._baseSeconds = cfgValue;
+
+        // Normalize invalid running state: cannot run with null value
+        if (c.running && cfgValue === null) {
+            this.configuration.running = false;
+        }
+
+        // Apply running state
+        if (this.configuration.running) this._startInternal();
+        else this._stopInternal(false);
+
+        this._renderFromState();
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    assignListeners(el) {
+        super.assignListeners(el);
+        window.addEventListener('resize', () => this.resize());
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    resize() {
+        if (this.value_container) {
+            getFittingFontSizeSingleContainer(this.value_container, 0, 0, 100, 0);
+        }
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    update(data) {
+        // Supports:
+        // - number => seconds
+        // - null => placeholder
+        // - { value } / { running } / { value, running }
+        if (typeof data === 'number' || data === null) {
+            this.set(data);
+            return;
+        }
+        if (!data || typeof data !== 'object') return;
+
+        if (Object.prototype.hasOwnProperty.call(data, 'value')) this.set(data.value);
+        if (Object.prototype.hasOwnProperty.call(data, 'running')) (data.running ? this.start() : this.stop());
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    updateConfig(data) {
+        this.configuration = {...this.configuration, ...data};
+        this.configureElement(this.element);
+    }
+
+    // ===== Public API (callable from python via self.function) =====
+
+    start() {
+        // If placeholder -> starting begins at 0.0 (or keep if already numeric)
+        if (this._baseSeconds === null) {
+            this._baseSeconds = 0.0;
+            this.configuration.value = 0.0;
+        }
+
+        this.configuration.running = true;
+        this._startInternal();
+    }
+
+    stop() {
+        // Freeze BEFORE flipping running-dependent logic
+        this._stopInternal(true);
+        this.configuration.running = false;
+    }
+
+    reset() {
+        this.stop();
+        this.set(0);
+    }
+
+    /**
+     * @param {number|null} seconds number => set base seconds, null => placeholder
+     */
+    set(seconds) {
+        const v = this._coerceSeconds(seconds);
+
+        // Setting null => placeholder, always stopped
+        if (v === null) {
+            this._stopInternal(false);
+            this._baseSeconds = null;
+            this.configuration.value = null;
+            this.configuration.running = false;
+            this._t0 = null;
+            this._renderFromState();
+            return;
+        }
+
+        const q = this._quantize(v);
+
+        // If currently running, keep running but rebase from now
+        const wasRunning = !!this.configuration.running;
+
+        this._baseSeconds = q;
+        this.configuration.value = q;
+
+        if (wasRunning) {
+            this._t0 = performance.now();
+            this._startInternal(); // ensures interval matches increment
+        }
+
+        this._renderFromState();
+    }
+
+    /**
+     * Set to local wall clock time-of-day (seconds since midnight).
+     */
+    setToWallClockNow() {
+        const now = new Date();
+        const seconds =
+            now.getHours() * 3600 +
+            now.getMinutes() * 60 +
+            now.getSeconds() +
+            now.getMilliseconds() / 1000;
+
+        this.set(seconds);
+    }
+
+    // ===== Internal timing =====
+
+    _startInternal() {
+        // cannot run in placeholder mode
+        if (this._baseSeconds === null) {
+            this.configuration.running = false;
+            return this._renderFromState();
+        }
+
+        // Restart timer if increment changed
+        const desiredMs = this._tickMs();
+        const haveTimer = !!this._timer;
+
+        if (haveTimer && this._timerMs === desiredMs) return;
+
+        if (this._timer) {
+            clearInterval(this._timer);
+            this._timer = null;
+        }
+
+        // Start from now
+        this._t0 = performance.now();
+        this._timerMs = desiredMs;
+
+        this._timer = setInterval(() => {
+            const s = this._computeSeconds(true);
+            this.configuration.value = s; // keep config hot for reloads
+            this._renderFromState();
+        }, desiredMs);
+
+        const s0 = this._computeSeconds(true);
+        this.configuration.value = s0;
+        this._renderFromState();
+    }
+
+    _stopInternal(writeBackValue = true) {
+        // Freeze using internal state regardless of configuration.running
+        const frozen = this._computeSeconds(true); // may be null
+
+        if (this._timer) {
+            clearInterval(this._timer);
+            this._timer = null;
+        }
+
+        this._t0 = null;
+
+        if (frozen === null) {
+            this._baseSeconds = null;
+            if (writeBackValue) this.configuration.value = null;
+        } else {
+            this._baseSeconds = frozen;
+            if (writeBackValue) this.configuration.value = frozen;
+        }
+
+        this._renderFromState();
+    }
+
+    _tickMs() {
+        const inc = Number(this.configuration.increment);
+        const ms = isFinite(inc) && inc > 0 ? Math.round(inc * 1000) : 100;
+        return Math.max(10, ms);
+    }
+
+    /**
+     * Compute current seconds.
+     * If forceCompute=true, uses internal base+t0 even if config.running is false
+     * (this fixes stop() freeze bugs).
+     */
+    _computeSeconds(forceCompute = false) {
+        if (this._baseSeconds === null) return null;
+
+        // If not running and not forced, return base
+        if (!forceCompute && (!this.configuration.running || this._t0 == null)) {
+            return this._baseSeconds;
+        }
+
+        // If we don't have a start time, just return base
+        if (this._t0 == null) return this._baseSeconds;
+
+        const base = this._baseSeconds || 0;
+        const inc = this._incSafe();
+        const elapsed = (performance.now() - this._t0) / 1000;
+
+        // Discrete stepping: base + floor(elapsed/inc)*inc
+        const steps = Math.floor(elapsed / inc) * inc;
+        const s = base + steps;
+
+        return this.configuration.allow_negative ? s : Math.max(0, s);
+    }
+
+    _incSafe() {
+        const inc = Number(this.configuration.increment);
+        return (isFinite(inc) && inc > 0) ? inc : 0.1;
+    }
+
+    _quantize(v) {
+        const inc = this._incSafe();
+        // quantize to nearest increment step
+        const q = Math.round(v / inc) * inc;
+        // avoid tiny float tails
+        return Number(q.toFixed(9));
+    }
+
+    // ===== Rendering =====
+
+    _renderFromState() {
+        const v = this._computeSeconds(false);
+
+        if (v === null) {
+            const placeholder = this._placeholderForFormat(this.configuration.display_format);
+            this._renderText(placeholder);
+            return;
+        }
+
+        const formatted = this._formatSeconds(v, this.configuration.display_format);
+        this._renderText(formatted);
+    }
+
+    _renderText(text) {
+        if (text === this._lastRendered) return;
+        this._lastRendered = text;
+
+        if (this.value) {
+            this.value.style.width = `${text.length}ch`;
+            this.value.textContent = text;
+        }
+    }
+
+    _placeholderForFormat(fmt) {
+        // Replace token runs with same-length dashes; keep separators as-is.
+        // Example: "HH:mm:ss.SS" -> "--:--:--.--"
+        //          "hh:mm:ss.SS" -> "--:--:--.--"
+        //          "HH:mm:ss.SSS" -> "--:--:--.---"
+        const s = String(fmt);
+        let out = "";
+        for (let i = 0; i < s.length; ) {
+            const ch = s[i];
+            if ("HhmsS".includes(ch)) {
+                let j = i + 1;
+                while (j < s.length && s[j] === ch) j++;
+                out += "-".repeat(j - i);
+                i = j;
+            } else {
+                out += ch;
+                i++;
+            }
+        }
+        return out;
+    }
+
+    _coerceSeconds(v) {
+        if (v === null || v === undefined) return null;
+        const n = Number(v);
+        if (!isFinite(n)) return null;
+        return n;
+    }
+
+    _formatSeconds(totalSeconds, fmt) {
+        let s = Number(totalSeconds) || 0;
+        if (!this.configuration.allow_negative) s = Math.max(0, s);
+
+        const inc = this._incSafe();
+
+        // Since we step by inc, compute frac from quantized time
+        const q = this._quantize(s);
+        const whole = Math.floor(q);
+        const frac = q - whole;
+
+        const HH = String(Math.floor(whole / 3600)).padStart(2, '0');
+        const mm = String(Math.floor((whole % 3600) / 60)).padStart(2, '0');
+        const ss = String(whole % 60).padStart(2, '0');
+
+        // convert fractional seconds to ms
+        const ms = Math.round(frac * 1000);
+        const S1 = String(Math.floor(ms / 100));
+        const S2 = String(Math.floor(ms / 10)).padStart(2, '0');
+        const S3 = String(ms).padStart(3, '0');
+
+        return String(fmt)
+            .replace(/SSS/g, S3)
+            .replace(/SS/g, S2)
+            .replace(/HH/g, HH)
+            .replace(/hh/g, HH) // treat hh same for relative timer
+            .replace(/mm/g, mm)
+            .replace(/ss/g, ss)
+            .replace(/S/g, S1);
+    }
+}
+
+
+export class TimecodeWidget extends Widget {
+    constructor(id, config = {}) {
+        super(id, config);
+
+        const defaults = {
+            color: [0, 0, 0, 0],
+            text_color: '#fff',
+            automatic: false,
+            fps: 25
+        }
+    }
+
+    initializeElement() {
+    }
+
+    resize() {
+    }
+
+    update(data) {
+        return undefined;
+    }
+
+    updateConfig(data) {
+        return undefined;
+    }
+
+    set(timecode) {
+
+    }
+}
+
+
 export class LineScrollTextWidget extends Widget {
     constructor(id, payload = {}) {
         super(id, payload);

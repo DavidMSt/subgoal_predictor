@@ -355,8 +355,6 @@ class Event:
 
 
 # === SUBSCRIBER =======================================================================================================
-
-
 @dataclass
 class _EventPayload:
     # event_id: str | None = None
@@ -377,7 +375,6 @@ class SubscriberMatch:
 
     def __repr__(self):
         return f"SubscriberMatch(time={self.time:.3f}, match={self.match!r})"
-        # return f"SubscriberMatch(time={self.time:.3f}, match={self.match!r}, trace_keys={list(self.trace_data)[:3] if self.trace_data else []}...)"
 
     def _resolve_node_payload(self, node) -> tuple[Optional[dict], Optional[Any], Optional[Any]]:
         """
@@ -599,9 +596,6 @@ class Subscriber:
     stale_event_time: float | None
     once: bool
     type: SubscriberType
-
-    # finished_events: dict[str, bool]
-    # payloads: dict[str, _EventPayload | None]
 
     matches: list[SubscriberMatch]  # Previous matches (recent, pruned)
 

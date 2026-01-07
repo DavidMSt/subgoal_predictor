@@ -5,14 +5,17 @@ from typing import Dict, Optional, Callable
 import numpy as np
 from qmt import wrapToPi
 
+from applications.BILBO.gui.applications.dilc_app import DILC_APP
 # === CUSTOM MODULES ===================================================================================================
-from applications.BILBO.gui.applications.dilc_app import DILC_App
 from applications.BILBO.gui.applications.input_viewer import InputViewerApplication
-from applications.BILBO.testbed_manager import BILBO_TestbedManager, BILBO_TestbedAgent
+from applications.BILBO.testbed.testbed_manager import BILBO_TestbedManager, BILBO_TestbedAgent
 from core.utils.callbacks import callback_definition, CallbackContainer, Callback
 from core.utils.colors import get_color_from_palette
 from core.utils.lipo import lipo_soc
 from core.utils.logging_utils import Logger, addLogRedirection, LOGGING_COLORS
+from core.utils.time import setTimeout, set_timeout
+from core.utils.timecode.timecode import Timecode
+from core.utils.timecode.timecode_server import TimecodeServerStatus
 from extensions.babylon.src.babylon import BabylonVisualization
 from extensions.babylon.src.lib.objects.bilbo.bilbo import BabylonBilbo
 from extensions.babylon.src.lib.objects.box.box import WallFancy
@@ -24,9 +27,10 @@ from extensions.gui.src.lib.objects.objects import Widget_Group, ContextMenuItem
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.objects.python.buttons import MultiStateButton, Button
 from extensions.gui.src.lib.objects.python.indicators import BatteryIndicatorWidget, ConnectionIndicator, \
-    InternetIndicator, JoystickIndicator, ProgressIndicator
-from extensions.gui.src.lib.objects.python.number import DigitalNumberWidget
+    InternetIndicator, JoystickIndicator, ProgressIndicator, CircleIndicator
+from extensions.gui.src.lib.objects.python.number import DigitalNumberWidget, DigitalClockWidget
 from extensions.gui.src.lib.objects.python.popup import YesNoPopup
+from extensions.gui.src.lib.objects.python.table import Table, TextColumn, IndicatorColumn, NumberColumn
 from extensions.gui.src.lib.objects.python.text import TextWidget, StatusWidget, StatusWidgetElement
 from extensions.gui.src.lib.plot.realtime.rt_plot import ServerMode, UpdateMode, TimeSeries, RT_Plot_Widget
 from extensions.joystick.joystick_manager import Joystick
@@ -36,6 +40,8 @@ from robots.bilbo.robot.bilbo_data import BILBO_Sample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandler_Status
 from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory
+from robots.bilbo.robot.experiment.multi_trial_experiments import DILC_Experiment
+
 # from robots.bilbo.robot.experiment.experiments import DILC_Experiment
 
 # === GLOBAL VARIABLES =================================================================================================
@@ -60,6 +66,9 @@ class BILBO_Application_GUI_Robot_Category:
 
         self.robot.core.events.stream.on(self._streamCallback)
         self.logger = Logger(f"Category {self.robot.id}")
+
+        # Register some events
+        self.robot.experiment_handler.events.dilc_experiment_started.on(self._onDILCExperimentStarted)
 
     # === METHODS ======================================================================================================
 
@@ -737,11 +746,11 @@ class BILBO_Application_GUI_Robot_Category:
         # dilc_button.callbacks.click.register(self.robot.experiments.startDILC)
         self.experiment_apps_group.addWidget(dilc_button, row=1, column=1, width=1, height=1)
 
-        def dilc_button_click(*args, **kwargs):
-            self.robot.experiment_handler.runExperiment(DILC_Experiment)
-            self._openDILCApp()
+        # def dilc_button_click(*args, **kwargs):
+        #     self.robot.experiment_handler.runExperiment(DILC_Experiment)
+        #     self._openDILCApp()
 
-        dilc_button.callbacks.click.register(dilc_button_click)
+        # dilc_button.callbacks.click.register(dilc_button_click)
 
         iml_button = Button(widget_id='iml_button', text='IML', color=[0.4, 0.4, 0.4])
         self.experiment_apps_group.addWidget(iml_button, row=1, column=2, width=1, height=1)
@@ -756,9 +765,15 @@ class BILBO_Application_GUI_Robot_Category:
         dilc_rls_button.disable()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _openDILCApp(self, *args, **kwargs):
-        dilc_app = DILC_App(self.robot)
-        dilc_app.open(gui=self.gui)
+    # def _openDILCApp(self, *args, **kwargs):
+    #     dilc_app = DILC_App(self.robot)
+    #     dilc_app.open(gui=self.gui)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _onDILCExperimentStarted(self, data: DILC_Experiment, *args, **kwargs):
+        self.logger.info("Starting DILC App ... ")
+        app = DILC_APP(robot=self.robot, experiment=data)
+        app.open(gui=self.gui)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _streamCallback(self, sample: BILBO_Sample, *args, **kwargs):
@@ -954,7 +969,7 @@ class BILBO_Application_App_Robot_Folder:
 
 
 # ======================================================================================================================
-class BILBO_GUI_TestbedPage:
+class BILBO_GUI_OverviewPage:
     page: Page
     manager: BILBO_TestbedManager
 
@@ -983,9 +998,22 @@ class BILBO_GUI_TestbedPage:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _buildPage(self):
+        # Statuses
+        # Make a group
+        # status_group = Widget_Group(group_id='status_group', title='Status', rows=1, columns=1, show_title=True)
+        # self.page.addWidget(status_group, row=1, column=1, width=8, height=8)
+
+        self._build_tracker_overview()
+
+        self._build_timecode()
+
+        display_group = Widget_Group(group_id='display_group', title='Display', rows=1, columns=1, show_title=True)
+        self.page.addWidget(display_group, row=15, column=1, width=10, height=4)
+
+        # Testbed
         testbed_size = [3, 3]  # Size in meters
         self.babylon_widget = BabylonWidget(widget_id='babylon_widget')
-        self.page.addWidget(self.babylon_widget, row=1, column=1, height=18, width=24)
+        self.page.addWidget(self.babylon_widget, row=8, column=32, height=11, width=19)
 
         # Floor is kept larger than testbed for visual purposes
         floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
@@ -1012,6 +1040,198 @@ class BILBO_GUI_TestbedPage:
         self.babylon_visualization.addObject(wall4)
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _build_timecode(self):
+        # Timecode
+        timecode_group = Widget_Group(group_id='timecode_group',
+                                      title='Timecode',
+                                      rows=1,
+                                      columns=4,
+                                      fill_empty=True,
+                                      show_title=True)
+        timecode_status_indicator = CircleIndicator()
+        timecode_group.addWidget(timecode_status_indicator, row=1, column=1, width=1, height=1)
+        timecode_fps = DigitalNumberWidget(increment=0.01, min_value=0, max_value=100, value=0,
+                                           show_unused_digits=False)
+        timecode_group.addWidget(timecode_fps, row=1, column=2, width=1, height=1)
+        timecode_clock = DigitalClockWidget(display_format="hh:mm:ss")
+        timecode_group.addWidget(timecode_clock, row=1, column=3, width=2, height=1)
+
+        def initialize_timecode(*args, **kwargs):
+            fps = self.manager.timecode_server.get_fps()
+            timecode_fps.value = fps
+            timecode_status_indicator.updateConfig(color=[0, 0.8, 0])
+            timecode_clock.set(self.manager.timecode_server.get_time())
+            timecode_clock.start()
+
+        def stop_timecode(*args, **kwargs):
+            timecode_status_indicator.updateConfig(color=[0.8, 0, 0])
+            timecode_clock.stop()
+            timecode_clock.set(None)
+
+        def update_timecode(timecode: Timecode):
+            # seconds = self.manager.timecode_server.get_time()
+            timecode_clock.set(timecode.to_seconds())
+            timecode_status_indicator.blink(250)
+
+        if self.manager.timecode_server.status == TimecodeServerStatus.running:
+            initialize_timecode()
+        else:
+            stop_timecode()
+
+        self.manager.timecode_server.events.initialized.on(initialize_timecode)
+        self.manager.timecode_server.events.error.on(stop_timecode)
+        self.manager.timecode_server.callbacks.zero_frame.register(update_timecode)
+
+        self.page.addWidget(timecode_group, row=13, column=1, width=10, height=2)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _build_tracker_overview(self):
+        tracker_group = Widget_Group(group_id='tracker_group',
+                                     title='Tracker',
+                                     rows=11,
+                                     columns=3,
+                                     show_title=True)
+        self.page.addWidget(tracker_group, row=1, column=1, width=10, height=12)
+
+        tracker_status = CircleIndicator()
+        tracker_group.addWidget(tracker_status, row=1, column=1, width=1, height=1)
+
+        rigid_body_text = TextWidget(text='Rigid Bodies')
+        tracker_group.addWidget(rigid_body_text, row=2, column=1, width=3, height=1)
+
+        # Table
+        rb_table = Table(title='Rigid Bodies')
+        rb_table.add_column(
+            TextColumn(
+                id='object_id',
+                title='ID',
+                width=0.7
+            )
+        )
+        rb_table.add_column(
+            IndicatorColumn(
+                id='valid',
+                title='Valid'
+            )
+        )
+
+        tracker_group.addWidget(rb_table, row=3, column=1, width=3, height=4)
+
+        tracked_objects_text = TextWidget(text='Tracked Objects')
+        tracker_group.addWidget(tracked_objects_text, row=7, column=1, width=3, height=1)
+
+        tracker_table = Table()
+        tracker_table.add_column(
+            TextColumn(
+                id='object_id',
+                title='ID',
+                width=0.4
+            )
+        )
+        tracker_table.add_column(
+            NumberColumn(
+                id='x',
+                title='X',
+                increment=0.01,
+            )
+        )
+        tracker_table.add_column(
+            NumberColumn(
+                id='y',
+                title='Y',
+                increment=0.01,
+            )
+        )
+        tracker_table.add_column(
+            IndicatorColumn(
+                id='valid',
+                title='Valid'
+            )
+        )
+
+        tracker_group.addWidget(tracker_table, row=8, column=1, width=3, height=4)
+
+        #
+
+        def initialize_tracker(*args, **kwargs):
+            tracker_status.updateConfig(color=[0, 0.8, 0])
+
+            for obj_id, rigid_body in self.manager.tracker.rigid_bodies.items():
+                # rb_table.addRow(obj_id, cells=[obj_id, '❌'])
+                rb_table.make_row(id=obj_id, object_id=obj_id, valid=[0.8, 0, 0])
+
+        def tracker_error(*args, **kwargs):
+            tracker_status.updateConfig(color=[0.8, 0, 0])
+
+        def on_new_tracked_object(tracked_object):
+            # tracker_table.addRow(
+            #     id=tracked_object.id,
+            #     cells=[
+            #         tracked_object.id,
+            #         tracked_object.state.x,
+            #         tracked_object.state.y,
+            #         '❌']
+            # )
+            tracker_table.make_row(id=tracked_object.id,
+                                   object_id=tracked_object.id,
+                                   x=tracked_object.state.x,
+                                   y=tracked_object.state.y,
+                                   valid=[0.8, 0, 0])
+
+        def on_tracked_object_removed(obj_id: str):
+            row = tracker_table.get_row_by_id(row_id=obj_id)
+            if row:
+                tracker_table.delete_row(row)
+
+        def tracker_new_sample(*args, **kwargs):
+            if self.manager.tracker.samples % 5 == 0:
+                tracker_status.blink(250)
+
+            # Go through the rigid bodies
+            for rb_id, rigid_body_sample in self.manager.tracker.sample.items():
+                row = rb_table.get_row_by_id(row_id=rb_id)
+                if row:
+                    cell = row.get_cell('valid')
+                    if rigid_body_sample.valid:
+                        cell.set([0, 0.8, 0])
+                    else:
+                        cell.set([0.8, 0, 0])
+
+            # Go through the BILBOs
+            for bilbo_id, bilbo in self.manager.tracker.robots.items():
+                row = tracker_table.get_row_by_id(row_id=bilbo_id)
+                if row:
+                    cell_x = row.get_cell('x')
+                    cell_y = row.get_cell('y')
+                    cell_valid = row.get_cell('valid')
+                    cell_x.set(bilbo.state.x)
+                    cell_y.set(bilbo.state.y)
+
+                    if bilbo.tracking_valid:
+                        cell_valid.set([0, 0.8, 0])
+                    else:
+                        cell_valid.set([0.8, 0, 0])
+
+            if self.manager.tracker.origin:
+                row = tracker_table.get_row_by_id(row_id=self.manager.tracker.origin.id)
+                if row:
+                    cell_x = row.get_cell('x')
+                    cell_y = row.get_cell('y')
+                    cell_valid = row.get_cell('valid')
+                    cell_x.set(self.manager.tracker.origin.state.x)
+                    cell_y.set(self.manager.tracker.origin.state.y)
+                    if self.manager.tracker.origin.tracking_valid:
+                        cell_valid.set([0, 0.8, 0])
+                    else:
+                        cell_valid.set([0.8, 0, 0])
+
+        self.manager.tracker.events.initialized.on(initialize_tracker)
+        self.manager.tracker.events.error.on(tracker_error)
+        self.manager.tracker.events.new_sample.on(tracker_new_sample, max_rate=10)
+        self.manager.tracker.events.new_tracked_object.on(on_new_tracked_object)
+        self.manager.tracker.events.tracked_object_removed.on(on_tracked_object_removed)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _on_new_testbed_robot(self, robot: BILBO_TestbedAgent):
         if robot.id in self.robots:
             self.logger.warning(f'Testbed robot {robot.id} already exists. Skipping.')
@@ -1027,7 +1247,8 @@ class BILBO_GUI_TestbedPage:
         self.robots[robot.id] = container
         self.babylon_visualization.addObject(container.babylon)
 
-    # ------------------------------------------------------------------------------------------------------------------
+        # ------------------------------------------------------------------------------------------------------------------
+
     def _on_testbed_robot_disconnected(self, robot: BILBO_TestbedAgent):
         if robot.id not in self.robots:
             self.logger.warning(f'Testbed robot {robot.id} not found. Skipping.')
@@ -1036,7 +1257,8 @@ class BILBO_GUI_TestbedPage:
         self.babylon_visualization.removeObject(self.robots[robot.id].babylon)
         del self.robots[robot.id]
 
-    # ------------------------------------------------------------------------------------------------------------------
+        # ------------------------------------------------------------------------------------------------------------------
+
     def _on_new_tracker_sample(self, *args, **kwargs):
         for robot in self.robots.values():
             robot.babylon.set_state(
@@ -1138,7 +1360,7 @@ class BILBO_Application_GUI:
         # page_robots = Page(id='robots', name='Robots')
         # category_application.addPage(page_robots)
 
-        self.testbed_page = BILBO_GUI_TestbedPage(self.testbed_manager)
+        self.testbed_page = BILBO_GUI_OverviewPage(self.testbed_manager)
         category_application.addPage(self.testbed_page.page)
 
         self.categories['application']['pages'] = {

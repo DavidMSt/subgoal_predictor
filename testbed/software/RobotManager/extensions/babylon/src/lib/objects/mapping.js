@@ -4,6 +4,7 @@ import {BabylonBox, BabylonWall, BabylonWall_Fancy} from "./box/box.js";
 import {BabylonFloorInstanced, BabylonSimpleFloor} from "./floor/floor.js";
 import {BabylonCircleDrawing, BabylonLineDrawing, BabylonRectangleDrawing} from "./drawings";
 import {ArucoStatic} from "./static/static";
+import {ClusterTool} from "./clustertool/clustertool";
 
 export let BABYLON_OBJECT_MAPPINGS = {
     'bilbo': BabylonBilbo,
@@ -17,5 +18,6 @@ export let BABYLON_OBJECT_MAPPINGS = {
     "rectangle_drawing": BabylonRectangleDrawing,
     "circle_drawing": BabylonCircleDrawing,
     "line_drawing": BabylonLineDrawing,
-    'static': ArucoStatic
+    'static': ArucoStatic,
+    'clustertool': ClusterTool
 }

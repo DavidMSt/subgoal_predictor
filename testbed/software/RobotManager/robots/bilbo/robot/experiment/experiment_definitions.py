@@ -41,6 +41,11 @@ class BILBO_InputTrajectory:
         from robots.bilbo.robot.experiment.experiment_helpers import trajectory_inputs_to_vector
         return trajectory_inputs_to_vector(self.inputs, single_input=single_input)
 
+    @classmethod
+    def from_vector(cls, vector: np.ndarray, name: str, id: int, dt: float = None) -> BILBO_InputTrajectory:
+        from robots.bilbo.robot.experiment.experiment_helpers import generate_trajectory_inputs
+        return cls(name=name, id=id, inputs=generate_trajectory_inputs(vector), dt=dt or BILBO_CONTROL_DT)
+
 
 @dataclasses.dataclass
 class BILBO_StateTrajectory:
@@ -101,6 +106,30 @@ class BILBO_OutputTrajectory:
 #     meta: BILBO_ExperimentMeta
 #     data: BILBO_TrajectoryData
 
+
+# EXPERIMENT_ACTION_TYPE_MAPPING = {
+#     "beep": BeepAction,
+#     "set_mode": SetModeAction,
+#     "set_tic": SetTICAction,
+#     "speak": SpeakAction,
+#     "set_marker": SetMarkerAction,
+#     "run_trajectory": RunTrajectoryAction,
+#     "wait_time": WaitTimeAction,
+#     "wait_ticks": WaitTickAction,
+#     "wait_until_tick": WaitUntilTickAction,
+#     "wait_event": WaitEventAction,
+#     "set_input": SetInputAction,
+#     "enable_external_input": EnableExternalInputAction,
+#     "reset": ResetAction,
+# }
+
+ALLOWED_ACTIONS = [
+    'beep', 'set_mode', 'set_tic', 'speak', 'set_marker', 'run_trajectory', 'wait_time', 'wait_ticks',
+    'wait_until_tick',
+    'wait_event', 'set_input', 'enable_external_input', 'reset'
+]
+
+
 @dataclasses.dataclass
 class ExperimentActionDefinition:
     id: str
@@ -115,6 +144,10 @@ class ExperimentActionDefinition:
 
     # action-specific stuff (parameters for the concrete action class)
     parameters: dict[str, Any] = dataclasses.field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.type not in ALLOWED_ACTIONS:
+            raise ValueError(f"Action type '{self.type}' not allowed. Allowed actions: {ALLOWED_ACTIONS}")
 
     # ------------------------------------------------------------------
     @classmethod

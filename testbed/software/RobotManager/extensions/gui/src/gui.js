@@ -2743,7 +2743,7 @@ export class GUI {
             }
             // Check if the message is an array, if so, iterate over it
             if (Array.isArray(message)) {
-                console.warn(`Received array message for object "${id}":`, message);
+                // console.warn(`Received array message for object "${id}":`, message);
                 // If it's an array, we assume it's a list of updates
                 for (const item of message) {
                     object.update(item.data);

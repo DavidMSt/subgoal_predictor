@@ -64,11 +64,12 @@ class TimecodeClient:
         if self._thread.is_alive():
             self._thread.join()
 
+
     # ------------------------------------------------------------------------------------------------------------------
-    def get_timecode(self) -> Timecode:
+    def get_timecode(self) -> Timecode | None:
         with self._lock:
             if self._last_timecode is None or self._last_timecode_time is None:
-                return Timecode(0, 0, 0, 0, 25)
+                return None
 
             now = time.monotonic()
             # Predict current timecode from the last accepted one using elapsed time

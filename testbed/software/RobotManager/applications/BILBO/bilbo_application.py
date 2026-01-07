@@ -3,8 +3,9 @@ import os
 import sys
 import time
 
-from applications.BILBO.testbed_manager import BILBO_TestbedManager, BILBO_TestbedAgent
+from applications.BILBO.testbed.testbed_manager import BILBO_TestbedManager, BILBO_TestbedAgent
 from core.utils.callbacks import Callback
+from core.utils.network.network import getHostIP
 from robots.bilbo.robot.bilbo import BILBO
 
 # Get the directory of the current script
@@ -24,7 +25,7 @@ from applications.BILBO.tracker.bilbo_tracker import BILBO_Tracker
 from extensions.cli.cli import CommandSet, CLI
 from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
 from robots.bilbo.manager.bilbo_manager import BILBO_Manager
-from core.utils.exit import register_exit_callback
+from core.utils.exit import register_exit_callback, exit_program
 from core.utils.logging_utils import setLoggerLevel, Logger
 from core.utils.loop import infinite_loop
 from core.utils.sound.sound import speak, SoundSystem
@@ -43,11 +44,16 @@ class BILBO_Application:
     soundsystem: SoundSystem
 
     def __init__(self):
-        # self.robot_manager = BILBO_Manager(enable_scanner=AUTOSTART_ROBOTS, autostop_robots=AUTOSTOP_ROBOTS)
-        #
-        # # self.robot_manager.callbacks.stream.register(self.gui.sendRawStream)
-        # self.robot_manager.callbacks.new_robot.register(self._newRobot_callback)
-        # self.robot_manager.callbacks.robot_disconnected.register(self._robotDisconnected_callback)
+
+        # Logging
+        self.logger = Logger('APP')
+        self.logger.setLevel('INFO')
+
+        # Check if there is a valid host IP
+        ip = getHostIP()
+        if ip is None:
+            self.logger.error("No valid IP address for the server")
+            exit_program()
 
         self.manager = BILBO_TestbedManager()
         self.manager.events.new_robot.on(self._newRobot_callback)
@@ -56,10 +62,6 @@ class BILBO_Application:
 
         # CLI
         self.cli = CLI(id='bilbo_app_cli')
-
-        # Logging
-        self.logger = Logger('APP')
-        self.logger.setLevel('INFO')
 
         # Sound System for speaking and sounds
         self.soundsystem = SoundSystem(primary_engine='etts', volume=1)

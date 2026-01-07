@@ -1521,7 +1521,7 @@ class GUI:
 
         if client in self.frontends:
             self.frontends.remove(client)
-            self.logger.info(f"Frontend disconnected: {client.address}:{client.port} ({len(self.frontends)})")
+            self.logger.debug(f"Frontend disconnected: {client.address}:{client.port} ({len(self.frontends)})")
         elif client in self.child_guis:
             self.logger.warning(f"TODO: Child GUI disconnected: {client.address}:{client.port}")
 

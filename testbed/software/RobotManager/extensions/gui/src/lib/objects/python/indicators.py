@@ -9,7 +9,7 @@ from core.utils.dict import update_dict, ObservableDict
 class CircleIndicator(Widget):
     type = 'circle_indicator'
 
-    def __init__(self, widget_id, **kwargs):
+    def __init__(self, widget_id=None, **kwargs):
         super().__init__(widget_id, **kwargs)
 
         default_config = {
@@ -34,9 +34,14 @@ class CircleIndicator(Widget):
     def init(self, *args, **kwargs):
         pass
 
+    # ------------------------------------------------------------------------------------------------------------------
     def handleEvent(self, message, sender=None) -> Any:
         self.logger.warning(
             f"CircleIndicator {self.id} received message: {message} from {sender}. Should not receive messages.")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def blink(self, time=250):
+        self.function(function_name='singleBlink', args=time)
 
 
 # === LOADING INDICATOR ================================================================================================

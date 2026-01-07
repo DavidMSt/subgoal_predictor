@@ -153,8 +153,8 @@ class CommandArgument:
         default (any): Default value if the argument is not provided.
     """
     name: str
-    description: str
     type: type
+    description: str = ''
     optional: bool = False
     default: Any = None
 

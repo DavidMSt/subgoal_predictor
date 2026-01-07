@@ -970,6 +970,44 @@
 }
 
 
+/* === DIGITAL CLOCK WIDGET ========================================================================================= */
+
+.digitalClockWidget {
+    display: grid;
+    height: 100%;
+    width: 100%;
+    user-select: none;
+    margin-right: 2px;
+    margin-left: 2px;
+}
+
+.digitalClockWidget .dcValueContainer {
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    padding: 0;
+    font-size: 80px; /* will be auto-fit by resize() */
+}
+
+.digitalClockWidget .dcValue {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+
+    /* constant-width digits + stable separators */
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-variant-numeric: tabular-nums;
+    white-space: pre;
+    line-height: 1;
+
+    /* reserved width set in JS via ch */
+    min-width: 0;
+    margin: 0 auto;
+}
+
+
 /** ----------------------------------------------------------------------------------------------------------------- */
 .textWidget {
     box-sizing: border-box;
@@ -1252,220 +1290,1099 @@
 }
 
 /* === TABLE WIDGET ================================================================================================= */
-
-/* === TableWidget styles (objects.css) === */
+/* Widget layout: header row + content row */
 .tableWidget {
-    display: block;
+    display: grid;
+    grid-template-rows: var(--title-height, 0px) 1fr;
+
     width: 100%;
     height: 100%;
     box-sizing: border-box;
-    overflow: hidden; /* JS controls scroll */
+
+    /* IMPORTANT: allow the content row to shrink so overflow works */
+    min-height: 0;
+    min-width: 0;
+
+    /* Make sure the widget itself doesn't become the scroller */
+    overflow: hidden;
 }
 
-.tableWidget table {
+/* The actual scrolling area */
+.tableWidget .table-container {
     width: 100%;
     height: 100%;
-    border-collapse: collapse;
-    table-layout: fixed;
+
+    /* IMPORTANT for grid/flex: allows proper scrolling instead of stretching */
+    min-height: 0;
+    min-width: 0;
+
+    overflow-y: auto;     /* ← scrollbar ONLY when needed */
+    overflow-x: hidden;
+
+    /* Firefox scrollbar */
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.25) rgba(0, 0, 0, 0.0);
 }
 
-/* adjust this padding to reduce internal vertical space */
-.tableWidget th,
-.tableWidget td {
-    padding: 4px 8px; /* ← shrink top/bottom padding here */
-    padding-bottom: 2px;
-    padding-top: 2px;
-    /*overflow: hidden;*/
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.tableWidget th {
-    font-weight: bold;
-    text-align: left;
-}
-
-.tableWidget td {
-    /* inherits font-size & colors inline */
-}
-
-.tableWidget {
-    /* … your existing rules … */
-    --scrollbar-track: #fafafa; /* fallback */
-    --scrollbar-thumb: #ddd; /* fallback */
-}
-
-/* WebKit (Chrome, Safari, Edge) */
-.tableWidget::-webkit-scrollbar {
+/* WebKit scrollbar (Chrome / Edge / Safari) */
+.tableWidget .table-container::-webkit-scrollbar {
     width: 8px;
     height: 8px;
 }
 
-.tableWidget::-webkit-scrollbar-track {
-    background: var(--scrollbar-track);
-}
-
-.tableWidget::-webkit-scrollbar-thumb {
-    background-color: var(--scrollbar-thumb);
+.tableWidget .table-container::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.35);
     border-radius: 4px;
-    border: 2px solid var(--scrollbar-track);
 }
 
-/* Firefox */
-.tableWidget {
-    scrollbar-width: thin;
-    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+.tableWidget .table-container::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.22);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.tableWidget .table-container::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.45);
+    background-clip: content-box;
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    height: auto;
+    overflow: visible;
 }
 
 
-.tableButton {
-    background: #2a2a2a;
-    color: rgba(255, 255, 255, 0.8);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+.table th {
+    /*background-color: red;*/
+    padding: 2px 8px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+}
+
+.table td {
+    padding: 2px 8px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+    background-color: blue;
+}
+
+/* --- FIX: ensure rows/cells have a real height so 100% children (slider/button etc) can render --- */
+.tableWidget .table tbody tr {
+    height: 16px;          /* pick your preferred row height */
+}
+
+.tableWidget .table td,
+.tableWidget .table th {
+    height: 16px;          /* keeps cell height consistent */
+    vertical-align: middle;
+}
+
+/* Slider needs its container to have height */
+.tableWidget td.table-cell-slider {
+    height: 20px;
+}
+
+/* ===== Input cell ===== */
+.tableWidget td.table-cell-input {
+    padding: 0;
+    overflow: hidden;
+}
+
+.tableWidget td.table-cell-input input.tableInput {
+    background-color: inherit;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+
     margin: 0;
+    padding: 0 6px;
+
+    border: 1px dashed rgba(255, 255, 255, 0.35);
     border-radius: 2px;
+    outline: none;
 }
 
-.tableButton:hover {
-    filter: brightness(1.2);
+.tableWidget td.table-cell-input input.tableInput:focus {
+    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.25);
 }
 
+/* ── shake + blink for “error” ── */
+@keyframes table-shake {
+    0% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    50% { transform: translateX(4px); }
+    75% { transform: translateX(-4px); }
+    100% { transform: translateX(0); }
+}
 
-/* only apply when NOT disabled */
-.tableButton:not(:disabled).pressed,
-.tableButton:not(:disabled):active {
+@keyframes table-blink-error {
+    0%, 100% { border-color: rgba(255, 255, 255, 0.35); }
+    50% { border-color: red; }
+}
+
+@keyframes table-blink-accept {
+    0%, 100% {
+        outline-color: transparent;
+        box-shadow: inset 0 0 0 rgba(0, 0, 0, 0);
+    }
+    50% {
+        outline-color: limegreen;
+        box-shadow: inset 0 0 6px rgba(0, 255, 0, 0.6);
+    }
+}
+
+.tableWidget td.table-cell-input input.tableInput.accepted {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    animation: table-blink-accept 200ms ease;
+}
+
+.tableWidget td.table-cell-input input.tableInput.error {
+    animation: table-shake 300ms ease, table-blink-error 200ms ease;
+}
+
+/* ===== Button cell ===== */
+.tableWidget td.table-cell-button {
+    padding: 0;
+    overflow: hidden;
+}
+
+.tableWidget td.table-cell-button button.tableButton {
+    width: calc(100% - 6px);
+    height: calc(100% - 6px);
+    margin: 3px;
+
+    box-sizing: border-box;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 3px;
+    padding: 2px 6px;
+
+    cursor: pointer;
+    outline: none;
+}
+
+.tableWidget td.table-cell-button button.tableButton:hover:not(:disabled) {
+    filter: brightness(1.15);
+}
+
+.tableWidget td.table-cell-button button.tableButton:active:not(:disabled),
+.tableWidget td.table-cell-button button.tableButton.pressed:not(:disabled) {
     transform: translateY(1px);
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
-    filter: brightness(0.9);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
+    filter: brightness(0.95);
 }
 
-.tableButton:disabled,
-.tableButton.tableButton--disabled {
-    opacity: 0.5; /* fade it out */
-    cursor: not-allowed; /* show “🚫” cursor */
-    filter: none; /* cancel any hover-brightness filters */
-    /* you can also override border, background, etc. here */
+.tableWidget td.table-cell-button button.tableButton:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.35);
+    outline-offset: 1px;
 }
 
-.tableCheckbox {
-
+.tableWidget td.table-cell-button button.tableButton:disabled,
+.tableWidget td.table-cell-button button.tableButton.tableButton--disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    filter: none;
+    transform: none;
+    box-shadow: none;
 }
 
-.tableCheckbox:disabled,
-.tableCheckbox.tableButton--disabled {
-    opacity: 0.8; /* fade it out */
-    cursor: not-allowed; /* show “🚫” cursor */
-    filter: none; /* cancel any hover-brightness filters */
-    /* you can also override border, background, etc. here */
+/* ===== Checkbox cell ===== */
+.tableWidget td.table-cell-checkbox {
+    padding: 0;
+    overflow: hidden;
 }
 
+.tableWidget td.table-cell-checkbox label.tableCheckbox {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 
-.tableInput {
+    width: 100%;
+    height: 100%;
 
+    box-sizing: border-box;
+    padding: 3px;
+    cursor: pointer;
+
+    user-select: none;
+    /* ✅ FIX: anchor the absolute input to this label */
+    position: relative;
 }
 
-/* === editable “input” cells === */
-.tableWidget td input.tableInput {
-    /* match whatever the <td> background & text color is */
+.tableWidget td.table-cell-checkbox label.tableCheckbox > input[type="checkbox"] {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    pointer-events: none;
+}
+
+.tableWidget td.table-cell-checkbox .tableCheckbox__box {
+    --checkbox-color: rgba(255, 255, 255, 0.7);
+    --checkmark-color: rgba(0, 0, 0, 1);
+
+    width: 16px;
+    height: 16px;
+
+    box-sizing: border-box;
+    border-radius: 3px;
+
+    background: var(--checkbox-color);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    transition: filter 120ms ease, transform 120ms ease;
+}
+
+.tableWidget td.table-cell-checkbox label.tableCheckbox:hover .tableCheckbox__box {
+    filter: brightness(1.15);
+}
+
+.tableWidget td.table-cell-checkbox label.tableCheckbox:active .tableCheckbox__box {
+    transform: translateY(1px);
+    filter: brightness(0.95);
+}
+
+.tableWidget td.table-cell-checkbox label.tableCheckbox > input[type="checkbox"]:focus-visible + .tableCheckbox__box {
+    outline: 2px solid rgba(255, 255, 255, 0.35);
+    outline-offset: 2px;
+}
+
+.tableWidget td.table-cell-checkbox label.tableCheckbox.is-disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.tableWidget td.table-cell-checkbox label.tableCheckbox.is-disabled .tableCheckbox__box {
+    filter: none;
+    transform: none;
+}
+
+.tableWidget td.table-cell-checkbox label.tableCheckbox .tableCheckbox__box::before,
+.tableWidget td.table-cell-checkbox label.tableCheckbox .tableCheckbox__box::after {
+    content: "";
+    display: none;
+}
+
+/* CHECK */
+.tableWidget td.table-cell-checkbox label.tableCheckbox.is-checked .tableCheckbox__box[data-mark="check"]::before {
+    display: block;
+    width: 9px;
+    height: 5px;
+
+    border-left: 2px solid var(--checkmark-color);
+    border-bottom: 2px solid var(--checkmark-color);
+    transform: rotate(-45deg);
+
+    margin-top: -1px;
+}
+
+/* CROSS */
+.tableWidget td.table-cell-checkbox label.tableCheckbox.is-checked .tableCheckbox__box[data-mark="cross"]::before,
+.tableWidget td.table-cell-checkbox label.tableCheckbox.is-checked .tableCheckbox__box[data-mark="cross"]::after {
+    display: block;
+    position: absolute;
+
+    width: 10px;
+    height: 2px;
+    background: var(--checkmark-color);
+    border-radius: 1px;
+}
+
+.tableWidget td.table-cell-checkbox label.tableCheckbox.is-checked .tableCheckbox__box[data-mark="cross"]::before {
+    transform: rotate(45deg);
+}
+
+.tableWidget td.table-cell-checkbox label.tableCheckbox.is-checked .tableCheckbox__box[data-mark="cross"]::after {
+    transform: rotate(-45deg);
+}
+
+/* DOT */
+.tableWidget td.table-cell-checkbox label.tableCheckbox.is-checked .tableCheckbox__box[data-mark="dot"]::before {
+    display: block;
+    width: 8px;
+    height: 8px;
+
+    background: var(--checkmark-color);
+    border-radius: 999px;
+}
+
+/* ===== Slider cell ===== */
+.tableWidget td.table-cell-slider {
+    padding: 0;
+    overflow: hidden;
+}
+
+.tableWidget td.table-cell-slider .tableSlider {
+    position: relative;
+    width: calc(100% - 6px);
+    height: calc(100% - 6px);
+    margin: 3px;
+    box-sizing: border-box;
+
+    border-radius: 3px;
+    overflow: hidden;
+
+    touch-action: none;
+    user-select: none;
+
+    --ts-bar: rgba(255, 0, 0, 0.7);
+    --ts-bg: rgba(255, 0, 0, 0.12);
+}
+
+.tableWidget td.table-cell-slider .tableSlider__bg {
+    position: absolute;
+    inset: 0;
+    background: var(--ts-bg);
+    z-index: 1;
+}
+
+.tableWidget td.table-cell-slider .tableSlider__fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 0%;
+    background: var(--ts-bar);
+    z-index: 2;
+}
+
+.tableWidget td.table-cell-slider .tableSlider__value {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 3;
+
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+    padding: 0 6px;
+    box-sizing: border-box;
+    white-space: nowrap;
+}
+
+.tableWidget td.table-cell-slider .tableSlider__value[data-align="left"] {
+    justify-content: flex-start;
+}
+
+.tableWidget td.table-cell-slider .tableSlider__value[data-align="right"] {
+    justify-content: flex-end;
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .tableWidget td.table-cell-slider .tableSlider:hover:not(.is-disabled) {
+        filter: brightness(1.12);
+    }
+}
+
+.tableWidget td.table-cell-slider .tableSlider.is-disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    filter: none;
+}
+
+@keyframes table-slider-blink-accept {
+    0%, 100% { filter: brightness(1); }
+    50% { filter: brightness(1.25); }
+}
+
+.tableWidget td.table-cell-slider .tableSlider.accepted {
+    animation: table-slider-blink-accept 180ms ease-out;
+}
+
+/* ===== Indicator cell ===== */
+.tableWidget td.table-cell-indicator {
+    padding: 0;
+    overflow: hidden;
+}
+
+.tableWidget td.table-cell-indicator .tableIndicator {
+    width: calc(100% - 6px);
+    height: calc(100% - 6px);
+    margin: 3px;
+    box-sizing: border-box;
+
+    display: flex;
+    align-items: center;
+    gap: var(--ti-gap, 6px);
+}
+
+.tableWidget td.table-cell-indicator .tableIndicator[data-align="left"] {
+    justify-content: flex-start;
+}
+
+.tableWidget td.table-cell-indicator .tableIndicator[data-align="center"] {
+    justify-content: center;
+}
+
+.tableWidget td.table-cell-indicator .tableIndicator[data-align="right"] {
+    justify-content: flex-end;
+}
+
+.tableWidget td.table-cell-indicator .tableIndicator__dot {
+    --ti-dot: rgba(255, 255, 255, 0.7);
+
+    height: calc(100% * var(--ti-size, 0.8));
+    aspect-ratio: 1 / 1;
+    border-radius: 999px;
+
+    background: var(--ti-dot);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    box-sizing: border-box;
+
+    flex: 0 0 auto;
+}
+
+.tableWidget td.table-cell-indicator .tableIndicator__label {
+    display: inline-block;
+    min-width: 0;
+
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    color: inherit;
+    font: inherit;
+
+    flex: 0 1 auto;
+}
+
+/* ===== Select cell ===== */
+.tableWidget td.table-cell-select {
+    padding: 0;
+    overflow: hidden;
+}
+
+.tableWidget td.table-cell-select select.tableSelect {
     background-color: inherit;
     color: inherit;
 
     font: inherit;
     text-align: inherit;
 
-    /* fill the entire cell */
     width: 100%;
     height: 100%;
     box-sizing: border-box;
+
     margin: 0;
-    padding: 0 4px; /* match your td’s horizontal padding */
+    padding: 0 24px 0 6px;
 
-    /* dashed inset border to signal “editable” */
-    border: 1px dashed rgba(255, 255, 255, 0.3);
+    border: 1px dashed rgba(255, 255, 255, 0.35);
     border-radius: 2px;
 
-    /* no native outline */
     outline: none;
+
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+
+    background-image:
+        linear-gradient(45deg, transparent 50%, rgba(255, 255, 255, 0.75) 50%),
+        linear-gradient(135deg, rgba(255, 255, 255, 0.75) 50%, transparent 50%),
+        linear-gradient(to right, transparent, transparent);
+    background-position:
+        calc(100% - 14px) 50%,
+        calc(100% - 9px) 50%,
+        100% 0;
+    background-size:
+        5px 5px,
+        5px 5px,
+        2.2em 100%;
+    background-repeat: no-repeat;
 }
 
-/* ── shake + blink for “error” ── */
-@keyframes table-shake {
-    0% {
-        transform: translateX(0);
-    }
-    25% {
-        transform: translateX(-4px);
-    }
-    50% {
-        transform: translateX(4px);
-    }
-    75% {
-        transform: translateX(-4px);
-    }
-    100% {
-        transform: translateX(0);
-    }
+.tableWidget td.table-cell-select select.tableSelect:focus {
+    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.25);
 }
 
-@keyframes table-blink-error {
-    0%, 100% {
-        /*border-color: ;*/
-    }
-    50% {
-        border-color: red;
-    }
+.tableWidget td.table-cell-select select.tableSelect:hover:not(:disabled) {
+    filter: brightness(1.08);
 }
 
-/* ── accepted blink ── */
-@keyframes table-blink-accept {
-    0%, 100% {
-        /*border-color: transparent;*/
-        /*filter: brightness(1);*/
-    }
-    50% {
-        border-color: limegreen;
-        /*filter: brightness(1.3);*/
-    }
-
+.tableWidget td.table-cell-select select.tableSelect:disabled,
+.tableWidget td.table-cell-select select.tableSelect.tableSelect--disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    filter: none;
 }
 
-/* ── accepted state ── */
-.tableInput.accepted {
-    animation: table-blink-accept 200ms;
+.tableWidget td.table-cell-select select.tableSelect.accepted {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    animation: table-blink-accept 200ms ease;
 }
 
-/* ── error state ── */
-.tableInput.error {
-    animation: table-shake 300ms ease,
-    table-blink-error 200ms ease;
+.tableWidget td.table-cell-select select.tableSelect.error {
+    animation: table-shake 300ms ease, table-blink-error 200ms ease;
 }
 
-/* ── (reuse your existing `.tiTooltipFloating` & `.tiTooltipFloatingError` from TextInputWidget) ── */
-
-
-.tableWidget td input.tableInput:focus {
-    /* subtle inset glow on focus */
-    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.2);
+/* ===== MultiSelect cell (in-table control) ===== */
+.tableWidget td.table-cell-multiselect {
+    padding: 0;
+    overflow: visible;
+    position: relative;
 }
 
+.tableWidget td.table-cell-multiselect .tableMultiSelect {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
 
-.tableSelect {
-    background: #1b6d85;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+.tableWidget td.table-cell-multiselect .tableMultiSelect__button {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+
+    margin: 0;
+    padding: 0 24px 0 6px;
+
+    background-color: inherit;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+
+    border: 1px dashed rgba(255, 255, 255, 0.35);
     border-radius: 2px;
+
+    cursor: pointer;
+    outline: none;
+
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    background-image:
+        linear-gradient(45deg, transparent 50%, rgba(255, 255, 255, 0.75) 50%),
+        linear-gradient(135deg, rgba(255, 255, 255, 0.75) 50%, transparent 50%),
+        linear-gradient(to right, transparent, transparent);
+    background-position:
+        calc(100% - 14px) 50%,
+        calc(100% - 9px) 50%,
+        100% 0;
+    background-size:
+        5px 5px,
+        5px 5px,
+        2.2em 100%;
+    background-repeat: no-repeat;
 }
 
-.tableSelect:hover {
-    filter: brightness(1.2);
+.tableWidget td.table-cell-multiselect .tableMultiSelect__button:focus {
+    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.25);
 }
 
-.tableSelect:disabled,
-.tableSelect.tableButton--disabled {
-    opacity: 0.8; /* fade it out */
-    cursor: not-allowed; /* show “🚫” cursor */
-    filter: none; /* cancel any hover-brightness filters */
-    /* you can also override border, background, etc. here */
+.tableWidget td.table-cell-multiselect .tableMultiSelect__button:hover:not(:disabled) {
+    filter: brightness(1.08);
 }
+
+.tableWidget td.table-cell-multiselect .tableMultiSelect__button:disabled,
+.tableWidget td.table-cell-multiselect .tableMultiSelect__button--disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    filter: none;
+}
+
+.tableWidget td.table-cell-multiselect .tableMultiSelect__button.accepted {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    animation: table-blink-accept 200ms ease;
+}
+
+.tableWidget td.table-cell-multiselect .tableMultiSelect__button.error {
+    animation: table-shake 300ms ease, table-blink-error 200ms ease;
+}
+
+/* ===== MultiSelect PORTALED dropdown menu (menu is in document.body) ===== */
+.tableMultiSelect__menu--portal {
+    /* position/left/top set by JS; keep display toggled by JS */
+    max-height: 220px;
+    overflow: auto;
+
+    background: rgba(20, 20, 20, 0.95);
+    color: rgba(255, 255, 255, 0.9);
+
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 4px;
+
+    padding: 6px;
+    box-sizing: border-box;
+
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.tableMultiSelect__menu--portal .tableMultiSelect__item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    padding: 4px 6px;
+    border-radius: 3px;
+
+    cursor: pointer;
+    user-select: none;
+}
+
+.tableMultiSelect__menu--portal .tableMultiSelect__item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.tableMultiSelect__menu--portal .tableMultiSelect__item input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: rgba(120, 200, 255, 0.9);
+}
+
+.tableMultiSelect__menu--portal .tableMultiSelect__label {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+
+
+/* === ADDITIONS for row highlight + row background override + groups =============================================== */
+
+/* Row-level highlight outline (whole row) */
+.tableWidget .table tbody tr.tableRow--highlight td {
+    /* Use inset shadows so it looks like an outline around the row */
+    box-shadow: inset 0 2px 0 rgba(255, 200, 80, 0.95), inset 0 -2px 0 rgba(255, 200, 80, 0.95);
+}
+
+.tableWidget .table tbody tr.tableRow--highlight td:first-child {
+    box-shadow:
+        inset 2px 0 0 rgba(255, 200, 80, 0.95),
+        inset 0 2px 0 rgba(255, 200, 80, 0.95),
+        inset 0 -2px 0 rgba(255, 200, 80, 0.95);
+}
+
+.tableWidget .table tbody tr.tableRow--highlight td:last-child {
+    box-shadow:
+        inset -2px 0 0 rgba(255, 200, 80, 0.95),
+        inset 0 2px 0 rgba(255, 200, 80, 0.95),
+        inset 0 -2px 0 rgba(255, 200, 80, 0.95);
+}
+
+/* Group outline using --table-group-color (set inline from JS) */
+.tableWidget .table tbody tr.tableGroup--colored.tableGroup--in td {
+    box-shadow:
+        inset 2px 0 0 var(--table-group-color, transparent),
+        inset -2px 0 0 var(--table-group-color, transparent);
+}
+
+.tableWidget .table tbody tr.tableGroup--colored.tableGroup--first td {
+    box-shadow:
+        inset 2px 0 0 var(--table-group-color, transparent),
+        inset -2px 0 0 var(--table-group-color, transparent),
+        inset 0 2px 0 var(--table-group-color, transparent);
+}
+
+.tableWidget .table tbody tr.tableGroup--colored.tableGroup--last td {
+    box-shadow:
+        inset 2px 0 0 var(--table-group-color, transparent),
+        inset -2px 0 0 var(--table-group-color, transparent),
+        inset 0 -2px 0 var(--table-group-color, transparent);
+}
+
+/* If group is both first and last (collapsed or empty), draw full box */
+.tableWidget .table tbody tr.tableGroup--colored.tableGroup--first.tableGroup--last td {
+    box-shadow:
+        inset 2px 0 0 var(--table-group-color, transparent),
+        inset -2px 0 0 var(--table-group-color, transparent),
+        inset 0 2px 0 var(--table-group-color, transparent),
+        inset 0 -2px 0 var(--table-group-color, transparent);
+}
+
+/* Group title row look */
+.tableWidget .table tbody tr.tableGroupTitleRow td.tableGroupTitleCell {
+    padding: 0; /* we do padding inside the content wrapper */
+    border: 0.5px solid #999999;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.tableWidget .table tbody tr.tableGroupTitleRow td.tableGroupTitleCell .tableGroupTitleContent {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    height: 100%;
+    padding: 0 8px;
+    box-sizing: border-box;
+
+    user-select: none;
+}
+
+/* Triangle indicator */
+.tableWidget .table tbody tr.tableGroupTitleRow.is-collapsible .tableGroupTriangle {
+    width: 0;
+    height: 0;
+    border-style: solid;
+
+    /* default: expanded => ▼ */
+    border-width: 6px 5px 0 5px;
+    border-color: rgba(255, 255, 255, 0.7) transparent transparent transparent;
+    opacity: 0.9;
+}
+
+.tableWidget .table tbody tr.tableGroupTitleRow.is-collapsed.is-collapsible .tableGroupTriangle {
+    /* collapsed => ▶ */
+    border-width: 5px 0 5px 6px;
+    border-color: transparent transparent transparent rgba(255, 255, 255, 0.7);
+}
+
+/* If not collapsible, hide triangle but keep spacing stable */
+.tableWidget .table tbody tr.tableGroupTitleRow:not(.is-collapsible) .tableGroupTriangle {
+    width: 10px;
+    height: 10px;
+    border: none;
+    opacity: 0;
+}
+
+.tableWidget .table tbody tr.tableGroupTitleRow td.tableGroupTitleCell:hover {
+    filter: brightness(1.08);
+    cursor: default;
+}
+
+/* Make group title text slightly bolder */
+.tableWidget .table tbody tr.tableGroupTitleRow .tableGroupTitleText {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ===== SingleSelect cell (custom, portaled) ===== */
+.tableWidget td.table-cell-select {
+    padding: 0;
+    overflow: visible;
+    position: relative;
+}
+
+.tableWidget td.table-cell-select .tableSingleSelect {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+.tableWidget td.table-cell-select .tableSingleSelect__button {
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+
+    margin: 0;
+    padding: 0 24px 0 6px;
+
+    background-color: inherit;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+
+    border: 1px dashed rgba(255, 255, 255, 0.35);
+    border-radius: 2px;
+
+    cursor: pointer;
+    outline: none;
+
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    background-image:
+        linear-gradient(45deg, transparent 50%, rgba(255, 255, 255, 0.75) 50%),
+        linear-gradient(135deg, rgba(255, 255, 255, 0.75) 50%, transparent 50%),
+        linear-gradient(to right, transparent, transparent);
+    background-position:
+        calc(100% - 14px) 50%,
+        calc(100% - 9px) 50%,
+        100% 0;
+    background-size:
+        5px 5px,
+        5px 5px,
+        2.2em 100%;
+    background-repeat: no-repeat;
+}
+
+.tableWidget td.table-cell-select .tableSingleSelect__button:focus {
+    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.25);
+}
+
+.tableWidget td.table-cell-select .tableSingleSelect__button:hover:not(:disabled) {
+    filter: brightness(1.08);
+}
+
+.tableWidget td.table-cell-select .tableSingleSelect__button:disabled,
+.tableWidget td.table-cell-select .tableSingleSelect__button--disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    filter: none;
+}
+
+.tableWidget td.table-cell-select .tableSingleSelect__button.accepted {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    animation: table-blink-accept 200ms ease;
+}
+
+.tableWidget td.table-cell-select .tableSingleSelect__button.error {
+    animation: table-shake 300ms ease, table-blink-error 200ms ease;
+}
+
+/* ===== SingleSelect PORTALED menu ===== */
+.tableSingleSelect__menu--portal {
+    max-height: 220px;
+    overflow: auto;
+
+    background: rgba(20, 20, 20, 0.95);
+    color: rgba(255, 255, 255, 0.9);
+
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 4px;
+
+    padding: 6px;
+    box-sizing: border-box;
+
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+}
+
+.tableSingleSelect__menu--portal .tableSingleSelect__item {
+    padding: 6px 8px;
+    border-radius: 3px;
+    cursor: pointer;
+    user-select: none;
+
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tableSingleSelect__menu--portal .tableSingleSelect__item:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.tableSingleSelect__menu--portal .tableSingleSelect__item[data-selected="true"] {
+    background: rgba(120, 200, 255, 0.18);
+    border: 1px solid rgba(120, 200, 255, 0.35);
+}
+
+.tableWidget td.table-cell-select .tableSingleSelect__button {
+    text-align: left;
+}
+
+/*!* ------------------------------------------------------------------------------------------------------------------ *!*/
+/*!* OLD STUFF: *!*/
+/*!* adjust this padding to reduce internal vertical space *!*/
+/*.tableWidget th,*/
+/*.tableWidget td {*/
+/*    padding: 4px 8px; !* ← shrink top/bottom padding here *!*/
+/*    padding-bottom: 2px;*/
+/*    padding-top: 2px;*/
+/*    !*overflow: hidden;*!*/
+/*    text-overflow: ellipsis;*/
+/*    white-space: nowrap;*/
+/*}*/
+
+/*.tableWidget th {*/
+/*    font-weight: bold;*/
+/*    text-align: left;*/
+/*}*/
+
+/*.tableWidget td {*/
+/*    !* inherits font-size & colors inline *!*/
+/*}*/
+
+/*.tableWidget {*/
+/*    !* … your existing rules … *!*/
+/*    --scrollbar-track: #fafafa; !* fallback *!*/
+/*    --scrollbar-thumb: #ddd; !* fallback *!*/
+/*}*/
+
+/*!* WebKit (Chrome, Safari, Edge) *!*/
+/*.tableWidget::-webkit-scrollbar {*/
+/*    width: 8px;*/
+/*    height: 8px;*/
+/*}*/
+
+/*.tableWidget::-webkit-scrollbar-track {*/
+/*    background: var(--scrollbar-track);*/
+/*}*/
+
+/*.tableWidget::-webkit-scrollbar-thumb {*/
+/*    background-color: var(--scrollbar-thumb);*/
+/*    border-radius: 4px;*/
+/*    border: 2px solid var(--scrollbar-track);*/
+/*}*/
+
+/*!* Firefox *!*/
+/*.tableWidget {*/
+/*    scrollbar-width: thin;*/
+/*    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);*/
+/*}*/
+
+
+/*.tableButton {*/
+/*    background: #2a2a2a;*/
+/*    color: rgba(255, 255, 255, 0.8);*/
+/*    border: 1px solid rgba(255, 255, 255, 0.2);*/
+/*    margin: 0;*/
+/*    border-radius: 2px;*/
+/*}*/
+
+/*.tableButton:hover {*/
+/*    filter: brightness(1.2);*/
+/*}*/
+
+
+/*!* only apply when NOT disabled *!*/
+/*.tableButton:not(:disabled).pressed,*/
+/*.tableButton:not(:disabled):active {*/
+/*    transform: translateY(1px);*/
+/*    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);*/
+/*    filter: brightness(0.9);*/
+/*}*/
+
+/*.tableButton:disabled,*/
+/*.tableButton.tableButton--disabled {*/
+/*    opacity: 0.5; !* fade it out *!*/
+/*    cursor: not-allowed; !* show “🚫” cursor *!*/
+/*    filter: none; !* cancel any hover-brightness filters *!*/
+/*    !* you can also override border, background, etc. here *!*/
+/*}*/
+
+/*.tableCheckbox {*/
+
+/*}*/
+
+/*.tableCheckbox:disabled,*/
+/*.tableCheckbox.tableButton--disabled {*/
+/*    opacity: 0.8; !* fade it out *!*/
+/*    cursor: not-allowed; !* show “🚫” cursor *!*/
+/*    filter: none; !* cancel any hover-brightness filters *!*/
+/*    !* you can also override border, background, etc. here *!*/
+/*}*/
+
+
+/*.tableInput {*/
+
+/*}*/
+
+/*!* === editable “input” cells === *!*/
+/*.tableWidget td input.tableInput {*/
+/*    !* match whatever the <td> background & text color is *!*/
+/*    background-color: inherit;*/
+/*    color: inherit;*/
+
+/*    font: inherit;*/
+/*    text-align: inherit;*/
+
+/*    !* fill the entire cell *!*/
+/*    width: 100%;*/
+/*    height: 100%;*/
+/*    box-sizing: border-box;*/
+/*    margin: 0;*/
+/*    padding: 0 4px; !* match your td’s horizontal padding *!*/
+
+/*    !* dashed inset border to signal “editable” *!*/
+/*    border: 1px dashed rgba(255, 255, 255, 0.3);*/
+/*    border-radius: 2px;*/
+
+/*    !* no native outline *!*/
+/*    outline: none;*/
+/*}*/
+
+/*!* ── shake + blink for “error” ── *!*/
+/*@keyframes table-shake {*/
+/*    0% {*/
+/*        transform: translateX(0);*/
+/*    }*/
+/*    25% {*/
+/*        transform: translateX(-4px);*/
+/*    }*/
+/*    50% {*/
+/*        transform: translateX(4px);*/
+/*    }*/
+/*    75% {*/
+/*        transform: translateX(-4px);*/
+/*    }*/
+/*    100% {*/
+/*        transform: translateX(0);*/
+/*    }*/
+/*}*/
+
+/*@keyframes table-blink-error {*/
+/*    0%, 100% {*/
+/*        !*border-color: ;*!*/
+/*    }*/
+/*    50% {*/
+/*        border-color: red;*/
+/*    }*/
+/*}*/
+
+/*!* ── accepted blink ── *!*/
+/*@keyframes table-blink-accept {*/
+/*    0%, 100% {*/
+/*        !*border-color: transparent;*!*/
+/*        !*filter: brightness(1);*!*/
+/*    }*/
+/*    50% {*/
+/*        border-color: limegreen;*/
+/*        !*filter: brightness(1.3);*!*/
+/*    }*/
+
+/*}*/
+
+/*!* ── accepted state ── *!*/
+/*.tableInput.accepted {*/
+/*    animation: table-blink-accept 200ms;*/
+/*}*/
+
+/*!* ── error state ── *!*/
+/*.tableInput.error {*/
+/*    animation: table-shake 300ms ease,*/
+/*    table-blink-error 200ms ease;*/
+/*}*/
+
+/*!* ── (reuse your existing `.tiTooltipFloating` & `.tiTooltipFloatingError` from TextInputWidget) ── *!*/
+
+
+/*.tableWidget td input.tableInput:focus {*/
+/*    !* subtle inset glow on focus *!*/
+/*    box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.2);*/
+/*}*/
+
+
+/*.tableSelect {*/
+/*    background: #1b6d85;*/
+/*    border: 1px solid rgba(255, 255, 255, 0.2);*/
+/*    border-radius: 2px;*/
+/*}*/
+
+/*.tableSelect:hover {*/
+/*    filter: brightness(1.2);*/
+/*}*/
+
+/*.tableSelect:disabled,*/
+/*.tableSelect.tableButton--disabled {*/
+/*    opacity: 0.8; !* fade it out *!*/
+/*    cursor: not-allowed; !* show “🚫” cursor *!*/
+/*    filter: none; !* cancel any hover-brightness filters *!*/
+/*    !* you can also override border, background, etc. here *!*/
+/*}*/
 
 
 /* ─── ObjectGroup container ─────────────────────────────────────────── */
@@ -1902,6 +2819,7 @@
 
 .circleIndicator .circle-shape {
     transition: width 0.2s ease, height 0.2s ease, opacity 0.2s ease;
+    will-change: transform, opacity, filter;
 }
 
 @keyframes circle-blink {
@@ -1911,6 +2829,33 @@
     50.01%, 100% {
         opacity: 0;
     }
+}
+
+@keyframes circle-pulse {
+    0% {
+        transform: scale(1);
+        opacity: 0.8;
+        filter: brightness(1);
+        box-shadow: 0 0 0 rgba(255, 255, 255, 0);
+    }
+
+    40% {
+        transform: scale(1.25);
+        opacity: 1;
+        filter: brightness(2);
+        box-shadow: 0 0 20px rgba(255, 255, 255, 0.6);
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 0.8;
+        filter: brightness(1);
+        box-shadow: 0 0 0 rgba(255, 255, 255, 0);
+    }
+}
+
+.circleIndicator.pulse .circle-shape {
+    animation: circle-pulse 0.2s ease-out;
 }
 
 /* ─── LoadingIndicator ───────────────────────────────────────────────────── */

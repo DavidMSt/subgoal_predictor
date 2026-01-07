@@ -1,7 +1,10 @@
+import enum
 import socket
 import struct
 import time
 
+from core.utils.callbacks import callback_definition, CallbackContainer
+from core.utils.events import event_definition, Event
 from core.utils.logging_utils import Logger, setLoggerLevel
 from core.utils.network.network import getHostIP, pingAddress
 from core.utils.timecode.mtc import MTC_Decoder
@@ -10,10 +13,32 @@ from core.utils.timecode.timecode import Timecode
 TIME_SERVER_PORT = 5005
 
 
-class UDP_MTC_TimeServer:
+@callback_definition
+class TimecodeServerCallbacks:
+    zero_frame: CallbackContainer
+
+
+@event_definition
+class TimecodeServerEvents:
+    zero_frame: Event
+    initialized: Event
+    error: Event
+
+
+class TimecodeServerStatus(enum.StrEnum):
+    running = "running"
+    error = "error"
+
+
+class TimecodeServer:
     mtc_decoder: MTC_Decoder
+    status: TimecodeServerStatus = TimecodeServerStatus.error
 
     def __init__(self):
+
+        self.callbacks = TimecodeServerCallbacks()
+        self.events = TimecodeServerEvents()
+
         host = getHostIP()
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -57,8 +82,10 @@ class UDP_MTC_TimeServer:
             return
         self.targets.append(target)
 
+    # ------------------------------------------------------------------------------------------------------------------
     def remove_target(self, target: str):
-        self.targets.remove(target)
+        if target in self.targets:
+            self.targets.remove(target)
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self) -> bool:
@@ -67,8 +94,21 @@ class UDP_MTC_TimeServer:
             self.logger.warning("MTC Decoder failed to start")
             return result
         self.logger.info("Start Timecode Server")
+        self.status = TimecodeServerStatus.running
+        self.events.initialized.set()
         return True
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_timecode(self) -> Timecode | None:
+        return self.mtc_decoder.get_timecode()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_time(self) -> float | None:
+        return self.mtc_decoder.get_time()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_fps(self)-> float | None:
+        return self.mtc_decoder.fps
     # === PRIVATE METHODS =======================================================
     def _mtc_zero_frame_callback(self, timecode: Timecode):
 
@@ -88,25 +128,26 @@ class UDP_MTC_TimeServer:
         self._last_callback_mono = now
         packet = timecode.to_bytes()
 
-        self.logger.info(f"Sent timecode: {timecode}")
-        if len(self.targets) == 0:
-            return
-
         # self.socket.sendto(packet, ('255.255.255.255', TIME_SERVER_PORT))
         for target in self.targets:
             self.socket.sendto(packet, (target, TIME_SERVER_PORT))
 
+        self.callbacks.zero_frame.call(timecode)
+        self.events.zero_frame.set(timecode)
+
     # ------------------------------------------------------------------------------------------------------------------
     def _on_mtc_error(self):
         self.logger.error(f"Error in MTC decoder")
+        self.status = TimecodeServerStatus.error
+        self.events.error.set()
 
 
 if __name__ == '__main__':
-    server = UDP_MTC_TimeServer()
+    server = TimecodeServer()
     server.init()
     server.start()
 
-    server.add_target("bilbo1.lan")
+    # server.add_target("bilbo2.lan")
 
     while True:
         time.sleep(1)

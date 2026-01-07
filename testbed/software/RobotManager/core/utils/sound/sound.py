@@ -37,7 +37,6 @@ def beep(
         volume: float = 1.0,
         force: bool = False,
         flush: bool = False,
-        gap_ms: int = 40,
 ):
     """
     Non-blocking beep tone played through the active SoundSystem.
@@ -55,7 +54,7 @@ def beep(
     # Clamp parameters
     volume = max(0.0, min(1.0, float(volume)))  # pygame expects 0..1
     repeats = max(1, int(repeats))
-    gap_ms = max(0, int(gap_ms))
+    gap_ms = max(0, int(time_ms))
 
     # Cache key must include repeats + gap for multi-beep variants
     key = (int(frequency), int(time_ms), int(repeats), int(gap_ms))
@@ -562,7 +561,7 @@ if __name__ == "__main__":
     # cleanTTS()
     sound_system.start()
     try:
-        # beep(frequency=1000, volume=2)
+        beep(frequency=1000, volume=2, repeats=3)
         # playSound('warning')
         # speak("BILBO 1 disconnected")
         # # speak("Experiment with ID f-e-x-1-2-3-4 finished")

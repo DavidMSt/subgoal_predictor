@@ -1,16 +1,18 @@
 import dataclasses
+import time
 
 import yaml
 
 from applications.BILBO.settings import AUTOSTOP_ROBOTS, AUTOSTART_ROBOTS
+from applications.BILBO.testbed.testbed_extensions import BILBO_TestbedExtensions
 from applications.BILBO.tracker.bilbo_tracker import BILBO_Tracker, TrackedBILBO, BILBO_Tracker_Status
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.events import event_definition, Event, EventFlag
 from core.utils.files import file_exists, get_absolute_path
 from core.utils.logging_utils import Logger
 from core.utils.sound.sound import speak
-from core.utils.timecode.timecode_server import UDP_MTC_TimeServer
-# from core.utils.timecode.timecode_server_sync import TimecodeMasterServer
+from core.utils.time import set_timeout
+from core.utils.timecode.timecode_server import TimecodeServer
 from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
 from robots.bilbo.manager.bilbo_manager import BILBO_Manager
 from robots.bilbo.robot.bilbo import BILBO
@@ -35,7 +37,7 @@ class BILBO_TestbedManager:
     robot_manager: BILBO_Manager
     tracker: BILBO_Tracker
     bilbos: dict[str, BILBO_TestbedAgent]
-    # timecode_server: UDP_MTC_TimeServer
+    extensions: BILBO_TestbedExtensions
 
     # === INIT =========================================================================================================
     def __init__(self):
@@ -46,14 +48,15 @@ class BILBO_TestbedManager:
 
         self.tracker.events.new_sample.on(self._on_new_tracker_sample, max_rate=20)
         self.tracker.events.description_received.on(self._on_tracker_initialized, once=True)
+        self.tracker.events.new_rigid_body.on(self._on_tracker_new_rigid_body)
 
         # Joystick Control
         self.joystick_control = BILBO_JoystickControl(bilbo_manager=self.robot_manager, run_in_thread=True)
 
         self.bilbos = {}
 
-        # self.timecode_server = UDP_MTC_TimeServer()
-        # self.timecode_server = TimecodeMasterServer()
+        self.timecode_server = TimecodeServer()
+        # self.extensions = BILBO_TestbedExtensions()
 
         self.robot_manager.events.new_robot.on(self._on_new_robot)
         self.robot_manager.events.robot_disconnected.on(self._on_robot_disconnected)
@@ -67,9 +70,13 @@ class BILBO_TestbedManager:
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
         self.tracker.start()
-        # self.timecode_server.start()
+        self.timecode_server.start()
         self.robot_manager.start()
         self.joystick_control.start()
+
+        # self.extensions.start()
+
+        # set_timeout(self.extensions.limbo_bar.blink, 2, (0, 100, 0), 5, 400)
 
     # ------------------------------------------------------------------------------------------------------------------
     def emergency_stop(self):
@@ -122,7 +129,7 @@ class BILBO_TestbedManager:
     # ------------------------------------------------------------------------------------------------------------------
     def _on_tracker_initialized(self, *args, **kwargs):
         # 1. Load the testbed config
-        testbed_config_file = get_absolute_path('./configs/testbed.yaml')
+        testbed_config_file = get_absolute_path('../configs/testbed.yaml')
 
         if not file_exists(testbed_config_file):
             self.logger.warning(f"Testbed config file '{testbed_config_file}' does not exist.")
@@ -140,3 +147,8 @@ class BILBO_TestbedManager:
     # ------------------------------------------------------------------------------------------------------------------
     def _on_new_tracker_sample(self, *args, **kwargs):
         self.events.new_tracker_sample.set()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_tracker_new_rigid_body(self, rigid_body: dict):
+        self.logger.error(f"Received rigid body from OptiTrack: {rigid_body}. This is currently not supported. All "
+                          f"rigid bodies need to be available before starting the application!")

@@ -116,9 +116,14 @@ class BILBO(MainProvider):
         self.sensors = BILBO_Sensors(comm=self.communication)
         self.supervisor = TWIPR_Supervisor(comm=self.communication)
 
+        self.interfaces = BILBO_Interfaces(communication=self.communication,
+                                           control=self.control,
+                                           core=self.common)
+
         self.utilities = BILBO_Utilities(core=self.common, communication=self.communication, board=self.board)
         self.experiment_handler = BILBO_ExperimentHandler(common=self.common,
                                                           communication=self.communication,
+                                                          interfaces=self.interfaces,
                                                           utilities=self.utilities,
                                                           control=self.control, )
 
@@ -130,10 +135,6 @@ class BILBO(MainProvider):
                                      sensors=self.sensors,
                                      experiment_handler=self.experiment_handler,
                                      )
-
-        self.interfaces = BILBO_Interfaces(communication=self.communication,
-                                           control=self.control,
-                                           core=self.common)
 
         # Test Command
         self.communication.wifi.newCommand(identifier='test',
@@ -148,7 +149,6 @@ class BILBO(MainProvider):
         register_exit_callback(self._shutdownInit, priority=2)
 
         self._startup_phase = True
-
 
         def on_new_timecode(timecode):
             self.board.status_led.toggle()
@@ -169,8 +169,6 @@ class BILBO(MainProvider):
         self.sensors.init()
         self.logging.init()
         self.experiment_handler.init()
-
-
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
@@ -247,7 +245,7 @@ class BILBO(MainProvider):
             self.logger.warning(f"Update took {self.update_time * 1000:.2f} ms")
 
         self.common.end_of_step()
-        
+
     # === PRIVATE METHODS ==============================================================================================
     def _resetLowLevel(self):
         # self.board.beep()

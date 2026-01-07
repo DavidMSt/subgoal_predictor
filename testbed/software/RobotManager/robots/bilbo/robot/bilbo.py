@@ -1,3 +1,4 @@
+import threading
 import time
 
 from core.communication.device_server import Device
@@ -23,13 +24,15 @@ class BILBO:
     interfaces: BILBO_Interfaces
     data: BILBO_Sample
 
+    _exit_task: bool = False
+
     # ==================================================================================================================
     def __init__(self, device: Device, config: BILBO_Config, *args, **kwargs):
         self.device = device
 
         self.config = config
 
-        self.core = BILBO_Core(device=device, robot_id=self.device.information.device_id)
+        self.core = BILBO_Core(device=device, robot_id=self.device.information.device_id, robot=self)
 
         self.control = BILBO_Control(core=self.core)
         self.experiment_handler = BILBO_ExperimentHandler(core=self.core, control=self.control)
@@ -43,6 +46,9 @@ class BILBO:
 
         self.device.callbacks.stream.register(self._onStreamCallback)
         self.device.callbacks.disconnected.register(self._disconnected_callback)
+
+        # self._thread = threading.Thread(target=self._task, daemon=True)
+        # self._thread.start()
 
     # ------------------------------------------------------------------------------------------------------------------
     def setControlConfiguration(self, config):
@@ -83,7 +89,14 @@ class BILBO:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _disconnected_callback(self, *args, **kwargs):
+        # self._exit_task = True
+        # self._thread.join()
         del self.experiment_handler
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _task(self):
+        while not self._exit_task:
+            time.sleep(0.1)
 
     # ------------------------------------------------------------------------------------------------------------------
     def __del__(self):

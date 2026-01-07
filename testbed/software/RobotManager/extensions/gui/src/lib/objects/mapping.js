@@ -1,11 +1,18 @@
 import {ButtonWidget, MultiStateButtonWidget} from './js/buttons.js';
 import {ClassicSliderWidget, RotaryDialWidget, SliderWidget} from './js/sliders.js';
 import {MultiSelectWidget} from './js/select.js';
-import {DigitalNumberWidget, InputWidget, LineScrollTextWidget, StatusWidget, TextWidget} from './js/text.js';
+import {
+    DigitalClockWidget,
+    DigitalNumberWidget,
+    InputWidget,
+    LineScrollTextWidget,
+    StatusWidget,
+    TextWidget
+} from './js/text.js';
 import {ImageWidget, UpdatableImageWidget, VideoWidget} from './js/media.js';
 import {MapWidget} from '../map/map.js';
 import {RT_Plot_Widget} from '../plot/realtime/rt_plot.js';
-import {TableWidget} from './js/table.js';
+import {Table} from './js/table.js';
 import {PagedGroupsWidget, WidgetGroup} from './group.js';
 import {CheckboxWidget} from "./js/checkbox.js";
 import {
@@ -34,8 +41,7 @@ export let OBJECT_MAPPING = {
     'text': TextWidget,
     'input': InputWidget,
     'status': StatusWidget,
-    'TableWidget': TableWidget,
-    'table': TableWidget,
+    'table': Table,
     'group': WidgetGroup,
     'rt_plot': RT_Plot_Widget,
     'image': ImageWidget,
@@ -62,4 +68,5 @@ export let OBJECT_MAPPING = {
     'container_stack': GUI_Container_Stack,
     'collapsivle_container': CollapsibleContainer,
     'container': GUI_Container,
+    'digital_clock': DigitalClockWidget
 }

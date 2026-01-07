@@ -1,3 +1,5 @@
+import dataclasses
+
 import numpy as np
 from typing import Tuple
 
@@ -8,7 +10,8 @@ __all__ = [
     "build_Qf_circulant",
     "fir_toeplitz_causal",
     "build_Qf_TtT",
-    "freq_response"
+    "freq_response",
+    "FIR_Design_Params",
 ]
 
 
@@ -89,6 +92,12 @@ __all__ = [
 # -------------------------------
 # FIR design and application
 # -------------------------------
+@dataclasses.dataclass(frozen=True)
+class FIR_Design_Params:
+    fc: float
+    L: int
+    window: str = "hann"  # can be "hann", "hamming", "blackman"
+
 
 def design_zero_phase_fir(fc: float, L: int, window: str = "hann") -> np.ndarray:
     """

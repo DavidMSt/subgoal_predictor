@@ -91,7 +91,6 @@ class BILBO_Common:
         self.timecode_listener.callbacks.sync.register(self._on_timecode_sync)
         self.timecode_listener.start()
 
-
         self._thread = threading.Thread(target=self._connection_check_task)
         self._thread.start()
 
@@ -146,14 +145,14 @@ class BILBO_Common:
     def setAbortEvent(self, data):
         self.interaction_events.abort.set(data=data)
 
-
     # ------------------------------------------------------------------------------------------------------------------
     def get_general_sample_dict(self) -> dict:
 
         current_timecode = self.timecode_listener.get_timecode()
 
         # Adapt the timecode for the time of the LL sample. Since this is 0.1 seconds in the past, we have to adjust it
-        # timecode = current_timecode - 0.1
+        if current_timecode is not None:
+            current_timecode = current_timecode - 0.1
 
         sample = {
             'status': 'none',
@@ -161,8 +160,8 @@ class BILBO_Common:
             'time_global': time.monotonic(),
             'tick': self.tick,
             'connection_strength': self.connection_strength,
-            'timecode': current_timecode.to_string(),
-            'timecode_fps': current_timecode.fps
+            'timecode': current_timecode.to_string() if current_timecode is not None else '00:00:00:00',
+            'timecode_fps': current_timecode.fps if current_timecode is not None else 0
         }
 
         return sample

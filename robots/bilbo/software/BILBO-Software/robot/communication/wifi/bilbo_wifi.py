@@ -108,7 +108,7 @@ class BILBO_WIFI_Interface:
     def _gatherDeviceInformation(self) -> DeviceInformation:
 
         information = DeviceInformation()
-        information.device_id = self.core._get_id()
+        information.device_id = self.core.id
         information.device_type = 'bilbo'
         information.device_class = 'bilbo'
         information.device_name = 'Bilbo'

@@ -498,6 +498,7 @@ class BILBO_InteractiveExample:
 
         robot_babylon = BabylonBilbo(object_id=robot_id, color=BILBO_MAPPINGS[robot_id]['color'],
                                      text=BILBO_MAPPINGS[robot_id]['text'])
+
         self.babylon_visualization.addObject(robot_babylon)
 
         self.robots[robot_id]['babylon'] = robot_babylon
