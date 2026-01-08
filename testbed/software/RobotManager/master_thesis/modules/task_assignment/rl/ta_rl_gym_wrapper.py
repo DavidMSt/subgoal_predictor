@@ -13,16 +13,19 @@ class RLEnvMLP(gym.Env):
                  limits = (((-5,5), (-5, 5))),
                  max_episode_steps = 1000
                  ) -> None:
-        
+
         # x, y, v, psi, psi_dot for each agent
         self.agent_dim = 5
         # x, y, psi
         self.task_dim = 3
-        
+
         self.max_n = max_n
         self.max_episode_steps = max_episode_steps
         # Use 'fast' mode for non-real-time RL training
         self.sim = FRODO_universal_Simulation(Ts = 0.1, limits = limits, run_mode='fast')
+
+        # Silence loggers for RL training (only show errors)
+        self._configure_logging_for_rl()
 
         self.action_space = gym.spaces.Discrete(max_n+1)
         self.obs_dim = self._compute_obs_dim()
@@ -34,8 +37,18 @@ class RLEnvMLP(gym.Env):
         )
         self.curr_agent_idx = 0
 
-    # TODO: Start with fixed no. of observations when working with MLPs later for GNNs adjust to actual number of the current episode? 
-    def _compute_obs_dim(self)-> int:        
+    def _configure_logging_for_rl(self):
+        """Silence all loggers during RL training (only show ERROR level messages)."""
+        # Simulation logger
+        if hasattr(self.sim, 'logger'):
+            self.sim.logger.setLevel('ERROR')
+
+        # Environment logger
+        if hasattr(self.sim.environment, 'logger'):
+            self.sim.environment.logger.setLevel('ERROR')
+
+    # TODO: Start with fixed no. of observations when working with MLPs later for GNNs adjust to actual number of the current episode?
+    def _compute_obs_dim(self)-> int:
         # own agent observation
         dim = self.agent_dim
         # other agents (with padding - have to expect max agents to be used to keep no. of inputs constant for the MLP)

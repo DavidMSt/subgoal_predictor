@@ -121,7 +121,8 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
                   agent_id: str,
                   agent_class: type[FRODOUniversalAgent] = FRODOUniversalAgent,
                   start_config: tuple[float, float, float]  = (0.0, 0.0, 0.0),
-                  color:tuple[float, float, float] = (1.0,1.0,1.0)
+                  color:tuple[float, float, float] = (1.0,1.0,1.0),
+                  log_level: str = 'INFO'
                   ) -> FRODOUniversalAgent | None:
 
         # Pass env_container as kwarg to FRODOUniversalAgent
@@ -130,6 +131,7 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
             agent_class=agent_class,
             start_config=start_config,
             color=color,
+            log_level=log_level,
             env_container=self.environment.environment_container  # Add env_container
         )
 
@@ -148,12 +150,8 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
         return agent
 
     def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOUniversalAgent, log_level: str = 'INFO') -> Sequence[FRODOUniversalAgent]:
-        result = super().spawn_agents(n, configurations, agent_class)
-
-        # Set log level for all newly created agents
-        for agent in result:
-            if hasattr(agent, 'logger'):
-                agent.logger.setLevel(log_level)
+        # Pass log_level to parent - agents will be created with correct logger level from the start
+        result = super().spawn_agents(n, configurations, agent_class, log_level=log_level)
 
         return cast(Sequence[FRODOUniversalAgent], result)
 

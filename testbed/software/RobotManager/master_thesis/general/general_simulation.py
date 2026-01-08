@@ -180,6 +180,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
                   agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent,
                   start_config: tuple[float, float, float]  = (0.0, 0.0, 0.0),
                   color:tuple[float, float, float] = (1.0,1.0,1.0),
+                  log_level: str = 'INFO',
                   **kwargs) -> FRODOGeneralAgent | None:
 
         if agent_id in self.agents:
@@ -200,6 +201,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
             Ts= self.Ts,
             start_config= start_config,
             color= color,
+            log_level=log_level,
             **kwargs  # Pass through any additional kwargs (e.g., env_container)
         )
 
@@ -207,7 +209,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         return agent
 
-    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent) -> Sequence[FRODOGeneralAgent]:
+    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent, log_level: str = 'INFO') -> Sequence[FRODOGeneralAgent]:
         """
         Spawn multiple agents in collision-free positions using hybrid approach (grid + FCL).
         If configurations is None, agents are spawned uniformly at random inside env limits.
@@ -216,6 +218,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
             n: Number of agents to spawn
             configurations: Optional list of (x, y, psi) tuples for agent positions
             agent_class: Agent class to instantiate
+            log_level: Logging level for agent loggers (default: 'INFO')
 
         Returns:
             List of created agent objects
@@ -257,7 +260,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
         agents = []
         for config in configurations:
             agent_id = f"vfrodo{len(self.agents)}"
-            agent = self.new_agent(agent_id=agent_id, agent_class=agent_class, start_config=config)
+            agent = self.new_agent(agent_id=agent_id, agent_class=agent_class, start_config=config, log_level=log_level)
             if agent:
                 agents.append(agent)
 

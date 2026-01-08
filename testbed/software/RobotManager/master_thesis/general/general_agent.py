@@ -30,11 +30,12 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
     """
 
     def __init__(
-    self, 
+    self,
     agent_id: str,
-    Ts=0.1, # TODO: this could probably be removed anyway, since Ts could also be received by env updates? 
+    Ts=0.1, # TODO: this could probably be removed anyway, since Ts could also be received by env updates?
     start_config: tuple[float, float, float] = (0.0, 0.0, 0.0),
     color: tuple[float, float, float] = (1.0, 1.0, 1.0),
+    log_level: str = 'INFO',
     ):
         agent_config = FRODO_Agent_Config(color = color, Ts= Ts)
 
@@ -52,7 +53,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.agent_id = agent_id
         self.color = agent_config.color
         self.size = getattr(agent_config, "size", 0.2)
-        self.logger = Logger(agent_id)
+        self.logger = Logger(agent_id, log_level)
 
         super().__init__(agent_id=agent_id, Ts=Ts)
 

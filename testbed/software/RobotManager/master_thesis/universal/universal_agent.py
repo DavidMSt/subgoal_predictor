@@ -21,8 +21,8 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
     tam: TAAgentModule
     exm: EXEAgentModule 
 
-    def __init__(self, env_container, agent_id: str, Ts=0.1, start_config=(0.0,0.0,0.0), color: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
-        super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, color=color)
+    def __init__(self, env_container, agent_id: str, Ts=0.1, start_config=(0.0,0.0,0.0), color: tuple[float, float, float] = (1.0, 1.0, 1.0), log_level: str = 'INFO') -> None:
+        super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, color=color, log_level=log_level)
      
         # ------------------------------------------------------------------
         # MODULES
