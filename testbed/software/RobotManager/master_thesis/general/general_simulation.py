@@ -2,7 +2,7 @@
 import numpy as np
 import time
 import math
-from typing import Type
+from typing import Type, Sequence
 
 # bilbolab
 from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation, FRODO_ENVIRONMENT_ACTIONS, FrodoEnvironment, FRODO_Static, FRODO_Simulation_Events
@@ -39,11 +39,11 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
     events: FRODO_Simulation_Events
 
-    def __init__(self, Ts=0.1, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), env = FrodoGeneralEnvironment):
-        
+    def __init__(self, Ts=0.1, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), env = FrodoGeneralEnvironment, run_mode='rt'):
+
         super().__init__(Ts)
         # override standard bilbo environment with my custom version
-        self.environment = env(Ts=Ts, run_mode='rt', limits = limits)
+        self.environment = env(Ts=Ts, run_mode=run_mode, limits = limits)
         # self.environment.setup_collision_checker()
         self.agents = {} # TODO: Remove these global variables from BILBOLAB?
         self.obstacles = {}
@@ -207,7 +207,7 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         return agent
 
-    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent) -> list[FRODOGeneralAgent]:
+    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent) -> Sequence[FRODOGeneralAgent]:
         """
         Spawn multiple agents in collision-free positions using hybrid approach (grid + FCL).
         If configurations is None, agents are spawned uniformly at random inside env limits.

@@ -12,6 +12,7 @@ from master_thesis.containers.module_containers.ta_containers.ta_container_agent
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
 from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer
 from master_thesis.containers.module_containers.exe_containers.exe_container import AgentExeContainer
+from master_thesis.containers.general_containers.task_container import TaskContainer
 
 import master_thesis.modules.task_assignment.strategies.centralized_strategies 
 
@@ -156,14 +157,15 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         return self.tam.ta_container
 
     @property
-    def assigned_task(self):
+    def assigned_task(self)-> TaskContainer | None:
         """Link to the task assigned by TA module."""
         return self.tam.ta_container.assigned_task
 
     @assigned_task.setter
-    def assigned_task(self, value):
+    def assigned_task(self, task: TaskContainer):
         """Set assigned task and trigger motion planning."""
-        self.tam.ta_container.assigned_task = value
+        assert isinstance(task, TaskContainer)
+        self.tam.ta_container.assigned_task = task
 
     # ---------- Motion Planning ----------
     @property

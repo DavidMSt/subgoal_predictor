@@ -1,4 +1,5 @@
 from extensions.cli.cli import CommandSet, Command, CommandArgument
+from typing import Sequence, cast
 
 from core.utils.logging_utils import Logger
 
@@ -94,10 +95,12 @@ class FRODO_General_CommandSet(CommandSet):
         )
 
 class FRODO_universal_Simulation(FRODO_general_Simulation):
+
+    agents: dict[str, FRODOUniversalAgent] # type: ignore[assignment]
     cli: FRODO_General_CommandSet | None = None
 
-    def __init__(self, Ts=0.1, limits=((-5,5),(-5,5)), env=FrodoGeneralEnvironment):
-        super().__init__(Ts=Ts, limits=limits, env=env)
+    def __init__(self, Ts=0.1, limits=((-5,5),(-5,5)), env=FrodoGeneralEnvironment, run_mode='rt'):
+        super().__init__(Ts=Ts, limits=limits, env=env, run_mode=run_mode)
         
         self.mp_containers: dict[str, AgentMPPlannerContainer] = {}
         self.ta_containers: dict[str, AgentTAContainer] = {}
@@ -144,8 +147,15 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
         return agent
 
-    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOUniversalAgent) -> list[FRODOGeneralAgent]:
-        return super().spawn_agents(n, configurations, agent_class)
+    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOUniversalAgent, log_level: str = 'INFO') -> Sequence[FRODOUniversalAgent]:
+        result = super().spawn_agents(n, configurations, agent_class)
+
+        # Set log level for all newly created agents
+        for agent in result:
+            if hasattr(agent, 'logger'):
+                agent.logger.setLevel(log_level)
+
+        return cast(Sequence[FRODOUniversalAgent], result)
 
     def reset_simulation(self):
         """Reset the simulation to initial state - clears all agents, tasks, and obstacles."""
@@ -216,6 +226,11 @@ class FRODO_universal_Simulation(FRODO_general_Simulation):
 
     def start_exe(self):
         self.exm.start_execution()
+
+    def step(self):
+        """Advance simulation by one timestep (for non-real-time RL training)."""
+        self.environment.scheduling.actions['step'].run()
+
     
 
 def assignment_example_simple():

@@ -48,6 +48,7 @@ audioop-lts; python_version >= "3.13"
 torch-geometric >= 2.6.1
 torch >= 2.8.0
 stable-baselines3 >= 2.7.0
+tensorboard >= 2.20.0
 
 # Motion planning
 # NOTE: OMPL cannot be installed via pip. Install separately:

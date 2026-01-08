@@ -658,7 +658,7 @@ class Environment(scheduling.ScheduledObject):
                                                                                   default_action
                                                                                   in
                                                                                   scheduling.SCHEDULING_DEFAULT_ACTIONS)):
-                    print(f"Adding action \"{action_name}\" to own action list.")
+                    # print(f"Adding action \"{action_name}\" to own action list.")
                     obj.scheduling.actions[action_name].addParent(action)
 
             logging.info(f"Added Object \"{obj.object_id}\" ({type(obj)}) to the world.")
