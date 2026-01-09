@@ -281,7 +281,7 @@ class BILBO_CLI_CommandSet(CommandSet):
 
         stable_command = Command(name='stable',
                                  description='Checks if the robot is stable',
-                                 function = self._check_stable,
+                                 function=self._check_stable,
                                  )
 
         read_state_command = Command(name='read',
@@ -415,7 +415,8 @@ class BILBO_CLI_CommandSet(CommandSet):
                                        function=Callback(
                                            function=dilc_example,
                                            inputs={'bilbo': self.core.get_robot()}
-                                       )
+                                       ),
+                                       execute_in_thread=True
                                        )
 
         experiment_command_set = CommandSet(name='experiment',
@@ -433,7 +434,6 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                            test_communication],
 
                          children=[control_command_set, experiment_command_set])
-
 
     def _check_stable(self):
         stable = self.core.is_upright_and_static()

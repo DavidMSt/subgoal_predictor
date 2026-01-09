@@ -16,7 +16,8 @@ from core.utils.timecode.timecode_server import TimecodeServer
 from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
 from robots.bilbo.manager.bilbo_manager import BILBO_Manager
 from robots.bilbo.robot.bilbo import BILBO
-from robots.bilbo.robot.bilbo_definitions import BILBO_OriginConfig
+from robots.bilbo.robot.bilbo_definitions import BILBO_OriginConfig, BILBO_LimboMarkerConfig
+from core.utils.yaml_utils import load_yaml
 
 
 @dataclasses.dataclass
@@ -31,6 +32,20 @@ class BILBO_TestbedManager_Events:
     new_robot: Event = Event(copy_data_on_set=False, flags=[EventFlag('type', str), EventFlag('id', str)])
     robot_disconnected: Event = Event(copy_data_on_set=False, flags=[EventFlag('type', str), EventFlag('id', str)])
     new_tracker_sample: Event
+    initialized: Event = Event(copy_data_on_set=False)
+
+
+@dataclasses.dataclass
+class BILBO_TestbedManager_Settings:
+    testbed: str = 'track'  # can be 'track' or 'lab'
+
+
+@dataclasses.dataclass
+class BILBO_TestbedConfig:
+    size: list[float]
+    origin_position: str
+    origin: dict | None = None
+    limbo_marker: dict | None = None
 
 
 class BILBO_TestbedManager:
@@ -38,10 +53,14 @@ class BILBO_TestbedManager:
     tracker: BILBO_Tracker
     bilbos: dict[str, BILBO_TestbedAgent]
     extensions: BILBO_TestbedExtensions
+    settings: BILBO_TestbedManager_Settings
+    testbed_config: BILBO_TestbedConfig
 
     # === INIT =========================================================================================================
-    def __init__(self):
+    def __init__(self, settings: BILBO_TestbedManager_Settings):
         self.logger = Logger('BILBO Testbed Manager', 'DEBUG')
+        self.settings = settings
+
         self.robot_manager = BILBO_Manager(enable_scanner=AUTOSTART_ROBOTS, autostop_robots=AUTOSTOP_ROBOTS)
         self.tracker = BILBO_Tracker()
         self.events = BILBO_TestbedManager_Events()
@@ -63,9 +82,25 @@ class BILBO_TestbedManager:
 
     # === METHODS ======================================================================================================
     def init(self):
+
+        # Load the testbed config
+        match self.settings.testbed:
+            case 'track':
+                testbed_config = get_absolute_path('../configs/testbed-track.yaml')
+                testbed_config_dict = load_yaml(testbed_config)
+                self.testbed_config = from_dict_auto(BILBO_TestbedConfig, testbed_config_dict)
+            case 'lab':
+                testbed_config = get_absolute_path('../configs/testbed-lab.yaml')
+                testbed_config_dict = load_yaml(testbed_config)
+                self.testbed_config = from_dict_auto(BILBO_TestbedConfig, testbed_config_dict)
+            case _:
+                raise ValueError(f"Testbed '{self.settings.testbed}' not supported.")
+
         self.robot_manager.init()
         self.joystick_control.init()
         self.tracker.init()
+
+        self.events.initialized.set()
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
@@ -128,21 +163,14 @@ class BILBO_TestbedManager:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_tracker_initialized(self, *args, **kwargs):
-        # 1. Load the testbed config
-        testbed_config_file = get_absolute_path('../configs/testbed.yaml')
 
-        if not file_exists(testbed_config_file):
-            self.logger.warning(f"Testbed config file '{testbed_config_file}' does not exist.")
-            return
-
-        with open(testbed_config_file, 'r') as file:
-            testbed_config = yaml.safe_load(file)
-
-        if testbed_config['origin'] is not None:
-            origin_config = from_dict_auto(BILBO_OriginConfig, testbed_config['origin'])
+        if self.testbed_config.origin is not None:
+            origin_config = from_dict_auto(BILBO_OriginConfig, self.testbed_config.origin)
             self.tracker.add_origin(origin_config.id, origin_config)
-        else:
-            return
+
+        if self.testbed_config.limbo_marker is not None:
+            limbo_marker_config = from_dict_auto(BILBO_LimboMarkerConfig, self.testbed_config.limbo_marker)
+            self.tracker.add_limbo_bar(limbo_marker_config.id, limbo_marker_config)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_new_tracker_sample(self, *args, **kwargs):

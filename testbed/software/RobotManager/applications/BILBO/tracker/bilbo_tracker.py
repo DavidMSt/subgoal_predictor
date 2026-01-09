@@ -12,7 +12,8 @@ from core.utils.orientation.orientation_3d import calculate_intersection, vector
     vector_from_global_to_local
 from extensions.optitrack.optitrack import OptiTrack, RigidBodySample
 from core.utils.callbacks import callback_definition, CallbackContainer
-from robots.bilbo.robot.bilbo_definitions import BILBO_OptiTrack_Definition, BILBO_Config, BILBO_OriginConfig
+from robots.bilbo.robot.bilbo_definitions import BILBO_OptiTrack_Definition, BILBO_Config, BILBO_OriginConfig, \
+    BILBO_LimboMarkerConfig
 
 
 @dataclasses.dataclass
@@ -78,6 +79,73 @@ class TrackedOrigin:
         )
         self.tracking_valid = True
         self.state = TrackedOrigin_State(x=position[0], y=position[1], z=position[2], orientation=orientation)
+
+
+@dataclasses.dataclass
+class TrackedLimboBar_State:
+    x: float
+    y: float
+
+
+@callback_definition
+class TrackedLimboBar_Callbacks:
+    update: CallbackContainer
+
+
+@event_definition
+class TrackedLimboBar_Events:
+    update: Event
+
+
+class TrackedLimboBar:
+    id: str
+    config: BILBO_LimboMarkerConfig
+    origin: TrackedOrigin | None = None
+    tracking_valid: bool = False
+    state: TrackedLimboBar_State
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def __init__(self, id: str, config: BILBO_LimboMarkerConfig, origin: TrackedOrigin | None = None):
+        self.id = id
+        self.config = config
+        self.origin = origin
+        self.state = TrackedLimboBar_State(x=0, y=0)
+
+        self.callbacks = TrackedLimboBar_Callbacks()
+        self.events = TrackedLimboBar_Events()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def update(self, data: RigidBodySample):
+        if not data.valid:
+            self.tracking_valid = False
+            return
+
+        self.tracking_valid = True
+
+        x_axis_point_start = np.asarray(data.markers[self.config.x_start])
+        x_axis_point_end = np.asarray(data.markers[self.config.x_end])
+        y_axis_point_start = np.asarray(data.markers[self.config.y_start])
+        y_axis_point_end = np.asarray(data.markers[self.config.y_end])
+
+        position = calculate_intersection(x_axis_point_start,
+                                        x_axis_point_end,
+                                        y_axis_point_start,
+                                        y_axis_point_end)
+
+
+        if self.origin is not None:
+            diff_vector = position - np.asarray([self.origin.state.x, self.origin.state.y, self.origin.state.z])
+
+            position = vector_from_global_to_local(
+                vector_in_global_frame=diff_vector,
+                target_frame_global_orientation=self.origin.state.orientation
+            )
+
+
+        self.state = TrackedLimboBar_State(x=position[0], y=position[1])
+
+        self.callbacks.update.call(self.state, self.tracking_valid)
+        self.events.update.set(self.state)
 
 
 # ======================================================================================================================
@@ -230,6 +298,7 @@ class BILBO_Tracker:
 
     robots: dict[str, TrackedBILBO]
     origin: TrackedOrigin | None = None
+    limbo_bar: TrackedLimboBar | None = None
     events: BILBO_Tracker_Events
 
     samples: int = 0
@@ -325,13 +394,18 @@ class BILBO_Tracker:
             if robot.origin is None:
                 robot.origin = self.origin
 
+        if self.limbo_bar is not None:
+            self.limbo_bar.origin = self.origin
 
         self.events.new_tracked_object.set(self.origin)
         return self.origin
 
     # ------------------------------------------------------------------------------------------------------------------
-    def add_limbo_bar(self, limbo_bar_id: str, config: dict):
-        ...
+    def add_limbo_bar(self, limbo_bar_id: str, config: BILBO_LimboMarkerConfig) -> TrackedLimboBar | None:
+        limbo_bar = TrackedLimboBar(id=limbo_bar_id, config=config, origin=self.origin)
+        self.limbo_bar = limbo_bar
+        self.events.new_tracked_object.set(self.limbo_bar)
+        return self.limbo_bar
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_object_by_id(self, id: str) -> TrackedBILBO | None:
@@ -342,8 +416,6 @@ class BILBO_Tracker:
 
     # === PRIVATE METHODS ==============================================================================================
     def _onSample(self, sample: dict[str, RigidBodySample]):
-
-
         self.sample = sample
         self.samples += 1
 
@@ -357,8 +429,15 @@ class BILBO_Tracker:
             else:
                 self.origin.tracking_valid = False
 
-        for name, data in sample.items():
+        if self.limbo_bar is not None:
+            if self.limbo_bar.id in sample:
+                self.limbo_bar.update(sample[self.limbo_bar.id])
+                self.limbo_bar.tracking_valid = sample[self.limbo_bar.id].valid
 
+            else:
+                self.limbo_bar.tracking_valid = False
+
+        for name, data in sample.items():
             if name not in self.rigid_bodies:
                 self.logger.info(f"New rigid body found: {name}")
                 self.callbacks.new_rigid_body.call(name)

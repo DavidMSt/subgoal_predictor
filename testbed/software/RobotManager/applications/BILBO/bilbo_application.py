@@ -1,9 +1,11 @@
+import dataclasses
 import logging
 import os
 import sys
 import time
 
-from applications.BILBO.testbed.testbed_manager import BILBO_TestbedManager, BILBO_TestbedAgent
+from applications.BILBO.testbed.testbed_manager import BILBO_TestbedManager, BILBO_TestbedAgent, \
+    BILBO_TestbedManager_Settings
 from core.utils.callbacks import Callback
 from core.utils.network.network import getHostIP
 from robots.bilbo.robot.bilbo import BILBO
@@ -39,11 +41,18 @@ ENABLE_SPEECH_OUTPUT = True
 
 
 # ======================================================================================================================
+@dataclasses.dataclass
+class BILBO_ApplicationSettings:
+    testbed: str = 'track'
+
+
 class BILBO_Application:
     manager: BILBO_TestbedManager
     soundsystem: SoundSystem
 
-    def __init__(self):
+    def __init__(self, settings: BILBO_ApplicationSettings):
+
+        self.settings = settings
 
         # Logging
         self.logger = Logger('APP')
@@ -55,7 +64,11 @@ class BILBO_Application:
             self.logger.error("No valid IP address for the server")
             exit_program()
 
-        self.manager = BILBO_TestbedManager()
+        testbed_settings = BILBO_TestbedManager_Settings(
+            testbed=settings.testbed,
+        )
+
+        self.manager = BILBO_TestbedManager(testbed_settings)
         self.manager.events.new_robot.on(self._newRobot_callback)
         self.manager.events.robot_disconnected.on(self._robotDisconnected_callback)
         # self.manager.robot_manager.callbacks.stream.register(self.gui.sendRawStream)
@@ -122,7 +135,10 @@ class BILBO_Application:
 
 # ======================================================================================================================
 def run_bilbo_application():
-    app = BILBO_Application()
+
+    settings = BILBO_ApplicationSettings(testbed='track')
+
+    app = BILBO_Application(settings=settings)
     app.init()
     app.start()
 

@@ -25,6 +25,14 @@ class BabylonWidget(Widget):
         }
         return config
 
+    def getPayload(self):
+        payload = super().getPayload()
+        payload['babylon'] = self.babylon.getPayload() if self.babylon else None
+        return payload
+
     def handleEvent(self, message, sender=None) -> None:
         pass
+
+    def set_babylon(self, babylon: BabylonVisualization) -> None:
+        self.babylon = babylon
     # === PRIVATE METHODS ==============================================================================================

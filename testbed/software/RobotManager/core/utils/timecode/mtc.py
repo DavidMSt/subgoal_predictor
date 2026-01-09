@@ -208,7 +208,7 @@ class MTC_Decoder:
             self._timecode = self._timecode_mtc.offset_frames(self._offset_frames)
 
         if self._timecode.frames == 0:
-            self.logger.info(f"MTC Zero-Frame Callback: {self._timecode}. (MTC: {self._timecode_mtc})")
+            self.logger.debug(f"MTC Zero-Frame Callback: {self._timecode}. (MTC: {self._timecode_mtc})")
             self.callbacks.zero_frame.call(self._timecode)
 
     # ------------------------------------------------------------------------------------------------------------------

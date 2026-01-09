@@ -1,5 +1,6 @@
 import dataclasses
 import time
+from random import randint, random, uniform
 from typing import Dict, Optional, Callable
 
 import numpy as np
@@ -10,7 +11,7 @@ from applications.BILBO.gui.applications.dilc_app import DILC_APP
 from applications.BILBO.gui.applications.input_viewer import InputViewerApplication
 from applications.BILBO.testbed.testbed_manager import BILBO_TestbedManager, BILBO_TestbedAgent
 from core.utils.callbacks import callback_definition, CallbackContainer, Callback
-from core.utils.colors import get_color_from_palette
+from core.utils.colors import get_color_from_palette, random_color_from_palette
 from core.utils.lipo import lipo_soc
 from core.utils.logging_utils import Logger, addLogRedirection, LOGGING_COLORS
 from core.utils.time import setTimeout, set_timeout
@@ -29,7 +30,7 @@ from extensions.gui.src.lib.objects.python.buttons import MultiStateButton, Butt
 from extensions.gui.src.lib.objects.python.indicators import BatteryIndicatorWidget, ConnectionIndicator, \
     InternetIndicator, JoystickIndicator, ProgressIndicator, CircleIndicator
 from extensions.gui.src.lib.objects.python.number import DigitalNumberWidget, DigitalClockWidget
-from extensions.gui.src.lib.objects.python.popup import YesNoPopup
+from extensions.gui.src.lib.objects.python.popup import YesNoPopup, Popup
 from extensions.gui.src.lib.objects.python.table import Table, TextColumn, IndicatorColumn, NumberColumn
 from extensions.gui.src.lib.objects.python.text import TextWidget, StatusWidget, StatusWidgetElement
 from extensions.gui.src.lib.plot.realtime.rt_plot import ServerMode, UpdateMode, TimeSeries, RT_Plot_Widget
@@ -68,7 +69,8 @@ class BILBO_Application_GUI_Robot_Category:
         self.logger = Logger(f"Category {self.robot.id}")
 
         # Register some events
-        self.robot.experiment_handler.events.dilc_experiment_started.on(self._onDILCExperimentStarted)
+        self.robot.experiment_handler.events.dilc_experiment_started.on(self._onDILCExperimentStarted,
+                                                                        spawn_new_threads=True)
 
     # === METHODS ======================================================================================================
 
@@ -413,6 +415,8 @@ class BILBO_Application_GUI_Robot_Category:
             grid_column=42,
         )
 
+        # overview_page.addWidget(test_button)
+
     # ------------------------------------------------------------------------------------------------------------------
     def _createGeneralGroup(self):
 
@@ -625,6 +629,7 @@ class BILBO_Application_GUI_Robot_Category:
         self.experiment_group.addWidget(self.experiment_status_widget, row=2, column=1, width=11, height=1)
 
         def set_experiment_status(*args, **kwargs):
+            return
             try:
                 if self.robot.experiment_handler.experiment is None:
                     self.experiment_status_widget.elements['status'].status = '---'
@@ -772,7 +777,9 @@ class BILBO_Application_GUI_Robot_Category:
     # ------------------------------------------------------------------------------------------------------------------
     def _onDILCExperimentStarted(self, data: DILC_Experiment, *args, **kwargs):
         self.logger.info("Starting DILC App ... ")
-        app = DILC_APP(robot=self.robot, experiment=data)
+
+        app = DILC_APP(gui=self.gui, robot=self.robot, experiment=data)
+
         app.open(gui=self.gui)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -987,14 +994,12 @@ class BILBO_GUI_OverviewPage:
         self.page = Page(id='testbed_page', name='Testbed')
         self.robots = {}
 
-        self.babylon_visualization = BabylonVisualization(id='babylon', babylon_config={
-            'title': 'BILBO Testbed'})
-        self.babylon_visualization.start()
         self._buildPage()
 
         self.manager.events.new_robot.on(self._on_new_testbed_robot)
         self.manager.events.robot_disconnected.on(self._on_testbed_robot_disconnected)
         self.manager.events.new_tracker_sample.on(self._on_new_tracker_sample)
+        self.manager.events.initialized.on(self._on_testbed_initialized)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _buildPage(self):
@@ -1007,37 +1012,11 @@ class BILBO_GUI_OverviewPage:
 
         self._build_timecode()
 
+        self.babylon_widget = BabylonWidget(widget_id='babylon_widget')
+        self.page.addWidget(self.babylon_widget, row=6, column=30, height=13, width=21)
+
         display_group = Widget_Group(group_id='display_group', title='Display', rows=1, columns=1, show_title=True)
         self.page.addWidget(display_group, row=15, column=1, width=10, height=4)
-
-        # Testbed
-        testbed_size = [3, 3]  # Size in meters
-        self.babylon_widget = BabylonWidget(widget_id='babylon_widget')
-        self.page.addWidget(self.babylon_widget, row=8, column=32, height=11, width=19)
-
-        # Floor is kept larger than testbed for visual purposes
-        floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
-        self.babylon_visualization.addObject(floor)
-
-        # Wall length matches testbed size
-        # Wall positions are offset by half the testbed size to create the boundary
-        wall1 = WallFancy('wall1', length=testbed_size[0], texture='wood4.png', include_end_caps=True)
-        wall1.setPosition(y=testbed_size[1] / 2)
-        self.babylon_visualization.addObject(wall1)
-
-        wall2 = WallFancy('wall2', length=testbed_size[0], texture='wood4.png', include_end_caps=True)
-        self.babylon_visualization.addObject(wall2)
-        wall2.setPosition(y=-testbed_size[1] / 2)
-
-        wall3 = WallFancy('wall3', length=testbed_size[1], texture='wood4.png')
-        wall3.setPosition(x=testbed_size[0] / 2)
-        wall3.setAngle(np.pi / 2)
-        self.babylon_visualization.addObject(wall3)
-
-        wall4 = WallFancy('wall4', length=testbed_size[1], texture='wood4.png')
-        wall4.setPosition(x=-testbed_size[0] / 2)
-        wall4.setAngle(np.pi / 2)
-        self.babylon_visualization.addObject(wall4)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _build_timecode(self):
@@ -1164,14 +1143,6 @@ class BILBO_GUI_OverviewPage:
             tracker_status.updateConfig(color=[0.8, 0, 0])
 
         def on_new_tracked_object(tracked_object):
-            # tracker_table.addRow(
-            #     id=tracked_object.id,
-            #     cells=[
-            #         tracked_object.id,
-            #         tracked_object.state.x,
-            #         tracked_object.state.y,
-            #         '❌']
-            # )
             tracker_table.make_row(id=tracked_object.id,
                                    object_id=tracked_object.id,
                                    x=tracked_object.state.x,
@@ -1186,16 +1157,17 @@ class BILBO_GUI_OverviewPage:
         def tracker_new_sample(*args, **kwargs):
             if self.manager.tracker.samples % 5 == 0:
                 tracker_status.blink(250)
-
+            else:
+                return
             # Go through the rigid bodies
             for rb_id, rigid_body_sample in self.manager.tracker.sample.items():
                 row = rb_table.get_row_by_id(row_id=rb_id)
                 if row:
                     cell = row.get_cell('valid')
                     if rigid_body_sample.valid:
-                        cell.set([0, 0.8, 0])
+                        cell.color = [0, 0.8, 0]
                     else:
-                        cell.set([0.8, 0, 0])
+                        cell.color = [0.8, 0, 0]
 
             # Go through the BILBOs
             for bilbo_id, bilbo in self.manager.tracker.robots.items():
@@ -1208,9 +1180,9 @@ class BILBO_GUI_OverviewPage:
                     cell_y.set(bilbo.state.y)
 
                     if bilbo.tracking_valid:
-                        cell_valid.set([0, 0.8, 0])
+                        cell_valid.color = [0, 0.8, 0]
                     else:
-                        cell_valid.set([0.8, 0, 0])
+                        cell_valid.color = [0.8, 0, 0]
 
             if self.manager.tracker.origin:
                 row = tracker_table.get_row_by_id(row_id=self.manager.tracker.origin.id)
@@ -1221,9 +1193,22 @@ class BILBO_GUI_OverviewPage:
                     cell_x.set(self.manager.tracker.origin.state.x)
                     cell_y.set(self.manager.tracker.origin.state.y)
                     if self.manager.tracker.origin.tracking_valid:
-                        cell_valid.set([0, 0.8, 0])
+                        cell_valid.color = [0, 0.8, 0]
                     else:
-                        cell_valid.set([0.8, 0, 0])
+                        cell_valid.color = [0.8, 0, 0]
+
+            if self.manager.tracker.limbo_bar:
+                row = tracker_table.get_row_by_id(row_id=self.manager.tracker.limbo_bar.id)
+                if row:
+                    cell_x = row.get_cell('x')
+                    cell_y = row.get_cell('y')
+                    cell_valid = row.get_cell('valid')
+                    cell_x.set(self.manager.tracker.limbo_bar.state.x)
+                    cell_y.set(self.manager.tracker.limbo_bar.state.y)
+                    if self.manager.tracker.limbo_bar.tracking_valid:
+                        cell_valid.color = [0, 0.8, 0]
+                    else:
+                        cell_valid.color = [0.8, 0, 0]
 
         self.manager.tracker.events.initialized.on(initialize_tracker)
         self.manager.tracker.events.error.on(tracker_error)
@@ -1268,6 +1253,57 @@ class BILBO_GUI_OverviewPage:
                 psi=robot.robot.tracked_object.state.psi,
             )
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_testbed_initialized(self, *args, **kwargs):
+        # Babylon
+        testbed_size = self.manager.testbed_config.size
+        self.babylon_visualization = BabylonVisualization(
+            id='babylon', babylon_config=
+            {
+                'title': 'BILBO Testbed',
+                'camera': {
+                    'target': [testbed_size[0]/2, testbed_size[1]/2, 0],
+                    'position': [1.5, -0.9, 1.334]
+                }
+            }
+        )
+
+        self.babylon_widget.set_babylon(self.babylon_visualization)
+        self.babylon_visualization.start()
+
+
+        floor = SimpleFloor('floor',
+                            size_x=testbed_size[0],
+                            size_y=testbed_size[1],
+                            origin=self.manager.testbed_config.origin_position)
+        self.babylon_visualization.addObject(floor)
+
+        # testbed_size = [3, 3]  # Size in meters
+
+        # # Floor is kept larger than testbed for visual purposes
+        # floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
+        # self.babylon_visualization.addObject(floor)
+        #
+        # # Wall length matches testbed size
+        # # Wall positions are offset by half the testbed size to create the boundary
+        # wall1 = WallFancy('wall1', length=testbed_size[0], texture='wood4.png', include_end_caps=True)
+        # wall1.setPosition(y=testbed_size[1] / 2)
+        # self.babylon_visualization.addObject(wall1)
+        #
+        # wall2 = WallFancy('wall2', length=testbed_size[0], texture='wood4.png', include_end_caps=True)
+        # self.babylon_visualization.addObject(wall2)
+        # wall2.setPosition(y=-testbed_size[1] / 2)
+        #
+        # wall3 = WallFancy('wall3', length=testbed_size[1], texture='wood4.png')
+        # wall3.setPosition(x=testbed_size[0] / 2)
+        # wall3.setAngle(np.pi / 2)
+        # self.babylon_visualization.addObject(wall3)
+        #
+        # wall4 = WallFancy('wall4', length=testbed_size[1], texture='wood4.png')
+        # wall4.setPosition(x=-testbed_size[0] / 2)
+        # wall4.setAngle(np.pi / 2)
+        # self.babylon_visualization.addObject(wall4)
+
 
 # ======================================================================================================================
 @callback_definition
@@ -1300,6 +1336,7 @@ class BILBO_Application_GUI:
             host=host,
             run_js_app=False,
         )
+
         self.testbed_manager = testbed_manager
         self.gui.cli_terminal.setCLI(cli)
         self.joystick_control = joystick_control

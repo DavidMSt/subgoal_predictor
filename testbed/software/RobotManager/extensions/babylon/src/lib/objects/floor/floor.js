@@ -12,256 +12,210 @@ import {
 } from "@babylonjs/core";
 
 // =====================================================================================================================
-// export class BabylonFloor extends BabylonObject {
-//     constructor(id, scene, config = {}) {
-//         super(id, scene, config);
+// export class BabylonSimpleFloor extends BabylonObject {
+//     constructor(id, scene, payload = {}) {
+//         super(id, scene, payload);
 //
-//         const default_config = {
-//             tile_size: 0.5,
-//             tiles_x: 10,
-//             tiles_y: 10,
-//             color1: [0.5, 0.5, 0.5],
-//             color2: [0.65, 0.65, 0.65],
-//             texture_1: 'floor_bright.png',
-//             texture_2: 'floor_bright.png',
-//             brightness_1: 1,
-//             brightness_2: 0.9,
-//             border_type: 'line', // Can be null, 'line' or 'tile'
-//             border_color: [0.4, 0.4, 0.4],
-//             border_width: 0.025,
-//             border_texture: 'floor_bright.png',
-//             border_texture_brightness: 0.6,
-//
-//             show_coordinates: true,
-//             coordinates_font_size: 12,
-//             coordinates_color: [0, 0, 0]
+//         const defaultConfig = {
+//             size_x: 5,          // total width of the floor (X axis, meters or units)
+//             size_y: 5,          // total height/depth of the floor (Z axis)
+//             tile_size: 0.5,     // desired size of a single tile (square)
+//             texture: 'floor_bright.png', // URL or path to a texture image
+//             color: [0.7, 0.7, 0.7],      // fallback diffuse color
 //         };
 //
-//         this.config = {...default_config, ...config};
+//         this.config = {...defaultConfig, ...this.config};
 //
-//         // Create the tiled ground mesh
-//         this.mesh = new CreateTiledGround("Tiled Ground", {
-//             xmin: -this.config.tile_size * this.config.tiles_x / 2,
-//             zmin: -this.config.tile_size * this.config.tiles_y / 2,
-//             xmax: this.config.tile_size * this.config.tiles_x / 2,
-//             zmax: this.config.tile_size * this.config.tiles_y / 2,
-//             subdivisions: {
-//                 h: this.config.tiles_y,
-//                 w: this.config.tiles_x
-//             }
-//         }, this.scene);
+//         // Compute how many tiles we want along each axis.
+//         // We round to the nearest integer so tiles align nicely with size.
+//         const tilesX = Math.max(1, Math.round(this.config.size_x / this.config.tile_size));
+//         const tilesY = Math.max(1, Math.round(this.config.size_y / this.config.tile_size));
 //
-//         // material 1
-//         this.material_1 = new StandardMaterial("material_1", this.scene);
-//         if (this.config.texture_1) {
-//             const tex1 = loadTexture(this.config.texture_1);
-//             this.material_1.diffuseTexture = new Texture(tex1, this.scene);
+//         // NOTE: In Babylon, CreateGround's `subdivisions` only affects geometry density,
+//         // not UVs/texture repetition. We still set it based on the max tile count so
+//         // the mesh is reasonably dense (helps with lighting/shadows).
+//         const subdivisions = Math.max(tilesX, tilesY);
+//
+//         // Create a simple ground mesh
+//         this.mesh = MeshBuilder.CreateGround(
+//             id + '_ground',
+//             {
+//                 width: this.config.size_x,
+//                 height: this.config.size_y,
+//                 subdivisions,       // geometry density only; does NOT control texture tiling
+//                 updatable: false,
+//             },
+//             this.scene
+//         );
+//
+//         // Create material
+//         const mat = new StandardMaterial(id + '_mat', this.scene);
+//         mat.specularColor = new Color3(0, 0, 0);              // no specular highlights
+//         mat.emissiveColor = new Color3(0, 0, 0);              // keep shadows visible
+//         // (Backface culling on by default; fine for a ground plane)
+//         // mat.backFaceCulling = true;
+//
+//         if (this.config.texture) {
+//             const texUrl = loadTexture(this.config.texture);
+//             const tex = new Texture(texUrl, this.scene);
+//             // Ensure tiling mode is wrapping (repeat)
+//             tex.wrapU = Texture.WRAP_ADDRESSMODE;
+//             tex.wrapV = Texture.WRAP_ADDRESSMODE;
+//
+//             // **This is the key:** tile the texture across the ground by scaling UVs.
+//             // One repeat per tile along each axis.
+//             tex.uScale = tilesX;
+//             tex.vScale = tilesY;
+//
+//             // Optional: if your texture looks vertically flipped, uncomment the next line:
+//             // tex.vScale = -tilesY;
+//
+//             mat.diffuseTexture = tex;
 //         } else {
-//             this.material_1.diffuseColor = getBabylonColor3(this.config.color1);
-//         }
-//         this.material_1.specularColor = getBabylonColor3([0, 0, 0]);
-//
-//         // material 2
-//         this.material_2 = new StandardMaterial("material_2", this.scene);
-//         if (this.config.texture_2) {
-//             const tex2 = loadTexture(this.config.texture_2);
-//             this.material_2.diffuseTexture = new Texture(tex2, this.scene);
-//         } else {
-//             this.material_2.diffuseColor = getBabylonColor3(this.config.color2);
-//         }
-//         this.material_2.specularColor = getBabylonColor3([0, 0, 0]);
-//
-//
-//         this.material_1.emissiveColor = getBabylonColor3([0, 0, 0]);
-//         this.material_2.emissiveColor = getBabylonColor3([0, 0, 0]);
-//
-//         // Combine into MultiMaterial
-//         this.multimat = new MultiMaterial("multi", this.scene);
-//         this.multimat.subMaterials.push(this.material_1);
-//         this.multimat.subMaterials.push(this.material_2);
-//
-//         // If using tile-border mode, add a third material for the border tiles
-//         if (this.config.border_type === 'tile') {
-//             this.border_material = new StandardMaterial("border_material", this.scene);
-//             if (this.config.border_texture) {
-//                 const tex = loadTexture(this.config.border_texture);
-//                 this.border_material.diffuseTexture = new Texture(tex, this.scene);
-//             } else {
-//                 this.border_material.diffuseColor = getBabylonColor3(this.config.border_color);
-//             }
-//             this.border_material.specularColor = getBabylonColor3([0, 0, 0]);
-//             this.multimat.subMaterials.push(this.border_material);
+//             // Fallback solid color if no texture provided
+//             mat.diffuseColor = getBabylonColor3(this.config.color);
 //         }
 //
-//         this.mesh.material = this.multimat;
+//         this.mesh.material = mat;
+//         this.mesh.isPickable = false;
 //
-//         // Split the mesh into checkerboard (or border) subMeshes
-//         this.verticesCount = this.mesh.getTotalVertices();
-//         this.tileIndicesLength = this.mesh.getIndices().length / (this.config.tiles_x * this.config.tiles_y);
-//         this.mesh.subMeshes = [];
-//
-//         let base = 0;
-//         for (let row = 0; row < this.config.tiles_y; row++) {
-//             for (let col = 0; col < this.config.tiles_x; col++) {
-//                 const isBorderTile = row === 0 || row === this.config.tiles_y - 1 || col === 0 || col === this.config.tiles_x - 1;
-//                 let matIndex;
-//                 if (this.config.border_type === 'tile' && isBorderTile) {
-//                     // use the last material (border)
-//                     matIndex = this.multimat.subMaterials.length - 1;
-//                 } else {
-//                     // standard checker pattern
-//                     matIndex = (row % 2) ^ (col % 2);
-//                 }
-//                 let submesh = new SubMesh(
-//                     matIndex,
-//                     0,
-//                     this.verticesCount,
-//                     base,
-//                     this.tileIndicesLength,
-//                     this.mesh
-//                 )
-//                 // submesh.receiveShadows = true;
-//                 this.mesh.subMeshes.push(submesh);
-//                 base += this.tileIndicesLength;
-//             }
-//         }
-//
-//         // If line-border mode, add a tube around the outer edge
-//         if (this.config.border_type === 'line') {
-//             const halfX = this.config.tile_size * this.config.tiles_x / 2;
-//             const halfZ = this.config.tile_size * this.config.tiles_y / 2;
-//             const y = 0; // lift slightly to avoid z-fighting
-//             const path = [
-//                 new Vector3(-halfX, y, -halfZ),
-//                 new Vector3(halfX, y, -halfZ),
-//                 new Vector3(halfX, y, halfZ),
-//                 new Vector3(-halfX, y, halfZ),
-//                 new Vector3(-halfX, y, -halfZ)
-//             ];
-//             const borderTube = MeshBuilder.CreateTube("border_tube", {
-//                 path,
-//                 radius: this.config.border_width / 2,
-//                 sideOrientation: MeshBuilder.DOUBLESIDE,
-//                 updatable: false
-//             }, this.scene);
-//             const borderLineMat = new StandardMaterial("border_line_material", this.scene);
-//             borderLineMat.diffuseColor = getBabylonColor3(this.config.border_color);
-//             borderLineMat.emissiveColor = getBabylonColor3(this.config.border_color);
-//             borderLineMat.specularColor = getBabylonColor3([0, 0, 0]);
-//             borderTube.material = borderLineMat;
-//         }
-//
+//         // Receive shadows
 //         this.mesh.receiveShadows = true;
+//
+//         // Store a couple of things in case you want to query/update later
+//         this._tilesX = tilesX;
+//         this._tilesY = tilesY;
 //     }
 //
 //     highlight(state) {
-//         // implement as needed
+//         // optional highlight implementation
 //     }
 //
 //     onMessage(message) {
-//         // implement as needed
+//         // optional message handling
 //     }
 //
 //     setOrientation(orientation) {
-//         // implement as needed
+//         // optional orientation handling
 //     }
 //
 //     setPosition(position) {
-//         // implement as needed
+//         if (Array.isArray(position)) {
+//             this.mesh.position = new Vector3(...position);
+//         } else if (position instanceof Vector3) {
+//             this.mesh.position = position;
+//         }
 //     }
 //
 //     update(data) {
-//         // implement as needed
+//         // optional update implementation
+//         // If you ever add dynamic resizing, remember:
+//         // - Recompute tilesX/tilesY from size_x/size_y/tile_size
+//         // - Update mat.diffuseTexture.uScale / vScale
+//         // - Rebuild the ground if width/height change (or create as updatable)
+//     }
+//
+//     delete() {
+//         this.mesh.dispose();
+//     }
+//
+//     dim(state) {
+//         return undefined;
+//     }
+//
+//     buildObject() {
+//         return undefined;
 //     }
 // }
 
-// =====================================================================================================================
 export class BabylonSimpleFloor extends BabylonObject {
     constructor(id, scene, payload = {}) {
         super(id, scene, payload);
 
         const defaultConfig = {
-            size_x: 5,          // total width of the floor (X axis, meters or units)
-            size_y: 5,          // total height/depth of the floor (Z axis)
-            tile_size: 0.5,     // desired size of a single tile (square)
-            texture: 'floor_bright.png', // URL or path to a texture image
-            color: [0.7, 0.7, 0.7],      // fallback diffuse color
+            size_x: 5,          // total width of the floor (X axis)
+            size_y: 5,          // total depth of the floor (Z axis)
+            tile_size: 0.5,     // desired size of a single tile
+            texture: 'floor_bright.png',
+            color: [0.7, 0.7, 0.7],
+
+            // NEW
+            offset_x: 0,        // offset in world X
+            offset_y: 0,        // offset in world Z
+            origin: 'center',   // 'center' | 'corner'
         };
 
-        this.config = {...defaultConfig, ...this.config};
+        this.config = { ...defaultConfig, ...this.config };
 
-        // Compute how many tiles we want along each axis.
-        // We round to the nearest integer so tiles align nicely with size.
         const tilesX = Math.max(1, Math.round(this.config.size_x / this.config.tile_size));
         const tilesY = Math.max(1, Math.round(this.config.size_y / this.config.tile_size));
-
-        // NOTE: In Babylon, CreateGround's `subdivisions` only affects geometry density,
-        // not UVs/texture repetition. We still set it based on the max tile count so
-        // the mesh is reasonably dense (helps with lighting/shadows).
         const subdivisions = Math.max(tilesX, tilesY);
 
-        // Create a simple ground mesh
         this.mesh = MeshBuilder.CreateGround(
             id + '_ground',
             {
                 width: this.config.size_x,
                 height: this.config.size_y,
-                subdivisions,       // geometry density only; does NOT control texture tiling
+                subdivisions,
                 updatable: false,
             },
             this.scene
         );
 
-        // Create material
+        // ----- MATERIAL -----
         const mat = new StandardMaterial(id + '_mat', this.scene);
-        mat.specularColor = new Color3(0, 0, 0);              // no specular highlights
-        mat.emissiveColor = new Color3(0, 0, 0);              // keep shadows visible
-        // (Backface culling on by default; fine for a ground plane)
-        // mat.backFaceCulling = true;
+        mat.specularColor = new Color3(0, 0, 0);
+        mat.emissiveColor = new Color3(0, 0, 0);
 
         if (this.config.texture) {
             const texUrl = loadTexture(this.config.texture);
             const tex = new Texture(texUrl, this.scene);
-            // Ensure tiling mode is wrapping (repeat)
+
             tex.wrapU = Texture.WRAP_ADDRESSMODE;
             tex.wrapV = Texture.WRAP_ADDRESSMODE;
-
-            // **This is the key:** tile the texture across the ground by scaling UVs.
-            // One repeat per tile along each axis.
             tex.uScale = tilesX;
             tex.vScale = tilesY;
 
-            // Optional: if your texture looks vertically flipped, uncomment the next line:
-            // tex.vScale = -tilesY;
-
             mat.diffuseTexture = tex;
         } else {
-            // Fallback solid color if no texture provided
             mat.diffuseColor = getBabylonColor3(this.config.color);
         }
 
         this.mesh.material = mat;
         this.mesh.isPickable = false;
-
-        // Receive shadows
         this.mesh.receiveShadows = true;
 
-        // Store a couple of things in case you want to query/update later
+        // ----- POSITION / OFFSET HANDLING -----
+        this._applyOriginAndOffset();
+
         this._tilesX = tilesX;
         this._tilesY = tilesY;
     }
 
-    highlight(state) {
-        // optional highlight implementation
+    /**
+     * Computes mesh position based on origin mode and offsets
+     */
+    _applyOriginAndOffset() {
+        let x = 0;
+        let z = 0;
+
+        if (this.config.origin === 'corner') {
+            // Move center so that (0,0) is the lower-left corner
+            x = this.config.size_x / 2;
+            z = -this.config.size_y / 2;
+        }
+
+        x += this.config.offset_x;
+        z += this.config.offset_y;
+
+        this.mesh.position.set(x, 0, z);
     }
 
-    onMessage(message) {
-        // optional message handling
-    }
+    highlight(state) {}
 
-    setOrientation(orientation) {
-        // optional orientation handling
-    }
+    onMessage(message) {}
+
+    setOrientation(orientation) {}
 
     setPosition(position) {
         if (Array.isArray(position)) {
@@ -271,19 +225,17 @@ export class BabylonSimpleFloor extends BabylonObject {
         }
     }
 
-    update(data) {
-        // optional update implementation
-        // If you ever add dynamic resizing, remember:
-        // - Recompute tilesX/tilesY from size_x/size_y/tile_size
-        // - Update mat.diffuseTexture.uScale / vScale
-        // - Rebuild the ground if width/height change (or create as updatable)
-    }
+    update(data) {}
 
     delete() {
         this.mesh.dispose();
     }
 
     dim(state) {
+        return undefined;
+    }
+
+    buildObject() {
         return undefined;
     }
 }

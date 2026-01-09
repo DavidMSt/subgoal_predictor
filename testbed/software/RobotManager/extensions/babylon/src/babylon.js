@@ -119,31 +119,38 @@ export class Babylon extends Scene {
 
         this.canvas = canvasOrEngine;
 
+        console.log('babylon config')
+        console.log(config)
 
         // element.addEventListener('mousedown', e => e.preventDefault()); // stops focus
+        this._initializeWebsocket();
+        this._addSceneClickListener();
+        this._initializeScene();
 
+        this.objects = objects;
+        this._buildObjectsFromConfig(objects);
 
         this.callbacks = new Callbacks();
         this.callbacks.add('event');
         this.callbacks.add('log');
+        this.callbacks.add('initialized')
 
         this.callbacks.add('record_start');
         this.callbacks.add('record_stop');
         this.callbacks.add('websocket_connected');
         this.callbacks.add('websocket_disconnected');
 
-
-        this._initializeScene();
-        this._addSceneClickListener();
-        this._initializeWebsocket();
         this._addOwnCallbacks();
+        // this.addTestObjects();
 
-
-        this.addTestObjects();
 
         setTimeout(() => {
             this.log(`Babylon scene initialized. Listening on websocket ${this.config.websocket_host}:${this.config.websocket_port}...`);
         }, 250);
+
+        setTimeout(() => {
+            this.callbacks.get('initialized').call();
+        }, 500);
     }
 
     /* === METHODS ================================================================================================== */
@@ -158,11 +165,13 @@ export class Babylon extends Scene {
             console.warn(`Object is not a BabylonObject`);
             return;
         }
+
         this.objects[object.id] = object;
         object.parent = this;
         object.callbacks.get('event').register(this._onObjectEvent.bind(this));
         object.callbacks.get('log').register(this._onObjectLog.bind(this));
         object.callbacks.get('send_message').register(this._onObjectSendMessage.bind(this));
+        console.log(`BABYLON: Added object with id ${object.id}`);
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -658,11 +667,6 @@ export class Babylon extends Scene {
     /* --------------------------------------------------------------------------------------------------------------- */
     _handleInitMessage(msg) {
         this.log(`Received init message`)
-
-        this.config = {...this.config, ...msg.payload.config};
-        // this._configureScene(this.config);
-        const objects = msg.payload.objects;
-        this._buildObjectsFromConfig(objects);
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -1459,7 +1463,7 @@ export class BabylonContainer {
 
 
     // === CONSTRUCTOR =================================================================================================
-    constructor(id, container, config = {}) {
+    constructor(id, container, payload = {}) {
 
         const default_config = {
             show_widget_controls: true,
@@ -1469,16 +1473,15 @@ export class BabylonContainer {
             title: 'Dustin Babylon.JS',
         }
 
-        this.configuration = {...default_config, ...config};
+        this.configuration = {...default_config, ...payload.config};
 
-        console.log(this.configuration)
         this.container = container;
         this.id = id;
 
         this.element = this.initializeElement();
         this.configureElement();
 
-        this.babylon = new Babylon(this.id, this.babylon_canvas, this.configuration.babylon);
+        this.babylon = new Babylon(this.id, this.babylon_canvas, payload.config, payload.objects);
 
         this.babylon_canvas.setAttribute('tabindex', '-1');
         this.babylon_canvas.addEventListener('mousedown', (e) => e.preventDefault(), {capture: true});
@@ -1488,25 +1491,6 @@ export class BabylonContainer {
 
         this._debugCollapse = {};
         this._debugBuilt = false;
-
-
-        this.addCameraView({
-            name: 'default',
-            position: coordinatesFromBabylon(this.babylon.camera.position),
-            target: coordinatesFromBabylon(this.babylon.camera.target),
-            alpha: this.babylon.camera.alpha,
-            beta: this.babylon.camera.beta,
-            radius: this.babylon.camera.radius,
-        })
-
-        this.addCameraView({
-            name: 'top',
-            position: [0, 0, 6],
-            target: [0, 0, 0],
-            alpha: deg2rad(90),
-            beta: 0,
-            radius: 6
-        });
 
 
         this.top_bar_time = this.top_bar_time || this.element.querySelector('.top-bar .time');
@@ -2085,6 +2069,28 @@ export class BabylonContainer {
         this.babylon.callbacks.get('websocket_disconnected').register(() => {
             if (this._mpsTimer) clearInterval(this._mpsTimer), this._mpsTimer = null;
             this._setConnectionStatus(false, '');
+        });
+
+        this.babylon.callbacks.get('initialized').register(this._on_babylon_initialized.bind(this))
+    }
+
+    _on_babylon_initialized() {
+        this.addCameraView({
+            name: 'default',
+            position: coordinatesFromBabylon(this.babylon.camera.position),
+            target: coordinatesFromBabylon(this.babylon.camera.target),
+            alpha: this.babylon.camera.alpha,
+            beta: this.babylon.camera.beta,
+            radius: this.babylon.camera.radius,
+        })
+
+        this.addCameraView({
+            name: 'top',
+            position: [0, 0, 6],
+            target: [0, 0, 0],
+            alpha: deg2rad(90),
+            beta: 0,
+            radius: 6
         });
     }
 

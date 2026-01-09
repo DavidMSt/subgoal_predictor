@@ -1,9 +1,7 @@
 import dataclasses
 import enum
 
-
 HOST_EXPERIMENT_FOLDER = "/Users/lehmann/bilbolab/testbed/software/RobotManager/applications/BILBO/experiments"
-
 
 BILBO_HOST_NAMES = ['bilbo1', 'bilbo2', 'bilbo3', 'bilbo4', 'bilbo5']
 
@@ -193,7 +191,6 @@ class BILBO_ControlConfig:
     speed_control: SpeedControl_Config = dataclasses.field(default_factory=SpeedControl_Config)
 
 
-
 @dataclasses.dataclass
 class BILBO_OriginConfig:
     id: str
@@ -205,3 +202,13 @@ class BILBO_OriginConfig:
     offset_x: float = 0.0
     offset_y: float = 0.0
     offset_z: float = 0.0
+
+
+@dataclasses.dataclass(kw_only=True)
+class BILBO_LimboMarkerConfig:
+    id: str = 'limbo-marker'
+    points: list
+    x_start: int
+    x_end: int
+    y_start: int
+    y_end: int

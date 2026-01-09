@@ -2501,7 +2501,7 @@ export class TableCell {
         this.element.textContent = value;
     }
 
-    destroy(){
+    destroy() {
 
     }
 }
@@ -4366,6 +4366,7 @@ export class IndicatorCell extends TableCell {
         const {color: vColor, label: vLabel} = this._normValue(value);
 
         const circleColor = getColor(vColor ?? cfg.indicator_color ?? [1, 1, 1, 0.7]);
+
         this.dotEl.style.setProperty("--ti-dot", circleColor);
 
         const gap = Number(cfg.gap_px ?? 6);
@@ -4413,9 +4414,8 @@ export class IndicatorCell extends TableCell {
     update(value) {
         this.value = value;
         if (!this.element || !this.wrapEl) return;
-
         const cfg = this._getMergedStyleConfig();
-        this._applyTdStyle(this.element, cfg);
+        // this._applyTdStyle(this.element, cfg);
         this._applyIndicatorStyle(cfg, value);
     }
 }
@@ -5091,7 +5091,6 @@ export class Table extends Widget {
 
         switch (message.type) {
             case 'cell_update': {
-                console.log(message)
                 break;
             }
             case 'cell_config_update': {

@@ -39,6 +39,7 @@ class BILBO_Estimation:
         self.state = BILBO_DynamicState()
 
         self.tracker = BILBO_OptiTrackListener(common=self.common)
+        self.tracker.callbacks.sample.register(self._on_tracker_sample_callback)
 
         self.status = TWIPR_Estimation_Status.NORMAL
         self._comm.events.rx_stm32_sample.on(self._onSample)
@@ -53,6 +54,7 @@ class BILBO_Estimation:
         self.setThetaOffset(theta_offset)
         self.tracker.init()
 
+
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
         self.tracker.start()
@@ -60,6 +62,14 @@ class BILBO_Estimation:
     # ------------------------------------------------------------------------------------------------------------------
     def getSample(self) -> TWIPR_Estimation_Sample | dict:
         raise NotImplementedError
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_tracker_sample_callback(self, sample: BILBO_ConfigurationState):
+        self.state.x = sample.x
+        self.state.y = sample.y
+        self.state.psi = sample.psi
+
+        print(f"Position: {self.state.x:.2f} {self.state.y:.2f}, Orientation: {self.state.psi:.2f}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_sample_dict(self) -> dict:

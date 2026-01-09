@@ -24,7 +24,7 @@ class TrackedOrigin_State:
     x: float = 0.0
     y: float = 0.0
     z: float = 0.0
-    orientation: np.ndarray = dataclasses.field(default_factory= lambda: np.asarray([1, 0, 0, 0]))
+    orientation: np.ndarray = dataclasses.field(default_factory=lambda: np.asarray([1, 0, 0, 0]))
 
 
 class TrackedOrigin:
@@ -45,7 +45,6 @@ class TrackedOrigin:
         if not data.valid:
             self.tracking_valid = False
             return
-        return
 
         origin = data.markers[self.definition.origin]
         x_axis_end = data.markers[self.definition.x_axis_end]

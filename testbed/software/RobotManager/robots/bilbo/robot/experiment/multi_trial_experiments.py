@@ -215,7 +215,7 @@ class DILC_Experiment:
 
             if self.j > self.settings.J:
                 self._finished = True
-                self.logger.info("Experiment finished after {} trials".format(self.j))
+                self.logger.important("Experiment finished after {} trials".format(self.j - 1))
                 self.state = DILC_Experiment_State.FINISHED
                 break
 
@@ -260,7 +260,7 @@ class DILC_Experiment:
                     self.bilbo.core.interface_events.resume,
                     self.bilbo.core.interface_events.stop
                 ),
-                timeout=10,
+                timeout=100,
                 stale_event_time=None,
             )
 
@@ -332,7 +332,7 @@ class DILC_Experiment:
             data, trace = wait_for_events(
                 events=OR(self.bilbo.core.interface_events.resume,
                           self.bilbo.core.interface_events.revert),
-                timeout=10.0,
+                timeout=100.0,
                 stale_event_time=None,
             )
             if data is TIMEOUT:

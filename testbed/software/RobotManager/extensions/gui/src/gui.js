@@ -2641,6 +2641,7 @@ export class GUI {
         const message = {
             'type': 'event', 'id': event.id, 'data': event,
         }
+
         if (this.connected) {
             this.websocket.send(message);
         }
@@ -2863,6 +2864,7 @@ export class GUI {
 
     /* ===============================================================================================================*/
     _addPopup(data) {
+        console.log("Adding popup:", data);
         const popup = new Popup(data.id, data.config.config, data.config.group);
         this.popups[data.id] = popup;
         popup.callbacks.get('event').register(this._onEvent.bind(this));

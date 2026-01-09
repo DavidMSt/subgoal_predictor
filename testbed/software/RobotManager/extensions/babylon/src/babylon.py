@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import dataclasses
+import math
 import os
 import threading
 import uuid
@@ -392,36 +393,43 @@ class BabylonVisualization:
                  babylon_config=None):
 
         babylon_default_config = {
-            'websocket_port': port,
+            "title": "ABCDEF",
+            "websocket_host": "localhost",
+            "websocket_port": "9000",
+            "coordinate_system_length": 0.5,
+            "show_coordinate_system": True,
 
-            'show_coordinate_system': True,
-            'coordinate_system_length': 0.5,
+            "background_color": [31 / 255, 32 / 255, 35 / 255],
+            "ambient_color": [0.5, 0.5, 0.5],
 
-            'background_color': [31 / 255, 32 / 255, 35 / 255],
-            'title': 'Dustin Babylon.JS',
-
-            'scene': {
-                'add_fog': True,
-                'fog_color': [31 / 255, 32 / 255, 35 / 255],
+            "scene": {
+                "add_fog": True,
+                "fog_color": [31 / 255, 32 / 255, 35 / 255],
+                "fog_density": 0.08,
+                "fog_mode": "exp2",
             },
 
-            'camera': {
-                'position': [2, -2, 1],
-                'target': [0, 0, 0],
-                'alpha': np.radians(45),
-                'beta': np.radians(70),
-                'radius': 3.5,
-                'radius_lower_limit': 0.5,
-                'radius_upper_limit': 6,
+            "camera": {
+                "position": [2, -2, 1],
+                "target": [0, 0, 0],
+                "alpha": math.radians(-18),
+                "beta": math.radians(70),
+                "radius": 3.5,
+                "fov": math.radians(65),
+                "radius_lower_limit": 0.5,
+                "radius_upper_limit": 6,
             },
 
-            'lights': {
-                'hemispheric_direction': [2, 0, 1]
+            "lights": {
+                "hemispheric_direction": [2, -1, 0],
             },
 
+            "ui": {
+                "text_color": [1, 1, 1],
+                "font_size": 40,
+            },
         }
-
-        self.config = {**babylon_default_config, **(babylon_config if babylon_config else {})}
+        self.config = update_dict(babylon_default_config, babylon_config)
 
         self.id = id
 
@@ -658,7 +666,7 @@ class BabylonVisualization:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _initializeClient(self, client):
-        self.logger.debug(f"Initializing client: {client}")
+        self.logger.important(f"Initializing client: {client}")
 
         message = {
             'type': 'init',

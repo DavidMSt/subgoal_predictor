@@ -753,6 +753,7 @@ def main():
         window_popup.group.addWidget(window_popupbtn1, row=1, column=1, width=3, height=2)
         window_popupbtn1.callbacks.click.register(
             lambda *args, **kwargs: window_popup.close())
+        window_popupbtn1.callbacks.click.register(lambda *args, **kwargs: print("bvhjfdbvjhbdfjkhvbsdfkjhvbhdskjfvbhjdfsbvkjhdfsbvhjkdsf"))
         app.openPopup(window_popup)
 
     button_popup_open_2 = Button(widget_id='button_popup_open_2', text='Open Window')

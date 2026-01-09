@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, TypeVar
+from typing import Any, TypeVar, ClassVar
 
 from core.utils.callbacks import callback_definition
 from core.utils.callbacks import CallbackContainer
@@ -179,7 +179,7 @@ class Column:
     column_type: str | None = None
 
     # Which Cell class this Column should create – subclasses should override
-    cell_cls: type[Cell] = Cell
+    cell_cls: ClassVar[type["Cell"]] = Cell
 
     def make_cell(self, *, id: str | None = None, value: Any = None, **overwrites) -> Cell:
         """
@@ -351,22 +351,72 @@ class IndicatorColumn(Column):
     column_type: str | None = "indicator"
 
 
+# @dataclasses.dataclass(kw_only=True)
+# class IndicatorCell(Cell):
+#     value: list[float] | str | None = None  # color (rgba list) or string
+
 @dataclasses.dataclass(kw_only=True)
 class IndicatorCell(Cell):
-    value: list[float] | str | None = None  # color (rgba list) or string
+    _color: Any = dataclasses.field(default=None, repr=False)
+    _label: Any = dataclasses.field(default=None, repr=False)
+
+    def _compose_value(self) -> Any:
+        # matches your JS _normValue() accepted shapes
+        # if self._color is not None and self._label not in (None, ""):
+        #     return {"color": self._color, "label": str(self._label)}
+        # if self._color is not None:
+        #     return self._color
+        # if self._label not in (None, ""):
+        #     return str(self._label)
+        return {"color": self._color, "label": self._label}
+
+    @property
+    def color(self) -> Any:
+        return self._color
+
+    @color.setter
+    def color(self, v: Any) -> None:
+        self._color = v
+        super().set(self._compose_value())
+
+    @property
+    def label(self) -> Any:
+        return self._label
+
+    @label.setter
+    def label(self, v: Any) -> None:
+        self._label = None if v is None else str(v)
+        super().set(self._compose_value())  # IMPORTANT: call super()
+
+    def set(self, value: Any) -> None:
+        """
+        Allow raw set(...) to still work, while also updating _color/_label.
+        """
+        self._color = None
+        self._label = None
+
+        if value is None:
+            pass
+        elif isinstance(value, (str, int, float)):
+            self._label = str(value)
+        elif isinstance(value, (list, tuple)):
+            if len(value) == 4:
+                self._color = value
+            elif len(value) >= 1 and isinstance(value[0], (list, tuple)):
+                self._color = value[0]
+                if len(value) > 1:
+                    self._label = None if value[1] is None else str(value[1])
+        elif isinstance(value, dict):
+            self._color = value.get("color") or value.get("indicator_color")
+            if "label" in value:
+                self._label = None if value["label"] is None else str(value["label"])
+        else:
+            raise TypeError(f"Unsupported indicator value type: {type(value).__name__}")
+
+        super().set(self._compose_value())
 
 
 IndicatorColumn.cell_cls = IndicatorCell
-
-
-
-# Add these to your python table module (same style as your other columns/cells)
-
-import dataclasses
-from typing import Any
-
-# assumes Column and Cell are already defined above, like in your snippet
-
 
 # ======================================================================================================================
 # Select (single)
@@ -466,6 +516,7 @@ class MultiSelectCell(Cell):
 
 
 MultiSelectColumn.cell_cls = MultiSelectCell
+
 
 # ======================================================================================================================
 # Groups (optional)
