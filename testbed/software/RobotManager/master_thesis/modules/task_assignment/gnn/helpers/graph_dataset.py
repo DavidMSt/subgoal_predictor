@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 class BipartiteAssignmentDataset(Dataset):
 
-    def __init__(self, data_path: str = 'master_thesis/task_assignment/assignment_policies/training_dataset.pt') -> None:
+    def __init__(self, data_path: str = 'master_thesis/modules/task_assignment/gnn/training_dataset.pt') -> None:
         obj = torch.load(f =  data_path, map_location='cpu')
         self.scenes = obj['samples']
 
