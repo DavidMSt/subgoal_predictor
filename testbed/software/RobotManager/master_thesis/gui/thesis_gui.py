@@ -30,8 +30,8 @@ from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.joystick.joystick_manager import JoystickManager, Joystick
 
 # thesis imports
-from master_thesis.universal.universal_simulation import FRODO_universal_Simulation
-from master_thesis.universal.universal_agent import FRODOUniversalAgent
+from master_thesis.universal.offline_plan_simulation import FRODO_OfflinePlan_Simulation
+from master_thesis.universal.offline_plan_agent import FRODOOfflinePlanAgent
 from master_thesis.general.general_obstacle import GeneralObstacle
 from master_thesis.gui.demo_scenarios.maze_examples import maze_single_2x2, maze_multi_4x4
 from master_thesis.general.general_task import GeneralTask
@@ -71,7 +71,7 @@ class BabylonTask(Box):
 @dataclasses.dataclass
 class RobotGUIContainer:
     babylon: BabylonFrodo
-    sim_agent: FRODOUniversalAgent
+    sim_agent: FRODOOfflinePlanAgent
 
 @dataclasses.dataclass
 class ObstacleGUIContainer:
@@ -116,7 +116,7 @@ class ThesisGUI:
             'title': 'HHI demo'})
 
         # Simulation
-        self.sim = FRODO_universal_Simulation(Ts=0.01, limits= ((-2,2), (-2,2)))
+        self.sim = FRODO_OfflinePlan_Simulation(Ts=0.01, limits= ((-2,2), (-2,2)))
 
         # Attach output callback to the simulation's environment
         self.sim.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT].addAction(self._simulationOutputStep)
@@ -279,7 +279,7 @@ class ThesisGUI:
         self.logger.info(f"Spawning {n} agents and {n} tasks in collision-free positions...")
 
         # Spawn agents using simulation's spawn_agents method
-        spawned_agents = self.sim.spawn_agents(n=n, agent_class=FRODOUniversalAgent)
+        spawned_agents = self.sim.spawn_agents(n=n, agent_class=FRODOOfflinePlanAgent)
 
         # Create babylon visualizations for spawned agents
         for i, agent in enumerate(spawned_agents):
