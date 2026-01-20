@@ -113,12 +113,6 @@ class DGNN_GA(nn.Module):
         # Encode costs: [N_r, N_g] -> [N_r, N_g, F]
         h_e = self.encoder(c.unsqueeze(-1))  # cleaner than flatten/reshape
 
-        # Debug: check encoder output variation
-        if not self.training:
-            h_e_flat = h_e.reshape(-1, F)
-            h_e_std = h_e_flat.std(dim=0).mean()
-            print(f"    [MODEL] After encoder: h_e std={h_e_std:.6f}")
-
         # Initialize node embeddings as zero vectors
         h_r = torch.zeros(N_r, F, device=device)  # [N_r, F]
         h_g = torch.zeros(N_g, F, device=device)  # [N_g, F]
