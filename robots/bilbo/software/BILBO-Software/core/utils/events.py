@@ -1630,6 +1630,9 @@ class EventContainer:
         self.events[event.id] = event
         event.parent = self
 
+    def clear_all_listeners(self):
+        raise NotImplementedError
+
 
 # === EVENT CONTAINER DECORATOR ========================================================================================
 def event_definition(cls):

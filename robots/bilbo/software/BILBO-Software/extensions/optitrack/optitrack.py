@@ -81,6 +81,10 @@ class OptiTrack:
     _min_dt: float
     _last_emit_t: float
 
+
+
+    _last_received_time: float = 0
+
     # ------------------------------------------------------------------------------------------------------------------
     def __init__(self, server_address, max_sample_rate=30):
         """
@@ -202,6 +206,9 @@ class OptiTrack:
         SUPER LIGHT callback: just stash the latest frame and return immediately.
         Heavy work is done in _processing_loop at a controlled rate.
         """
+        duration = time.monotonic() - self._last_received_time
+        self._last_received_time = time.monotonic()
+        # self.logger.important(f"Frequency: {1 / duration:.1f} Hz")
         if not self.description_received:
             return
         with self._queue_lock:
@@ -388,7 +395,7 @@ class OptiTrack:
 
 
 if __name__ == '__main__':
-    optitrack = OptiTrack(server_address='bree.lan', max_sample_rate=30)
+    optitrack = OptiTrack(server_address='palantir.lan', max_sample_rate=1000)
     optitrack.init()
     ok = optitrack.start()
 

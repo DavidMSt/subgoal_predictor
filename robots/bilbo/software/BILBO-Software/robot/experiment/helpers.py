@@ -2,7 +2,7 @@ import numpy as np
 
 from core.utils.data import generate_time_vector, generate_random_input
 from robot.bilbo_definitions import BILBO_DynamicState
-from robot.control.bilbo_control_data import BILBO_Control_Mode
+from robot.control.bilbo_control_definitions import BILBO_Control_Mode
 from robot.experiment.definitions import BILBO_InputTrajectoryStep, BILBO_InputTrajectory
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL, MAX_STEPS_TRAJECTORY, BILBO_CONTROL_DT
 

@@ -78,6 +78,13 @@ class Callback:
         self.once = once
         self.container = None
 
+        # Route attached kwargs:
+        for k, v in kwargs.items():
+            if callable(v):
+                self.lambdas[k] = v
+            else:
+                self.inputs[k] = v
+
     # ------------------------------------------------------------------------------------------------------------------
     def __call__(self, *args, **kwargs):
         # Prepare any lazy values

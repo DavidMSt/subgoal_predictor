@@ -5,6 +5,7 @@ from core.communication.device_server import Device
 from core.utils.events import Event, event_definition
 from robots.bilbo.robot.bilbo_control import BILBO_Control
 from robots.bilbo.robot.bilbo_core import BILBO_Core
+from robots.bilbo.robot.bilbo_estimation import BILBO_Estimation
 from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
 from robots.bilbo.robot.bilbo_interfaces import BILBO_Interfaces
 from robots.bilbo.robot.bilbo_data import BILBO_Sample, bilboSampleFromDict
@@ -20,6 +21,7 @@ class BILBO:
 
     core: BILBO_Core
     control: BILBO_Control
+    estimation: BILBO_Estimation
     experiment_handler: BILBO_ExperimentHandler
     interfaces: BILBO_Interfaces
     data: BILBO_Sample
@@ -35,6 +37,7 @@ class BILBO:
         self.core = BILBO_Core(device=device, robot_id=self.device.information.device_id, robot=self)
 
         self.control = BILBO_Control(core=self.core)
+        self.estimation = BILBO_Estimation(core=self.core)
         self.experiment_handler = BILBO_ExperimentHandler(core=self.core, control=self.control)
         self.utilities = BILBO_Utilities(core=self.core)
         self.interfaces = BILBO_Interfaces(core=self.core,

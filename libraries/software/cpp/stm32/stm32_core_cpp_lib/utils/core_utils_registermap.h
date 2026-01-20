@@ -206,20 +206,20 @@ public:
 	/* --------------------------------------------------------------------------------------------------------- */
 	void execute(uint8_t *input_buffer, output_type &output) {
 		for (uint8_t i = 0; i < sizeof(input_type); i++) {
-			this->input_data_union.data_bytes[i] = input_buffer[i];
+			this->input_data_bytes[i] = input_buffer[i];
 		}
-		this->callback.call(this->input_data_union.data, output);
+		this->callback.call(*reinterpret_cast<input_type*>(this->input_data_bytes), output);
 	}
 
 	/* --------------------------------------------------------------------------------------------------------- */
 	uint16_t execute(uint8_t *input_buffer, uint8_t *output_buffer) {
 		for (uint8_t i = 0; i < sizeof(input_type); i++) {
-			this->input_data_union.data_bytes[i] = input_buffer[i];
+			this->input_data_bytes[i] = input_buffer[i];
 		}
-		this->callback.call(this->input_data_union.data,
-				this->output_data_union_t.data);
+		this->callback.call(*reinterpret_cast<input_type*>(this->input_data_bytes),
+				*reinterpret_cast<output_type*>(this->output_data_bytes));
 		for (uint8_t i = 0; i < sizeof(output_type); i++) {
-			output_buffer[i] = this->output_data_union_t.data_bytes[i];
+			output_buffer[i] = this->output_data_bytes[i];
 		}
 		return this->getOutputSize();
 	}
@@ -258,15 +258,8 @@ public:
 		return this->type;
 	}
 
-	union input_data_union_t {
-		uint8_t data_bytes[sizeof(input_type)];
-		input_type data;
-	} input_data_union;
-
-	union output_data_union_t {
-		uint8_t data_bytes[sizeof(output_type)];
-		output_type data;
-	} output_data_union_t;
+	alignas(input_type) uint8_t input_data_bytes[sizeof(input_type)];
+	alignas(output_type) uint8_t output_data_bytes[sizeof(output_type)];
 
 	input_type *data = NULL;
 	uint8_t address;
@@ -315,17 +308,17 @@ public:
 	/* --------------------------------------------------------------------------------------------------------- */
 	void execute(uint8_t *input_buffer) {
 		for (uint8_t i = 0; i < sizeof(input_type); i++) {
-			this->input_data_union.data_bytes[i] = input_buffer[i];
+			this->input_data_bytes[i] = input_buffer[i];
 		}
-		this->callback.call(this->input_data_union.data);
+		this->callback.call(*reinterpret_cast<input_type*>(this->input_data_bytes));
 	}
 
 	/* --------------------------------------------------------------------------------------------------------- */
 	uint16_t execute(uint8_t *input_buffer, uint8_t *output_buffer) {
 		for (uint8_t i = 0; i < sizeof(input_type); i++) {
-			this->input_data_union.data_bytes[i] = input_buffer[i];
+			this->input_data_bytes[i] = input_buffer[i];
 		}
-		this->callback.call(this->input_data_union.data);
+		this->callback.call(*reinterpret_cast<input_type*>(this->input_data_bytes));
 		return this->getOutputSize();
 	}
 	/* --------------------------------------------------------------------------------------------------------- */
@@ -352,10 +345,7 @@ public:
 	}
 	/* --------------------------------------------------------------------------------------------------------- */
 
-	union input_data_union_t {
-		uint8_t data_bytes[sizeof(input_type)];
-		input_type data;
-	} input_data_union;
+	alignas(input_type) uint8_t input_data_bytes[sizeof(input_type)];
 
 	input_type *data = NULL;
 	uint8_t address;
@@ -405,9 +395,9 @@ public:
 
 	/* --------------------------------------------------------------------------------------------------------- */
 	uint16_t execute(uint8_t *input_buffer, uint8_t *output_buffer) {
-		this->callback.call(this->output_data_union_t.data);
+		this->callback.call(*reinterpret_cast<output_type*>(this->output_data_bytes));
 		for (uint8_t i = 0; i < sizeof(output_type); i++) {
-			output_buffer[i] = this->output_data_union_t.data_bytes[i];
+			output_buffer[i] = this->output_data_bytes[i];
 		}
 		return this->getOutputSize();
 	}
@@ -438,10 +428,7 @@ public:
 	}
 	/* --------------------------------------------------------------------------------------------------------- */
 
-	union output_data_union_t {
-		uint8_t data_bytes[sizeof(output_type)];
-		output_type data;
-	} output_data_union_t;
+	alignas(output_type) uint8_t output_data_bytes[sizeof(output_type)];
 
 	output_type *data;
 	uint8_t address;

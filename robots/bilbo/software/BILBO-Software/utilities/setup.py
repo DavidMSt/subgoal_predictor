@@ -13,9 +13,9 @@ def setup():
     write_id_file(robot_id)
 
     # 2. Check if there is a config file for the specified ID
-    config_file = f"{SOFTWARE_PATH}configs/{robot_id}.yaml"
+    config_file = f"{SOFTWARE_PATH}configs/hardware/{robot_id}.yaml"
     if not file_exists(config_file):
-        raise FileNotFoundError(f"Config file for robot ID '{robot_id}' not found.")
+        raise FileNotFoundError(f"Config file for robot ID '{robot_id}' not found at '{config_file}'.")
     else:
         print(f"Config file for robot ID '{robot_id}' found: {config_file}")
 
@@ -34,7 +34,7 @@ def setup():
     generate_default_config(robot_id)
 
     # 7. Copy the testbed config file to the robot's config folder
-    testbed_file = f"{SOFTWARE_PATH}configs/testbed.yaml"
+    testbed_file = f"{SOFTWARE_PATH}configs/testbed/testbed.yaml"
 
     if not file_exists(testbed_file):
         raise FileNotFoundError(f"Testbed config file not found: {testbed_file}")

@@ -3,7 +3,16 @@ import time
 
 from core.utils.exit import register_exit_callback
 from robots.bilbo.robot.bilbo_core import BILBO_Core
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 
+CONTROL_MODE_COLORS = {
+    None: [0.2, 0.2, 0.2],
+    BILBO_Control_Mode.DIRECT: [0.1, 0.1, 0.1],
+    BILBO_Control_Mode.OFF: [0.5, 0.5, 0.5],
+    BILBO_Control_Mode.BALANCING: [0, 0.7, 0],
+    BILBO_Control_Mode.VELOCITY: [0, 0.7, 0.7],
+    BILBO_Control_Mode.POSITION: [0.7, 0, 0.7]
+}
 
 # ======================================================================================================================
 class BILBO_Utilities:

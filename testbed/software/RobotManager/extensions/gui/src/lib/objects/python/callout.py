@@ -43,6 +43,9 @@ class CalloutButton:
     text_color: str | list = 'white'
     color: str | list = "transparent"
 
+    def __post_init__(self):
+        self.callbacks = CalloutButton_Callbacks()
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 class CalloutColors:

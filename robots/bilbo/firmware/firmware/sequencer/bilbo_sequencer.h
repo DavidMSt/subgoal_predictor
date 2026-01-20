@@ -10,7 +10,7 @@
 
 
 #include <bilbo_messages.h>
-#include "twipr_control.h"
+#include "bilbo_control.h"
 #include "firmware_core.h"
 
 class TWIPR_CommunicationManager;
@@ -19,7 +19,7 @@ class TWIPR_CommunicationManager;
  * @brief Configuration for the TWIPR_Sequencer.
  */
 typedef struct twipr_sequencer_config_t {
-	TWIPR_ControlManager *control;
+	BILBO_Control *control;
 	TWIPR_CommunicationManager *comm;
 } twipr_sequencer_config_t;
 
@@ -41,8 +41,8 @@ typedef struct twipr_sequencer_sequence_data_t {
 	bool require_control_mode; ///< true: Control mode must be set in advance. false: Sequencer sets control mode
 	uint16_t wait_time_beginning; ///< Wait time in ticks before starting sequence (currently unused)
 	uint16_t wait_time_end; ///< Time in ticks after sequence (currently unused)
-	twipr_control_mode_t control_mode; ///< Control mode in which the sequence is run
-	twipr_control_mode_t control_mode_end; ///< Control mode to switch to after the sequence
+	bilbo_control_mode_t control_mode; ///< Control mode in which the sequence is run
+	bilbo_control_mode_t control_mode_end; ///< Control mode to switch to after the sequence
 	bool loaded;               ///< True if sequence data is present in buffer
 } twipr_sequencer_sequence_data_t;
 
@@ -187,7 +187,7 @@ public:
 	 *
 	 * If a sequence is running, it will be aborted.
 	 */
-	void modeChange_callback(twipr_control_mode_t mode);
+	void modeChange_callback(bilbo_control_mode_t mode);
 
 	/**
 	 * @brief Called once the DMA transfer of the complete sequence has finished.

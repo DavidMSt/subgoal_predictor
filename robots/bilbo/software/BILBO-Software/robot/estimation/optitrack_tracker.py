@@ -185,7 +185,6 @@ class TrackedBILBO:
 
 
 # ======================================================================================================================
-
 @callback_definition
 class BILBO_OptitrackListener_Callbacks:
     sample: CallbackContainer
@@ -222,7 +221,7 @@ class BILBO_OptiTrackListener:
         self.tracked_object: TrackedBILBO | None = None
 
         self.optitrack.callbacks.description_received.register(self._description_received_callback)
-        self.optitrack.events.sample.on(self._sample_callback, max_rate=20)
+        self.optitrack.events.sample.on(self._sample_callback, max_rate=50)
 
         register_exit_callback(self.close)
 

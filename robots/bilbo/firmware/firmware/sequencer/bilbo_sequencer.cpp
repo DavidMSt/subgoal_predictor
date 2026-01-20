@@ -90,8 +90,8 @@ void BILBO_Sequencer::update() {
 		sendMessage(msg);
 
 		// Disable Theta Integral Control and Velocity Integral Control during the sequence
-		this->config.control->enableTIC(false);
-		this->config.control->enableVIC(false);
+		this->config.control->set_tic_enabled(false);
+		this->config.control->set_vic_enabled(false);
 	}
 
 	// Check if we have reached the end of the sequence
@@ -99,7 +99,7 @@ void BILBO_Sequencer::update() {
 		this->finishSequence();
 
 		// Re-Enable VIC. TIC has to be manually enabled from the host
-		this->config.control->enableVIC(true);
+		this->config.control->set_vic_enabled(true);
 
 		return;
 	}
@@ -108,10 +108,10 @@ void BILBO_Sequencer::update() {
 	twipr_sequence_input_t current_input = sequence_buffer[this->sequence_tick];
 
 	// Apply the input to the controller depending on control mode
-	if (this->loaded_sequence.control_mode == TWIPR_CONTROL_MODE_BALANCING) {
-		twipr_balancing_control_input_t balancing_input = { .u_1 =
-				current_input.u_1, .u_2 = current_input.u_2 };
-		this->config.control->_setBalancingInput(balancing_input);
+	if (this->loaded_sequence.control_mode == bilbo_control_mode_t::BALANCING) {
+		bilbo_control_input_ext_t balancing_input = { .u_left =
+				current_input.u_1, .u_right = current_input.u_2 };
+		this->config.control->set_external_input(balancing_input);
 	}
 
 	this->sequence_tick++;
@@ -205,7 +205,7 @@ bool BILBO_Sequencer::_startSequenceInternal() {
 	this->mode = TWIPR_SEQUENCER_MODE_RUNNING;
 
 	// Disable External Inputs to the controller
-	this->config.control->disableExternalInput();
+	this->config.control->disable_external_input();
 
 	send_info("Start Sequence %d with length %d (aligned start at tick %lu)",
 			this->loaded_sequence.sequence_id, this->loaded_sequence.length,
@@ -228,9 +228,9 @@ void BILBO_Sequencer::abortSequence() {
 	// TODO: reflect in the sample if the sequence was finished or aborted
 
 	// Enable external inputs to the controller
-	this->config.control->enableExternalInput();
+	this->config.control->enable_external_input();
 
-	this->config.control->_resetExternalInput();
+	this->config.control->reset_external_input();
 
 	// Set the mode
 	this->mode = TWIPR_SEQUENCER_MODE_ERROR;
@@ -279,15 +279,15 @@ void BILBO_Sequencer::finishSequence() {
 	}
 
 	// Set the control mode to the desired mode
-	this->config.control->setMode(this->loaded_sequence.control_mode_end);
+	this->config.control->set_mode(this->loaded_sequence.control_mode_end);
 
 	this->resetSequenceData();
 
 	// Enable external inputs to the controller
-	this->config.control->enableExternalInput();
+	this->config.control->enable_external_input();
 
 	// Set the controller inputs to zero
-	this->config.control->_resetExternalInput();
+	this->config.control->reset_external_input();
 }
 
 /* =============================================================== */
@@ -317,7 +317,7 @@ bool BILBO_Sequencer::loadSequence(
 	}
 
 	// Check the required control mode. For now, we only accept balancing. TODO
-	if (sequence_data.control_mode != TWIPR_CONTROL_MODE_BALANCING) {
+	if (sequence_data.control_mode != bilbo_control_mode_t::BALANCING) {
 		send_error("Sequence with control mode %d is not yet supported",
 				sequence_data.control_mode);
 		return false;
@@ -347,8 +347,8 @@ void BILBO_Sequencer::resetSequenceData() {
 		.require_control_mode = true,
 		.wait_time_beginning = 0,
 		.wait_time_end = 0,
-		.control_mode = TWIPR_CONTROL_MODE_OFF,
-		.control_mode_end = TWIPR_CONTROL_MODE_OFF,
+		.control_mode = bilbo_control_mode_t::OFF,
+		.control_mode_end = bilbo_control_mode_t::OFF,
 		.loaded = true   // no sequence pending / invalid
 	};
 
@@ -408,7 +408,7 @@ void BILBO_Sequencer::sequenceReceivedAndTransferred_callback() {
 }
 
 /* =============================================================== */
-void BILBO_Sequencer::modeChange_callback(twipr_control_mode_t /*mode*/) {
+void BILBO_Sequencer::modeChange_callback(bilbo_control_mode_t /*mode*/) {
 	// If there is an active sequence, abort it on mode change.
 	if (this->mode != TWIPR_SEQUENCER_MODE_RUNNING) {
 		return;

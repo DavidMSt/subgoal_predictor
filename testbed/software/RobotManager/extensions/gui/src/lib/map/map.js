@@ -42,6 +42,12 @@ class Map {
 
     websocket_connected = false;
 
+    // === cursor state ===
+    /** @type {string} */ _cursorType = 'default';  // 'default', 'circle', 'crosshair', 'none'
+    /** @type {object} */ _cursorOptions = {};
+    /** @type {[number, number] | null} */ _mouseWorldPos = null;  // current mouse position in world coords
+    /** @type {[number, number] | null} */ _mouseScreenPos = null; // current mouse position in screen coords
+
     /* == CONSTRUCTOR ============================================================================================== */
     constructor(id, container, payload = {}) {
 
@@ -143,6 +149,7 @@ class Map {
 
         this.websocket.connect()
 
+
         // first draw
         this.drawMap();
 
@@ -200,10 +207,11 @@ class Map {
 
     /* -------------------------------------------------------------------------------------------------------------- */
 
-    // compute baseScale (px per world unit) so that at zoom=1 the *larger* map dimension fits the container
+    // compute baseScale (px per world unit) so that at zoom=1 the entire map fits within the container
     computeBaseScale() {
         if (this.worldWidth <= 0 || this.worldHeight <= 0 || this.cw === 0 || this.ch === 0) return 1;
-        return Math.max(this.cw / this.worldWidth, this.ch / this.worldHeight);
+        // Use Math.min to ensure the constraining dimension fits (entire map visible)
+        return Math.min(this.cw / this.worldWidth, this.ch / this.worldHeight);
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -225,7 +233,7 @@ class Map {
 
     /* -------------------------------------------------------------------------------------------------------------- */
 
-// Zoom limits helpers
+    // Zoom limits helpers
     getZoomLimits() {
         // Accepts [min, max] where either may be null or undefined
         const zl = this.config.zoom_limits ?? [null, null];
@@ -300,6 +308,275 @@ class Map {
                 this.setZoom(next);           // <-- clamp to zoom_limits
                 this.drawMap();
             }, {passive: false});
+        }
+
+        // Click listener (left click)
+        this.canvas.addEventListener('click', (e) => {
+            // Don't trigger click if we were dragging
+            if (this._wasDragging) {
+                this._wasDragging = false;
+                return;
+            }
+            const rect = this.canvas.getBoundingClientRect();
+            const sx = e.clientX - rect.left;
+            const sy = e.clientY - rect.top;
+            const worldPos = this.canvasPointToWorld(sx, sy);
+            this.on_click(worldPos.x, worldPos.y);
+        });
+
+        // Double click listener
+        this.canvas.addEventListener('dblclick', (e) => {
+            const rect = this.canvas.getBoundingClientRect();
+            const sx = e.clientX - rect.left;
+            const sy = e.clientY - rect.top;
+            const worldPos = this.canvasPointToWorld(sx, sy);
+            this.on_double_click(worldPos.x, worldPos.y);
+        });
+
+        // Right click listener (context menu)
+        this.canvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault(); // Prevent default context menu
+            const rect = this.canvas.getBoundingClientRect();
+            const sx = e.clientX - rect.left;
+            const sy = e.clientY - rect.top;
+            const worldPos = this.canvasPointToWorld(sx, sy);
+            this.on_right_click(worldPos.x, worldPos.y);
+        });
+
+        // Middle click listener
+        this.canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 1) { // Middle mouse button
+                e.preventDefault();
+                const rect = this.canvas.getBoundingClientRect();
+                const sx = e.clientX - rect.left;
+                const sy = e.clientY - rect.top;
+                const worldPos = this.canvasPointToWorld(sx, sy);
+                this.on_middle_click(worldPos.x, worldPos.y);
+            }
+        });
+
+        // Prevent middle click default behavior (auto-scroll)
+        this.canvas.addEventListener('auxclick', (e) => {
+            if (e.button === 1) {
+                e.preventDefault();
+            }
+        });
+
+        // Track if we dragged (to prevent click after drag)
+        this.canvas.addEventListener('mousedown', () => {
+            this._wasDragging = false;
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (this.dragging) {
+                this._wasDragging = true;
+            }
+        });
+
+        // Mouse move listener for cursor position tracking
+        this.canvas.addEventListener('mousemove', (e) => {
+            const rect = this.canvas.getBoundingClientRect();
+            const sx = e.clientX - rect.left;
+            const sy = e.clientY - rect.top;
+            this._mouseScreenPos = [sx, sy];
+            const worldPos = this.canvasPointToWorld(sx, sy);
+            this._mouseWorldPos = [worldPos.x, worldPos.y];
+        });
+
+        // Clear mouse position when leaving canvas
+        this.canvas.addEventListener('mouseleave', () => {
+            this._mouseScreenPos = null;
+            this._mouseWorldPos = null;
+        });
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Called when the map is left-clicked. Override this method or use it as a callback.
+     * @param {number} x - World x coordinate of the click
+     * @param {number} y - World y coordinate of the click
+     */
+    on_click(x, y) {
+        console.log(`Map left-clicked at world coordinates: x=${x.toFixed(3)}, y=${y.toFixed(3)}`);
+        const message = {
+            type: 'event',
+            data: {
+                type: 'click',
+                x: x,
+                y: y,
+            },
+        }
+
+        this.websocket.send(message);
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Called when the map is double-clicked. Override this method or use it as a callback.
+     * @param {number} x - World x coordinate of the double-click
+     * @param {number} y - World y coordinate of the double-click
+     */
+    on_double_click(x, y) {
+
+        const message = {
+            type: 'event',
+            data: {
+                type: 'double_click',
+                x: x,
+                y: y,
+            },
+        }
+        this.websocket.send(message);
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Called when the map is right-clicked. Override this method or use it as a callback.
+     * @param {number} x - World x coordinate of the right-click
+     * @param {number} y - World y coordinate of the right-click
+     */
+    on_right_click(x, y) {
+        const message = {
+            type: 'event',
+            data: {
+                type: 'right_click',
+                x: x,
+                y: y,
+            },
+        }
+        this.websocket.send(message);
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Called when the map is middle-clicked. Override this method or use it as a callback.
+     * @param {number} x - World x coordinate of the middle-click
+     * @param {number} y - World y coordinate of the middle-click
+     */
+    on_middle_click(x, y) {
+        const message = {
+            type: 'event',
+            data: {
+                type: 'middle_click',
+                x: x,
+                y: y,
+            },
+        }
+        this.websocket.send(message);
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Change the cursor displayed on the map.
+     * @param {string} type - Cursor type: 'default', 'circle', 'crosshair', 'none'
+     * @param {object} options - Options for the cursor (depends on type)
+     *   For 'circle': { color: [r,g,b,a], size: radiusInWorldUnits, fillColor: [r,g,b,a] (optional), lineWidth: px }
+     *   For 'crosshair': { color: [r,g,b,a], size: sizeInWorldUnits, lineWidth: px }
+     *   Common options:
+     *     - showCoordinates: boolean - Show x,y coordinates next to cursor (lower right, .1f format)
+     *     - coordinatesColor: [r,g,b,a] - Color for coordinates text (defaults to cursor color)
+     */
+    change_cursor(type, options = {}) {
+        this._cursorType = type;
+        this._cursorOptions = options;
+
+        // Update the actual CSS cursor based on type
+        // Apply to both container and canvas to ensure cursor is hidden
+        if (type === 'default') {
+            const defaultCursor = this.config.allow_drag ? 'grab' : 'default';
+            this.container.style.cursor = defaultCursor;
+            this.canvas.style.cursor = defaultCursor;
+            this.map_container.style.cursor = defaultCursor;
+        } else if (type === 'none') {
+            this.container.style.cursor = 'none';
+            this.canvas.style.cursor = 'none';
+            this.map_container.style.cursor = 'none';
+        } else {
+            // For custom cursors (circle, crosshair), hide the system cursor
+            this.container.style.cursor = 'none';
+            this.canvas.style.cursor = 'none';
+            this.map_container.style.cursor = 'none';
+        }
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    /**
+     * Draw the custom cursor at the current mouse position.
+     * Called during the render loop after all other elements are drawn.
+     */
+    drawCursor() {
+        if (this._cursorType === 'default' || this._cursorType === 'none') return;
+        if (!this._mouseWorldPos) return;
+
+        const ctx = this.context;
+        const [wx, wy] = this._mouseWorldPos;
+
+        ctx.save();
+        this.applyWorldTransform(ctx);
+
+        if (this._cursorType === 'circle') {
+            const color = this._cursorOptions.color || [1, 0, 0, 1];
+            const fillColor = this._cursorOptions.fillColor || null;
+            const size = this._cursorOptions.size || 0.1;  // radius in world units
+            const lineWidth = (this._cursorOptions.lineWidth || 2) / this.scale;
+
+            // Draw fill if specified
+            if (fillColor) {
+                ctx.beginPath();
+                ctx.arc(wx, wy, size, 0, 2 * Math.PI);
+                ctx.fillStyle = this.arrayToColor(fillColor);
+                ctx.fill();
+            }
+
+            // Draw outline
+            ctx.beginPath();
+            ctx.arc(wx, wy, size, 0, 2 * Math.PI);
+            ctx.strokeStyle = this.arrayToColor(color);
+            ctx.lineWidth = lineWidth;
+            ctx.stroke();
+
+        } else if (this._cursorType === 'crosshair') {
+            const color = this._cursorOptions.color || [1, 1, 1, 1];
+            const size = this._cursorOptions.size || 0.1;  // half-length in world units
+            const lineWidth = (this._cursorOptions.lineWidth || 2) / this.scale;
+
+            ctx.strokeStyle = this.arrayToColor(color);
+            ctx.lineWidth = lineWidth;
+
+            // Horizontal line
+            ctx.beginPath();
+            ctx.moveTo(wx - size, wy);
+            ctx.lineTo(wx + size, wy);
+            ctx.stroke();
+
+            // Vertical line
+            ctx.beginPath();
+            ctx.moveTo(wx, wy - size);
+            ctx.lineTo(wx, wy + size);
+            ctx.stroke();
+        }
+
+        ctx.restore();
+
+        // Draw coordinates if enabled (in screen space for consistent size)
+        if (this._cursorOptions.showCoordinates && this._mouseScreenPos) {
+            const [sx, sy] = this._mouseScreenPos;
+            const coordColor = this._cursorOptions.coordinatesColor || this._cursorOptions.color || [1, 1, 1, 1];
+            const coordText = `${wx.toFixed(this._cursorOptions.coordinatesPrecision || 2)}, ${wy.toFixed(this._cursorOptions.coordinatesPrecision || 2)}`;
+
+            ctx.save();
+            ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset to screen space
+
+            ctx.font = '10px monospace';
+            ctx.fillStyle = this.arrayToColor(coordColor);
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+
+            // Position at lower right of cursor (offset by 8px)
+            const offsetX = 8;
+            const offsetY = 8;
+            ctx.fillText(coordText, sx + offsetX, sy + offsetY);
+
+            ctx.restore();
         }
     }
 
@@ -487,6 +764,30 @@ class Map {
         const sy = -yr * this.scale + this.ch / 2;
 
         return {x: sx, y: sy};
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+
+    // Utility: convert canvas px to world coordinates (inverse of worldPointToCanvas)
+    canvasPointToWorld(sx, sy) {
+        const theta = (this.config.rotation || 0) * Math.PI / 180;
+        const [cx, cy] = this.viewCenter;
+        const [ox, oy] = this.offset;
+
+        // Reverse the screen transform
+        const xr = (sx - this.cw / 2) / this.scale;
+        const yr = -(sy - this.ch / 2) / this.scale;
+
+        // Reverse the rotation
+        const ct = Math.cos(-theta), st = Math.sin(-theta);
+        const x = ct * xr - st * yr;
+        const y = st * xr + ct * yr;
+
+        // Add back the center and offset
+        const wx = x + (cx + ox);
+        const wy = y + (cy + oy);
+
+        return {x: wx, y: wy};
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -941,6 +1242,9 @@ class Map {
         // Done with world drawing
         ctx.restore();
 
+        // Draw custom cursor (on top of everything, in its own transform)
+        this.drawCursor();
+
         // 7) Edge labels (tile or grid coordinates) on the canvas edges inside bars
         const showTileCoords = this.config.tiles && this.config.show_tile_coordinates;
         const showGridCoords = this.config.show_grid && this.config.show_grid_coordinates;
@@ -1379,124 +1683,13 @@ export class MapWidget extends Widget {
         this.map = new Map(payload.map.id, this.element, payload.map || {});
 
 
-        // const gPoints = new MapObjectGroup('map/points', {config: {show_in_table: true}});
-        // gPoints.parent = this.map;
-        // this.map.groups[gPoints.id] = gPoints;
-        //
-        // gPoints.addObject(new Point('map/points/p1', {
-        //     config: {
-        //         name: 'P1',
-        //         color: [0.98, 0.35, 0.30, 1],
-        //         size: 0.06,
-        //         size_mode: 'meter',
-        //         layer: 3,
-        //         show_name: true
-        //     },
-        //     data: {x: 0.5, y: 0.5}
-        // }));
-        //
-        // gPoints.addObject(new Point('map/points/p2', {
-        //     config: {
-        //         name: 'P2',
-        //         color: [0.20, 0.75, 0.95, 1],
-        //         size: 0.06,
-        //         size_mode: 'meter',
-        //         layer: 3,
-        //         show_name: true
-        //     },
-        //     data: {x: 1.5, y: 1.2}
-        // }));
-        //
-        // gPoints.addObject(new Point('map/points/p3', {
-        //     config: {
-        //         name: 'P3',
-        //         color: [0.35, 0.85, 0.45, 1],
-        //         size: 0.06,
-        //         size_mode: 'meter',
-        //         layer: 3,
-        //         show_name: true
-        //     },
-        //     data: {x: 2.6, y: 0.8}
-        // }));
-        //
-        // // --- Agents group ------------------------------------------------------
-        // const gAgents = new MapObjectGroup('map/agents', {config: {show_in_table: true}});
-        // gAgents.parent = this.map;
-        // this.map.groups[gAgents.id] = gAgents;
-        //
-        // gAgents.addObject(new Agent('map/agents/a1', {
-        //     config: {
-        //         name: 'A1', color: [1, 0.6, 0, 1],
-        //         size: 0.10, size_mode: 'meter',
-        //         arrow_length: 0.25, arrow_length_mode: 'meter',
-        //         arrow_width: 0.03, arrow_width_mode: 'meter',
-        //         show_name: true, layer: 4, highlight: true,
-        //     },
-        //     data: {x: 0.8, y: 2.2, psi: Math.PI / 6} // ~30°
-        // }));
-        //
-        // gAgents.addObject(new Agent('map/agents/a2', {
-        //     config: {
-        //         name: 'A2', color: [0.6, 0.6, 1, 1],
-        //         size: 0.10, size_mode: 'meter',
-        //         arrow_length: 0.25, arrow_length_mode: 'meter',
-        //         arrow_width: 0.03, arrow_width_mode: 'meter',
-        //         show_name: true, layer: 4, dim: true,
-        //     },
-        //     data: {x: 2.3, y: 1.6, psi: -Math.PI / 3} // ~-60°
-        // }));
-        //
-        // // --- Vision agents group ----------------------------------------------
-        // const gVision = new MapObjectGroup('map/vision', {config: {show_in_table: true}});
-        // gVision.parent = this.map;
-        // this.map.groups[gVision.id] = gVision;
-        //
-        // const va1 = gVision.addObject(new VisionAgent('map/vision/v1', {
-        //     config: {
-        //         name: 'V1', color: [0.9, 0.2, 0.9, 1],
-        //         size: 0.10, size_mode: 'meter',
-        //         // vision
-        //         fov: Math.PI / 2,           // 90°
-        //         vision_radius: 0.9,         // meters
-        //         vision_opacity: 0.25,
-        //         show_name: true,
-        //         show_trail: true,
-        //         layer: 4
-        //     },
-        //     data: {x: 2.2, y: 2.3, psi: Math.PI/2}
-        // }));
-        //
-        //
-        // gVision.addObject(new VisionAgent('map/vision/v2', {
-        //     config: {
-        //         name: 'V2', color: [0.2, 0.9, 0.9, 1],
-        //         size: 0.10, size_mode: 'meter',
-        //         fov: Math.PI * 0.66,        // ~120°
-        //         vision_radius: 0.8,
-        //         vision_opacity: 0.25,
-        //         show_name: true,
-        //         layer: 4,
-        //     },
-        //     data: {x: 0.7, y: 1.8, psi: 0} // facing +x
-        // }));
-        //
-        //
-        // // gVision.setVisibility(false);
-        // // gAgents.dim(true);
-        //
-        //
-        // setInterval(() => {
-        //     const va1x = va1.data.x;
-        //     const va1y = va1.data.y;
-        //     const psi = va1.data.psi;
-        //     va1.update({x: va1x + 0, y: va1y - 0.007, psi: psi + 0.1})
-        // }, 100);
-        //
-        // setTimeout(() => {
-        //     // va1.clearHistory();
-        //     // va1.dim(true);
-        // }, 2000);
-
+        setTimeout(() => {
+            this.map.change_cursor('crosshair', {
+                color: [1, 1, 1, 1],
+                size: 0.1,                    // Half-length in world units
+                showCoordinates: true,
+            });
+        }, 1000);
     }
 
     initializeElement() {

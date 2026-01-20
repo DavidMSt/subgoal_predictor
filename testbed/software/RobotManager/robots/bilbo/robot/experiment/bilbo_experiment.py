@@ -162,6 +162,8 @@ class BILBO_ExperimentHandler:
 
     _loadedTrajectory: BILBO_InputTrajectory | None = None
 
+    _last_experiment_data: ExperimentData | None = None
+
     # === INIT =========================================================================================================
     def __init__(self, core: BILBO_Core, control: BILBO_Control):
         self.core = core
@@ -248,77 +250,23 @@ class BILBO_ExperimentHandler:
 
             # Download the file
             if experiment_file_folder is None:
-                with tempfile.TemporaryDirectory(prefix="experiment_") as tmpdir:
-                    filename = self.core.file_handler.download_file(data, tmpdir)
+                # with tempfile.TemporaryDirectory(prefix="experiment_") as tmpdir:
+                tmpdir = '/Users/lehmann/Desktop/'
+                filename = self.core.file_handler.download_file(data, tmpdir)
 
-                    with open(filename, 'r') as f:
-                        experiment_data = json.load(f)
+                with open(filename, 'r') as f:
+                    experiment_data = json.load(f)
 
-                    return experiment_data
+                self._last_experiment_data = experiment_data
+                return experiment_data
             else:
                 filename = self.core.file_handler.download_file(data, experiment_file_folder)
 
                 with open(filename, 'r') as f:
                     experiment_data = json.load(f)
 
+                self._last_experiment_data = experiment_data
                 return experiment_data
-            # samples = experiment_data['samples']
-            # theta = [sample['lowlevel']['estimation']['state']['theta'] for sample in samples]
-            # mode = [sample['control']['mode'] for sample in samples]
-            # input = [sample['lowlevel']['control']['data']['input_left'] for sample in samples]
-            # mode_ll = [sample['lowlevel']['control']['mode'] for sample in samples]
-            # v = [sample['lowlevel']['estimation']['state']['v'] for sample in samples]
-            #
-            # tick_ll = [sample['lowlevel']['tick'] for sample in samples]
-            #
-            # t = generate_time_vector_by_length(start=0, num_samples=len(theta), dt=0.01)
-            #
-            # quick_plot(
-            #     x=t,
-            #     y=theta,
-            #     xlabel='Time [s]',
-            #     ylabel='Theta [rad]',
-            #     ylim=(-2, 2),
-            # )
-            #
-            # quick_plot(
-            #     x=t,
-            #     y=mode,
-            #     xlabel='Time [s]',
-            #     ylabel='Mode',
-            #     title='Mode',
-            # )
-            #
-            # quick_plot(
-            #     x=t,
-            #     y=input,
-            #     xlabel='Time [s]',
-            #     ylabel='Input',
-            #     title='Input',
-            # )
-            # quick_plot(
-            #     x=t,
-            #     y=mode_ll,
-            #     xlabel='Time [s]',
-            #     ylabel='Mode LL',
-            #     title='Mode LL',
-            # )
-            #
-            # quick_plot(
-            #     x=t,
-            #     y=v,
-            #     xlabel='Time [s]',
-            #     ylabel='v [m/s]',
-            #     title='v',
-            # )
-            #
-            # quick_plot(
-            #     x=t,
-            #     y=tick_ll,
-            #     xlabel='Time [s]',
-            #     ylabel='Tick LL',
-            #     title='Tick LL',
-            # )
 
         return True
 
@@ -551,3 +499,63 @@ class BILBO_ExperimentHandler:
     #         strict=False,  # ignore unknown fields if the device returns extra data
     #     )
     #     return from_dict_auto(BILBO_ExperimentData, data)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def plot_last_experiment(self):
+        samples = self._last_experiment_data['samples']
+        theta = [sample['lowlevel']['estimation']['state']['theta'] for sample in samples]
+        mode = [sample['control']['mode'] for sample in samples]
+        # input = [sample['lowlevel']['control']['data']['input_left'] for sample in samples]
+        # mode_ll = [sample['lowlevel']['control']['mode'] for sample in samples]
+        v = [sample['lowlevel']['estimation']['state']['v'] for sample in samples]
+
+        tick_ll = [sample['lowlevel']['tick'] for sample in samples]
+
+        t = generate_time_vector_by_length(start=0, num_samples=len(theta), dt=0.01)
+
+        quick_plot(
+            x=t,
+            y=theta,
+            xlabel='Time [s]',
+            ylabel='Theta [rad]',
+            ylim=(-2, 2),
+        )
+
+        quick_plot(
+            x=t,
+            y=mode,
+            xlabel='Time [s]',
+            ylabel='Mode',
+            title='Mode',
+        )
+
+        # quick_plot(
+        #     x=t,
+        #     y=input,
+        #     xlabel='Time [s]',
+        #     ylabel='Input',
+        #     title='Input',
+        # )
+        # quick_plot(
+        #     x=t,
+        #     y=mode_ll,
+        #     xlabel='Time [s]',
+        #     ylabel='Mode LL',
+        #     title='Mode LL',
+        # )
+
+        quick_plot(
+            x=t,
+            y=v,
+            xlabel='Time [s]',
+            ylabel='v [m/s]',
+            title='v',
+        )
+
+        quick_plot(
+            x=t,
+            y=tick_ll,
+            xlabel='Time [s]',
+            ylabel='Tick LL',
+            title='Tick LL',
+        )

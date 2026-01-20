@@ -11,29 +11,28 @@
 #include "firmware_core.h"
 #include "twipr_estimation.h"
 
-
 #define TWIPR_BALANCING_CONTROL_ERROR 0x00000601
 #define TWIPR_BALANCING_CONTROL_ERROR_INIT 0x00000602
 
-typedef enum twipr_balancing_control_mode_t {
-	TWIPR_BALANCING_CONTROL_MODE_OFF = 0,
-	TWIPR_BALANCING_CONTROL_MODE_DIRECT = 1,
-	TWIPR_BALANCING_CONTROL_MODE_ON = 2,
-} twipr_balancing_control_mode_t;
+enum class twipr_balancing_control_mode_t: uint8_t {
+	OFF = 0,
+	DIRECT = 1,
+	ON = 2,
+};
 
-typedef enum twipr_balancing_control_status_t {
-	TWIPR_BALANCING_CONTROL_STATUS_NONE = 0,
-	TWIPR_BALANCING_CONTROL_STATUS_IDLE = 1,
-	TWIPR_BALANCING_CONTROL_STATUS_ERROR = -1,
-	TWIPR_BALANCING_CONTROL_STATUS_RUNNING = 2,
-} twipr_balancing_control_status_t;
+enum class twipr_balancing_control_status_t: int8_t {
+	NONE = 0,
+	IDLE = 1,
+	ERROR = -1,
+	RUNNING = 2,
+};
 
 typedef enum twipr_balancing_control_callback_id_t {
 	TWIPR_BALANCING_CONTROL_CALLBACK_ERROR = 1,
 } twipr_balancing_control_callback_id_t;
 
 typedef struct twipr_balancing_control_config_t {
-	float K[8] = {0};
+	float K[8] = { 0 };
 	float pitch_offset = 0;
 } twipr_balancing_control_config_t;
 
@@ -58,21 +57,19 @@ public:
 	void registerCallback(twipr_balancing_control_callback_id_t callback_id,
 			void (*callback)(void *argument, void *params), void *params);
 
-	void update(twipr_estimation_state_t state,
-			twipr_balancing_control_input_t input,
-			twipr_balancing_control_output_t *output);
+	twipr_balancing_control_output_t update(twipr_estimation_state_t state,
+			twipr_balancing_control_input_t input);
 
 	void set_K(float K[8]);
-	void setMode(twipr_balancing_control_mode_t mode);
+	void set_mode(twipr_balancing_control_mode_t mode);
 
 	twipr_balancing_control_status_t status;
 	twipr_balancing_control_mode_t mode;
 	twipr_balancing_control_config_t config;
 private:
 
-	void _calculateOutput(twipr_estimation_state_t state,
-			twipr_balancing_control_input_t input,
-			twipr_balancing_control_output_t *output);
+	twipr_balancing_control_output_t _calculateOutput(twipr_estimation_state_t state,
+			twipr_balancing_control_input_t input);
 	twipr_balancing_control_input_t _last_input;
 	twipr_estimation_state_t _dynamic_state;
 	twipr_estimation_state_t _last_dynamic_state;

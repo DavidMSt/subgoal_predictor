@@ -172,6 +172,8 @@ class BILBO_Logging(LoggingProvider):
 
                 self.tick += 10  # TODO: Magic number
 
+                self.common.events.sample.set(data=self.sample)
+
                 # if 290 <= self.tick <= 320:
                 #     self.logger.debug(f"Finished global tick: {self.tick}")
 
@@ -182,6 +184,7 @@ class BILBO_Logging(LoggingProvider):
                  end: int | None = None,
                  signals: list[str] | None = None,
                  add_intermediate_samples: bool = False) -> dict | None:
+
         """
         Args:
             index:

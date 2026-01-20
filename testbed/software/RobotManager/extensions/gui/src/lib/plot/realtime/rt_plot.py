@@ -256,6 +256,9 @@ class RT_Plot_Backend:
         self.y_axes: dict[str, Y_Axis] = {}
         self.time_series: dict[str, TimeSeries] = {}
 
+        # Thread lock to protect concurrent access to time_series and y_axes dicts
+        self._lock = threading.Lock()
+
         if x_axis_config is None:
             x_axis_config = {}
 
@@ -293,10 +296,12 @@ class RT_Plot_Backend:
         else:
             raise ValueError(f"Invalid type for y_axis: {type(y_axis)}")
 
-        if id in self.y_axes:
-            raise ValueError(f"Y-axis with id '{id}' already exists.")
+        with self._lock:
+            if id in self.y_axes:
+                raise ValueError(f"Y-axis with id '{id}' already exists.")
 
-        self.y_axes[id] = y_axis
+            self.y_axes[id] = y_axis
+
         self.send_function("add_y_axis", y_axis.get_config())
 
         y_axis.callbacks.update.register(self._update_y_axis_callback,
@@ -309,10 +314,12 @@ class RT_Plot_Backend:
     # ------------------------------------------------------------------------------------------------------------------
     def remove_y_axis(self, id) -> None:
 
-        if id not in self.y_axes:
-            raise ValueError(f"Y-axis with id '{id}' does not exist.")
+        with self._lock:
+            if id not in self.y_axes:
+                raise ValueError(f"Y-axis with id '{id}' does not exist.")
 
-        del self.y_axes[id]
+            del self.y_axes[id]
+
         self.send_function("remove_y_axis", id)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -327,10 +334,12 @@ class RT_Plot_Backend:
         else:
             raise ValueError(f"Invalid type for timeseries: {type(timeseries)}")
 
-        if id in self.time_series:
-            raise ValueError(f"Timeseries with id '{id}' already exists.")
+        with self._lock:
+            if id in self.time_series:
+                raise ValueError(f"Timeseries with id '{id}' already exists.")
 
-        self.time_series[id] = timeseries
+            self.time_series[id] = timeseries
+
         self.send_function("add_timeseries", timeseries.get_config())
 
         timeseries.callbacks.update.register(
@@ -352,15 +361,20 @@ class RT_Plot_Backend:
         else:
             raise ValueError(f"Invalid type for timeseries: {type(timeseries)}")
 
-        if timeseries_id not in self.time_series:
-            return
+        with self._lock:
+            if timeseries_id not in self.time_series:
+                return
 
-        del self.time_series[timeseries_id]
+            del self.time_series[timeseries_id]
+
         self.send_function("remove_timeseries", timeseries_id)
 
     # ------------------------------------------------------------------------------------------------------------------
     def remove_all_timeseries(self) -> None:
-        for ts in list(self.time_series.values()):
+        with self._lock:
+            ts_list = list(self.time_series.values())
+
+        for ts in ts_list:
             self.remove_timeseries(ts)
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -388,17 +402,24 @@ class RT_Plot_Backend:
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_payload(self) -> dict:
+        with self._lock:
+            # Create snapshots of the dicts
+            y_axes_snapshot = dict(self.y_axes)
+            timeseries_snapshot = dict(self.time_series)
+
         payload = {
             'id': self.id,
             'config': self.get_config(),
-            'y_axes': {k: value.get_config() for k, value in self.y_axes.items()},
-            'timeseries': {k: value.get_config() for k, value in self.time_series.items()},
+            'y_axes': {k: value.get_config() for k, value in y_axes_snapshot.items()},
+            'timeseries': {k: value.get_config() for k, value in timeseries_snapshot.items()},
         }
         return payload
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_data(self) -> dict:
-        data = {k: ts.get_data() for k, ts in self.time_series.items()}
+        with self._lock:
+            # Hold lock during iteration - safe since get_data() is fast (just returns self.value)
+            data = {k: ts.get_data() for k, ts in self.time_series.items()}
         return data
 
     # === PRIVATE METHODS ==============================================================================================

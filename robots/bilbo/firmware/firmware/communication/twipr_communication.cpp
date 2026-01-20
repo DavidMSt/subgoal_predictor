@@ -457,10 +457,21 @@ void TWIPR_CommunicationManager::printf(uint8_t flag, const char *format, ...) {
  * @param format Format string.
  * @param args Variable argument list.
  */
+//void TWIPR_CommunicationManager::vprint(uint8_t flag, const char *format, va_list args) {
+//    int length = vsnprintf(this->_debug_message.data->message, DEBUG_PRINT_BUFFER_SIZE, format, args);
+//    this->_debug_message.data->flag = flag;
+//    // Send the message if it was successfully formatted and fits within the buffer.
+//    if (length > 0 && length < DEBUG_PRINT_BUFFER_SIZE) {
+//        this->sendMessage(this->_debug_message);
+//    }
+//}
+
 void TWIPR_CommunicationManager::vprint(uint8_t flag, const char *format, va_list args) {
-    int length = vsnprintf(this->_debug_message.data->message, DEBUG_PRINT_BUFFER_SIZE, format, args);
-    this->_debug_message.data->flag = flag;
-    // Send the message if it was successfully formatted and fits within the buffer.
+    auto d = this->_debug_message.get();  // copy out
+    int length = vsnprintf(d.message, DEBUG_PRINT_BUFFER_SIZE, format, args);
+    d.flag = flag;
+    this->_debug_message.set(d);          // copy back
+
     if (length > 0 && length < DEBUG_PRINT_BUFFER_SIZE) {
         this->sendMessage(this->_debug_message);
     }

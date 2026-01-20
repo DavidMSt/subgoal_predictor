@@ -99,6 +99,11 @@ class Model:
     theta_offset: float = 0.0
 
 
+@dataclasses.dataclass
+class BILBO_EstimationConfig:
+    enable_dead_reckoning: bool = True
+
+
 # ======================================================================================================================
 @dataclasses.dataclass
 class BILBO_Config:
@@ -107,6 +112,7 @@ class BILBO_Config:
     optitrack: BILBO_OptiTrack_Definition
     model: BILBO_PhysicalModel
     electronics: BILBO_Hardware_Electronics
+    estimation: BILBO_EstimationConfig = dataclasses.field(default_factory=BILBO_EstimationConfig)
 
 
 # ======================================================================================================================

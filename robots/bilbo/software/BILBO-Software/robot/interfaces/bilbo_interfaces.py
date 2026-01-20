@@ -6,10 +6,12 @@ from core.communication.wifi.data_link import CommandArgument
 # === CUSTOM PACKAGES ==================================================================================================
 from core.utils.joystick.joystick_manager import JoystickManager, Joystick
 from core.utils.logging_utils import Logger
+from core.utils.sound.sound import playSound
 from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
 from core.utils.exit import register_exit_callback
+from robot.control.bilbo_control_definitions import BILBO_Control_Mode
 from robot.interfaces.bilbo_display import BILBO_Display
 
 
@@ -26,6 +28,7 @@ class InputSource(enum.Enum):
 JOYSTICK_MAPPING = {
     'CONTROL_MODE_BALANCING': "A",
     'CONTROL_MODE_OFF': "B",
+    'CONTROL_MODE_VELOCITY': "X",
     "TIC_ENABLE": "DPAD_UP",
     "TIC_DISABLE": "DPAD_DOWN",
     "AXIS_TORQUE_FORWARD": "LEFT_VERTICAL",
@@ -39,7 +42,7 @@ JOYSTICK_MAPPING = {
 class BILBO_Interfaces:
     communication: BILBO_Communication
 
-    display: BILBO_Display
+    display: BILBO_Display | None = None
 
     input_source: InputSource
 
@@ -68,7 +71,7 @@ class BILBO_Interfaces:
         if self.has_display:
             self.display = BILBO_Display(core=self.core)
 
-        self._joystick_manager = JoystickManager(accept_unmapped_joysticks=False)
+        self._joystick_manager = JoystickManager()
         self._joystick_manager.callbacks.new_joystick.register(self._onJoystickConnected)
         self._joystick_manager.callbacks.joystick_disconnected.register(self._onJoystickDisconnected)
 
@@ -150,9 +153,9 @@ class BILBO_Interfaces:
         self._input_thread.start()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def close(self):
+    def close(self, *args, **kwargs):
         self.logger.info('Stop Interfaces')
-        self._joystick_manager.exit()
+        self._joystick_manager.close()
 
         self._exit_input_task = True
         if self._input_thread is not None and self._input_thread.is_alive():
@@ -161,12 +164,12 @@ class BILBO_Interfaces:
     # ------------------------------------------------------------------------------------------------------------------
     def enable_external_input(self):
         self.external_input_enabled = True
-        self.control.setNormalizedBalancingInput(0, 0)
+        self.control.set_external_input(0, 0)
 
     # ------------------------------------------------------------------------------------------------------------------
     def disable_external_input(self):
         self.external_input_enabled = False
-        self.control.setNormalizedBalancingInput(0, 0)
+        self.control.set_external_input(0, 0)
 
     # === PRIVATE METHODS ==============================================================================================
     def _onJoystickConnected(self, joystick, *args, **kwargs):
@@ -177,45 +180,75 @@ class BILBO_Interfaces:
 
         self.input_source = InputSource.JOYSTICK
 
-        joystick.setButtonCallback(button="A", event='down', function=self._onJoystickPress)
-        joystick.setButtonCallback(button="B", event='down', function=self._onJoystickPress)
-        joystick.setButtonCallback(button="X", event='down', function=self._onJoystickPress)
-        joystick.setButtonCallback(button="Y", event='down', function=self._onJoystickPress)
+        self._joystick.buttons['A'].callbacks.pressed.register(
+            self.control.set_mode,
+            mode=BILBO_Control_Mode.BALANCING,
+        )
+        self._joystick.buttons['A'].callbacks.long_pressed.register(
+            self.control.set_mode,
+            mode=BILBO_Control_Mode.VELOCITY,
+        )
 
-        joystick.setButtonCallback(button="DPAD_UP", event='down', function=self._onJoystickPress)
-        joystick.setButtonCallback(button="DPAD_DOWN", event='down', function=self._onJoystickPress)
+        self._joystick.buttons['B'].callbacks.pressed.register(
+            self.control.set_mode,
+            mode=BILBO_Control_Mode.OFF,
+        )
 
-        joystick.setButtonCallback(button=JOYSTICK_MAPPING['ACCEPT'], event='down', function=self._onJoystickPress)
-        joystick.setButtonCallback(button=JOYSTICK_MAPPING['CANCEL'], event='down', function=self._onJoystickPress)
+        self._joystick.buttons['X'].callbacks.pressed.register(
+            playSound,
+            file='horn_double.mp3',
+            volume=2
+        )
+
+        self._joystick.buttons['Y'].callbacks.pressed.register(
+            self.control.set_mode,
+            mode=BILBO_Control_Mode.POSITION,
+        )
+
+        self._joystick.hat['up'].callbacks.pressed.register(self.control.enable_tic_control, enable=True)
+        self._joystick.hat['down'].callbacks.pressed.register(self.control.enable_tic_control, enable=False)
+
+        # joystick.setButtonCallback(button="A", event='down', function=self._onJoystickPress)
+        # joystick.setButtonCallback(button="B", event='down', function=self._onJoystickPress)
+        # joystick.setButtonCallback(button="X", event='down', function=self._onJoystickPress)
+        # joystick.setButtonCallback(button="Y", event='down', function=self._onJoystickPress)
+        #
+        # joystick.setButtonCallback(button="DPAD_UP", event='down', function=self._onJoystickPress)
+        # joystick.setButtonCallback(button="DPAD_DOWN", event='down', function=self._onJoystickPress)
+        #
+        # joystick.setButtonCallback(button=JOYSTICK_MAPPING['ACCEPT'], event='down', function=self._onJoystickPress)
+        # joystick.setButtonCallback(button=JOYSTICK_MAPPING['CANCEL'], event='down', function=self._onJoystickPress)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _onJoystickDisconnected(self, joystick, *args, **kwargs):
         if joystick == self._joystick:
             self._joystick = None  # type: ignore
-            joystick.clearAllButtonCallbacks()
+            # joystick.clearAllButtonCallbacks()
             self.logger.info(f'Joystick disconnected: {joystick.name}')
             self.core.joystick_connected = False
             self.core.events.joystick_disconnected.set()
             self.input_source = InputSource.NONE
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _onJoystickPress(self, button=None, *args, **kwargs):
-        self.logger.debug(f'Joystick button pressed: {button}')
-        if button == JOYSTICK_MAPPING['CONTROL_MODE_BALANCING']:
-            self.control.set_mode(self.control.mode.BALANCING)
-        elif button == JOYSTICK_MAPPING['CONTROL_MODE_OFF']:
-            self.control.set_mode(self.control.mode.OFF)
-        elif button == JOYSTICK_MAPPING['TIC_ENABLE']:
-            self.control.enableTIC(True)
-        elif button == JOYSTICK_MAPPING['TIC_DISABLE']:
-            self.control.enableTIC(False)
-        elif button == JOYSTICK_MAPPING['ACCEPT']:
-            self.logger.debug('Joystick button pressed: ACCEPT')
-        elif button == JOYSTICK_MAPPING['CANCEL']:
-            self.logger.debug('Joystick button pressed: CANCEL')
-        else:
-            self.logger.debug(f'Joystick button pressed: {button} not recognized')
-            return
+    # def _onJoystickPress(self, button=None, *args, **kwargs):
+    # self.logger.debug(f'Joystick button pressed: {button}')
+    # if button == JOYSTICK_MAPPING['CONTROL_MODE_BALANCING']:
+    #     self.control.set_mode(self.control.mode.BALANCING)
+    # elif button == JOYSTICK_MAPPING['CONTROL_MODE_OFF']:
+    #     self.control.set_mode(self.control.mode.OFF)
+    # elif button == JOYSTICK_MAPPING['TIC_ENABLE']:
+    #     self.control.enable_tic_control(True)
+    # elif button == JOYSTICK_MAPPING['TIC_DISABLE']:
+    #     self.control.enable_tic_control(False)
+    # elif button == JOYSTICK_MAPPING['ACCEPT']:
+    #     self.logger.debug('Joystick button pressed: ACCEPT')
+    # elif button == JOYSTICK_MAPPING['CANCEL']:
+    #     self.logger.debug('Joystick button pressed: CANCEL')
+    # elif button == JOYSTICK_MAPPING['CONTROL_MODE_VELOCITY']:
+    #     self.control.set_mode(self.control.mode.VELOCITY)
+    # else:
+    #     self.logger.debug(f'Joystick button pressed: {button} not recognized')
+    #     return
 
     # ------------------------------------------------------------------------------------------------------------------
     def _input_task(self):
@@ -230,10 +263,19 @@ class BILBO_Interfaces:
             match self.input_source:
                 case InputSource.JOYSTICK:
                     if self._joystick is not None:
-                        axis_forward = - self._joystick.getAxis(JOYSTICK_MAPPING['AXIS_TORQUE_FORWARD'])
-                        axis_turn = -self._joystick.getAxis(JOYSTICK_MAPPING['AXIS_TORQUE_TURN'])
+                        axis_forward = self._joystick.get_axis("LEFT_VERTICAL")
+                        axis_turn = -self._joystick.get_axis("RIGHT_HORIZONTAL")
+                        axis_boost = (self._joystick.get_axis("TRIGGER_RIGHT") + 1) / 2  # now is 0 to 1
                         input = (axis_forward, axis_turn)
-                        self.control.setNormalizedBalancingInput(axis_forward, axis_turn)
+
+                        match self.control.mode:
+                            case BILBO_Control_Mode.BALANCING:
+                                # print(f"axis_forward: {axis_forward:.1f}, axis_turn: {axis_turn:.1f}")
+                                self.control.set_external_input_forward_turn(axis_forward, axis_turn, normalized=True)
+                            case BILBO_Control_Mode.VELOCITY:
+                                scale = (2 / 3) + (1 / 3) * axis_boost
+                                forward_command = axis_forward * scale
+                                self.control.set_velocity(forward_command, axis_turn, normalized=True)
                 case InputSource.WIFI_JOYSTICK:
                     input = self._external_joystick_input
 
@@ -242,12 +284,15 @@ class BILBO_Interfaces:
 
             # self.control.setNormalizedBalancingInput(*input)
 
-
     # ------------------------------------------------------------------------------------------------------------------
     def _set_external_joystick_input(self, forward, turn):
         self._external_joystick_input = (forward, turn)
-        if self.input_source == InputSource.WIFI_JOYSTICK and self.external_input_enabled:
-            self.control.setNormalizedBalancingInput(forward, turn)
+
+        if self.control.mode == BILBO_Control_Mode.BALANCING:
+            if self.input_source == InputSource.WIFI_JOYSTICK and self.external_input_enabled:
+                self.control.set_external_input_forward_turn(forward, turn, normalized=True)
+        elif self.control.mode == BILBO_Control_Mode.VELOCITY:
+            self.control.set_velocity(forward, turn, normalized=True)
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_input_source(self, source: str):

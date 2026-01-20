@@ -22,7 +22,7 @@
 #include "twipr_uart_communication.h"
 #include "twipr_spi_communication.h"
 #include "firmware_defs.h"
-#include "twipr_control.h"
+#include "bilbo_control.h"
 #include "bilbo_sequencer.h"
 
 // Define error flag macros for communication error responses.

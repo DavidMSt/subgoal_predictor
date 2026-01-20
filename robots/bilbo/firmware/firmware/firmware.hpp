@@ -10,7 +10,7 @@
 
 #include "firmware_core.h"
 #include "twipr_communication.h"
-#include "twipr_control.h"
+#include "bilbo_control.h"
 #include "robot-control_std.h"
 #include "twipr_estimation.h"
 
@@ -55,7 +55,7 @@ public:
 	uint32_t tick = 0;
 
 	TWIPR_CommunicationManager comm;
-	TWIPR_ControlManager control;
+	BILBO_Control control;
 	BILBO_Sequencer sequencer;
 	TWIPR_Estimation estimation;
 	TWIPR_Supervisor supervisor;

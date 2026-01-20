@@ -1,1115 +1,1088 @@
-from core.utils.dataclass_utils import from_dict, asdict_optimized
-from core.utils.dict_utils import format_floats
-from robot.bilbo_common import BILBO_Common, error_handler
-from robot.communication.serial.bilbo_serial_messages import BILBO_Control_Event_Message
-from robot.control.bilbo_control_config import load_config
-# Importing low-level sample class from STM32 interface
-from robot.lowlevel.stm32_sample import BILBO_LL_Sample
+import ctypes
+import dataclasses
 
-# === OWN PACKAGES =====================================================================================================
-from core.utils.callbacks import callback_definition, CallbackContainer
-from robot.communication.bilbo_communication import BILBO_Communication
-import robot.lowlevel.stm32_addresses as addresses
-from robot.lowlevel.stm32_control import *
-from core.utils.events import Event, event_definition, EventFlag
+import numpy as np
+
+from core.communication.wifi.archive import addresses
+from core.communication.wifi.data_link import CommandArgument
+from core.utils.callbacks import CallbackContainer, callback_definition
+from core.utils.dataclass_utils import from_dict_auto
+from core.utils.events import event_definition, EventFlag, Event
+from core.utils.exit import exit_program
 from core.utils.logging_utils import Logger
-from robot.control.bilbo_control_data import *
-from robot.control.bilbo_control_data import *
-from core.utils.data import limit, are_lists_approximately_equal
-from core.utils.delayed_executor import delayed_execution
-
-
-# import robot.control.config as control_config
+from core.utils.time import setTimeout
+from robot.bilbo_common import BILBO_Common
+from robot.communication.bilbo_communication import BILBO_Communication
+from robot.communication.serial.bilbo_serial_messages import BILBO_Control_Event_Message
+from robot.control.bilbo_control_config import load_config_by_name
+from robot.control.bilbo_control_definitions import BILBO_Control_Mode, BILBO_ControlConfig, PID_Config, \
+    BILBO_Control_Status, \
+    BILBO_Control_Event_Type, BILBO_Control_Inputs, VelocityControl_Config, PositionControl_Config, TIC_Config, \
+    VIC_Config, BILBO_Control_Sample, Feedforward_Config
+from robot.control.bilbo_position_control import BILBO_PositionControl
+from robot.estimation.bilbo_estimation import BILBO_Estimation
+from robot.lowlevel.stm32_addresses import TWIPR_AddressTables, TWIPR_ControlAddresses
+from robot.lowlevel.stm32_control import bilbo_velocity_control_command_t, bilbo_control_input_ext_t, \
+    bilbo_control_config_t, bilbo_tic_config_t, bilbo_vic_config_t, bilbo_position_control_config_t, \
+    bilbo_velocity_control_config_t, pid_control_config_t, feedforward_config_t, bilbo_ll_control_data, \
+    position_command_t, heading_command_t
+from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
+from robot.lowlevel.stm32_sample import BILBO_LL_Sample
 
 
 # === BILBO Control Callbacks ==========================================================================================
 @callback_definition
 class BILBO_Control_Callbacks:
-    """
-    Callback container for control-related events.
-
-    Attributes:
-        mode_change (CallbackContainer): Callback for mode changes. Expected arguments: mode (BILBO_Control_Mode), forced_change (bool).
-        status_change (CallbackContainer): Callback for status changes. Expected arguments: status (BILBO_Control_State), forced_change (bool).
-        error (CallbackContainer): Callback for errors.
-        on_update (CallbackContainer): Callback for update events.
-    """
-    mode_change: CallbackContainer  # Inputs: mode: BILBO_Control_Mode, forced_change: bool
-    status_change: CallbackContainer  # Inputs: status: BILBO_Control_State, forced_change: bool
-    configuration_change: CallbackContainer
+    mode_change: CallbackContainer
+    status_change: CallbackContainer
+    config_change: CallbackContainer
     error: CallbackContainer
-    on_update: CallbackContainer
+    update: CallbackContainer
 
 
 @event_definition
 class BILBO_Control_Events:
     mode_change: Event = Event(flags=EventFlag('mode', BILBO_Control_Mode))
-    configuration_change: Event
+    config_change: Event
     error: Event
     status_change: Event = Event(flags=EventFlag('status', str))
     vic_change: Event
     tic_change: Event
+    movement_element_finished: Event = Event(flags=EventFlag('id', int))
+    movement_element_timeout: Event = Event(flags=EventFlag('id', int))
+
+
+# TODO: this needs to be initially set somehow
+@dataclasses.dataclass
+class BILBO_Control_Controller_Status:
+    vic_enabled: bool = False
+    tic_enabled: bool = False
 
 
 # === BILBO Control ====================================================================================================
 class BILBO_Control:
-    """
-    High-level control class for the BILBO robot.
-
-    This class handles configuration, mode switching, input processing, and communication with the low-level STM32 module.
-    It makes use of callbacks for various events (e.g., mode change, status updates) and executes commands via a Wi-Fi interface.
-    """
-
-    # Communication interface with BILBO hardware
-    _comm: BILBO_Communication
-
-    # Current control statuses and modes (both high-level and low-level)
-    status: BILBO_Control_Status
-    mode: BILBO_Control_Mode
-
-    mode_ll: BILBO_Control_Mode_LL
-    status_ll: BILBO_Control_Status_LL
-
-    # Control configuration (loaded from control_config)
-    config: BILBO_ControlConfig
-
-    ll_config: BILBO_LL_ControlConfig
-
-    # External and manual control inputs
-    external_input: BILBO_Control_Input
-    enable_external_input: bool
-    input: BILBO_Control_Input
-
-    # Callback container instance for control events
+    mode: BILBO_Control_Mode | None = None
     callbacks: BILBO_Control_Callbacks
+    events: BILBO_Control_Events
+    controller_status: BILBO_Control_Controller_Status
+    inputs: BILBO_Control_Inputs
 
-    # The latest low-level control sample received from the STM32 module
-    _lowlevel_control_sample: BILBO_LL_Sample
+    position_control: BILBO_PositionControl | None = None
 
-    # Timer for periodic updates (default interval: 0.1 seconds)
-    # _updateTimer: IntervalTimer = IntervalTimer(0.1)
+    status: BILBO_Control_Status = BILBO_Control_Status.NORMAL
+    _config: BILBO_ControlConfig | None = None
 
     # === INIT =========================================================================================================
-    def __init__(self, core: BILBO_Common, comm: BILBO_Communication):
-        """
-        Initialize the BILBO_Control instance.
-
-        Args:
-            comm (BILBO_Communication): Communication interface used to interact with the low-level module.
-        """
-        self.logger = Logger('CONTROL')
-        self.logger.setLevel('INFO')
-        # Store communication interface
-        self._comm = comm
-
-        self.common = core
-
-        # Load the default configuration later
-        self.config = None  # type: Ignore
-
-        # Initialize high-level status and mode to error/off
-        self.status = BILBO_Control_Status(BILBO_Control_Status.ERROR)
-        self.mode = BILBO_Control_Mode(BILBO_Control_Mode.OFF)
-        self.status_ll = BILBO_Control_Status_LL(BILBO_Control_Status_LL.ERROR)
-        self.mode_ll = BILBO_Control_Mode_LL(BILBO_Control_Mode_LL.OFF)
-
-        # Initialize control inputs
-        self.external_input = BILBO_Control_Input()
-        self.input = BILBO_Control_Input()
-        self.enable_external_input = True
-
-        # Register the callback for receiving STM32 samples
-        self._comm.callbacks.rx_stm32_sample.register(self._lowlevel_sample_callback)
-
-        # Initialize callback container for high-level events
+    def __init__(self, common: BILBO_Common, estimation: BILBO_Estimation, comm: BILBO_Communication):
         self.callbacks = BILBO_Control_Callbacks()
         self.events = BILBO_Control_Events()
+        self.logger = Logger("CONTROL", "DEBUG")
 
-        # Register commands to the WI-FI module for remote control
-        self._comm.wifi.newCommand(identifier='setControlMode',
-                                   function=self.set_mode,
-                                   arguments=['mode'],
-                                   description='Sets the control mode')
+        # --- Input Handling ---
+        self.common = common
+        self.estimation = estimation
+        self.communication = comm
 
-        self._comm.wifi.newCommand(identifier='setNormalizedBalancingInput',
-                                   function=self.setNormalizedBalancingInput,
-                                   arguments=['forward', 'turn'],
-                                   description='Sets the Input')
+        # --- Register communication callbacks ---
+        self.communication.serial.callbacks.event.register(self._lowlevel_control_event_callback,
+                                                           parameters={'messages': [BILBO_Control_Event_Message]})
 
-        self._comm.wifi.newCommand(identifier='setSpeed',
-                                   function=self.setSpeed,
-                                   arguments=['v', 'psi_dot'],
-                                   description='Sets the Speed')
+        self.communication.callbacks.rx_stm32_sample.register(self._lowlevel_sample_callback)
 
-        self._comm.wifi.newCommand(identifier='setPIDForward',
-                                   function=self.setVelocityControlPID_Forward,
-                                   arguments=['P', 'I', 'D'],
-                                   description='Sets the PID Control Values for the Forward Velocity')
+        self._register_wifi_commands()
 
-        self._comm.wifi.newCommand(identifier='setPIDTurn',
-                                   function=self.setVelocityControlPID_Turn,
-                                   arguments=['P', 'I', 'D'],
-                                   description='Sets the PID Control Values for the Turn Velocity')
-
-        self._comm.wifi.newCommand(identifier='enableTIC',
-                                   function=self.enableTIC,
-                                   arguments=['enable'],
-                                   description='Enabled Theta Integral Control')
-
-        self._comm.wifi.newCommand(identifier='get_control_config',
-                                   function=self.get_control_config,
-                                   arguments=[],
-                                   description='Returns the current control configuration')
-
-        self._comm.serial.callbacks.event.register(self._ll_control_event_callback,
-                                                   parameters={'messages': [BILBO_Control_Event_Message]})
-
-        # Optionally, a dedicated thread could be started for continuous control updates
-        # self._thread = threading.Thread(target=self._threadFunction)
-
-        self._lowlevel_control_sample = None  # Type: Ignore
+        # --- Variables ---
+        self.controller_status = BILBO_Control_Controller_Status()
+        self.inputs = BILBO_Control_Inputs()
+        self.inputs.reset()
 
     # === METHODS ======================================================================================================
     def init(self):
-        """
-        Placeholder for additional initialization steps.
-
-        This method is intended to be extended as needed.
-        """
+        config = self.load_config("default")
+        if config is None:
+            self.logger.error("Failed to load default control config. Control will not work!")
+            exit_program(1)
+            return
+        result = self.set_config(config)
+        if not result:
+            self.logger.error("Failed to set default control config. Control will not work!")
+            return
+        self.controller_status.vic_enabled = False
+        self.controller_status.tic_enabled = False
+        self.logger.info("Control initialized successfully")
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
-        """
-        Start the control module by loading the default configuration and setting the control status to NORMAL.
-
-        Returns:
-            bool: True if the configuration was loaded successfully; False otherwise.
-        """
+        self.logger.info("Starting control")
         self.set_mode(BILBO_Control_Mode.OFF)
-        self.config = self.loadConfig('default')
-        if self.config is None:
-            return False
-
         self.status = BILBO_Control_Status.NORMAL
-        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def close(self, *args, **kwargs):
+        self.logger.info("Closing control")
+        self.set_mode(BILBO_Control_Mode.OFF)
 
     # ------------------------------------------------------------------------------------------------------------------
     def update(self):
-        """
-        Main update loop for processing inputs and updating control signals.
+        if self.status != BILBO_Control_Status.NORMAL:
+            return
 
-        Steps:
-            1. Process the latest low-level STM32 sample.
-            2. Update external input.
-            3. Set the processed input into the system.
-            4. Call any user-defined update callbacks.
-        """
-        # Step 1: Process the STM32 sample
-        self._updateFromLowLevelSample(self._lowlevel_control_sample)
+        match self.mode:
+            case BILBO_Control_Mode.OFF:
+                # Send [0,0], just in case
+                self._set_lowlevel_external_input(0, 0)
 
-        # Step 2: Process the external input and update the control input accordingly
-        external_input = self._updateExternalInput(self.external_input)
+            case BILBO_Control_Mode.BALANCING:
+                self._set_lowlevel_external_input(self.inputs.external.left, self.inputs.external.right)
 
-        # For now, manual input is the only method, so we copy the external input
-        self.input = external_input
+            case BILBO_Control_Mode.VELOCITY:
+                self._set_lowlevel_velocity_command(self.inputs.velocity.forward, self.inputs.velocity.turn)
 
-        # Set the control input in the low-level hardware
-        self._setInput(self.input)
+            case BILBO_Control_Mode.POSITION:
+                ...
+                # Do nothing for now
 
-        # Call user-defined update callbacks
-        self.callbacks.on_update.call()
+            case _:
+                self.logger.warning(f"Mode \"{self.mode}\" is not supported")
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def loadConfig(self, name):
-        """
-        Load a control configuration by name and write it to the low-level module.
-
-        Args:
-            name (str): Name of the configuration to load.
-
-        Returns:
-            control_config.ControlConfig: The loaded configuration if successful, or None otherwise.
-        """
-        self.logger.debug(f"Load control config \"{name}\"...")
-        config = load_config(name)
-        if config is None:
-            self.logger.warning(f"Control config \"{name}\" not found")
-            return None
-
-        # Write the configuration to the hardware
-        success = self._setControlConfig(config, verify=True)
-        if not success:
-            self.logger.warning(f"Control config {name} failed")
-            return None
-
-        self.logger.info(f"Control config \"{name}\" loaded!")
-        self.config = config
-        self._resetExternalInput()
-        return config
+        self.callbacks.update.call()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def saveConfig(self, name, config=None):
-        """
-        Save the current control configuration.
-
-        Args:
-            name (str): Name to save the configuration under.
-            config (optional): The configuration data to save. If None, uses the current config.
-
-        Raises:
-            NotImplementedError: This function is not implemented.
-        """
-        raise NotImplementedError
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def get_control_config(self):
-        """
-        Retrieve the current control configuration.
-
-        Returns:
-            dict: The current control configuration.
-        """
-        return self.config
-    
-    # ------------------------------------------------------------------------------------------------------------------
-    def set_mode(self, mode: int | BILBO_Control_Mode):
-        """
-        Set the current control mode.
-
-        The mode can be passed either as an integer or as a BILBO_Control_Mode enum.
-        Depending on the selected mode, the corresponding low-level control mode is set.
-
-        Args:
-            mode (int or BILBO_Control_Mode): The desired control mode.
-        """
-        # Convert integer mode to enum if necessary
+    def set_mode(self, mode: BILBO_Control_Mode | int):
         if isinstance(mode, int):
+            mode_int = mode
             try:
-                mode = BILBO_Control_Mode(mode)
+                mode = BILBO_Control_Mode(mode_int)
             except ValueError:
-                self.logger.warning(f"Value of {mode} is not a valid control mode")
+                self.logger.warning(f"Failed to convert mode {mode_int} to BILBO_Control_Mode")
                 return
 
-        # If the mode is already set, exit early
         if mode == self.mode:
             return
 
-        self.logger.info(f"Setting control mode to {mode.name}")
+        self.logger.info(f"Setting control mode to \"{mode.name}\"")
+        result = None
+        match mode:
+            case BILBO_Control_Mode.OFF:
+                self.mode = BILBO_Control_Mode.OFF
+                result = self._set_lowlevel_control_mode(BILBO_Control_Mode.OFF)
+            case BILBO_Control_Mode.DIRECT:
+                self.logger.warning("Direct mode is not supported yet")
+                return
+                # result = self._set_lowlevel_control_mode(BILBO_Control_Mode.DIRECT)
+            case BILBO_Control_Mode.BALANCING:
+                self.mode = BILBO_Control_Mode.BALANCING
+                result = self._set_lowlevel_control_mode(BILBO_Control_Mode.BALANCING)
+            case BILBO_Control_Mode.VELOCITY:
 
-        # Set the corresponding low-level control mode
-        if mode == BILBO_Control_Mode.OFF:
-            self._setControlMode_LL(BILBO_Control_Mode_LL.OFF)
-            self.mode = BILBO_Control_Mode.OFF
-        elif mode == BILBO_Control_Mode.BALANCING:
-            self._setControlMode_LL(BILBO_Control_Mode_LL.BALANCING)
-            self.mode = BILBO_Control_Mode.BALANCING
-        elif mode == BILBO_Control_Mode.VELOCITY:
-            self._setControlMode_LL(BILBO_Control_Mode_LL.VELOCITY)
-            self.mode = BILBO_Control_Mode.VELOCITY
+                if self.mode == BILBO_Control_Mode.OFF:
+                    self.logger.warning("Cannot set velocity mode while in OFF mode. Go to BALANCING first")
+                    return
 
-        # Reset external input on mode change
-        self._resetExternalInput()
-        # Notify callbacks of the mode change
+                self.mode = BILBO_Control_Mode.VELOCITY
+                result = self._set_lowlevel_control_mode(BILBO_Control_Mode.VELOCITY)
+            case BILBO_Control_Mode.POSITION:
+
+                dead_reckoning = self.estimation.get_dead_reckoning_enabled()
+                tracker_position = (
+                        self.estimation.get_tracker_updates_enabled()
+                        and self.estimation.tracker_connected
+                )
+
+                if not (dead_reckoning or tracker_position):
+                    self.logger.warning(
+                        "Cannot set position mode: no position source available "
+                        "(dead reckoning disabled and tracker unavailable)"
+                    )
+                    return
+
+                if self.mode == BILBO_Control_Mode.OFF:
+                    self.logger.warning("Cannot set position mode while in OFF mode. Go to BALANCING or VELOCITY first")
+                    return
+                self.mode = BILBO_Control_Mode.POSITION
+                result = self._set_lowlevel_control_mode(BILBO_Control_Mode.POSITION)
+            case _:
+                self.logger.warning(f"Mode \"{mode}\" is not supported")
+                return
+
+        if result is None or not result:
+            self.logger.warning("Failed to set control mode")
+            self.status = BILBO_Control_Status.ERROR
+            return
+
+        # Reset the external inputs
+        self.inputs.reset()
+
         self.callbacks.mode_change.call(mode, forced_change=False)
+        self.communication.wifi.sendEvent(
+            event='control',
+            data={
+                'event': 'mode_change',
+                'mode': mode.value,
+            }
+        )
 
     # ------------------------------------------------------------------------------------------------------------------
-    def standUp(self):
-        """
-        Transition the control mode from OFF to BALANCING, and then schedule a switch to VELOCITY.
+    def set_config(self, config: BILBO_ControlConfig):
 
-        This method is used to start the robot's balancing process.
-        """
-        if not self.mode == BILBO_Control_Mode.OFF:
-            return
-        self.set_mode(BILBO_Control_Mode.BALANCING)
-        # Delay execution to allow balancing before switching to velocity mode
-        # delayed_execution(self.setMode, 1, mode=BILBO_Control_Mode.VELOCITY)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def fallOver(self, direction='forward'):
-        """
-        Simulate a controlled fall over by setting a low speed and switching off control mode.
-
-        Args:
-            direction (str): Direction of the fall; valid values are 'forward' or 'backward'.
-
-        Raises:
-            Exception: If the provided direction is invalid.
-        """
-        if not self.mode == BILBO_Control_Mode.VELOCITY:
-            return
-
-        if direction == 'forward':
-            self.setSpeed(v=0.2, psi_dot=0)
-        elif direction == 'backward':
-            self.setSpeed(v=-0.2, psi_dot=0)
-        else:
-            raise Exception("Invalid direction")
-
-        # Schedule a switch to OFF mode after a short delay
-        delayed_execution(self.set_mode, 0.5, mode=BILBO_Control_Mode.OFF)
+        result = self._set_lowlevel_control_config(config)
+        if result is None:
+            self.logger.warning("Failed to set control config")
+            return False
+        self._config = config
+        self.logger.info(f"Control config \"{config.name}\" set successfully")
+        self.callbacks.config_change.call(config)
+        self.events.config_change.set(config)
+        return True
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setNormalizedBalancingInput(self, forward: int | float, turn: int | float, force=False):
-        """
-        Set the balancing input based on normalized forward and turn values.
+    def load_config(self, name: str):
+        self.logger.debug(f"Loading config \"{name}\"")
+        config = load_config_by_name(name)
 
-        The normalized values are scaled using configuration gains and then combined to compute
-        left and right torque commands.
+        if config is None:
+            self.logger.warning(f"Failed to load config \"{name}\"")
+            return None
 
-        Args:
-            forward (int or float): Normalized forward input.
-            turn (int or float): Normalized turn input.
-            force (bool): If True, force the low-level command update immediately.
-        """
-
-        assert isinstance(forward, (int, float))
-        assert isinstance(turn, (int, float))
-
-        if self.mode == BILBO_Control_Mode.BALANCING:
-            # Scale the commands using configuration gains
-            forward_cmd_scaled = forward * self.config.external_inputs.balancing_input_gain['forward']
-            turn_cmd_scaled = turn * self.config.external_inputs.balancing_input_gain['turn']
-            # Combine inputs to calculate left and right torque values
-            torque_left = -(forward_cmd_scaled + turn_cmd_scaled)
-            torque_right = -(forward_cmd_scaled - turn_cmd_scaled)
-
-            # Apply offsets from configuration
-            self.external_input.u_ext[0] = torque_left + self.config.general.torque_offset['left']
-            self.external_input.u_ext[1] = torque_right + self.config.general.torque_offset['right']
-
-            if force:
-                self._setBalancingInput_LL(u_left=torque_left, u_right=torque_right)
-        else:
-            # If not in balancing mode, no action is taken
-            ...
+        return config
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setNormalizedSpeedInput(self, forward: int | float, turn: int | float):
-        """
-        Set the velocity input based on normalized forward and turn values.
-
-        Values are first validated to be within [-1, 1] and then scaled with configuration gains.
-
-        Args:
-            forward (int or float): Normalized forward speed input.
-            turn (int or float): Normalized turn speed input.
-        """
-        assert isinstance(forward, (int, float))
-        assert isinstance(turn, (int, float))
-
-        if not -1 <= forward <= 1:
-            self.logger.warning("Normalized forward speed must be between -1 and 1")
-            return
-
-        if not -1 <= turn <= 1:
-            self.logger.warning("Normalized turn speed must be between -1 and 1")
-            return
-
-        if self.mode == BILBO_Control_Mode.VELOCITY:
-            # Scale speeds using configuration gains
-            forward_speed_scaled = forward * self.config.external_inputs.speed_input_gain['forward']
-            turn_speed_scaled = turn * self.config.external_inputs.speed_input_gain['turn']
-            self.external_input.v[0] = forward_speed_scaled
-            self.external_input.v[1] = turn_speed_scaled
-        else:
-
-            # If not in velocity mode, ignore the input
-            ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def setBalancingInput(self, left: float, right: float):
-        """
-        Set the balancing input directly with left and right torque values.
-
-        Offsets from the configuration are added to the provided inputs.
-
-        Args:
-            left (float): Torque for the left motor.
-            right (float): Torque for the right motor.
-        """
-        assert isinstance(left, float)
-        assert isinstance(right, float)
-
-        if self.mode == BILBO_Control_Mode.BALANCING:
-            left = left + self.config.general.torque_offset['left']
-            right = right + self.config.general.torque_offset['right']
-
-            self.external_input.u_ext[0] = left
-            self.external_input.u_ext[1] = right
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def setSpeed(self, v: float = 0, psi_dot: float = 0):
-        """
-        Set the speed input for velocity mode.
-
-        The inputs are limited by the maximum velocities defined in the configuration.
-
-        Args:
-            v (float): Forward velocity.
-            psi_dot (float): Turning velocity.
-        """
-        assert isinstance(v, (int, float))
-        assert isinstance(psi_dot, (int, float))
-
-        if self.mode == BILBO_Control_Mode.VELOCITY:
-            # Apply limits defined in the configuration
-            v = limit(v, self.config.speed_control.max_speeds['forward'])
-            psi_dot = limit(psi_dot, self.config.speed_control.max_speeds['turn'])
-
-            self.external_input.v[0] = v
-            self.external_input.v[1] = psi_dot
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def setStateFeedbackGain(self, K):
-        """
-        Set the state feedback gain for control.
-
-        Args:
-            K (list): Gain values for state feedback.
-        """
-        self.logger.info(f"Set State Feedback Gain to {K}")
-        self.config.balancing_control.K = K
-        self._setStateFeedbackGain_LL(K)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def setVelocityControlPID_Forward(self, P: float, I: float, D: float):
-        """
-        Set the PID control parameters for forward velocity.
-
-        Args:
-            P (float): Proportional gain.
-            I (float): Integral gain.
-            D (float): Derivative gain.
-        """
-        self.logger.info(f"Set Velocity Control PID Forward to {P}, {I}, {D}")
-        self.config.speed_control.v.Kp = P
-        self.config.speed_control.v.Ki = I
-        self.config.speed_control.v.Kd = D
-        self._setVelocityControlPIDForward_LL(P, I, D)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def setVelocityControlPID_Turn(self, P: float, I: float, D: float):
-        """
-        Set the PID control parameters for turn velocity.
-
-        Args:
-            P (float): Proportional gain.
-            I (float): Integral gain.
-            D (float): Derivative gain.
-        """
-        self.logger.info(f"Set Velocity Control PID Turn to {P}, {I}, {D}")
-        self.config.speed_control.psidot.Kp = P
-        self.config.speed_control.psidot.Ki = I
-        self.config.speed_control.psidot.Kd = D
-        self._setVelocityControlPIDTurn_LL(P, I, D)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def setVelocityController(self, config):
-        """
-        Set the velocity controller configuration.
-
-        Args:
-            config (TWIPR_Speed_Control_Config): The configuration for the velocity controller.
-
-        Raises:
-            NotImplementedError: This method is not yet implemented.
-        """
+    def save_current_config(self):
         raise NotImplementedError
 
     # ------------------------------------------------------------------------------------------------------------------
-    def setMaxWheelSpeed(self, speed: int | float):
-        """
-        Set the maximum wheel speed.
-
-        Args:
-            speed (int or float): Maximum speed to be set.
-        """
-        self.logger.info(f"Set max wheel speed to {speed}")
-        self.config.general.max_wheel_speed = speed
-        self._setMaxWheelSpeed_LL(speed)
+    def load_and_set_default_config(self) -> BILBO_ControlConfig | None:
+        """Load default config from file and apply it to the robot."""
+        self.logger.info("Loading and setting default control config")
+        config = self.load_config("default")
+        if config is None:
+            self.logger.error("Failed to load default config")
+            return None
+        result = self.set_config(config)
+        if not result:
+            self.logger.error("Failed to set default config")
+            return None
+        return self._config
 
     # ------------------------------------------------------------------------------------------------------------------
-    def enableVelocityIntegralControl(self, enable: bool) -> bool:
-        success = self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ENABLE_VELOCITY_INTEGRAL_CONTROL,
-            data=enable,
-            input_type=ctypes.c_bool,
-            output_type=ctypes.c_bool
-        )
+    def get_control_config(self) -> BILBO_ControlConfig | None:
+        return self._config
 
-        if success:
-            self.logger.info(f"Set velocity integral control to {enable}")
+    # ------------------------------------------------------------------------------------------------------------------
+    def stand_up(self) -> None:
+        if self.mode != BILBO_Control_Mode.OFF:
+            self.logger.warning(f"Cannot stand up while in mode \"{self.mode}\"")
+            return
+        self.set_mode(BILBO_Control_Mode.BALANCING)
 
-            self.config.balancing_control.vic.enabled = enable
+    # ------------------------------------------------------------------------------------------------------------------
+    def fall_down(self, direction='forward') -> None:
+
+        match self.mode:
+            case BILBO_Control_Mode.BALANCING:
+                input = -0.2 if direction == 'forward' else 0.2
+                self.set_external_input(left=input, right=input)
+            case BILBO_Control_Mode.VELOCITY:
+                input = 0.6 if direction == 'forward' else -0.6
+                self.set_velocity(forward=input, turn=0, normalized=False)
+            case _:
+                self.logger.warning(f"Cannot fall down while in mode \"{self.mode}\"")
+                return
+
+        setTimeout(self.set_mode, 0.5, mode=BILBO_Control_Mode.OFF)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_external_input(self, left: float, right: float) -> None:
+        if self.mode != BILBO_Control_Mode.BALANCING:
+            self.logger.warning("Cannot set external input while not in BALANCING mode")
+            return
+        self.inputs.external.left = left + self._config.general.torque_offset[0]
+        self.inputs.external.right = right + self._config.general.torque_offset[1]
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_external_input_forward_turn(self, forward: float, turn: float, normalized: bool = True) -> None:
+        if normalized:
+            if not (-1 <= forward <= 1 and -1 <= turn <= 1):
+                self.logger.warning(
+                    f"External input must be between -1 and 1. Got forward: {forward} and turn: {turn}"
+                )
+                return
+            forward = forward * self._config.inputs.balancing.forward.max
+            turn = turn * self._config.inputs.balancing.turn.max
+
+            torque_left = -(forward + turn)
+            torque_right = -(forward - turn)
         else:
-            self.logger.warning("Failed to set velocity integral control")
-
-        return success
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def enableTIC(self, enable: bool) -> bool:
-        if self.mode == BILBO_Control_Mode.OFF:
-            self.logger.warning("Cannot enable TIC in OFF mode")
-            return False
-
-        success = self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ENABLE_TIC,
-            data=enable,
-            input_type=ctypes.c_bool,
-            output_type=ctypes.c_bool,
-        )
-
-        if success:
-            self.logger.info(f"Set TIC to {enable}")
-            self.config.balancing_control.tic.enabled = enable
-        else:
-            self.logger.warning("Failed to set TIC")
-
-        return success
+            torque_left = forward + turn
+            torque_right = forward - turn
+        self.set_external_input(torque_left, torque_right)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def getSample(self) -> BILBO_Control_Sample:
-        """
-        Retrieve the current control sample.
+    def set_velocity(self, forward: float, turn: float, normalized: bool = True) -> None:
+        if self.mode != BILBO_Control_Mode.VELOCITY:
+            self.logger.warning("Cannot set velocity while not in VELOCITY mode")
+            return
 
-        Returns:
-            BILBO_Control_Sample: A copy of the current control status, mode, configuration name, and input.
-        """
+        if normalized:
+            if not (-1 <= forward <= 1 and -1 <= turn <= 1):
+                self.logger.warning(
+                    f"Velocity inputs must be between -1 and 1. Got forward: {forward} and turn: {turn}"
+                )
+                return
+            forward = forward * self._config.inputs.velocity.forward.max
+            turn = turn * self._config.inputs.velocity.turn.max
+
+        self.inputs.velocity.forward = forward
+        self.inputs.velocity.turn = turn
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def move_to(self, x: float, y: float, max_speed: float | None = None, timeout: float | None = None) -> None:
+        if self.mode != BILBO_Control_Mode.POSITION:
+            self.logger.warning("Cannot \"move to\" while not in POSITION mode")
+            return
+
+        # TODO: Add check if the position controller is currently still navigating
+
+        if max_speed is None:
+            max_speed = -1  # TODO: Magic Number
+
+        if timeout is None:
+            timeout = 0
+
+        self._set_lowlevel_position_command(x, y, max_speed, timeout)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def turn_to(self, psi: float, max_speed: float | None = None, timeout: float | None = None):
+        if self.mode != BILBO_Control_Mode.POSITION:
+            self.logger.warning("Cannot \"turn to\" while not in POSITION mode")
+            return
+        # TODO: Add check if the position controller is currently still navigating
+
+        if max_speed is None:
+            max_speed = -1
+
+        if timeout is None:
+            timeout = 0
+
+        self.logger.info(f"Turning to {psi:.1f}° with max speed {max_speed:.1f} m/s")
+        self._set_lowlevel_heading_command(psi, max_speed, timeout)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_statefeedback_gain(self, K: list | np.ndarray) -> bool:
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_forward_velocity_pid_config(self, config: PID_Config | dict) -> bool:
+        if isinstance(config, dict):
+            config = from_dict_auto(PID_Config, config)
+
+        self.logger.info(f"Setting forward velocity PID config to {config}")
+        self._config.velocity_control.v.pid = config
+        return self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_forward_velocity_ff_config(self, config: Feedforward_Config | dict):
+        if isinstance(config, dict):
+            config = from_dict_auto(Feedforward_Config, config)
+
+        self.logger.info(f"Setting forward velocity FF config to {config}")
+        self._config.velocity_control.v.feedforward = config
+        return self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_turn_velocity_pid_config(self, config: PID_Config | dict) -> bool:
+        if isinstance(config, dict):
+            config = from_dict_auto(PID_Config, config)
+
+        self.logger.info(f"Setting turn velocity PID config to {config}")
+        self._config.velocity_control.psidot.pid = config
+        return self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_turn_velocity_ff_config(self, config: Feedforward_Config | dict):
+        if isinstance(config, dict):
+            config = from_dict_auto(Feedforward_Config, config)
+
+        self.logger.info(f"Setting turn velocity FF config to {config}")
+        self._config.velocity_control.psidot.feedforward = config
+        return self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_position_control_config(self, config: PositionControl_Config | dict):
+        if isinstance(config, dict):
+            config = from_dict_auto(PositionControl_Config, config)
+
+        self.logger.info(f"Setting position control config to {config}")
+        self._config.position_control = config
+        return self._set_lowlevel_position_control_config(self._config.position_control)
+
+    # ------------------------------------------------------------------------------------------------------------------
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_max_wheel_speed(self, speed: float):
+        self.logger.info(f"Setting max wheel speed to {speed:.1f} m/s")
+        self._config.general.max_wheel_speed = speed
+        self._lowlevel_set_max_wheel_speed(speed)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def enable_vic_control(self, enable: bool = True):
+        if not self._config.balancing_control.vic.enabled:
+            self.logger.warning("Cannot set VIC control while VIC control is disabled. Change control config first")
+            return
+        self._set_lowlevel_vic_enabled(enable)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def enable_tic_control(self, enable: bool = True):
+
+        if not self._config.balancing_control.tic.enabled:
+            self.logger.warning("Cannot set TIC control while TIC control is disabled. Change control config first")
+            return
+
+        self._set_lowlevel_tic_enabled(enable)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_sample(self) -> BILBO_Control_Sample:
         sample = BILBO_Control_Sample(
             status=self.status,
             mode=self.mode,
-            configuration=self.config.name if self.config else '',
-            tic_enabled=self.config.balancing_control.tic.enabled,
+            input=self.inputs,
+            tic_enabled=self.controller_status.tic_enabled,
+            vic_enabled=self.controller_status.vic_enabled,
+            input_enabled=self.inputs.enabled
         )
         return sample
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_sample_dict(self) -> dict:
-        sample = {
-            'status': self.status,
-            'mode': self.mode,
-            'tic_enabled': self.config.balancing_control.tic.enabled,
-            'configuration': self.config.name if self.config else '',
-            # 'input': {}
+        sample_dict = {
+            'status': self.status.value,
+            'mode': self.mode.value,
+            'input': dataclasses.asdict(self.inputs),
+            'tic_enabled': self.controller_status.tic_enabled,
+            'vic_enabled': self.controller_status.vic_enabled,
+            'input_enabled': self.inputs.enabled
         }
-        return sample
+        return sample_dict
 
-    # = PRIVATE METHODS ================================================================================================
-    def _lowlevel_sample_callback(self, sample: BILBO_LL_Sample) -> None:
-        """
-        Callback function that is triggered upon receiving a new low-level sample from the STM32 module.
+    # === PRIVATE METHODS ==============================================================================================
+    def _register_wifi_commands(self):
 
-        Args:
-            sample (BILBO_LL_Sample): The received low-level control sample.
-        """
-        self._lowlevel_control_sample = sample
+        self.communication.wifi.newCommand(identifier='set_control_mode',
+                                           function=self.set_mode,
+                                           arguments=['mode'],
+                                           description='Sets the control mode')
+
+        self.communication.wifi.newCommand(identifier='set_external_input_forward_turn',
+                                           function=self.set_external_input_forward_turn,
+                                           arguments=['forward', 'turn', 'normalized'],
+                                           description='Sets the Input')
+
+        self.communication.wifi.newCommand(identifier='set_velocity',
+                                           function=self.set_velocity,
+                                           arguments=['forward', 'turn', 'normalized'],
+                                           description='Sets the Speed')
+
+        self.communication.wifi.newCommand(identifier='enable_tic',
+                                           function=self.enable_tic_control,
+                                           arguments=['enable'],
+                                           description='Enables or disables the TIC control')
+
+        self.communication.wifi.newCommand(identifier='enable_vic',
+                                           function=self.enable_vic_control,
+                                           arguments=['enable'],
+                                           description='Enables or disables the VIC control'
+                                           )
+
+        self.communication.wifi.newCommand(identifier='set_velocity_pid_config_forward',
+                                           function=self.set_forward_velocity_pid_config,
+                                           arguments=['config'],
+                                           description='Sets the forward velocity PID config')
+
+        self.communication.wifi.newCommand(identifier='get_velocity_config_forward',
+                                           function=lambda: self._config.velocity_control.v,
+                                           arguments=[],
+                                           description='Gets the forward velocity PID config')
+
+        self.communication.wifi.newCommand(identifier='set_velocity_pid_config_turn',
+                                           function=self.set_turn_velocity_pid_config,
+                                           arguments=['config'],
+                                           description='Sets the turn velocity PID config')
+
+        self.communication.wifi.newCommand(identifier='get_velocity_config_turn',
+                                           function=lambda: self._config.velocity_control.psidot,
+                                           arguments=[],
+                                           description='Gets the turn velocity PID config')
+
+        self.communication.wifi.newCommand(identifier='set_position_control_config',
+                                           function=self.set_position_control_config,
+                                           arguments=['config'],
+                                           description='Sets the position control config'
+                                           )
+
+        self.communication.wifi.newCommand(identifier='get_position_control_config',
+                                           function=lambda: self._config.position_control,
+                                           arguments=[],
+                                           description='Gets the position control config'
+                                           )
+
+        self.communication.wifi.newCommand(identifier='get_control_config',
+                                           function=self.get_control_config,
+                                           arguments=[],
+                                           description='Gets the control config')
+
+        self.communication.wifi.newCommand(identifier='load_default_control_config',
+                                           function=self.load_and_set_default_config,
+                                           arguments=[],
+                                           description='Loads and applies the default control config')
+
+        self.communication.wifi.newCommand(identifier='move_to',
+                                           function=self.move_to,
+                                           arguments=['x',
+                                                      'y',
+                                                      CommandArgument(
+                                                          name='max_speed',
+                                                          type=float,
+                                                          optional=True,
+                                                          default=None
+                                                      ),
+                                                      CommandArgument(
+                                                          name='timeout',
+                                                          type=float,
+                                                          optional=True,
+                                                          default=None
+                                                      )
+                                                      ]
+                                           )
+        self.communication.wifi.newCommand(identifier='turn_to',
+                                           function=self.turn_to,
+                                           arguments=['psi',
+                                                      CommandArgument(
+                                                          name='max_speed',
+                                                          type=float,
+                                                          optional=True,
+                                                          default=None
+                                                      ),
+                                                      CommandArgument(
+                                                          name='timeout',
+                                                          type=float,
+                                                          optional=True,
+                                                          default=None
+                                                      )
+                                                      ]
+                                           )
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _updateControlConfigFromLL(self, ll_control_config: BILBO_LL_ControlConfig) -> BILBO_ControlConfig:
-        control_config = self.config
+    def _lowlevel_sample_callback(self, sample: BILBO_LL_Sample):
 
-        control_config.balancing_control.K = ll_control_config.K
-        control_config.speed_control.v.Kp = ll_control_config.forward_p
-        control_config.speed_control.v.Ki = ll_control_config.forward_i
-        control_config.speed_control.v.Kd = ll_control_config.forward_d
-        control_config.speed_control.psidot.Kp = ll_control_config.turn_p
-        control_config.speed_control.psidot.Ki = ll_control_config.turn_i
-        control_config.speed_control.psidot.Kd = ll_control_config.turn_d
-        control_config.balancing_control.vic.enabled = ll_control_config.vic_enabled
-        control_config.balancing_control.vic.max_error = ll_control_config.vic_max_error
-        control_config.balancing_control.vic.v_limit = ll_control_config.vic_v_limit
-        control_config.balancing_control.vic.ki = ll_control_config.vic_ki
-        control_config.balancing_control.tic.enabled = ll_control_config.tic_enabled
-        control_config.balancing_control.tic.ki = ll_control_config.tic_ki
-        control_config.balancing_control.tic.max_error = ll_control_config.tic_max_error
-        control_config.balancing_control.tic.theta_limit = ll_control_config.tic_theta_limit
-
-        self.config = control_config
-
-        return control_config
+        # Update the controller status
+        self.controller_status.vic_enabled = bool(sample.control.vic_enabled)
+        self.controller_status.tic_enabled = bool(sample.control.tic_enabled)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _ll_mode_change_callback(self, mode_ll: BILBO_Control_Mode_LL, *args, **kwargs) -> None:
-        mode = None
-        if mode_ll == BILBO_Control_Mode_LL.OFF:
-            mode = BILBO_Control_Mode.OFF
-        elif mode_ll == BILBO_Control_Mode_LL.DIRECT:
-            mode = BILBO_Control_Mode.DIRECT
-        elif mode_ll == BILBO_Control_Mode_LL.BALANCING:
-            mode = BILBO_Control_Mode.BALANCING
-        elif mode_ll == BILBO_Control_Mode_LL.VELOCITY:
-            mode = BILBO_Control_Mode.VELOCITY
-        else:
-            raise Exception("Unknown low-level mode")
-
-        self.mode = mode
-
-        self.callbacks.mode_change.call(mode, forced_change=False)
-        self.events.mode_change.set(data=mode, flags={'mode': mode})
-
-        # Send Event to Host
-        self._comm.wifi.sendEvent(event='control',
-                                  data={
-                                      'event': 'mode_change',
-                                      'mode': mode,
-                                      'config': asdict_optimized(self.config),
-                                  })
+    def _lowlevel_mode_change_event(self, mode_ll: BILBO_Control_Mode, *args, **kwargs):
+        self.logger.debug(f"LL Mode changed to {mode_ll}")
+        match mode_ll:
+            case BILBO_Control_Mode.OFF:
+                if self.mode != mode_ll:
+                    self.logger.info("LL Mode changed to OFF! Change control mode to OFF now")
+                    self.set_mode(BILBO_Control_Mode.OFF)
+            case _:
+                if mode_ll != self.mode:
+                    self.logger.warning(f"LL Mode \"{mode_ll}\" is not the same as the current mode: \"{self.mode}\"")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _ll_configuration_change_callback(self, configuration: dict):
+    def _lowlevel_vic_change_event(self, data: dict, *args, **kwargs):
+        control_data = data.get('data', None)
+        if control_data is None:
+            self.logger.warning("Failed to read control data from LL. Something is wrong.")
+            return
+        vic_enabled = control_data.get('vic_enabled', None)
+        if vic_enabled is None:
+            self.logger.warning("Failed to read VIC enabled state from LL. Something is wrong.")
+            return
+        self.controller_status.vic_enabled = bool(vic_enabled)
+        self.events.vic_change.set(vic_enabled)
+        self.communication.wifi.sendEvent(event='control',
+                                          data={
+                                              'event': 'vic_change',
+                                              'vic_enabled': self.controller_status.vic_enabled,
+                                          })
+        self.logger.debug(f"VIC enabled state changed to {vic_enabled}")
 
-        try:
-            control_config_ll = from_dict(BILBO_LL_ControlConfig, configuration)
-        except Exception as e:
-            self.logger.warning(f"Failed to parse low-level configuration: {e}")
+    # ------------------------------------------------------------------------------------------------------------------
+    def _lowlevel_tic_change_event(self, data: dict, *args, **kwargs):
+        control_data = data.get('data', None)
+        if control_data is None:
+            self.logger.warning("Failed to read control data from LL. Something is wrong.")
+            return
+        tic_enabled = control_data.get('tic_enabled', None)
+        if tic_enabled is None:
+            self.logger.warning("Failed to read TIC enabled state from LL. Something is wrong.")
             return
 
-        # self.logger.info(f"Received changed low-level configuration: {configuration}")
+        self.controller_status.tic_enabled = bool(tic_enabled)
+        self.events.tic_change.set(tic_enabled)
+        self.communication.wifi.sendEvent(event='control',
+                                          data={
+                                              'event': 'tic_change',
+                                              'tic_enabled': self.controller_status.tic_enabled,
+                                          })
 
-        self._updateControlConfigFromLL(control_config_ll)
-
-        self.callbacks.configuration_change.call(configuration)
-        self.events.configuration_change.set(data=configuration)
-        self._comm.wifi.sendEvent(event='control',
-                                  data={
-                                      'event': 'configuration_change',
-                                      'configuration': asdict_optimized(self.config),
-                                  })
+        self.logger.debug(f"TIC enabled state changed to {tic_enabled}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _ll_vic_change_callback(self, configuration: dict):
+    def _lowlevel_position_element_finished_event(self, data: dict, *args, **kwargs):
+        data = from_dict_auto(bilbo_ll_control_data, data)
+        self.logger.info(
+            f"Position element of type \"{data.position_control_data.current_mode.name}\" with ID \"{data.position_control_data.current_position_command.id}\" finished!")
 
-        try:
-            control_config_ll = from_dict(BILBO_LL_ControlConfig, configuration)
-        except Exception as e:
-            self.logger.warning(f"Failed to parse low-level configuration: {e}")
-            return
-
-        self._updateControlConfigFromLL(control_config_ll)
-
-        self._comm.wifi.sendEvent(event='control',
-                                  data={
-                                      'event': 'vic_change',
-                                      'vic_enabled': self.config.balancing_control.vic.enabled,
-                                      'configuration': asdict_optimized(self.config),
-                                  })
-
-        self.logger.info(f"VIC enabled: {self.config.balancing_control.vic.enabled}")
+        # TODO
+        self.events.movement_element_finished.set(flags={
+            'id': data.position_control_data.current_position_command.id
+        })
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _ll_tic_change_callback(self, configuration: dict):
-
-        try:
-            control_config_ll = from_dict(BILBO_LL_ControlConfig, configuration)
-        except Exception as e:
-            self.logger.warning(f"Failed to parse low-level configuration: {e}")
-            return
-
-        self._updateControlConfigFromLL(control_config_ll)
-
-        self._comm.wifi.sendEvent(event='control',
-                                  data={
-                                      'event': 'tic_change',
-                                      'tic_enabled': self.config.balancing_control.tic.enabled,
-                                      'configuration': configuration,
-                                  })
-
-        self.logger.info(f"TIC enabled: {self.config.balancing_control.tic.enabled}")
+    def _lowlevel_position_element_timeout_event(self, data: dict, *args, **kwargs):
+        data = from_dict_auto(bilbo_ll_control_data, data)
+        self.logger.warning(
+            f"Position element of type \"{data.position_control_data.current_mode.name}\" with ID \"{data.position_control_data.current_position_command.id}\" timed out!")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _setControlConfig(self, config: BILBO_ControlConfig, verify: bool = False):
+    def _set_lowlevel_control_config(self, config: BILBO_ControlConfig) -> bool:
 
-        control_config = bilbo_control_configuration_ll_t(
-            K=(ctypes.c_float * 8)(*config.balancing_control.K),  # type: ignore
-            forward_p=config.speed_control.v.Kp,
-            forward_i=config.speed_control.v.Ki,
-            forward_d=config.speed_control.v.Kd,
-            turn_p=config.speed_control.psidot.Kp,
-            turn_i=config.speed_control.psidot.Ki,
-            turn_d=config.speed_control.psidot.Kd,
-            vic_enabled=config.balancing_control.vic.enabled,
-            vic_ki=config.balancing_control.vic.ki,
-            vic_max_error=config.balancing_control.vic.max_error,
-            vic_v_limit=config.balancing_control.vic.v_limit,
-            tic_enabled=config.balancing_control.tic.enabled,
-            tic_ki=config.balancing_control.tic.ki,
-            tic_max_error=config.balancing_control.tic.max_error,
-            tic_theta_limit=config.balancing_control.tic.theta_limit
+        result = self._set_lowlevel_velocity_control_config(config.velocity_control)
+        if not result: return False
+
+        result = self._set_lowlevel_position_control_config(config.position_control)
+        if not result: return False
+
+        result = self._set_lowlevel_tic_config(config.balancing_control.tic)
+        if not result: return False
+
+        result = self._set_lowlevel_vic_config(config.balancing_control.vic)
+        if not result: return False
+
+        result = self._set_lowlevel_max_torque(config.general.max_wheel_torque)
+        if not result: return False
+
+        result = self._set_lowlevel_state_feedback_gain(config.balancing_control.K)
+        if not result: return False
+
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_velocity_control_config(self, config: VelocityControl_Config) -> bool:
+        pid_config_v = pid_control_config_t(
+            Kp=config.v.pid.Kp,
+            Ki=config.v.pid.Ki,
+            Kd=config.v.pid.Kd,
+            Ts=LOOP_TIME_CONTROL,
+            enable_i_limit=config.v.pid.enable_i_limit,
+            i_term_limit=config.v.pid.i_term_limit,
+            enable_input_limit=config.v.pid.enable_input_limit,
+            input_limit=config.v.pid.input_limit,
+            enable_output_limit=config.v.pid.enable_output_limit,
+            output_limit=config.v.pid.output_limit,
+            enable_d_filter=config.v.pid.enable_d_filter,
+            Td_filter=config.v.pid.Td_filter,
+            enable_rate_limit=config.v.pid.enable_rate_limit,
+            rate_limit=config.v.pid.rate_limit,
+            enable_setpoint_rate_limit=config.v.pid.enable_setpoint_rate_limit,
+            setpoint_rate_limit=config.v.pid.setpoint_rate_limit,
         )
-
-        success = self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.SET_CONFIG,
-            data=control_config,
-            input_type=bilbo_control_configuration_ll_t,  # type: ignore
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_V,
+            input_type=pid_control_config_t,
             output_type=ctypes.c_bool,
-            timeout=1
+            data=pid_config_v
         )
 
-        if success is None or not success:
-            self.logger.warning("Failed to set control configuration")
+        if result is None or not result:
+            self.logger.error("Failed to set velocity PID config")
             return False
 
-        self._setMaxWheelSpeed_LL(speed=config.general.max_wheel_speed)
+        ff_config_v = feedforward_config_t(
+            Kv=config.v.feedforward.Kv,
+            Ka=config.v.feedforward.Ka,
+            Kc=config.v.feedforward.Kc,
+            Ts=LOOP_TIME_CONTROL,
+            enable_vref_slew=config.v.feedforward.enable_vref_slew,
+            vref_slew_rate=config.v.feedforward.vref_slew_rate,
+            enable_a_filter=config.v.feedforward.enable_a_filter,
+            Ta_filter=config.v.feedforward.Ta_filter,
+            enable_stiction=config.v.feedforward.enable_stiction,
+            v0_stiction=config.v.feedforward.v0_stiction,
+            enable_output_limit=config.v.feedforward.enable_output_limit,
+            output_limit=config.v.feedforward.output_limit,
+            enable_output_slew=config.v.feedforward.enable_output_slew,
+            output_slew_rate=config.v.feedforward.output_slew_rate,
+        )
 
-        if verify:
-            # Read back configuration from the low-level module
-            config_ll = self._readControlConfig_LL()
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_V_FF,
+            input_type=feedforward_config_t,
+            output_type=ctypes.c_bool,
+            data=ff_config_v
+        )
+        if not result:
+            self.logger.error("Failed to set velocity feedforward config")
+            return False
 
-            if config_ll is None:
-                return False
+        pid_config_psi_dot = pid_control_config_t(
+            Kp=config.psidot.pid.Kp,
+            Ki=config.psidot.pid.Ki,
+            Kd=config.psidot.pid.Kd,
+            Ts=LOOP_TIME_CONTROL,
+            enable_i_limit=config.psidot.pid.enable_i_limit,
+            i_term_limit=config.psidot.pid.i_term_limit,
+            enable_input_limit=config.psidot.pid.enable_input_limit,
+            input_limit=config.psidot.pid.input_limit,
+            enable_output_limit=config.psidot.pid.enable_output_limit,
+            output_limit=config.psidot.pid.output_limit,
+            enable_d_filter=config.psidot.pid.enable_d_filter,
+            enable_rate_limit=config.psidot.pid.enable_rate_limit,
+            rate_limit=config.psidot.pid.rate_limit,
+            enable_setpoint_rate_limit=config.psidot.pid.enable_setpoint_rate_limit,
+            setpoint_rate_limit=config.psidot.pid.setpoint_rate_limit,
+        )
 
-            # Verify state feedback gain
-            if not are_lists_approximately_equal(config_ll['K'], config.balancing_control.K):
-                self.logger.warning("State Feedback Gain not set correctly")
-                return False
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_PSIDOT,
+            input_type=pid_control_config_t,
+            output_type=ctypes.c_bool,
+            data=pid_config_psi_dot
+        )
 
-            # Verify forward PID control values
-            if not are_lists_approximately_equal(
-                    [config.speed_control.v.Kp,
-                     config.speed_control.v.Ki,
-                     config.speed_control.v.Kd],
-                    [config_ll['forward_p'], config_ll['forward_i'], config_ll['forward_d']]):
-                self.logger.warning("PID Control Values not set correctly")
-                return False
+        if result is None or not result:
+            self.logger.error("Failed to set psi_dot PID config")
+            return False
 
-            # Verify turn PID control values
-            if not are_lists_approximately_equal(
-                    [config.speed_control.psidot.Kp,
-                     config.speed_control.psidot.Ki,
-                     config.speed_control.psidot.Kd],
-                    [config_ll['turn_p'], config_ll['turn_i'], config_ll['turn_d']]):
-                self.logger.warning("PID Control Values not set correctly")
-                return False
+        ff_config_psi_dot = feedforward_config_t(
+            Kv=config.psidot.feedforward.Kv,
+            Ka=config.psidot.feedforward.Ka,
+            Kc=config.psidot.feedforward.Kc,
+            Ts=LOOP_TIME_CONTROL,
+            enable_vref_slew=config.psidot.feedforward.enable_vref_slew,
+            vref_slew_rate=config.psidot.feedforward.vref_slew_rate,
+            enable_a_filter=config.psidot.feedforward.enable_a_filter,
+            Ta_filter=config.psidot.feedforward.Ta_filter,
+            enable_stiction=config.psidot.feedforward.enable_stiction,
+            v0_stiction=config.psidot.feedforward.v0_stiction,
+            enable_output_limit=config.psidot.feedforward.enable_output_limit,
+            output_limit=config.psidot.feedforward.output_limit,
+            enable_output_slew=config.psidot.feedforward.enable_output_slew,
+            output_slew_rate=config.psidot.feedforward.output_slew_rate,
+        )
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_PSIDOT_FF,
+            input_type=feedforward_config_t,
+            output_type=ctypes.c_bool,
+            data=ff_config_psi_dot
+        )
+        if not result:
+            self.logger.error("Failed to set psi_dot feedforward config")
+            return False
 
-        return success
+        return True
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _setControlMode_LL(self, mode: BILBO_Control_Mode_LL) -> None:
-        """
-        Set the low-level control mode by sending the corresponding command via the serial interface.
+    def _set_lowlevel_position_control_config(self, config: PositionControl_Config) -> bool:
+        position_control_config = bilbo_position_control_config_t(
+            kp_linear=config.kp_linear,
+            ki_linear=config.ki_linear,
+            kp_angular=config.kp_angular,
+            ki_angular=config.ki_angular,
+            Ts=LOOP_TIME_CONTROL,
+            lookahead_distance=config.lookahead_distance,
+            allow_reverse=config.allow_reverse,
+            backwards_switch_angle=config.backwards_switch_angle,
+            distance_arrival_tolerance=config.distance_arrival_tolerance,
+            angle_arrival_tolerance=config.angle_arrival_tolerance,
+            arrival_time=config.arrival_time,
+            max_speed_forward=config.max_speed_forward,
+            max_speed_turn=config.max_speed_turn,
+        )
 
-        Args:
-            mode (BILBO_Control_Mode_LL): The low-level control mode to set.
-        """
-        assert (isinstance(mode, BILBO_Control_Mode_LL))
-        self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ADDRESS_CONTROL_SET_MODE,
-            data=mode.value,
-            input_type=ctypes.c_uint8
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_POSITION_CONFIG,
+            input_type=bilbo_position_control_config_t,
+            output_type=ctypes.c_bool,
+            data=position_control_config
+        )
+
+        if result is None or not result:
+            self.logger.error("Failed to set position PID config")
+            return False
+
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_tic_config(self, config: TIC_Config) -> bool:
+        tic_config = bilbo_tic_config_t(
+            enabled=config.enabled,
+            Ts=LOOP_TIME_CONTROL,
+            ki=config.ki,
+            max_torque=config.max_torque,
+            theta_limit=config.theta_limit
+        )
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_TIC_CONFIG,
+            input_type=bilbo_tic_config_t,
+            output_type=ctypes.c_bool,
+            data=tic_config
+        )
+        if result is None or not result:
+            self.logger.error("Failed to set TIC config")
+            return False
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_vic_config(self, config: VIC_Config) -> bool:
+        vic_config = bilbo_vic_config_t(
+            enabled=config.enabled,
+            Ts=LOOP_TIME_CONTROL,
+            ki=config.ki,
+            max_torque=config.max_torque,
+            v_limit=config.v_limit
+        )
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_VIC_CONFIG,
+            input_type=bilbo_vic_config_t,
+            output_type=ctypes.c_bool,
+            data=vic_config
+        )
+        if result is None or not result:
+            self.logger.error("Failed to set VIC config")
+            return False
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_max_torque(self, torque: float) -> bool:
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_MAX_TORQUE,
+            input_type=ctypes.c_float,
+            output_type=ctypes.c_bool,
+            data=torque
+        )
+        if result is None or not result:
+            self.logger.error("Failed to set max torque")
+            return False
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _get_lowlevel_control_config(self) -> bilbo_control_config_t | None:
+        raise NotImplementedError("This is probably longer than 128 Bytes. I need to rework this")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_control_mode(self, mode: BILBO_Control_Mode) -> bool:
+        self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_MODE,
+            input_type=ctypes.c_uint8,
+            output_type=None,
+            data=mode.value
+        )
+        # if result is None:
+        #     self.logger.warning("Failed to set control mode")
+        #     return False
+        # if not result:
+        #     self.logger.warning("Failed to set control mode. Return value: false")
+        #     return False
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _get_lowlevel_control_mode(self) -> BILBO_Control_Mode | None:
+        mode = self.communication.serial.readValue(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.READ_MODE,
+            type=ctypes.c_uint8,
+        )
+        if mode is None:
+            self.logger.warning("Failed to read control mode")
+            return None
+        return BILBO_Control_Mode(mode)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_vic_enabled(self, enabled: bool):
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.ENABLE_VIC,
+            input_type=ctypes.c_bool,
+            output_type=ctypes.c_bool,
+            data=enabled
+        )
+        if result is None:
+            self.logger.warning("Failed to set VIC enabled state")
+            return
+        if not result:
+            self.logger.warning("Failed to set VIC enabled state. Return value: false")
+            return
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_tic_enabled(self, enabled: bool):
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.ENABLE_TIC,
+            input_type=ctypes.c_bool,
+            output_type=ctypes.c_bool,
+            data=enabled
+        )
+        if result is None:
+            self.logger.warning("Failed to set TIC enabled state")
+            return
+        if not result:
+            self.logger.warning("Failed to set TIC enabled state. Return value: false")
+            return
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_external_input(self, left: float, right: float):
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_BALANCING_INPUT,
+            input_type=bilbo_control_input_ext_t,
+            data={
+                'u_left': left,
+                'u_right': right
+            },
+            output_type=ctypes.c_bool,
+        )
+        if result is None:
+            self.logger.warning("Failed to set external input")
+            return
+        if not result:
+            self.logger.warning("Failed to set external input. Return value: false")
+            return
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_velocity_command(self, forward: float, turn: float):
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_SPEED_INPUT,
+            input_type=bilbo_velocity_control_command_t,
+            data={
+                'v': forward,
+                'psi_dot': turn
+            },
+            output_type=ctypes.c_bool,
+        )
+        if result is None:
+            self.logger.warning("Failed to set velocity command")
+            return
+
+        if not result:
+            self.logger.warning("Failed to set velocity command. Return value: false")
+            return
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_position_command(self, x: float, y: float, max_speed: float = -1.0, timeout=0.0, id: int = 0):
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_POSITION_COMMAND,
+            input_type=position_command_t,
+            data={
+                'id': id,
+                'position_ref': {
+                    'x_target': x,
+                    'y_target': y,
+                },
+                'max_speed': max_speed,
+                'timeout': timeout
+            },
+            output_type=ctypes.c_bool,
+        )
+
+        if not result:
+            self.logger.warning("Failed to set position command")
+            return
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_heading_command(self, heading: float, max_speed: float = -1.0, timeout=0.0, id: int = 0):
+
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_HEADING_COMMAND,
+            input_type=heading_command_t,
+            data={
+                'id': id,
+                'heading_ref': {
+                    'psi_cmd': heading
+                },
+                'max_angular_speed': max_speed,
+                'timeout': timeout
+            },
+            output_type=ctypes.c_bool,
+        )
+
+        if not result:
+            self.logger.warning("Failed to set heading command")
+            return
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _lowlevel_abort_current_position_command(self):
+        self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.ABORT_CURRENT_POSITION_COMMAND,
+            input_type=None,
+            output_type=None,
         )
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _readControlMode_LL(self):
-        """
-        Placeholder for reading the current low-level control mode.
-
-        Returns:
-            NotImplemented
-        """
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _readControlState_LL(self):
-        """
-        Placeholder for reading the current low-level control state.
-
-        Returns:
-            NotImplemented
-        """
-        ...
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _setMaxWheelSpeed_LL(self, speed: int | float):
-        """
-        Set the maximum wheel speed in the low-level module.
-
-        Args:
-            speed (int or float): The maximum wheel speed.
-        """
-        self._comm.serial.writeValue(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ADDRESS_CONTROL_RW_MAX_WHEEL_SPEED,
+    def _lowlevel_set_max_wheel_speed(self, speed: float):
+        self.communication.serial.writeValue(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.RW_MAX_WHEEL_SPEED,
             value=float(speed),
             type=ctypes.c_float
         )
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _setStateFeedbackGain_LL(self, K) -> None:
-        """
-        Set the state feedback gain in the low-level module.
+    def _set_lowlevel_state_feedback_gain(self, gain: list | np.ndarray):
+        if isinstance(gain, np.ndarray): gain = gain.tolist()
 
-        Args:
-            K (list): List of gain values (must have 8 elements).
-        """
-        assert (isinstance(K, list))
-        assert (len(K) == 8)
-        assert (all(isinstance(elem, (float, int)) for elem in K))
-        self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ADDRESS_CONTROL_SET_K,
-            data=K,
+        assert (isinstance(gain, list))
+        assert (len(gain) == 8)
+        assert (all(isinstance(elem, (float, int)) for elem in gain))
+
+        result = self.communication.serial.executeFunction(
+            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
+            address=TWIPR_ControlAddresses.SET_K,
+            data=gain,
             input_type=ctypes.c_float * 8,  # type: Ignore
-            output_type=None
-        )
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _setVelocityControlPIDForward_LL(self, P: float, I: float, D: float) -> None:
-        """
-        Set the forward velocity PID parameters in the low-level module.
-
-        Args:
-            P (float): Proportional gain.
-            I (float): Integral gain.
-            D (float): Derivative gain.
-        """
-        self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ADDRESS_CONTROL_SET_FORWARD_PID,
-            data=[P, I, D],
-            input_type=ctypes.c_float * 3,  # type: Ignore
-            output_type=None
-        )
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _setVelocityControlPIDTurn_LL(self, P: float, I: float, D: float) -> None:
-        """
-        Set the turn velocity PID parameters in the low-level module.
-
-        Args:
-            P (float): Proportional gain.
-            I (float): Integral gain.
-            D (float): Derivative gain.
-        """
-        self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ADDRESS_CONTROL_SET_TURN_PID,
-            data=[P, I, D],
-            input_type=ctypes.c_float * 3,  # type: Ignore
-            output_type=None
-        )
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _setVelocityControl_LL(self):
-        """
-        Placeholder for setting the complete velocity control.
-
-        Raises:
-            NotImplementedError: This method is not implemented.
-        """
-        raise NotImplementedError
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _setBalancingInput_LL(self, u_left: float, u_right: float):
-        """
-        Set the balancing input in the low-level module.
-
-        Args:
-            u_left (float): Left motor torque.
-            u_right (float): Right motor torque.
-        """
-        assert (isinstance(u_left, (int, float)))
-        assert (isinstance(u_right, (int, float)))
-        data = {
-            'u_left': float(u_left),
-            'u_right': float(u_right)
-        }
-
-        result = self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ADDRESS_CONTROL_SET_BALANCING_INPUT,
-            data=data,
-            input_type=bilbo_control_balancing_input_t,
             output_type=ctypes.c_bool,
-            timeout=1
         )
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _setSpeedInput_LL(self, v: float, psi_dot: float) -> None:
-        """
-        Set the speed input in the low-level module.
-
-        Args:
-            v (float): Forward velocity.
-            psi_dot (float): Turning velocity.
-        """
-        assert (isinstance(v, (int, float)))
-        assert (isinstance(psi_dot, (int, float)))
-        data = {
-            'forward': v,
-            'turn': psi_dot
-        }
-        self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ADDRESS_CONTROL_SET_SPEED_INPUT,
-            data=data,
-            input_type=bilbo_control_speed_input_t
-        )
+        if result is None or not result:
+            self.logger.error("Failed to set state feedback gain")
+            return False
+        return True
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _setDirectInput_LL(self, u_left: float, u_right: float) -> None:
-        """
-        Set direct control input in the low-level module.
+    def _lowlevel_control_event_callback(self, message: BILBO_Control_Event_Message):
+        event = BILBO_Control_Event_Type(message.data['event'])
 
-        Args:
-            u_left (float): Left motor direct input.
-            u_right (float): Right motor direct input.
-        """
-        assert (isinstance(u_left, float))
-        assert (isinstance(u_right, float))
-        data = {
-            'u_left': u_left,
-            'u_right': u_right
-        }
-        self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ADDRESS_CONTROL_SET_DIRECT_INPUT,
-            data=data,
-            input_type=bilbo_control_direct_input_t
-        )
+        self.logger.debug(f"Received control event: {event}. Data: {message.data}")
 
+        match event:
+            case BILBO_Control_Event_Type.ERROR:
+                self.logger.error(f"Error in the LL Control Module: {message.data['error']}")
+            case BILBO_Control_Event_Type.MODE_CHANGED:
+                self._lowlevel_mode_change_event(BILBO_Control_Mode(message.data['mode']))
+            case BILBO_Control_Event_Type.VIC_CHANGED:
+                self._lowlevel_vic_change_event(message.data)
+            case BILBO_Control_Event_Type.TIC_CHANGED:
+                self._lowlevel_tic_change_event(message.data)
+            case BILBO_Control_Event_Type.POSITION_ELEMENT_FINISHED:
+                self._lowlevel_position_element_finished_event(message.data)
+            case BILBO_Control_Event_Type.POSITION_ELEMENT_TIMEOUT:
+                self._lowlevel_position_element_timeout_event(message.data)
+            case _:
+                self.logger.warning(f"Unhandled control event: {event}")
     # ------------------------------------------------------------------------------------------------------------------
-    def _readControlConfig_LL(self) -> dict:
-        """
-        Read the current control configuration from the low-level module.
-
-        Returns:
-            dict: A dictionary containing the low-level control configuration.
-        """
-        return self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_ControlAddresses.ADDRESS_CONTROL_READ_CONFIG,
-            data=None,
-            output_type=bilbo_control_configuration_ll_t
-        )
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _resetExternalInput(self):
-        """
-        Reset all external control inputs to zero.
-        """
-        self.external_input.u_ext = [0, 0]
-        self.external_input.v = [0, 0]
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _updateFromLowLevelSample(self, sample: BILBO_LL_Sample):
-        """
-        Update the internal state based on the latest low-level sample from the STM32 module.
-
-        This method updates both the control status and mode by comparing the sample with the current state.
-
-        Args:
-            sample (BILBO_LL_Sample): The received low-level control sample.
-        """
-        # Update low-level status from sample and check for errors
-        try:
-            status_ll = BILBO_Control_Status_LL(sample.control.status)
-        except ValueError:
-            error_message = f"Received invalid status: {sample.control.status}. Possible mismatch of" \
-                            f"lowlevel firmware and python module."
-            self.logger.error(error_message)
-            error_handler(severity='error', message=error_message)
-            return
-
-        if status_ll is not self.status_ll:
-            if status_ll == BILBO_Control_Status_LL.ERROR:
-                self.logger.error("Error in the LL Control Module")
-        self.status_ll = status_ll
-
-        # Map low-level status to high-level status
-        status = None
-        if status_ll == BILBO_Control_Status_LL.ERROR:
-            status = BILBO_Control_Status.ERROR
-        elif status_ll == BILBO_Control_Status_LL.RUNNING:
-            status = BILBO_Control_Status.NORMAL
-
-        # If the status changed, call the status change callback
-        if status != self.status:
-            self.callbacks.status_change.call(status, forced_change=True)
-
-        # Update low-level mode from sample
-        mode_ll = BILBO_Control_Mode_LL(sample.control.mode)
-        self.mode_ll = mode_ll
-
-        # Map low-level mode to high-level mode
-        mode = None
-        if mode_ll == BILBO_Control_Mode_LL.OFF:
-            mode = BILBO_Control_Mode.OFF
-        elif mode_ll == BILBO_Control_Mode_LL.DIRECT:
-            mode = BILBO_Control_Mode.DIRECT
-        elif mode_ll == BILBO_Control_Mode_LL.BALANCING:
-            mode = BILBO_Control_Mode.BALANCING
-        elif mode_ll == BILBO_Control_Mode_LL.VELOCITY:
-            mode = BILBO_Control_Mode.VELOCITY
-        else:
-            return
-
-        # self.mode = mode
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _updateExternalInput(self, external_input: BILBO_Control_Input):
-        """
-        Update the external input based on the current control mode.
-
-        Args:
-            external_input (BILBO_Control_Input): The current external input.
-
-        Returns:
-            BILBO_Control_Input: The updated control input.
-        """
-        control_input = BILBO_Control_Input()
-
-        # If external input is disabled or mode is OFF, return a zeroed input
-        if not self.enable_external_input:
-            return control_input
-
-        if self.mode == BILBO_Control_Mode.OFF:
-            return control_input
-        elif self.mode == BILBO_Control_Mode.DIRECT:
-            raise NotImplementedError("Direct control input not yet implemented")
-        elif self.mode == BILBO_Control_Mode.BALANCING:
-            control_input.u_ext = [self.external_input.u_ext[0], self.external_input.u_ext[1]]
-        elif self.mode == BILBO_Control_Mode.VELOCITY:
-            control_input.v = [self.external_input.v[0], self.external_input.v[1]]
-
-        return control_input
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _setInput(self, input: BILBO_Control_Input):
-        """
-        Set the input to the low-level module based on the current control mode.
-
-        Args:
-            input (BILBO_Control_Input): The input to be applied.
-        """
-        if self.mode == BILBO_Control_Mode.OFF:
-            return
-
-        elif self.mode == BILBO_Control_Mode.DIRECT:
-            # self._setDirectInput_LL(input.direct.u_left, input.direct.u_right)
-            self.logger.error("Direct control is not implemented yet")
-        elif self.mode == BILBO_Control_Mode.BALANCING:
-            self._setBalancingInput_LL(input.u_ext[0], input.u_ext[1])
-        elif self.mode == BILBO_Control_Mode.VELOCITY:
-            self.logger.error("Velocity control is not implemented yet")
-            # self._setSpeedInput_LL(input.velocity.forward, input.velocity.turn)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _ll_control_event_callback(self, message: BILBO_Control_Event_Message, *args, **kwargs):
-
-        event = BILBO_Control_Event_Type(message.data['event'])  # type: ignore
-
-        if event == BILBO_Control_Event_Type.ERROR:
-            self.logger.error(f"Error in the LL Control Module: {message.data['error']}")  # type: ignore
-        elif event == BILBO_Control_Event_Type.MODE_CHANGED:
-            self._ll_mode_change_callback(BILBO_Control_Mode_LL(message.data['mode']))  # type: ignore
-        elif event == BILBO_Control_Event_Type.CONFIGURATION_CHANGED:
-            self._ll_configuration_change_callback(message.data['config'])  # type: ignore
-        elif event == BILBO_Control_Event_Type.VIC_CHANGED:
-            self._ll_vic_change_callback(message.data['config'])  # type: ignore
-        elif event == BILBO_Control_Event_Type.TIC_CHANGED:
-            self._ll_tic_change_callback(message.data['config'])  # type: ignore

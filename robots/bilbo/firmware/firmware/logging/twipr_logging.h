@@ -10,7 +10,7 @@
 
 #include "twipr_estimation.h"
 #include "twipr_sensors.h"
-#include "twipr_control.h"
+#include "bilbo_control.h"
 #include "bilbo_sequencer.h"
 #include "firmware_defs.h"
 #include "bilbo_drive.h"
@@ -28,7 +28,7 @@ typedef struct twipr_logging_sample_t {
 	uint32_t tick;
 	twipr_logging_general_t general;
 	twipr_logging_error_t errors;
-	twipr_logging_control_t control;
+	bilbo_control_data_t control;
 	twipr_logging_estimation_t estimation;
 	twipr_sensors_data_t sensors;
 	twipr_sequencer_sample_t sequence;
@@ -37,7 +37,7 @@ typedef struct twipr_logging_sample_t {
 
 typedef struct twipr_logging_config_t {
 	TWIPR_Firmware *firmware;
-	TWIPR_ControlManager *control;
+	BILBO_Control *control;
 	TWIPR_Estimation *estimation;
 	TWIPR_Sensors *sensors;
 	BILBO_Sequencer *sequencer;

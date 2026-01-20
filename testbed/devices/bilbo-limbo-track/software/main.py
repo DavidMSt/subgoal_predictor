@@ -10,8 +10,7 @@ def main():
     height_indicator.start()
 
     # Start the display
-    display = TestbedDisplay(
-    )
+    display = TestbedDisplay()
     display.init()
     display.start()
 

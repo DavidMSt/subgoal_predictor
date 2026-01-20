@@ -363,7 +363,7 @@ class BILBOLab_Wifi_Interface:
                 response_message.data = {'output': output,
                                          'error': error,
                                          'success': success}
-                print(f"Sending response for function {function_name}: {response_message.request_id}")
+                # print(f"Sending response for function {function_name}: {response_message.request_id}")
                 self._send(response_message)
 
         if self.commands[function_name].execute_in_thread:

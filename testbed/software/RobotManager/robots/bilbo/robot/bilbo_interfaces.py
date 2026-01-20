@@ -270,6 +270,18 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                    default=None)
                                ], )
 
+        velocity_command = Command(name='vel',
+                                   function=self.control.set_velocity_command,
+                                   allow_positionals=True,
+                                   arguments=[
+                                       CommandArgument(name='v',
+                                                       type=float),
+                                       CommandArgument(name='psi_dot',
+                                                       short_name='p',
+                                                       type=float, )
+                                   ],
+                                   )
+
         stop_command = Command(name='stop',
                                function=Callback(
                                    function=self.control.setControlMode,
@@ -283,10 +295,6 @@ class BILBO_CLI_CommandSet(CommandSet):
                                  description='Checks if the robot is stable',
                                  function=self._check_stable,
                                  )
-
-        read_state_command = Command(name='read',
-                                     function=self.control.getControlState,
-                                     description='Reads the current control state and mode', )
 
         test_communication = Command(name='testComm',
                                      function=Callback(
@@ -303,72 +311,79 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                          description='Number of iterations to test')
                                      ])
 
-        statefeedback_command = Command(name='sfg',
-                                        function=self.control.setStateFeedbackGain,
-                                        allow_positionals=True,
-                                        arguments=[
-                                            CommandArgument(name='gain',
-                                                            type=list[float],
-                                                            array_size=8,
-                                                            short_name='g',
-                                                            description='State feedback gain',
-                                                            )
-                                        ], )
+        # --- CONTROL ----
 
-        forward_pid_command = Command(name='fpid',
-                                      function=self.control.setForwardPID,
-                                      allow_positionals=True,
-                                      arguments=[
-                                          CommandArgument(name='p',
-                                                          type=float,
-                                                          short_name='p',
-                                                          description='Forward PID P',
-                                                          ),
-                                          CommandArgument(name='i',
-                                                          type=float,
-                                                          short_name='i',
-                                                          description='Forward PID I',
-                                                          ),
-                                          CommandArgument(name='d',
-                                                          type=float,
-                                                          short_name='d',
-                                                          description='Forward PID D',
-                                                          ),
-                                      ], )
+        set_control_mode_command = Command(name='mode',
+                                           function=self.control.setControlMode,
+                                           allow_positionals=True,
+                                           arguments=[
+                                               CommandArgument(name='mode', type=int, short_name='m'),
+                                           ], )
 
-        turn_pid_command = Command(name='tpid',
-                                   allow_positionals=True,
-                                   function=self.control.setTurnPID,
-                                   arguments=[
-                                       CommandArgument(name='p',
-                                                       type=float,
-                                                       short_name='p',
-                                                       description='Turn PID P',
-                                                       ),
-                                       CommandArgument(name='i',
-                                                       type=float,
-                                                       short_name='i',
-                                                       description='Turn PID I',
-                                                       ),
-                                       CommandArgument(name='d',
-                                                       type=float,
-                                                       short_name='d',
-                                                       description='Turn PID D',
-                                                       ),
-                                   ])
-
-        read_control_config_command = Command(name='read',
-                                              function=self.control.readControlConfiguration,
-                                              description='Reads the current control configuration',
+        get_velocity_config_command = Command(name='getVelConfig',
+                                              function=self._read_velocity_config,
+                                              description='Reads the velocity configuration from the robot',
                                               arguments=[])
 
+        set_velocity_turn_pid_command = Command(name='setVelTurnPID',
+                                                function=self.control.set_turn_pid,
+                                                arguments=[
+                                                    CommandArgument(name='P', type=float, optional=True, default=None),
+                                                    CommandArgument(name='I', type=float, optional=True, default=None),
+                                                    CommandArgument(name='D', type=float, optional=True, default=None),
+                                                ],
+                                                allow_positionals=False)
+
+        set_velocity_forward_pid_command = Command(name='setVelForwardPID',
+                                                   function=self.control.set_forward_pid,
+                                                   arguments=[
+                                                       CommandArgument(name='P', type=float, optional=True,
+                                                                       default=None),
+                                                       CommandArgument(name='I', type=float, optional=True,
+                                                                       default=None),
+                                                       CommandArgument(name='D', type=float, optional=True,
+                                                                       default=None),
+                                                   ],
+                                                   allow_positionals=False
+                                                   )
+
+        get_position_control_config_command = Command(
+            name='getPosConfig',
+            function=self._read_position_control_config,
+            description='Reads the position control configuration from the robot',
+            arguments=[]
+        )
+
+        set_position_control_forward_pi_command = Command(
+            name='setPosForwardPI',
+            function=self.control.set_position_forward_pi,
+            arguments=[
+                CommandArgument(name='P', type=float, optional=True, default=None),
+                CommandArgument(name='I', type=float, optional=True, default=None),
+            ],
+            allow_positionals=False
+        )
+        set_position_control_turn_pi_command = Command(
+            name='setPosTurnPI',
+            function=self.control.set_position_turn_pi,
+            arguments=[
+                CommandArgument(name='P', type=float, optional=True, default=None),
+                CommandArgument(name='I', type=float, optional=True, default=None),
+            ],
+            allow_positionals=False
+        )
+
         control_command_set = CommandSet(name='control', commands=[
-            statefeedback_command,
-            forward_pid_command,
-            turn_pid_command,
-            read_control_config_command,
+            set_control_mode_command,
+            get_velocity_config_command,
+            set_velocity_turn_pid_command,
+            set_velocity_forward_pid_command,
+            # get_position_control_config_command,
+            # set_position_control_forward_pi_command,
+            # set_position_control_turn_pi_command,
         ])
 
+        # --- EXPERIMENT SET ---
         test_trajectory_command = Command(name='traj',
                                           allow_positionals=True,
                                           function=self.experiments.run_random_trajectory,
@@ -419,25 +434,242 @@ class BILBO_CLI_CommandSet(CommandSet):
                                        execute_in_thread=True
                                        )
 
+        plot_last_experiment_command = Command(name='plot',
+                                               function=self.experiments.plot_last_experiment)
+
         experiment_command_set = CommandSet(name='experiment',
                                             commands=[test_trajectory_command,
+                                                      plot_last_experiment_command,
                                                       test_trajectory_experiment_command,
                                                       dilc_example_command,
                                                       test_experiment_command])
 
+        navigation_command_set = CommandSet(name='navigation')
+
+        # add_move_command = Command(name='add_move',
+        #                            function=self.control.add_move,
+        #                            allow_positionals=True,
+        #                            arguments=[
+        #                                CommandArgument(name='x', type=float, short_name='x'),
+        #                                CommandArgument(name='y', type=float, short_name='y'),
+        #                                CommandArgument(name='timeout',
+        #                                                short_name='t',
+        #                                                type=float,
+        #                                                optional=True,
+        #                                                default=None),
+        #                            ])
+        #
+        # add_turn_heading_command = Command(name='add_turn_heading',
+        #                                    function=self.control.add_turn_heading,
+        #                                    allow_positionals=True,
+        #                                    arguments=[
+        #                                        CommandArgument(name='psi', short_name='p', type=float),
+        #                                        CommandArgument(name='timeout', short_name='t', type=float,
+        #                                                        optional=True,
+        #                                                        default=None),
+        #                                    ])
+        #
+        # add_wait_command = Command(name='add_wait',
+        #                            function=self.control.add_wait,
+        #                            arguments=[
+        #                                CommandArgument('duration', type=float, short_name='d')
+        #                            ])
+        #
+        # start_navigation_command = Command(name='start',
+        #                                    function=self.control.start_navigation,
+        #                                    description='Starts the navigation sequence',
+        #                                    arguments=[])
+        #
+        # clear_navigation_command = Command(name='clear_nav',
+        #                                    function=self.control.clear_navigation,
+        #                                    description='Clears the navigation sequence', )
+
+        move_to_command = Command(name='moveTo',
+                                  function=self.control.move_to,
+                                  allow_positionals=True,
+                                  arguments=[
+                                      CommandArgument(name='x', type=float, short_name='x'),
+                                      CommandArgument(name='y', type=float, short_name='y'),
+                                      CommandArgument(
+                                          name='max_speed',
+                                          short_name='s',
+                                          type=float,
+                                          optional=True,
+                                          default=None
+                                      ),
+                                      CommandArgument(name='timeout',
+                                                      short_name='t',
+                                                      type=float,
+                                                      optional=True,
+                                                      default=None),
+                                  ])
+
+        turn_to_command = Command(name='turnTo',
+                                  function=self.control.turn_to,
+                                  allow_positionals=True,
+                                  arguments=[
+                                      CommandArgument(name='psi', short_name='p', type=float),
+                                      CommandArgument(name='max_speed',
+                                                      short_name='s',
+                                                      type=float,
+                                                      optional=True,
+                                                      default=None
+                                                      ),
+                                      CommandArgument(name='timeout',
+                                                      short_name='t',
+                                                      type=float,
+                                                      optional=True,
+                                                      default=None),
+                                  ])
+
+        position_mode_command = Command(name='mode',
+                                        function=Callback(
+                                            function=self.control.setControlMode,
+                                            inputs={'mode': BILBO_Control_Mode.POSITION},
+                                        ),
+                                        arguments=[]
+                                        )
+
+        navigation_command_set.addCommand(get_position_control_config_command)
+        navigation_command_set.addCommand(set_position_control_forward_pi_command)
+        navigation_command_set.addCommand(set_position_control_turn_pi_command)
+        navigation_command_set.addCommand(position_mode_command)
+        navigation_command_set.addCommand(move_to_command)
+        navigation_command_set.addCommand(turn_to_command)
+
+        # navigation_command_set.addCommand(add_move_command)
+        # navigation_command_set.addCommand(add_turn_heading_command)
+        # navigation_command_set.addCommand(add_wait_command)
+        # navigation_command_set.addCommand(start_navigation_command)
+        # navigation_command_set.addCommand(clear_navigation_command)
+        # navigation_command_set.addCommand(position_mode_command)
+
         super().__init__(name=f"{self.core.id}", commands=[beep_command,
                                                            speak_command,
                                                            mode_command,
+                                                           velocity_command,
                                                            stop_command,
                                                            stable_command,
-                                                           read_state_command,
                                                            test_communication],
 
-                         children=[control_command_set, experiment_command_set])
+                         children=[control_command_set, experiment_command_set, navigation_command_set])
 
     def _check_stable(self):
-        stable = self.core.is_upright_and_static()
-        if stable:
-            self.core.logger.info("Robot is stable.")
+        self.core.logger.warning("Stable check is currently not implemented")
+        # stable = self.core.is_upright_and_static()
+        # if stable:
+        #     self.core.logger.info("Robot is stable.")
+        # else:
+        #     self.core.logger.warning("Robot is not stable.")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _read_velocity_config(self):
+        cfg = self.control.get_velocity_control_config()
+
+        def log_velocity_channel(name: str, vc):
+            pid = vc.pid
+            ff = vc.feedforward
+
+            self.core.logger.info(f"  {name} controller:")
+
+            # --- PID ---
+            self.core.logger.info("    PID:")
+            self.core.logger.info(
+                f"      Kp={pid.Kp}, Ki={pid.Ki}, Kd={pid.Kd}, Ts={pid.Ts}"
+            )
+            self.core.logger.info(
+                f"      limits: "
+                f"i={pid.enable_i_limit}({pid.i_term_limit}), "
+                f"input={pid.enable_input_limit}({pid.input_limit}), "
+                f"output={pid.enable_output_limit}({pid.output_limit})"
+            )
+            self.core.logger.info(
+                f"      filters: "
+                f"d_filter={pid.enable_d_filter}(Td={pid.Td_filter}), "
+                f"rate_limit={pid.enable_rate_limit}({pid.rate_limit}), "
+                f"sp_rate_limit={pid.enable_setpoint_rate_limit}({pid.setpoint_rate_limit})"
+            )
+
+            # --- Feedforward ---
+            self.core.logger.info("    Feedforward:")
+            self.core.logger.info(
+                f"      gains: Kv={ff.Kv}, Ka={ff.Ka}, Kc={ff.Kc}"
+            )
+            self.core.logger.info(
+                f"      vref slew: "
+                f"enabled={ff.enable_vref_slew}({ff.vref_slew_rate})"
+            )
+            self.core.logger.info(
+                f"      accel filter: "
+                f"enabled={ff.enable_a_filter}(Ta={ff.Ta_filter})"
+            )
+            self.core.logger.info(
+                f"      stiction: "
+                f"enabled={ff.enable_stiction}(v0={ff.v0_stiction})"
+            )
+            self.core.logger.info(
+                f"      output limits: "
+                f"limit={ff.enable_output_limit}({ff.output_limit}), "
+                f"slew={ff.enable_output_slew}({ff.output_slew_rate})"
+            )
+
+        self.core.logger.info("Velocity Control Configuration:")
+
+        log_velocity_channel("Linear velocity (v)", cfg.v)
+        log_velocity_channel("Angular velocity (psidot)", cfg.psidot)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _read_position_control_config(self):
+        cfg = self.control.get_position_control_config()
+        if cfg is None:
+            return
+
+        self.core.logger.info("Position Control Configuration:")
+
+        # --- PI gains ---
+        self.core.logger.info("  PI gains:")
+        self.core.logger.info(f"    linear:  Kp={cfg.kp_linear}, Ki={cfg.ki_linear}")
+        self.core.logger.info(f"    angular: Kp={cfg.kp_angular}, Ki={cfg.ki_angular}")
+
+        # --- Path / behavior ---
+        self.core.logger.info("  Behavior:")
+        self.core.logger.info(f"    lookahead_distance={cfg.lookahead_distance} m")
+        self.core.logger.info(f"    allow_reverse={bool(cfg.allow_reverse)} ({cfg.allow_reverse})")
+
+        # backwards_switch_angle is stored in rad in the dataclass
+        try:
+            bsa_deg = math.degrees(cfg.backwards_switch_angle)
+        except Exception:
+            bsa_deg = None
+
+        if bsa_deg is None:
+            self.core.logger.info(f"    backwards_switch_angle={cfg.backwards_switch_angle} rad")
         else:
-            self.core.logger.warning("Robot is not stable.")
+            self.core.logger.info(
+                f"    backwards_switch_angle={cfg.backwards_switch_angle} rad ({bsa_deg:.2f} deg)"
+            )
+
+        # --- Arrival criteria ---
+        self.core.logger.info("  Arrival criteria:")
+        self.core.logger.info(
+            f"    distance_arrival_tolerance={cfg.distance_arrival_tolerance} m"
+        )
+
+        try:
+            angle_tol_deg = math.degrees(cfg.angle_arrival_tolerance)
+        except Exception:
+            angle_tol_deg = None
+
+        if angle_tol_deg is None:
+            self.core.logger.info(f"    angle_arrival_tolerance={cfg.angle_arrival_tolerance} rad")
+        else:
+            self.core.logger.info(
+                f"    angle_arrival_tolerance={cfg.angle_arrival_tolerance} rad ({angle_tol_deg:.2f} deg)"
+            )
+
+        self.core.logger.info(f"    arrival_time={cfg.arrival_time} s")
+
+        # --- Limits ---
+        self.core.logger.info("  Limits:")
+        self.core.logger.info(f"    max_speed_forward={cfg.max_speed_forward} m/s")
+        self.core.logger.info(f"    max_speed_turn={cfg.max_speed_turn} rad/s")

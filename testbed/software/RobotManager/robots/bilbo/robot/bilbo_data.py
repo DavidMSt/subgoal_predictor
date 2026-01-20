@@ -5,7 +5,8 @@ import math
 import dacite
 from dacite import from_dict
 
-from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
+from core.utils.dataclass_utils import from_dict_auto
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_Control_Status, BILBO_Control_Inputs
 
 
 @dataclasses.dataclass
@@ -105,11 +106,66 @@ class BILBO_LL_Control_Data:
 
 
 @dataclasses.dataclass
-class BILBO_LL_Sample_Control:
-    status: int = 0
+class bilbo_position_command:
+    x_target: float = 0.0
+    y_target: float = 0.0
+    psi_target: float = 0.0
+
+
+@dataclasses.dataclass
+class bilbo_position_control_output:
+    u_l: float = 0.0
+    u_r: float = 0.0
+
+
+@dataclasses.dataclass
+class bilbo_velocity_control_command:
+    v: float = 0.0
+    psi_dot: float = 0.0
+
+
+@dataclasses.dataclass
+class bilbo_velocity_control_output:
+    u_l: float = 0.0
+    u_r: float = 0.0
+
+
+@dataclasses.dataclass
+class bilbo_control_input_ext:
+    u_left: float = 0.0
+    u_right: float = 0.0
+
+
+@dataclasses.dataclass
+class twipr_balancing_control_output:
+    u_1: float = 0.0
+    u_2: float = 0.0
+
+
+@dataclasses.dataclass
+class bilbo_control_output:
+    u_left: float = 0.0
+    u_right: float = 0.0
+
+
+@dataclasses.dataclass
+class bilbo_ll_control_data:
     mode: int = 0
-    external_input: BILBO_LL_Control_External_Input = dataclasses.field(default_factory=BILBO_LL_Control_External_Input)
-    data: BILBO_LL_Control_Data = dataclasses.field(default_factory=BILBO_LL_Control_Data)
+    status: int = 0
+
+    vic_enabled: int = 0
+    tic_enabled: int = 0
+
+    position_command: bilbo_position_command = dataclasses.field(default_factory=bilbo_position_command)
+    position_output: bilbo_position_control_output = dataclasses.field(default_factory=bilbo_position_control_output)
+
+    velocity_command: bilbo_velocity_control_command = dataclasses.field(default_factory=bilbo_velocity_control_command)
+    velocity_output: bilbo_velocity_control_output = dataclasses.field(default_factory=bilbo_velocity_control_output)
+
+    input_ext: bilbo_control_input_ext = dataclasses.field(default_factory=bilbo_control_input_ext)
+    balancing_output: twipr_balancing_control_output = dataclasses.field(default_factory=twipr_balancing_control_output)
+
+    output: bilbo_control_output = dataclasses.field(default_factory=bilbo_control_output)
 
 
 @dataclasses.dataclass
@@ -134,7 +190,7 @@ class BILBO_LL_Sample_Debug:
 class BILBO_LL_Sample:
     general: BILBO_LL_Sample_General = dataclasses.field(default_factory=BILBO_LL_Sample_General)
     errors: BILBO_LL_Sample_Errors = dataclasses.field(default_factory=BILBO_LL_Sample_Errors)
-    control: BILBO_LL_Sample_Control = dataclasses.field(default_factory=BILBO_LL_Sample_Control)
+    control: bilbo_ll_control_data = dataclasses.field(default_factory=bilbo_ll_control_data)
     estimation: BILBO_LL_Sample_Estimation = dataclasses.field(default_factory=BILBO_LL_Sample_Estimation)
     sensors: BILBO_LL_Sensor_Data = dataclasses.field(default_factory=BILBO_LL_Sensor_Data)
     sequence: BILBO_LL_Sample_Sequence = dataclasses.field(default_factory=BILBO_LL_Sample_Sequence)
@@ -143,14 +199,14 @@ class BILBO_LL_Sample:
 
 @dataclasses.dataclass
 class BILBO_Sample_General:
-    id: str = ''
     status: str = ''
-    configuration: str = ''
     time: float = 0.0
     time_global: float = 0.0
     tick: int = 0
-    sample_time: float = 0.0
-    sample_time_ll: float = 0.0
+    connection_strength: float = 0.0
+    internet_connected: bool = False
+    timecode: str = '00:00:00:00'
+    timecode_fps: float = 0.0
 
 
 class TWIPR_Control_Status(enum.IntEnum):
@@ -207,6 +263,7 @@ class BILBO_DynamicState:
     psi: float = 0.0
     psi_dot: float = 0.0
 
+
 @dataclasses.dataclass
 class BILBO_ConfigurationState:
     x: float = 0.0
@@ -226,6 +283,8 @@ class TWIPR_Estimation_Sample:
     status: TWIPR_Estimation_Status = TWIPR_Estimation_Status.ERROR
     state: BILBO_DynamicState = dataclasses.field(default_factory=BILBO_DynamicState)
     state_optitrack: BILBO_ConfigurationState | None = dataclasses.field(default_factory=BILBO_ConfigurationState)
+    static: bool = False
+    is_dead_reckoning: bool = True
 
 
 class TWIPR_Drive_Status(enum.IntEnum):
@@ -279,29 +338,49 @@ class TWIPR_Sensors_Distance:
     back: float = 0
 
 
-@dataclasses.dataclass
-class TWIPR_Sensors_Sample:
+@dataclasses.dataclass(frozen=True)
+class BILBO_Sensors_Sample:
     imu: TWIPR_Sensors_IMU = dataclasses.field(default_factory=TWIPR_Sensors_IMU)
     power: TWIPR_Sensors_Power = dataclasses.field(default_factory=TWIPR_Sensors_Power)
-    drive: TWIPR_Sensors_Drive = dataclasses.field(default_factory=TWIPR_Sensors_Drive)
-    distance: TWIPR_Sensors_Distance = dataclasses.field(default_factory=TWIPR_Sensors_Distance)
+
+
+@dataclasses.dataclass(frozen=True)
+class BILBO_Control_Sample:
+    status: BILBO_Control_Status = dataclasses.field(default=BILBO_Control_Status(BILBO_Control_Status.NORMAL))
+    mode: BILBO_Control_Mode = dataclasses.field(default=BILBO_Control_Mode(BILBO_Control_Mode.OFF))
+    input: BILBO_Control_Inputs = dataclasses.field(default_factory=BILBO_Control_Inputs)
+    tic_enabled: bool = False
+    vic_enabled: bool = False
+    input_enabled: bool = False
+
+
+@dataclasses.dataclass(kw_only=True, frozen=True)
+class ExperimentSample:
+    id: str = ""
+    tick: int = -1
+    actions: list[str] = dataclasses.field(default_factory=lambda: [""])
 
 
 @dataclasses.dataclass
-class BILBO_Sample_Connection:
-    strength: float = 0.0
-    internet: bool = False
+class BILBO_ExperimentHandler_Sample:
+    status: str = ""
+    markers_json: str = ''
+    experiment: ExperimentSample = dataclasses.field(default_factory=ExperimentSample)
+    experiment_id: str = ""
+    trajectory_id: str = ""
 
 
-@dataclasses.dataclass(frozen=False)
+@dataclasses.dataclass
 class BILBO_Sample:
+    tick: int = 0
+    time: float = 0.0
     general: BILBO_Sample_General = dataclasses.field(default_factory=BILBO_Sample_General)
-    connection: BILBO_Sample_Connection = dataclasses.field(default_factory=BILBO_Sample_Connection)
-    control: TWIPR_Control_Sample = dataclasses.field(default_factory=TWIPR_Control_Sample)
+    control: BILBO_Control_Sample = dataclasses.field(default_factory=BILBO_Control_Sample)
     estimation: TWIPR_Estimation_Sample = dataclasses.field(default_factory=TWIPR_Estimation_Sample)
     drive: TWIPR_Drive_Sample = dataclasses.field(default_factory=TWIPR_Drive_Sample)
-    sensors: TWIPR_Sensors_Sample = dataclasses.field(default_factory=TWIPR_Sensors_Sample)
+    sensors: BILBO_Sensors_Sample = dataclasses.field(default_factory=BILBO_Sensors_Sample)
     lowlevel: BILBO_LL_Sample = dataclasses.field(default_factory=BILBO_LL_Sample)
+    experiment: BILBO_ExperimentHandler_Sample = dataclasses.field(default_factory=BILBO_ExperimentHandler_Sample)
 
 
 type_hooks = {
@@ -317,7 +396,7 @@ type_hooks = {
 
 
 def bilboSampleFromDict(dict) -> BILBO_Sample:
-    sample = from_dict(data_class=BILBO_Sample, data=dict, config=dacite.Config(type_hooks=type_hooks))
+    sample = from_dict_auto(BILBO_Sample, dict)
     return sample
 
 

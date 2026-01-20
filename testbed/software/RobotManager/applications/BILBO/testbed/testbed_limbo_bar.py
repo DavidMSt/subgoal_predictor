@@ -4,6 +4,7 @@ from typing import Iterable, List, Sequence, Tuple, Union, Optional
 
 from core.utils.exit import register_exit_callback
 from core.utils.websockets import WebsocketClient
+from core.utils.network.network import resolveHostname
 
 WEBSOCKET_PORT = 7777
 DEFAULT_HOST = "display.lan"
@@ -82,7 +83,11 @@ class TestbedLimboBar:
             port: int = WEBSOCKET_PORT,
             max_brightness: int = DEFAULT_MAX_BRIGHTNESS
     ):
-        self.client = WebsocketClient(host, port)
+
+        host_ip = resolveHostname(host)
+        print(host_ip)
+
+        self.client = WebsocketClient(host_ip, port)
         self.client.callbacks.connected.register(self._websocket_connected_callback)
         self.client.callbacks.disconnected.register(self._websocket_disconnected_callback)
 

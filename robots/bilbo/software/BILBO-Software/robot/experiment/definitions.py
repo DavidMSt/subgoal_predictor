@@ -12,7 +12,7 @@ from core.utils.files import file_exists
 from core.utils.json_utils import writeJSON, readJSON
 from robot.bilbo_common import BILBO_Config
 from robot.bilbo_definitions import BILBO_DynamicState
-from robot.control.bilbo_control_data import BILBO_Control_Mode, BILBO_ControlConfig
+from robot.control.bilbo_control_definitions import BILBO_Control_Mode, BILBO_ControlConfig
 from robot.lowlevel.stm32_general import BILBO_CONTROL_DT
 
 

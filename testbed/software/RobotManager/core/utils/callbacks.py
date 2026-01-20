@@ -51,7 +51,6 @@ def _type_matches(value, expected_type) -> bool:
         return True
 
 
-
 class Callback:
     inputs: dict
     lambdas: dict
@@ -78,6 +77,13 @@ class Callback:
         self.discard_inputs = discard_inputs
         self.once = once
         self.container = None
+
+        # Route attached kwargs:
+        for k, v in kwargs.items():
+            if callable(v):
+                self.lambdas[k] = v
+            else:
+                self.inputs[k] = v
 
     # ------------------------------------------------------------------------------------------------------------------
     def __call__(self, *args, **kwargs):
@@ -371,10 +377,10 @@ class CallbacksA(CallbackGroup):
 
 
 if __name__ == "__main__":
-
     # Example using input specs & return type checks ----------------
     class SubscriberMatch:  # minimal stub for the demo
         ...
+
 
     @callback_definition
     class RobotCallbacks:
@@ -384,8 +390,10 @@ if __name__ == "__main__":
             returns=None
         )
 
+
     def callback_function(data: float, match=None):
         print("Callback function called:", data)
+
 
     # Register a callback with a typed spec
     robot_cb = RobotCallbacks()

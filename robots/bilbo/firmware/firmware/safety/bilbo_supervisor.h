@@ -10,7 +10,7 @@
 
 #include "core.h"
 #include "firmware_core.h"
-#include "twipr_control.h"
+#include "bilbo_control.h"
 #include "twipr_communication.h"
 #include "bilbo_drive.h"
 
@@ -35,7 +35,7 @@ typedef struct twipr_supervisor_controller_config_t {
 typedef struct twipr_supervisor_config_t {
 	TWIPR_Estimation *estimation;
 	BILBO_Drive *drive;
-	TWIPR_ControlManager *control;
+	BILBO_Control *control;
 	TWIPR_CommunicationManager *communication;
 	core_hardware_Button *off_button;
 	float max_wheel_speed;

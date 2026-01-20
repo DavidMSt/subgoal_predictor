@@ -73,6 +73,8 @@ class BILBO_Common:
     config: BILBO_Config
     testbed_config: BILBO_TestbedConfig
 
+    tracker_connected: bool = False
+
     # === INIT =========================================================================================================
     def __init__(self):
         self.interaction_events = BILBO_Common_Interaction_Events()
@@ -104,6 +106,10 @@ class BILBO_Common:
     # === METHODS ======================================================================================================
     def get_timecode(self) -> Timecode | None:
         return self.timecode_listener.get_timecode()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def is_tracker_connected(self) -> bool:
+        return self.tracker_connected
 
     # ------------------------------------------------------------------------------------------------------------------
     def stop(self):
@@ -160,6 +166,7 @@ class BILBO_Common:
             'time_global': time.monotonic(),
             'tick': self.tick,
             'connection_strength': self.connection_strength,
+            'internet_connected': self.internet_connected,
             'timecode': current_timecode.to_string() if current_timecode is not None else '00:00:00:00',
             'timecode_fps': current_timecode.fps if current_timecode is not None else 0
         }

@@ -37,6 +37,51 @@ _EXIT_CALLBACK_TIMEOUT = 3
 DEBUG_OUTPUTS = False
 
 
+def exit_program(exit_code: int = 0, *, force: bool = True) -> None:
+    """
+    Exit the program *cleanly* by running registered exit callbacks once,
+    then terminating the process.
+
+    Args:
+        exit_code: Process exit code.
+        force: If True, always end with os._exit(exit_code) to ensure no
+               non-daemon threads keep the process alive. If False, use
+               sys.exit(exit_code) after callbacks (lets Python unwind).
+
+    Notes:
+        - This is safe to call from any thread.
+        - If called from the main thread, we pass a real frame.
+        - If called from a non-main thread, we pass frame=None.
+    """
+    global _global_exit_called
+
+    # Ensure only one caller actually performs shutdown.
+    with _global_exit_callbacks_lock:
+        if _global_exit_called:
+            # Another thread/signal already initiated shutdown.
+            if force:
+                os._exit(exit_code)
+            raise SystemExit(exit_code)
+        _global_exit_called = True
+
+    # Provide a best-effort "frame" when called from main thread.
+    frame = None
+    if threading.current_thread() == threading.main_thread():
+        try:
+            frame = sys._getframe(1)
+        except Exception:
+            frame = None
+
+    # Run callbacks.
+    try:
+        _execute_exit_callbacks(signum=None, frame=frame)
+    finally:
+        # End the process.
+        if force:
+            os._exit(exit_code)
+        raise SystemExit(exit_code)
+
+
 def register_exit_callback(callback, priority=1):
     """
     Register an exit callback to be executed when the global exit handler is triggered.

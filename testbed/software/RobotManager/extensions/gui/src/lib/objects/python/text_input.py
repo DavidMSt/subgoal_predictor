@@ -107,6 +107,8 @@ class InputWidget(Widget):
         if send_update:
             self.updateConfig()
 
+        self.callbacks.value_changed.call(self._value)
+
         return True, None
 
     # ------------------------------------------------------------------------------------------------------------------

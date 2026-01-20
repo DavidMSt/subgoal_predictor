@@ -131,7 +131,7 @@ void TWIPR_Supervisor::checkMotors() {
 void TWIPR_Supervisor::checkMotorSpeed() {
 
 
-	if (this->config.control->mode == TWIPR_CONTROL_MODE_OFF) {
+	if (this->config.control->mode == bilbo_control_mode_t::OFF) {
 		return;
 	}
 
@@ -151,7 +151,7 @@ void TWIPR_Supervisor::checkMotorSpeed() {
 /* ============================================================================= */
 void TWIPR_Supervisor::checkButton() {
 
-	if (this->config.off_button->check() == 0 && this->config.control->mode != TWIPR_CONTROL_MODE_OFF) {
+	if (this->config.off_button->check() == 0 && this->config.control->mode != bilbo_control_mode_t::OFF) {
 
 		this->config.control->stop();
 		setError(BILBO_ERROR_WARNING, BILBO_WARNING_MANUAL_STOP);

@@ -388,7 +388,7 @@ class OptiTrack:
 
 
 if __name__ == '__main__':
-    optitrack = OptiTrack(server_address='bree.lan', max_sample_rate=30)
+    optitrack = OptiTrack(server_address='palantir.lan', max_sample_rate=100)
     optitrack.init()
     ok = optitrack.start()
 

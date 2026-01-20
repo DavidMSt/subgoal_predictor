@@ -123,3 +123,8 @@ def generate_random_input(t_vector, f_cutoff, sigma_I):
 
     start_idx = idx_candidates[0]
     return u[start_idx:start_idx + N]
+
+
+
+def clamp(value, low, high):
+    return limit(value, high, low)

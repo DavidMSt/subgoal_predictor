@@ -1,6 +1,8 @@
 import dataclasses
 import enum
 
+import numpy as np
+
 HOST_EXPERIMENT_FOLDER = "/Users/lehmann/bilbolab/testbed/software/RobotManager/applications/BILBO/experiments"
 
 BILBO_HOST_NAMES = ['bilbo1', 'bilbo2', 'bilbo3', 'bilbo4', 'bilbo5']
@@ -13,16 +15,6 @@ BILBO_PASSWORD = 'beutlin'
 BILBO_CONTROL_DT = 0.01
 MAX_STEPS_TRAJECTORY = 3000
 
-
-class BILBO_Control_Mode(enum.IntEnum):
-    OFF = 0,
-    DIRECT = 1,
-    BALANCING = 2,
-    VELOCITY = 3
-    POSITION = 4
-
-
-# ----------------------------------------------------------------------------------------------------------------------
 
 # === CONFIG ==========================================================================================================
 @dataclasses.dataclass
@@ -125,12 +117,22 @@ class BILBO_Config:
     electronics: BILBO_Hardware_Electronics
 
 
-# ----------------------------------------------------------------------------------------------------------------------
+# ======================================================================================================================
+# === CONTROL ==========================================================================================================
+# ======================================================================================================================
+class BILBO_Control_Mode(enum.IntEnum):
+    OFF = 0
+    DIRECT = 1
+    BALANCING = 2
+    VELOCITY = 3
+    POSITION = 4
+
+
 @dataclasses.dataclass
 class TIC_Config:
     enabled: bool = False
     ki: float = 0.0
-    max_error: float = 0.0
+    max_torque: float = 0.0
     theta_limit: float = 0.0
 
 
@@ -138,8 +140,9 @@ class TIC_Config:
 class VIC_Config:
     enabled: bool = False
     ki: float = 0.0
-    max_error: float = 0.0
+    max_torque: float = 0.0
     v_limit: float = 0.0
+    theta_limit: float = 0.0
 
 
 @dataclasses.dataclass
@@ -150,19 +153,68 @@ class TWIPR_Balancing_Control_Config:
 
 
 @dataclasses.dataclass
-class TWIPR_PID_Control_Config:
+class PID_Config:
     Kp: float = 0.0
     Kd: float = 0.0
     Ki: float = 0.0
-    # anti_windup: float = 0
-    # integrator_saturation: float = None
+    Ts: float = 0.0
+    enable_i_limit: bool = False
+    i_term_limit: float = 0.0
+    enable_input_limit: bool = False
+    input_limit: float = 0.0
+    enable_output_limit: bool = False
+    output_limit: float = 0.0
+    enable_d_filter: bool = False
+    Td_filter: float = 0.0
+    enable_rate_limit: bool = False
+    rate_limit: float = 0.0
+    enable_setpoint_rate_limit: bool = False
+    setpoint_rate_limit: float = 0.0
 
 
 @dataclasses.dataclass
-class SpeedControl_Config:
-    v: TWIPR_PID_Control_Config = dataclasses.field(default_factory=TWIPR_PID_Control_Config)
-    psidot: TWIPR_PID_Control_Config = dataclasses.field(default_factory=TWIPR_PID_Control_Config)
-    max_speeds: dict = dataclasses.field(default_factory=dict)
+class Feedforward_Config:
+    Kv: float = 0.0
+    Ka: float = 0.0
+    Kc: float = 0.0
+    enable_vref_slew: bool = False
+    vref_slew_rate: float = 0.0
+    enable_a_filter: bool = False
+    Ta_filter: float = 0.0
+    enable_stiction: bool = False
+    v0_stiction: float = 0.0
+    enable_output_limit: bool = False
+    output_limit: float = 0.0
+    enable_output_slew: bool = False
+    output_slew_rate: float = 0.0
+
+
+@dataclasses.dataclass
+class VelocityConfig:
+    pid: PID_Config
+    feedforward: Feedforward_Config
+
+
+@dataclasses.dataclass
+class VelocityControl_Config:
+    v: VelocityConfig = dataclasses.field(default_factory=VelocityConfig)
+    psidot: VelocityConfig = dataclasses.field(default_factory=VelocityConfig)
+
+
+@dataclasses.dataclass
+class PositionControl_Config:
+    kp_linear: float = 0.0
+    ki_linear: float = 0.0
+    kp_angular: float = 0.0
+    ki_angular: float = 0.0
+    lookahead_distance: float = 0.3
+    allow_reverse: int = 1
+    backwards_switch_angle: float = np.deg2rad(100.0)
+    distance_arrival_tolerance: float = 0.05
+    angle_arrival_tolerance: float = np.deg2rad(5.0)
+    arrival_time: float = 2.0
+    max_speed_forward: float = 0.75
+    max_speed_turn: float = 3
 
 
 @dataclasses.dataclass
@@ -170,27 +222,84 @@ class General_Control_Config:
     max_wheel_speed: float = 0.0
     max_wheel_torque: float = 0.0
     enable_external_inputs: bool = False
-    torque_offset: dict = dataclasses.field(default_factory=lambda: {'left': 0, 'right': 0})
+    torque_offset: list = dataclasses.field(default_factory=lambda: [0, 0])
+
+
+@dataclasses.dataclass
+class InputConfig:
+    max: float = 0.0
+
+
+@dataclasses.dataclass
+class BalancingInputsConfig:
+    forward: InputConfig = dataclasses.field(default_factory=InputConfig)
+    turn: InputConfig = dataclasses.field(default_factory=InputConfig)
+
+
+@dataclasses.dataclass
+class VelocityInputsConfig:
+    forward: InputConfig = dataclasses.field(default_factory=InputConfig)
+    turn: InputConfig = dataclasses.field(default_factory=InputConfig)
 
 
 @dataclasses.dataclass
 class ExternalInputsConfig:
-    balancing_input_gain: dict = dataclasses.field(default_factory=dict)  # 'forward' and 'turn'
-    speed_input_gain: dict = dataclasses.field(default_factory=dict)  # 'forward' and 'turn'
+    balancing: BalancingInputsConfig = dataclasses.field(default_factory=BalancingInputsConfig)
+    velocity: VelocityInputsConfig = dataclasses.field(default_factory=VelocityInputsConfig)
 
 
 @dataclasses.dataclass
 class BILBO_ControlConfig:
     name: str = ''
     description: str = ''
-    mode: BILBO_Control_Mode = dataclasses.field(default=BILBO_Control_Mode(BILBO_Control_Mode.OFF))
     general: General_Control_Config = dataclasses.field(default_factory=General_Control_Config)
-    external_inputs: ExternalInputsConfig = dataclasses.field(default_factory=ExternalInputsConfig)
+    inputs: ExternalInputsConfig = dataclasses.field(default_factory=ExternalInputsConfig)
     balancing_control: TWIPR_Balancing_Control_Config = dataclasses.field(
         default_factory=TWIPR_Balancing_Control_Config)
-    speed_control: SpeedControl_Config = dataclasses.field(default_factory=SpeedControl_Config)
+    velocity_control: VelocityControl_Config = dataclasses.field(default_factory=VelocityControl_Config)
+    position_control: PositionControl_Config = dataclasses.field(default_factory=PositionControl_Config)
 
 
+class BILBO_Control_Status(enum.IntEnum):
+    ERROR = 0
+    NORMAL = 1
+
+
+@dataclasses.dataclass
+class BILBO_ExternalInput:
+    left: float = 0.0
+    right: float = 0.0
+
+
+@dataclasses.dataclass
+class BILBO_VelocityInput:
+    forward: float = 0.0
+    turn: float = 0.0
+
+
+@dataclasses.dataclass
+class BILBO_PositionInput:
+    x: float = 0.0
+    y: float = 0.0
+
+
+@dataclasses.dataclass
+class BILBO_Control_Inputs:
+    enabled: bool = True
+    external: BILBO_ExternalInput = dataclasses.field(default_factory=BILBO_ExternalInput)
+    velocity: BILBO_VelocityInput = dataclasses.field(default_factory=BILBO_VelocityInput)
+    position: BILBO_PositionInput = dataclasses.field(default_factory=BILBO_PositionInput)
+
+    def reset(self):
+        self.enabled = True
+        self.external = BILBO_ExternalInput(0, 0)
+        self.velocity = BILBO_VelocityInput(0, 0)
+        self.position = BILBO_PositionInput(0, 0)
+
+
+# ======================================================================================================================
+# === OPTITRACK ========================================================================================================
+# ======================================================================================================================
 @dataclasses.dataclass
 class BILBO_OriginConfig:
     id: str

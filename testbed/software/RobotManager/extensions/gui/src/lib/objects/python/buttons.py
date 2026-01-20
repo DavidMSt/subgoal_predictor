@@ -113,7 +113,9 @@ class MultiStateButton(Widget):
             'fontSize': 12,
         }
 
-        self.config = {**default_config, **(config or {}), **kwargs}
+        self.config = update_dict(default_config, kwargs)
+
+        # self.config = {**default_config, **(config or {}), **kwargs}
 
         # Check the color array. It can be an array of arrays, but then it has to have the same length as the states
         if isinstance(self.config['color'], list) and all(isinstance(color, list) for color in self.config['color']):

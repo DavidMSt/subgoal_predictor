@@ -28,7 +28,7 @@ from robot.communication.bilbo_communication import BILBO_Communication
 from robot.communication.serial.bilbo_serial_messages import BILBO_Sequencer_Event_Message
 from robot.config import BILBO_Config
 from robot.control.bilbo_control import BILBO_Control
-from robot.control.bilbo_control_data import BILBO_Control_Mode
+from robot.control.bilbo_control_definitions import BILBO_Control_Mode
 from robot.core import get_logging_provider
 from robot.experiment.definitions import BILBO_InputTrajectory, BILBO_TrajectoryData, BILBO_InputTrajectoryStep, \
     BILBO_StateTrajectory, BILBO_TrajectoryExperimentData, \
@@ -37,7 +37,7 @@ from robot.experiment.helpers import get_state_trajectory_from_lowlevel_samples
 from robot.interfaces.bilbo_interfaces import BILBO_Interfaces
 from robot.logging.bilbo_sample import BILBO_Sample
 # from robot.logging.bilbo_sample import BILBO_Sample
-from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
+from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL, LOOP_TIME
 from robot.lowlevel.stm32_sequencer import BILBO_Sequence_LL, bilbo_sequence_description_t, bilbo_sequence_input_t
 from robot.utilities.bilbo_utilities import BILBO_Utilities
 import robot.lowlevel.stm32_addresses as addresses
@@ -49,8 +49,6 @@ LOWLEVEL_STATE_SIGNALS = [
     'estimation.state.theta_dot',
     'estimation.state.psi_dot'
 ]
-
-UPDATE_LOOP_TIME = 0.1
 
 
 # ======================================================================================================================
@@ -273,6 +271,8 @@ class SetModeAction(ExperimentAction):
                 mode_enum = BILBO_Control_Mode.OFF
             elif mode_upper == 'BALANCING':
                 mode_enum = BILBO_Control_Mode.BALANCING
+            elif mode_upper == 'VELOCITY':
+                mode_enum = BILBO_Control_Mode.VELOCITY
             else:
                 raise ValueError(f"Invalid mode: {mode}")
         elif isinstance(mode, int):
@@ -295,7 +295,7 @@ class SetTICAction(ExperimentAction):
 
     def execute(self) -> bool:
         self._on_started()
-        self.experiment.experiment_handler.control.enableTIC(self.enabled)
+        self.experiment.experiment_handler.control.enable_tic_control(self.enabled)
         self._on_finished()
         return True
 
@@ -370,6 +370,30 @@ class EnableExternalInputAction(ExperimentAction):
         return cls(
             **kwargs,
             enabled=definition.parameters.get('enabled', True),
+        )
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass(kw_only=True)
+class SetVelocityAction(ExperimentAction):
+    forward: float = 0.0
+    turn: float = 0.0
+    normalized: bool = False
+
+    def execute(self) -> bool:
+        self._on_started()
+        self.experiment.experiment_handler.control.set_velocity(self.forward, self.turn, normalized=self.normalized)
+        self._on_finished()
+        return True
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> SetVelocityAction:
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(
+            **kwargs,
+            forward=definition.parameters.get('forward', 0.0),
+            turn=definition.parameters.get('turn', 0.0),
+            normalized=definition.parameters.get('normalized', True),
         )
 
 
@@ -454,9 +478,11 @@ class SetInputAction(ExperimentAction):
     def execute(self):
         self._on_started()
         if self.normalized:
-            self.experiment.experiment_handler.control.setNormalizedBalancingInput(self.input[0], self.input[1])
+            self.experiment.experiment_handler.control.set_external_input_forward_turn(self.input[0], self.input[1],
+                                                                                       normalized=True)
         else:
-            self.experiment.experiment_handler.control.setBalancingInput(self.input[0], self.input[1])
+            self.experiment.experiment_handler.control.set_external_input_forward_turn(self.input[0], self.input[1],
+                                                                                       normalized=False)
         self._on_finished()
         return True
 
@@ -606,6 +632,7 @@ EXPERIMENT_ACTION_TYPE_MAPPING = {
     "wait_until_tick": WaitUntilTickAction,
     "wait_event": WaitEventAction,
     "set_input": SetInputAction,
+    "set_velocity": SetVelocityAction,
     "enable_external_input": EnableExternalInputAction,
     "reset": ResetAction,
 }
@@ -852,7 +879,7 @@ class Experiment:
 
                 # Convert from seconds to experiment ticks using UPDATE_LOOP_TIME.
                 # Flooring: e.g. time=0.25, UPDATE_LOOP_TIME=0.1 -> tick=int(2.5)=2
-                action_definition.tick = int(action_definition.time / UPDATE_LOOP_TIME)
+                action_definition.tick = int(action_definition.time / LOOP_TIME)
                 if action_definition.tick < 0:
                     action_definition.tick = 0
 
@@ -1049,7 +1076,7 @@ class Experiment:
             description=self.definition.description,
             camera_timestamp=self._camera_timestamp,
             date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            control_config=self.experiment_handler.control.config,
+            control_config=self.experiment_handler.control.get_control_config(),
             bilbo_config=self.experiment_handler.common.config
         )
         #
@@ -1472,7 +1499,7 @@ class BILBO_ExperimentHandler:
                     description='',
                     time_stamp=datetime.now().isoformat(),
                     robot_config=self.common.config,
-                    control_config=self.control.config,
+                    control_config=self.control.get_control_config(),
                     start_tick=start_tick,
                     end_tick=end_tick,
                 ),

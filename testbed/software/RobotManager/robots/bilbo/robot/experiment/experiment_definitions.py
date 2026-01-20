@@ -126,7 +126,7 @@ class BILBO_OutputTrajectory:
 ALLOWED_ACTIONS = [
     'beep', 'set_mode', 'set_tic', 'speak', 'set_marker', 'run_trajectory', 'wait_time', 'wait_ticks',
     'wait_until_tick',
-    'wait_event', 'set_input', 'enable_external_input', 'reset'
+    'wait_event', 'set_input', 'enable_external_input', 'reset', 'set_velocity'
 ]
 
 

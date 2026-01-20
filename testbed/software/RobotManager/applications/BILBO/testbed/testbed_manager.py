@@ -38,6 +38,8 @@ class BILBO_TestbedManager_Events:
 @dataclasses.dataclass
 class BILBO_TestbedManager_Settings:
     testbed: str = 'track'  # can be 'track' or 'lab'
+    tracker_max_sample_rate: int = 30
+    tracker_address: str = 'palantir.lan'
 
 
 @dataclasses.dataclass
@@ -62,7 +64,7 @@ class BILBO_TestbedManager:
         self.settings = settings
 
         self.robot_manager = BILBO_Manager(enable_scanner=AUTOSTART_ROBOTS, autostop_robots=AUTOSTOP_ROBOTS)
-        self.tracker = BILBO_Tracker()
+        self.tracker = BILBO_Tracker(max_sample_rate=self.settings.tracker_max_sample_rate, server_address=self.settings.tracker_address)
         self.events = BILBO_TestbedManager_Events()
 
         self.tracker.events.new_sample.on(self._on_new_tracker_sample, max_rate=20)
@@ -75,7 +77,7 @@ class BILBO_TestbedManager:
         self.bilbos = {}
 
         self.timecode_server = TimecodeServer()
-        # self.extensions = BILBO_TestbedExtensions()
+        self.extensions = BILBO_TestbedExtensions()
 
         self.robot_manager.events.new_robot.on(self._on_new_robot)
         self.robot_manager.events.robot_disconnected.on(self._on_robot_disconnected)
@@ -109,9 +111,7 @@ class BILBO_TestbedManager:
         self.robot_manager.start()
         self.joystick_control.start()
 
-        # self.extensions.start()
-
-        # set_timeout(self.extensions.limbo_bar.blink, 2, (0, 100, 0), 5, 400)
+        self.extensions.start()
 
     # ------------------------------------------------------------------------------------------------------------------
     def emergency_stop(self):

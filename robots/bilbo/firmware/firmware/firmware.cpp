@@ -69,50 +69,86 @@ REG_ADDRESS_RW_DEBUG_1, &twipr_firmware.debugData.debug1);
 /* Control */
 
 /* Read Control Mode Register Entry */
-core_utils_RegisterEntry<twipr_control_mode_t, void> reg_ctrl_mode(
+core_utils_RegisterEntry<bilbo_control_mode_t, void> reg_ctrl_mode(
 		&register_map, REG_ADDRESS_R_CONTROL_MODE,
 		&twipr_firmware.control.mode);
 
 /* Set Control Mode Function Register Entry */
-core_utils_RegisterEntry<uint8_t, twipr_control_mode_t> reg_set_mode(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_MODE, &twipr_firmware.control,
-		&TWIPR_ControlManager::setMode);
+core_utils_RegisterEntry<bool, bilbo_control_mode_t> reg_set_mode(&register_map,
+REG_ADDRESS_F_CONTROL_SET_MODE, &twipr_firmware.control,
+		&BILBO_Control::set_mode);
 
 /* Set Control Gain Function Register Entry */
-core_utils_RegisterEntry<uint8_t, float[8]> reg_set_gain(&register_map,
+core_utils_RegisterEntry<bool, float[8]> reg_set_gain(&register_map,
 REG_ADDRESS_F_CONTROL_SET_K, &twipr_firmware.control,
-		&TWIPR_ControlManager::setBalancingGain);
-
-/* Set Direct Input Register Entry */
-core_utils_RegisterEntry<void, twipr_control_direct_input_t> reg_set_direct(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_DIRECT_INPUT,
-		&twipr_firmware.control, &TWIPR_ControlManager::setDirectInput);
+		&BILBO_Control::set_balancing_gain);
 
 /* Set Balancing Input Register Entry */
-core_utils_RegisterEntry<bool, twipr_balancing_control_input_t> reg_set_balancing(
+core_utils_RegisterEntry<bool, bilbo_control_input_ext_t> reg_set_balancing(
 		&register_map, REG_ADDRESS_F_CONTROL_SET_BALANCING_INPUT,
-		&twipr_firmware.control, &TWIPR_ControlManager::setBalancingInput);
+		&twipr_firmware.control, &BILBO_Control::set_external_input);
 
 /* Set Speed Input Register Entry */
-core_utils_RegisterEntry<void, twipr_speed_control_input_t> reg_set_speed(
+core_utils_RegisterEntry<bool, bilbo_velocity_control_command_t> reg_set_speed(
 		&register_map, REG_ADDRESS_F_CONTROL_SET_SPEED_INPUT,
-		&twipr_firmware.control, &TWIPR_ControlManager::setSpeed);
-
-/* Set PID Forward Register Entry */
-core_utils_RegisterEntry<uint8_t, float[3]> reg_set_pid_fwd(&register_map,
-REG_ADDRESS_F_CONTROL_SET_FORWARD_PID, &twipr_firmware.control,
-		&TWIPR_ControlManager::setVelocityControlForwardPID);
-
-/* Set PID Turn Register Entry */
-core_utils_RegisterEntry<uint8_t, float[3]> reg_set_pid_turn(&register_map,
-REG_ADDRESS_F_CONTROL_SET_TURN_PID, &twipr_firmware.control,
-		&TWIPR_ControlManager::setVelocityControlTurnPID);
+		&twipr_firmware.control, &BILBO_Control::set_velocity_command);
 
 /* Get Control Configuration Register Entry */
-core_utils_RegisterEntry<twipr_control_configuration_t, void> reg_get_ctrl_conf(
+core_utils_RegisterEntry<bilbo_control_config_t, void> reg_get_ctrl_conf(
 		&register_map, REG_ADDRESS_F_CONTROL_GET_CONFIGURATION,
-		&twipr_firmware.control,
-		&TWIPR_ControlManager::getControlConfiguration);
+		&twipr_firmware.control, &BILBO_Control::get_config);
+
+core_utils_RegisterEntry<bool, pid_control_config_t> reg_set_vel_config_v(
+		&register_map, REG_ADDRESS_F_CONTROL_SET_VELOCITY_CONFIG_V,
+		&twipr_firmware.control, &BILBO_Control::set_vc_pid_v);
+
+core_utils_RegisterEntry<bool, feedforward_config_t> reg_set_vel_config_v_ff(
+		&register_map, REG_ADDRESS_F_CONTROL_SET_VELOCITY_CONFIG_V_FF,
+		&twipr_firmware.control, &BILBO_Control::set_vc_ff_v);
+
+core_utils_RegisterEntry<bool, pid_control_config_t> reg_set_vel_config_psidot(
+		&register_map, REG_ADDRESS_F_CONTROL_SET_VELOCITY_CONFIG_PSIDOT,
+		&twipr_firmware.control, &BILBO_Control::set_vc_pid_psidot);
+
+core_utils_RegisterEntry<bool, feedforward_config_t> reg_set_vel_config_psidot_ff(
+		&register_map, REG_ADDRESS_F_CONTROL_SET_VELOCITY_CONFIG_PSIDOT_FF,
+		&twipr_firmware.control, &BILBO_Control::set_vc_ff_psidot);
+
+core_utils_RegisterEntry<bool, bilbo_position_control_config_t> reg_set_pos_config(
+		&register_map, REG_ADDRESS_F_CONTROL_SET_POSITION_CONFIG,
+		&twipr_firmware.control, &BILBO_Control::set_position_control_config);
+
+core_utils_RegisterEntry<bool, position_command_t> reg_set_position_cmd(
+		&register_map, REG_ADDRESS_F_CONTROL_SET_POSITION_CMD,
+		&twipr_firmware.control, &BILBO_Control::set_position_command);
+
+core_utils_RegisterEntry<bool, heading_command_t> reg_set_heading_cmd(
+		&register_map, REG_ADDRESS_F_CONTROL_SET_HEADING_CMD,
+		&twipr_firmware.control, &BILBO_Control::set_heading_command);
+
+core_utils_RegisterEntry<void, void> reg_set_abort_position_cmd(
+		&register_map, REG_ADDRESS_F_CONTROL_ABORT_CURRENT_POSITION_COMMAND,
+		&twipr_firmware.control, &BILBO_Control::abort_position_command);
+
+core_utils_RegisterEntry<bilbo_position_control_mode_t, void> reg_get_position_control_mode(
+		&register_map, REG_ADDRESS_R_CONTROL_POSITION_MODE,
+		&twipr_firmware.control.position_control, &BILBO_PositionControl::get_current_mode);
+
+
+
+
+
+core_utils_RegisterEntry<bool, bilbo_tic_config_t> reg_set_tic_config(
+		&register_map, REG_ADDRESS_F_CONTROL_SET_TIC_CONFIG,
+		&twipr_firmware.control, &BILBO_Control::set_tic_config);
+
+core_utils_RegisterEntry<bool, bilbo_vic_config_t> reg_set_vic_config(
+		&register_map, REG_ADDRESS_F_CONTROL_SET_VIC_CONFIG,
+		&twipr_firmware.control, &BILBO_Control::set_vic_config);
+
+core_utils_RegisterEntry<bool, float> reg_set_max_torque(&register_map,
+REG_ADDRESS_F_CONTROL_SET_MAX_TORQUE, &twipr_firmware.control,
+		&BILBO_Control::set_max_torque);
 
 /* Sequencer */
 
@@ -136,29 +172,73 @@ core_utils_RegisterEntry<void, void> reg_abort_seq(&register_map,
 REG_ADDRESS_F_SEQUENCE_STOP, &twipr_firmware.sequencer,
 		&BILBO_Sequencer::abortSequence);
 
-core_utils_RegisterEntry<bool, twipr_control_configuration_t> reg_set_control_config(
-		&register_map,
-		REG_ADDRESS_F_CONTROL_SET_CONFIGURATION, &twipr_firmware.control,
-		&TWIPR_ControlManager::setControlConfiguration);
+//core_utils_RegisterEntry<bool, bilbo_control_config_t> reg_set_control_config(
+//		&register_map,
+//		REG_ADDRESS_F_CONTROL_SET_CONFIGURATION, &twipr_firmware.control,
+//		&BILBO_Control::set_config);
 
 core_utils_RegisterEntry<bool, bool> reg_enable_vel_int_cont(&register_map,
-REG_ADRESS_F_ENABLE_VELOCITY_INTEGRAL_CONTROL, &twipr_firmware.control,
-		&TWIPR_ControlManager::enableVIC);
+REG_ADDRESS_F_ENABLE_VELOCITY_INTEGRAL_CONTROL, &twipr_firmware.control,
+		&BILBO_Control::set_vic_enabled);
 
 core_utils_RegisterEntry<bool, float> reg_set_theta_offset(&register_map,
 REG_ADDRESS_F_ESTIMATION_SET_THETA_OFFSET, &twipr_firmware.estimation,
 		&TWIPR_Estimation::setThetaOffset);
 
 core_utils_RegisterEntry<bool, bool> reg_enable_tic(&register_map,
-REG_ADRESS_F_ENABLE_TIC, &twipr_firmware.control,
-		&TWIPR_ControlManager::enableTIC);
+REG_ADDRESS_F_ENABLE_TIC, &twipr_firmware.control,
+		&BILBO_Control::set_tic_enabled);
+
+core_utils_RegisterEntry<bool, bool> reg_enable_vic(&register_map,
+REG_ADDRESS_F_ENABLE_VIC, &twipr_firmware.control,
+		&BILBO_Control::set_vic_enabled);
+
+core_utils_RegisterEntry<void, bilbo_position_state_t> reg_set_position_state(
+		&register_map,
+		REG_ADDRESS_F_ESTIMATION_SET_POSITION_STATE, &twipr_firmware.estimation,
+		&TWIPR_Estimation::set_position_state);
+
+core_utils_RegisterEntry<void, bilbo_position_state_t> reg_set_position_update(
+		&register_map,
+		REG_ADDRESS_F_ESTIMATION_SET_POSITION_UPDATE, &twipr_firmware.estimation,
+		&TWIPR_Estimation::set_position_update);
+
+core_utils_RegisterEntry<void, void> reg_estimation_reset(
+		&register_map,
+		REG_ADDRESS_F_ESTIMATION_RESET, &twipr_firmware.estimation,
+		&TWIPR_Estimation::reset);
+
+core_utils_RegisterEntry<velocity_lowpass_filter_config_t, void> reg_get_velocity_lpf(
+		&register_map,
+		REG_ADDRESS_F_ESTIMATION_GET_VELOCITY_LPF, &twipr_firmware.estimation,
+		&TWIPR_Estimation::get_velocity_lpf_config);
+
+core_utils_RegisterEntry<void, velocity_lowpass_filter_config_t> reg_set_velocity_lpf(
+		&register_map,
+		REG_ADDRESS_F_ESTIMATION_SET_VELOCITY_LPF, &twipr_firmware.estimation,
+		&TWIPR_Estimation::set_velocity_lpf_config);
+
+core_utils_RegisterEntry<psi_dot_lowpass_filter_config_t, void> reg_get_psidot_lpf(
+		&register_map,
+		REG_ADDRESS_F_ESTIMATION_GET_PSIDOT_LPF, &twipr_firmware.estimation,
+		&TWIPR_Estimation::get_psi_dot_lpf_config);
+
+core_utils_RegisterEntry<void, psi_dot_lowpass_filter_config_t> reg_set_psidot_lpf(
+		&register_map,
+		REG_ADDRESS_F_ESTIMATION_SET_PSIDOT_LPF, &twipr_firmware.estimation,
+		&TWIPR_Estimation::set_psi_dot_lpf_config);
+
+core_utils_RegisterEntry<void, bool> reg_set_dead_reckoning_enable(
+		&register_map,
+		REG_ADDRESS_F_ESTIMATION_SET_DEAD_RECKONING_ENABLE, &twipr_firmware.estimation,
+		&TWIPR_Estimation::set_dead_reckoning_enable);
 
 /* Thread Attributes for Firmware and Control Tasks */
 const osThreadAttr_t firmware_task_attributes = { .name = "firmware",
-		.stack_size = 4000 * 4, .priority = (osPriority_t) osPriorityNormal, };
+		.stack_size = 8000 * 4, .priority = (osPriority_t) osPriorityNormal, };
 
 const osThreadAttr_t control_task_attributes = { .name = "control",
-		.stack_size = 2560 * 4, .priority = (osPriority_t) osPriorityNormal, };
+		.stack_size = 4000 * 4, .priority = (osPriority_t) osPriorityNormal, };
 
 elapsedMillis activityTimer;
 elapsedMillis infoTimer;
@@ -185,7 +265,6 @@ void start_firmware_task(void *argument) {
 	// Start the helper task (core firmware loop)
 	firmware->helperTask();
 }
-
 
 /**
  * @brief Main firmware task logic.
@@ -219,30 +298,35 @@ void TWIPR_Firmware::helperTask() {
 	rc_rgb_led_side_1.setColor(0, 0, 0);
 	rc_rgb_led_side_1.state(1);
 
-	extender.rgbLEDStrip_extern_setColor(
-			{ .red = 10, .green = 0, .blue = 10 });
 
 	elapsedMillis debug_timer;
 
 	// Main task loop
 	while (true) {
 		// Update control mode LED if timer exceeds 250ms
-		if (this->timer_control_mode_led >= 100) {
+		if (this->timer_control_mode_led >= 250) {
 			this->timer_control_mode_led.reset();
-			this->setControlModeLed();
+//			this->setControlModeLed();
 
-			// Set the external LED strip based on control mode and TIC
+			if (this->control.mode == bilbo_control_mode_t::OFF) {
 
-			if (this->control.mode == TWIPR_CONTROL_MODE_OFF) {
-				extender.rgbLEDStrip_extern_setColor( { 2, 2, 2 }); // Dim White
-			} else if (this->control.mode == TWIPR_CONTROL_MODE_BALANCING) {
-				if (this->control.control_config.tic_enabled) {
-					extender.rgbLEDStrip_extern_setColor( { 0, 10, 10 }); // Cyan for balancing with TIC
-				} else {
-					extender.rgbLEDStrip_extern_setColor( { 0, 10, 0 }); // Green for balancing without TIC
-				}
-			} else if (this->control.mode == TWIPR_CONTROL_MODE_VELOCITY) {
-				extender.rgbLEDStrip_extern_setColor( { 10, 10, 0 }); // Yellow for velocity with TIC
+			    // Pale white (very dim)
+			    extender.rgbLEDStrip_extern_setColor({ 3, 3, 3 });
+
+			} else if (this->control.mode == bilbo_control_mode_t::BALANCING) {
+
+			    // Soft green
+			    extender.rgbLEDStrip_extern_setColor({ 0, 6, 0 });
+
+			} else if (this->control.mode == bilbo_control_mode_t::VELOCITY) {
+
+			    // Soft turquoise (green + blue)
+			    extender.rgbLEDStrip_extern_setColor({ 0, 6, 6 });
+
+			} else if (this->control.mode == bilbo_control_mode_t::POSITION) {
+
+			    // Soft purple (red + blue)
+			    extender.rgbLEDStrip_extern_setColor({ 5, 0, 5 });
 			}
 
 		}
@@ -303,10 +387,10 @@ HAL_StatusTypeDef TWIPR_Firmware::init() {
 	this->estimation.init(twipr_estimation_config);
 
 	// Control module initialization
-	twipr_control_init_config_t twipr_control_config = { .estimation =
-			&this->estimation, .drive = &this->drive, .max_torque =
-	TWIPR_CONTROL_MAX_TORQUE, .freq = TWIPR_CONTROL_TASK_FREQ, };
-	this->control.init(twipr_control_config);
+	bilbo_control_init_config_t bilbo_control_config = { .estimation =
+			&this->estimation, .drive = &this->drive, .Ts =
+	BILBO_CONTROL_TASK_TIME, };
+	this->control.init(bilbo_control_config);
 
 	// Drive configuration
 
@@ -552,11 +636,11 @@ twipr_logging_general_t TWIPR_Firmware::getSample() {
  */
 void TWIPR_Firmware::setControlModeLed() {
 	if (this->firmware_state == TWIPR_FIRMWARE_STATE_RUNNING) {
-		if (this->control.mode == TWIPR_CONTROL_MODE_OFF) {
+		if (this->control.mode == bilbo_control_mode_t::OFF) {
 			rc_rgb_led_side_1.setColor(2, 2, 2); // White for OFF mode
-		} else if (this->control.mode == TWIPR_CONTROL_MODE_BALANCING) {
+		} else if (this->control.mode == bilbo_control_mode_t::BALANCING) {
 			rc_rgb_led_side_1.setColor(0, 70, 0); // Amber for balancing
-		} else if (this->control.mode == TWIPR_CONTROL_MODE_VELOCITY) {
+		} else if (this->control.mode == bilbo_control_mode_t::VELOCITY) {
 			rc_rgb_led_side_1.setColor(0, 0, 60); // Blue
 		}
 	} else if (this->firmware_state == TWIPR_FIRMWARE_STATE_ERROR) {

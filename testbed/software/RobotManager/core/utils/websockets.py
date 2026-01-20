@@ -215,7 +215,7 @@ class WebsocketServer:
         try:
             data = json.loads(message)
         except Exception as e:
-            self.logger.debug(f"Non-JSON message from {client['address']}, dropping: {e}")
+            self.logger.warning(f"Non-JSON message from {client['address']}, dropping: {e}")
             return
 
         websocket_client = next((c for c in self.clients if c.client == client), None)
@@ -229,6 +229,7 @@ class WebsocketServer:
 
         # Normal application message flow
         self.logger.debug(f"Message received from {client['address']}: {data}")
+
         self.callbacks.message.call(websocket_client, data)
         self.events.message.set(data=data)
         websocket_client.onMessage(data)
@@ -376,7 +377,7 @@ class WebsocketClient:
         self.ws_thread = None
 
         # Disable the internal websocket logger, since it messes with other modules
-        self.logger = Logger('Websocket Client', 'DEBUG')
+        self.logger = Logger('Websocket Client', 'INFO')
         logging.getLogger("websocket").setLevel(logging.CRITICAL)
         register_exit_callback(self.close)
 

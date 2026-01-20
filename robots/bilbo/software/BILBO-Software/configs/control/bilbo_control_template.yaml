@@ -1,0 +1,117 @@
+name: ''
+description: ''
+mode: 0
+
+general:
+  max_wheel_speed: 0.0
+  max_wheel_torque: 0.0
+  enable_external_inputs: false
+  torque_offset: [0, 0]
+
+inputs:
+  balancing:
+    forward:
+      max: 0.0
+    turn:
+      max: 0.0
+  velocity:
+    forward:
+      max: 0.0
+    turn:
+      max: 0.0
+
+balancing_control:
+  K: []
+  tic:
+    enabled: false
+    ki: 0.0
+    max_torque: 0.0
+    theta_limit: 0.0
+  vic:
+    enabled: false
+    ki: 0.0
+    max_torque: 0.0
+    v_limit: 0.0
+    theta_limit: 0.0
+
+velocity_control:
+  v:
+    pid:
+      Kp: 0.0
+      Kd: 0.0
+      Ki: 0.0
+      Ts: 0.0
+      enable_i_limit: false
+      i_term_limit: 0.0
+      enable_input_limit: false
+      input_limit: 0.0
+      enable_output_limit: false
+      output_limit: 0.0
+      enable_d_filter: false
+      Td_filter: 0.0
+      enable_rate_limit: false
+      rate_limit: 0.0
+      enable_setpoint_rate_limit: false
+      setpoint_rate_limit: 0.0
+    feedforward:
+      Kv: 0.0
+      Ka: 0.0
+      Kc: 0.0
+      enable_vref_slew: false
+      vref_slew_rate: 0.0
+      enable_a_filter: false
+      Ta_filter: 0.0
+      enable_stiction: false
+      v0_stiction: 0.0
+      enable_output_limit: false
+      output_limit: 0.0
+      enable_output_slew: false
+      output_slew_rate: 0.0
+  psidot:
+    pid:
+      Kp: 0.0
+      Kd: 0.0
+      Ki: 0.0
+      Ts: 0.0
+      enable_i_limit: false
+      i_term_limit: 0.0
+      enable_input_limit: false
+      input_limit: 0.0
+      enable_output_limit: false
+      output_limit: 0.0
+      enable_d_filter: false
+      Td_filter: 0.0
+      enable_rate_limit: false
+      rate_limit: 0.0
+      enable_setpoint_rate_limit: false
+      setpoint_rate_limit: 0.0
+    feedforward:
+      Kv: 0.0
+      Ka: 0.0
+      Kc: 0.0
+      enable_vref_slew: false
+      vref_slew_rate: 0.0
+      enable_a_filter: false
+      Ta_filter: 0.0
+      enable_stiction: false
+      v0_stiction: 0.0
+      enable_output_limit: false
+      output_limit: 0.0
+      enable_output_slew: false
+      output_slew_rate: 0.0
+
+position_control:
+  mode: 0
+  kp_pos: 0.0
+  ki_pos: 0.0
+  max_position_integral_torque: 0.0
+  kp_psi: 0.0
+  ki_psi: 0.0
+  max_angle_integral_torque: 0.0
+  lookahead_distance: 0.0
+  allow_reverse: false
+  backwards_switch_angle: 0.0
+  slow_radius: 0.0
+  min_speed_cos_scale: 0.0
+  max_common_torque: 0.0
+  max_diff_torque: 0.0

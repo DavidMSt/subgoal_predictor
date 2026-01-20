@@ -304,7 +304,7 @@ class BILBO_Tracker:
     samples: int = 0
 
     # === INIT =========================================================================================================
-    def __init__(self):
+    def __init__(self, max_sample_rate: int = 30, server_address: str = 'palantir.lan'):
         self.logger = Logger('BILBO Tracker', 'DEBUG')
 
         self.rigid_bodies = {}
@@ -316,7 +316,7 @@ class BILBO_Tracker:
         self.events = BILBO_Tracker_Events()
         self.callbacks = BILBO_Tracker_Callbacks()
 
-        self.optitrack = OptiTrack(server_address='palantir.lan')
+        self.optitrack = OptiTrack(max_sample_rate=max_sample_rate, server_address=server_address)
         self.optitrack.events.sample.on(self._onSample)
         self.optitrack.callbacks.description_received.register(self._onDescriptionReceived)
 

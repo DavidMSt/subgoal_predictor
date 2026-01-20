@@ -12,7 +12,7 @@
 #include "core.h"
 #include "firmware_settings.h"
 #include "twipr_balancing_control.h"
-#include "twipr_speed_control.h"
+#include "bilbo_velocity_control.h"
 #include "firmware_defs.h"
 #include "firmware_core.h"
 #include "bilbo_drive.h"
@@ -93,22 +93,26 @@ typedef struct twipr_control_callbacks_t {
 	core_utils_CallbackContainer<4, twipr_control_mode_t> mode_change;
 } twipr_control_callbacks_t;
 
+struct bilbo_tic_config_t {
+	bool enabled;
+	float ki;
+	float max_error;
+	float theta_limit;
+};
+
+struct bilbo_vic_config_t {
+	bool enabled;
+	float ki;
+	float max_error;
+	float v_limit;
+};
+
 typedef struct twipr_control_configuration_t {
 	float K[8];
-	float forward_kp;
-	float forward_ki;
-	float forward_kd;
-	float turn_kp;
-	float turn_ki;
-	float turn_kd;
-	bool vic_enabled; // Velocity Integral Control enable/disable
-	float vic_ki;  // Velocity Integral Control Ki
-	float vic_max_error; // Velocity Integral Control maxmum error
-	float vic_v_limit;  // Velocity Integral Control Velocity Limit
-	bool tic_enabled;
-	float tic_ki;
-	float tic_max_error;
-	float tic_theta_limit;
+	bilbo_tic_config_t tic_config;
+	bilbo_vic_config_t vic_config;
+	bilbo_velocity_control_config_t velocity_control_config;
+
 } twipr_control_configuration_t;
 
 typedef enum control_event_t {
@@ -127,14 +131,15 @@ typedef struct control_event_message_data_t {
 } control_event_message_data_t;
 
 typedef BILBO_Message<control_event_message_data_t, MSG_EVENT,
-		BILBO_MESSAGE_CONTROL_EVENT> BILBO_Message_Control_Event;
+BILBO_MESSAGE_CONTROL_EVENT> BILBO_Message_Control_Event;
 
 class TWIPR_ControlManager {
 
 public:
-	TWIPR_ControlManager(){
+	TWIPR_ControlManager() {
 
-	};
+	}
+	;
 
 	void init(twipr_control_init_config_t config);
 	uint8_t start();
@@ -159,16 +164,18 @@ public:
 	void setSpeed(twipr_speed_control_input_t speed);
 
 	uint8_t setBalancingGain(float *K);
-	uint8_t setVelocityControlForwardPID(float *K);
-	uint8_t setVelocityControlForwardPID(float Kp, float Ki, float Kd);
-	uint8_t setVelocityControlTurnPID(float *K);
-	uint8_t setVelocityControlTurnPID(float Kp, float Ki, float Kd);
+
+
+//
+//	uint8_t setVelocityControlForwardPID(float *K);
+//	uint8_t setVelocityControlForwardPID(float Kp, float Ki, float Kd);
+//	uint8_t setVelocityControlTurnPID(float *K);
+//	uint8_t setVelocityControlTurnPID(float Kp, float Ki, float Kd);
 
 	bool setControlConfiguration(twipr_control_configuration_t config);
 	twipr_control_configuration_t getControlConfiguration();
 
 	bool enableVIC(bool state);
-
 	bool enableTIC(bool state);
 
 	twipr_control_status_t status = TWIPR_CONTROL_STATUS_IDLE;
@@ -185,8 +192,9 @@ public:
 
 private:
 	TWIPR_BalancingControl _balancing_control;
-	TWIPR_SpeedControl _speed_control;
-	twipr_control_external_input_t _external_input;
+	BILBO_VelocityControl _velocity_control;
+
+twipr_control_external_input_t _external_input;
 
 	twipr_control_output_t _output;
 

@@ -5,6 +5,7 @@ import threading
 import time
 
 from core.utils.dict import update_dict
+from core.utils.events import event_definition, Event
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
 from core.utils.network.network import getHostIP
@@ -87,6 +88,13 @@ MAP_DEFAULT_CONFIG = {
 
 # ======================================================================================================================
 
+@event_definition
+class MapEvents:
+    click: Event
+    double_click: Event
+    right_click: Event
+    middle_click: Event
+
 
 # ======================================================================================================================
 class Map:
@@ -106,7 +114,7 @@ class Map:
 
         self.logger = Logger(f"Map {id}", 'DEBUG')
         self.config = update_dict(copy.deepcopy(MAP_DEFAULT_CONFIG), kwargs)
-
+        self.events = MapEvents()
         self.groups = {}
         self.objects = {}
 
@@ -326,8 +334,39 @@ class Map:
         self.sendMessage(message)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _onMessage(self, message, client=None):
+    def _onMessage(self, client, message):
         self.logger.debug(f"Received message: {message}")
+        match message['type']:
+            case 'event':
+                self._handle_event(message['data'])
+            case _:
+                self.logger.warning(f"Unknown message type. {message}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handle_event(self, event: dict):
+        match event['type']:
+            case 'click':
+                self.events.click.set({
+                    'x': event['x'],
+                    'y': event['y']
+                })
+            case 'double_click':
+                self.events.double_click.set({
+                    'x': event['x'],
+                    'y': event['y']
+                })
+            case 'right_click':
+                self.events.right_click.set({
+                    'x': event['x'],
+                    'y': event['y']
+                })
+            case 'middle_click':
+                self.events.middle_click.set({
+                    'x': event['x'],
+                    'y': event['y']
+                })
+            case _:
+                self.logger.warning(f"Unknown event type. {event}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _onNewClient(self, client, *args, **kwargs):

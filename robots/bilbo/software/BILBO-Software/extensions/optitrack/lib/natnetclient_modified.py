@@ -16,6 +16,7 @@ import os
 
 import socket
 import struct
+import time
 from threading import Thread
 from typing import Callable
 
@@ -31,6 +32,8 @@ Quaternion = struct.Struct('<ffff')
 FloatValue = struct.Struct('<f')
 DoubleValue = struct.Struct('<d')
 
+
+LAST_RECEIVE_TIME = 0
 
 class NatNetClient:
     rigid_body_callback: Callable
@@ -393,8 +396,10 @@ class NatNetClient:
         trackedModelsChanged = (param & 0x02) != 0
         offset += 2
 
+
         if self.mocap_data_callback is not None:
             self.mocap_data_callback(mocap_data)
+
 
     # Unpack a marker set description packet
     @staticmethod

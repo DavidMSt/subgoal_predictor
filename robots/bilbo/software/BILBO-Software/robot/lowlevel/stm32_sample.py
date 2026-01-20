@@ -1,6 +1,7 @@
 import ctypes
 import dataclasses
 
+from robot.lowlevel.stm32_control import bilbo_ll_control_data_t, bilbo_ll_control_data
 from robot.lowlevel.stm32_errors import bilbo_ll_log_entry_t, BILBO_LL_Log_Entry, TWIPR_ErrorType
 
 # Samples LL
@@ -73,7 +74,9 @@ class BILBO_LL_Sensor_Data:
 
 
 class bilbo_ll_estimation_data_struct(ctypes.Structure):
-    _fields_ = [("v", ctypes.c_float),
+    _fields_ = [("x", ctypes.c_float),
+                ("y", ctypes.c_float),
+                ("v", ctypes.c_float),
                 ("theta", ctypes.c_float),
                 ("theta_dot", ctypes.c_float),
                 ("psi", ctypes.c_float),
@@ -82,6 +85,8 @@ class bilbo_ll_estimation_data_struct(ctypes.Structure):
 
 @dataclasses.dataclass
 class BILBO_LL_Estimation_Data:
+    x: float = 0.0
+    y: float = 0.0
     v: float = 0.0
     theta: float = 0.0
     theta_dot: float = 0.0
@@ -90,50 +95,45 @@ class BILBO_LL_Estimation_Data:
 
 
 class bilbo_ll_sample_estimation_struct(ctypes.Structure):
-    _fields_ = [('state', bilbo_ll_estimation_data_struct)]
+    _fields_ = [('state', bilbo_ll_estimation_data_struct),
+                ('is_dead_reckoning', ctypes.c_bool)]
 
 
 @dataclasses.dataclass
 class BILBO_LL_Sample_Estimation:
     state: BILBO_LL_Estimation_Data = dataclasses.field(default_factory=BILBO_LL_Estimation_Data)
+    is_dead_reckoning: bool = False
 
 
-class bilbo_ll_control_data_struct(ctypes.Structure):
-    _fields_ = [("input_velocity_forward", ctypes.c_float),
-                ("input_velocity_turn", ctypes.c_float),
-                ("input_balancing_1", ctypes.c_float),
-                ("input_balancing_2", ctypes.c_float),
-                ("input_left", ctypes.c_float),
-                ("input_right", ctypes.c_float),
-                ("output_left", ctypes.c_float),
-                ("output_right", ctypes.c_float),
-                ]
-
-
-@dataclasses.dataclass
-class BILBO_LL_Control_Data:
-    input_velocity_forward: float = 0.0
-    input_velocity_turn: float = 0.0
-    input_balancing_1: float = 0.0
-    input_balancing_2: float = 0.0
-    input_left: float = 0.0
-    input_right: float = 0.0
-    output_left: float = 0.0
-    output_right: float = 0.0
-
-
-class bilbo_ll_sample_control_struct(ctypes.Structure):
-    _fields_ = [('status', ctypes.c_int8),
-                ('mode', ctypes.c_int8),
-                ("data", bilbo_ll_control_data_struct),
-                ]
+# LPF Config Types for Estimation
+class velocity_lowpass_filter_config_t(ctypes.Structure):
+    _fields_ = [
+        ("enable", ctypes.c_bool),
+        ("cutoff_hz", ctypes.c_float),
+        ("reset_on_start", ctypes.c_bool),
+    ]
 
 
 @dataclasses.dataclass
-class BILBO_LL_Sample_Control:
-    status: int = 0
-    mode: int = 0
-    data: BILBO_LL_Control_Data = dataclasses.field(default_factory=BILBO_LL_Control_Data)
+class VelocityLowpassFilterConfig:
+    enable: bool = True
+    cutoff_hz: float = 30.0
+    reset_on_start: bool = True
+
+
+class psi_dot_lowpass_filter_config_t(ctypes.Structure):
+    _fields_ = [
+        ("enable", ctypes.c_bool),
+        ("cutoff_hz", ctypes.c_float),
+        ("reset_on_start", ctypes.c_bool),
+    ]
+
+
+@dataclasses.dataclass
+class PsiDotLowpassFilterConfig:
+    enable: bool = True
+    cutoff_hz: float = 30.0
+    reset_on_start: bool = True
 
 
 class bilbo_ll_sample_sequence_struct(ctypes.Structure):
@@ -177,7 +177,7 @@ class bilbo_ll_sample_struct(ctypes.Structure):
         ("tick", ctypes.c_uint32),
         ("general", bilbo_ll_sample_general_struct),
         ("errors", bilbo_ll_sample_errors_struct),
-        ("control", bilbo_ll_sample_control_struct),
+        ("control", bilbo_ll_control_data_t),
         ("estimation", bilbo_ll_sample_estimation_struct),
         ("sensors", bilbo_ll_sensor_data_struct),
         ("sequence", bilbo_ll_sample_sequence_struct),
@@ -190,7 +190,7 @@ class BILBO_LL_Sample:
     tick: int = 0
     general: BILBO_LL_Sample_General = dataclasses.field(default_factory=BILBO_LL_Sample_General)
     errors: BILBO_LL_Sample_Errors = dataclasses.field(default_factory=BILBO_LL_Sample_Errors)
-    control: BILBO_LL_Sample_Control = dataclasses.field(default_factory=BILBO_LL_Sample_Control)
+    control: bilbo_ll_control_data = dataclasses.field(default_factory=bilbo_ll_control_data)
     estimation: BILBO_LL_Sample_Estimation = dataclasses.field(default_factory=BILBO_LL_Sample_Estimation)
     sensors: BILBO_LL_Sensor_Data = dataclasses.field(default_factory=BILBO_LL_Sensor_Data)
     sequence: BILBO_LL_Sample_Sequence = dataclasses.field(default_factory=BILBO_LL_Sample_Sequence)

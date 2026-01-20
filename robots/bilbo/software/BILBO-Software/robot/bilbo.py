@@ -17,7 +17,7 @@ from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.events import Event, event_definition, SubscriberListener
 from core.utils.singletonlock.singletonlock import SingletonLock, terminate
 from robot.communication.bilbo_communication import BILBO_Communication
-from robot.control.bilbo_control_data import BILBO_Control_Mode
+from robot.control.bilbo_control_definitions import BILBO_Control_Mode
 from robot.control.bilbo_control import BILBO_Control
 from robot.drive.bilbo_drive import BILBO_Drive
 from robot.estimation.bilbo_estimation import BILBO_Estimation
@@ -110,8 +110,8 @@ class BILBO(MainProvider):
         self.communication = BILBO_Communication(board=self.board, core=self.common)
 
         # Set up the individual modules
-        self.control = BILBO_Control(core=self.common, comm=self.communication)
         self.estimation = BILBO_Estimation(common=self.common, comm=self.communication)
+        self.control = BILBO_Control(common=self.common, comm=self.communication, estimation=self.estimation)
         self.drive = BILBO_Drive(comm=self.communication)
         self.sensors = BILBO_Sensors(comm=self.communication)
         self.supervisor = TWIPR_Supervisor(comm=self.communication)
@@ -176,11 +176,7 @@ class BILBO(MainProvider):
         # self.communication.start()
         self.utilities.start()
 
-        success = self.control.start()
-
-        if not success:
-            self.logger.error("Cannot write control configuration. Exit program")
-            exit()
+        self.control.start()
 
         self.supervisor.start()
         self.sensors.start()
@@ -218,6 +214,8 @@ class BILBO(MainProvider):
         # Update the logging
         self.logging.update()
 
+        self.estimation.update()
+
         # Update the experiment handler
         self.experiment_handler.step()
 
@@ -252,7 +250,7 @@ class BILBO(MainProvider):
 
         return self.communication.serial.executeFunction(
             module=stm32_addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=stm32_addresses.TWIPR_GeneralAddresses.ADDRESS_FIRMWARE_RESET,
+            address=stm32_addresses.TWIPR_SystemAddresses.FIRMWARE_RESET,
             input_type=None,
             output_type=ctypes.c_bool,
             timeout=1

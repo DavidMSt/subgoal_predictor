@@ -2382,6 +2382,20 @@ export class GUI {
         this.renderCategoryTree();
     }
 
+
+    setPage(page_id) {
+        const page = this.getObjectByUID(page_id);
+        if (!page) {
+            console.warn(`Page "${page_id}" not found.`);
+            return;
+        }
+
+        const category = page.parent;
+        this.setCategory(category.id);
+        category.setPage(page);
+    }
+
+
     /* ===============================================================================================================*/
     renderCategoryTree() {
         const container = this.category_bar_list;
