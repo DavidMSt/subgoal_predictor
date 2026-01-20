@@ -3,15 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import MessagePassing
 from torch_geometric.utils import scatter
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.nn import HeteroConv, GCNConv, GraphSAGE, SAGEConv
 from torch_geometric.loader import DataLoader
-from torch.utils.data import random_split
+from torch.utils.data import random_split, Subset
 
-from master_thesis.modules.task_assignment.gnn.helpers.graph_dataset import BipartiteAssignmentDataset
+from master_thesis.modules.task_assignment.gnn.helpers.graph_dataset import BipartiteAssignmentDataset, load_datasets
 from master_thesis.modules.task_assignment.gnn.helpers.train_utils import train_epoch, validate
+from master_thesis.modules.task_assignment.gnn.cost_computation import compute_cost_matrix
 
 class MLPModule(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim = None) -> None:
@@ -81,7 +78,7 @@ class GNNModule(MessagePassing):
         
 class DecoderModule(MLPModule):
     def __init__(self, F) -> None:
-        super().__init__(input_dim=F, output_dim=1)
+        super().__init__(input_dim=F, output_dim=1, hidden_dim=F)  # hidden_dim=F to avoid bottleneck
 
 class DGNN_GA(nn.Module):
     edge_in_dim = 1 # cost is scalar
@@ -113,8 +110,14 @@ class DGNN_GA(nn.Module):
         # Encoder: Eq. 3
         # h_e_ij <- φ_enc(c_ij)
         # =====================
-        c_flat = c.reshape(-1, 1)  # [N_r*N_g, 1]
-        h_e = self.encoder(c_flat).reshape(N_r, N_g, F)  # [N_r, N_g, F]
+        # Encode costs: [N_r, N_g] -> [N_r, N_g, F]
+        h_e = self.encoder(c.unsqueeze(-1))  # cleaner than flatten/reshape
+
+        # Debug: check encoder output variation
+        if not self.training:
+            h_e_flat = h_e.reshape(-1, F)
+            h_e_std = h_e_flat.std(dim=0).mean()
+            print(f"    [MODEL] After encoder: h_e std={h_e_std:.6f}")
 
         # Initialize node embeddings as zero vectors
         h_r = torch.zeros(N_r, F, device=device)  # [N_r, F]
@@ -183,60 +186,104 @@ class DGNN_GA(nn.Module):
         return s.squeeze(-1)  # [N_r, N_g]
     
 if __name__ == "__main__":
+    import argparse
     from torch.utils.tensorboard import SummaryWriter
-    import subprocess, os
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--team-sizes', type=int, nargs='+', default=None,
+                        help='Team sizes to train on (default: all available)')
+    parser.add_argument('--data-dir', type=str,
+                        default='master_thesis/modules/task_assignment/gnn/datasets')
+    parser.add_argument('--epochs', type=int, default=40)
+    parser.add_argument('--batch-size', type=int, default=200)
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--max-samples', type=int, default=None,
+                        help='Limit samples for debugging (e.g., 1000)')
+    args = parser.parse_args()
 
     # =====================
     # Load bipartite Dataset
     # =====================
+    graph_dataset = load_datasets(data_dir=args.data_dir, team_sizes=args.team_sizes)
 
-    graph_dataset = BipartiteAssignmentDataset(data_path= "master_thesis/modules/task_assignment/gnn/helpers/training_dataset.pt"
-    )
-    in_dims = graph_dataset.in_dims
+    # Limit samples for debugging
+    if args.max_samples and len(graph_dataset) > args.max_samples:
+        indices = torch.randperm(len(graph_dataset))[:args.max_samples].tolist()
+        graph_dataset = Subset(graph_dataset, indices)
+        print(f"Limited to {args.max_samples} samples for debugging")
 
     # =====================
-    # Split data
+    # Split data (80/20 train/val)
     # =====================
     g = torch.Generator().manual_seed(42)
     n = len(graph_dataset)
-    n_train = int(0.8*n)
-    n_val = n-n_train
+    n_train = int(0.8 * n)
+    n_val = n - n_train
 
     train_set, val_set = random_split(graph_dataset, [n_train, n_val], generator=g)
 
-    print(train_set)
-    train_loader = DataLoader(train_set, batch_size=32, shuffle=True, drop_last = False)
-    val_loader = DataLoader(val_set, batch_size=32, shuffle = False, drop_last = False)
+    print(f"Dataset: {n} graphs -> Train: {n_train}, Val: {n_val}")
 
-    # agents_pg = [n_agents_pg for n_agents_pg in torch.bincount(train_loader.dataset['agent'])]
-    # print(agents_pg)
-    # print(f"Datasets:  \t Training: graphs:{len(train_set)} \t Evaluation: graphs: {len(val_set)}")
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, drop_last=False)
+    val_loader = DataLoader(val_set, batch_size=args.batch_size, shuffle=False, drop_last=False)
 
-    # # --- vis ---------------------------------------------------------------------
-    # # get port
-    # port = os.environ.get("TB_PORT", "6006")
-    
-    # # run tensorboard 
-    # proc = subprocess.Popen(
-    #     ["tensorboard", "--logdir", "runs", "--port", port],
-    #     stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT
-    # )
-    # writer = SummaryWriter()
+    # =====================
+    # Setup model and training
+    # =====================
+    print(f"Device availability: CUDA={torch.cuda.is_available()}, MPS={torch.backends.mps.is_available()}")
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    # elif torch.backends.mps.is_available():
+    #     device = torch.device('mps')
+    else:
+        device = torch.device('cpu')
+    print(f"Using device: {device}")
 
-    # # --- run ---------------------------------------------------------------------
+    # Hyperparameters from paper
+    F_dim = 64      # Hidden dimension
+    T_layers = 5    # Message passing rounds (L in paper)
+    weight_decay = 5e-4
+    beta = 0.8      # BCE vs matching loss weight
+    alpha = 0.9     # Positive class weight in BCE
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    gnn_model = DGNN_GA(F=64, T=3).to(device)
-    optimizer = torch.optim.Adam(gnn_model.parameters(), lr=1e-3, weight_decay=5e-4)
+    gnn_model = DGNN_GA(F=F_dim, T=T_layers).to(device)
+    optimizer = torch.optim.Adam(gnn_model.parameters(), lr=args.lr, weight_decay=weight_decay)
 
-    n_epochs = 10000
+    # Tensorboard logging
+    writer = SummaryWriter()
 
-    for epoch in range(n_epochs):
-        loss = train_epoch(gnn_model, train_loader, opt=optimizer, device=device)
-        validation = validate(gnn_model, val_loader, device)
+    # =====================
+    # Training loop
+    # =====================
+    for epoch in range(args.epochs):
+        # Train
+        train_metrics = train_epoch(
+            gnn_model, train_loader, opt=optimizer, device=device,
+            beta=beta, alpha=alpha
+        )
 
-        writer.add_scalar("loss/train_ce", loss, epoch)
-        writer.add_scalar("loss/val_ce", validation["ce_loss"].item(), epoch)
-        writer.add_scalar("metrics/acc1", float(validation["acc1"]), epoch)     
-        print(f"epoch {epoch}/ {n_epochs}:\ttraining_loss {loss:.4f}\t validation metrics: acc@1: {validation['acc1']:.3f}, \t ce_loss: {validation['ce_loss']}")
+        # Validate
+        val_metrics = validate(
+            gnn_model, val_loader, device=device,
+            beta=beta, alpha=alpha
+        )
+
+        # Log to tensorboard
+        writer.add_scalar("loss/train", train_metrics["loss"], epoch)
+        writer.add_scalar("loss/train_bce", train_metrics["bce_loss"], epoch)
+        writer.add_scalar("loss/train_match", train_metrics["match_loss"], epoch)
+        writer.add_scalar("loss/val", val_metrics["loss"], epoch)
+        writer.add_scalar("metrics/acc1", val_metrics["acc1"], epoch)
+        writer.add_scalar("metrics/f1_score", val_metrics["f1_score"], epoch)
+
+        print(
+            f"Epoch {epoch+1:03d}/{args.epochs} | "
+            f"Train Loss: {train_metrics['loss']:.4f} | "
+            f"Val Loss: {val_metrics['loss']:.4f} | "
+            f"Acc@1: {val_metrics['acc1']:.3f} | "
+            f"F1: {val_metrics['f1_score']:.3f}"
+        )
+
+    writer.close()
+    print("Training complete!")
     
