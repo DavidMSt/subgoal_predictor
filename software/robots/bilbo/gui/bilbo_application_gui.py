@@ -2584,13 +2584,16 @@ class BILBO_GUI_OverviewPage:
         # status_group = Widget_Group(group_id='status_group', title='Status', rows=1, columns=1, show_title=True)
         # self.page.addWidget(status_group, row=1, column=1, width=8, height=8)
 
+        # Build tracker overview (disabled if OptiTrack not enabled)
         self._build_tracker_overview()
 
+        # Build timecode group (disabled if timecode not enabled)
         self._build_timecode()
 
         self.babylon_widget = BabylonWidget(widget_id='babylon_widget')
         self.page.addWidget(self.babylon_widget, row=6, column=30, height=13, width=21)
 
+        # Build extensions group (individual widgets disabled based on settings)
         self._build_display_group()
 
         # self.joystick_manager_widget = JoystickAssignmentWidget(
@@ -2632,12 +2635,11 @@ class BILBO_GUI_OverviewPage:
         #
         # self.page.addWidget(self.joystick_manager_widget, row=5, width=14, height=14)
 
-        bilbo_mode_widget = BilboModeWidget(widget_id='bilbo_mode_widget', current_mode='OFF')
-        self.page.addWidget(bilbo_mode_widget, height=3, width=10)
-
     # ------------------------------------------------------------------------------------------------------------------
     def _build_timecode(self):
-        # Timecode
+        """Build the timecode group. Disabled if timecode is not enabled in settings."""
+        timecode_enabled = self.manager.settings.use_timecode
+
         timecode_group = Widget_Group(group_id='timecode_group',
                                       title='Timecode',
                                       rows=1,
@@ -2652,6 +2654,13 @@ class BILBO_GUI_OverviewPage:
         timecode_clock = DigitalClockWidget(display_format="hh:mm:ss")
         timecode_group.addWidget(timecode_clock, row=1, column=3, width=2, height=1)
 
+        self.page.addWidget(timecode_group, row=13, column=1, width=10, height=2)
+
+        # If timecode is not enabled, disable the group and skip callback registration
+        if not timecode_enabled:
+            timecode_group.disable()
+            return
+
         def initialize_timecode(*args, **kwargs):
             fps = self.manager.timecode_server.get_fps()
             timecode_fps.value = fps
@@ -2665,7 +2674,6 @@ class BILBO_GUI_OverviewPage:
             timecode_clock.set(None)
 
         def update_timecode(timecode: Timecode):
-            # seconds = self.manager.timecode_server.get_time()
             timecode_clock.set(timecode.to_seconds())
             timecode_status_indicator.blink(250)
 
@@ -2678,10 +2686,11 @@ class BILBO_GUI_OverviewPage:
         self.manager.timecode_server.events.error.on(stop_timecode)
         self.manager.timecode_server.callbacks.zero_frame.register(update_timecode)
 
-        self.page.addWidget(timecode_group, row=13, column=1, width=10, height=2)
-
     # ------------------------------------------------------------------------------------------------------------------
     def _build_tracker_overview(self):
+        """Build the tracker overview group. Disabled if OptiTrack is not enabled in settings."""
+        optitrack_enabled = self.manager.settings.use_optitrack
+
         tracker_group = Widget_Group(group_id='tracker_group',
                                      title='Tracker',
                                      rows=11,
@@ -2747,13 +2756,15 @@ class BILBO_GUI_OverviewPage:
 
         tracker_group.addWidget(tracker_table, row=8, column=1, width=3, height=4)
 
-        #
+        # If OptiTrack is not enabled, disable the group and skip callback registration
+        if not optitrack_enabled:
+            tracker_group.disable()
+            return
 
         def initialize_tracker(*args, **kwargs):
             tracker_status.updateConfig(color=[0, 0.8, 0])
 
             for obj_id, rigid_body in self.manager.tracker.rigid_bodies.items():
-                # rb_table.addRow(obj_id, cells=[obj_id, '❌'])
                 rb_table.make_row(id=obj_id, object_id=obj_id, valid=[0.8, 0, 0])
 
         def tracker_error(*args, **kwargs):
@@ -2835,7 +2846,13 @@ class BILBO_GUI_OverviewPage:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _build_display_group(self):
-        """Build the display/extensions group with display text input and limbo bar slider."""
+        """Build the display/extensions group with display text input and limbo bar slider.
+
+        Widgets are disabled if their corresponding feature is not enabled in settings.
+        """
+        use_display = self.manager.settings.use_display
+        use_limbobar = self.manager.settings.use_limbobar
+
         display_group = Widget_Group(
             group_id='display_group',
             title='Extensions',
@@ -2857,12 +2874,16 @@ class BILBO_GUI_OverviewPage:
         )
         display_group.addWidget(self.display_text_input, row=1, column=1, width=2, height=1)
 
-        def on_display_text_changed(text: str):
-            self.logger.info(f"Setting display text to: {text}")
-            self.manager.extensions.display.set_text(text)
+        if use_display:
+            def on_display_text_changed(text: str):
+                self.logger.info(f"Setting display text to: {text}")
+                self.manager.extensions.display.set_text(text)
 
-        self.display_text_input.callbacks.value_changed.register(on_display_text_changed)
+            self.display_text_input.callbacks.value_changed.register(on_display_text_changed)
+        else:
+            self.display_text_input.disable()
 
+        # === Limbo Height Slider ===
         self.limbo_height_slider = ClassicSliderWidget(
             widget_id='limbo_height_slider',
             min_value=0,
@@ -2877,13 +2898,16 @@ class BILBO_GUI_OverviewPage:
         )
         display_group.addWidget(self.limbo_height_slider, row=2, column=1, width=2, height=1)
 
-        def on_limbo_height_changed(height: float):
-            height_m = height  # Convert cm to mm
-            self.logger.info(f"Setting limbo bar height to: {height} mm")
-            self.manager.extensions.limbo_bar.setHeight(height_m)
+        if use_limbobar:
+            def on_limbo_height_changed(height: float):
+                height_m = height
+                self.logger.info(f"Setting limbo bar height to: {height} mm")
+                self.manager.extensions.limbo_bar.setHeight(height_m)
 
-        self.manager.extensions.limbo_bar.setHeight(0)
-        self.limbo_height_slider.callbacks.value_changed.register(on_limbo_height_changed)
+            self.manager.extensions.limbo_bar.setHeight(0)
+            self.limbo_height_slider.callbacks.value_changed.register(on_limbo_height_changed)
+        else:
+            self.limbo_height_slider.disable()
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_new_testbed_robot(self, robot: BILBO_TestbedAgent):

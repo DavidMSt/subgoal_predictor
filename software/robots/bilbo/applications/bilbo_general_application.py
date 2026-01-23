@@ -32,25 +32,67 @@ from robots.bilbo.testbed.testbed_manager import BILBO_TestbedManager, BILBO_Tes
 from core.utils.callbacks import Callback
 from core.utils.network.network import getHostIP
 from robots.bilbo.robot.bilbo import BILBO
+from core.utils.yaml_utils import load_yaml
 
 # ======================================================================================================================
 ENABLE_SPEECH_OUTPUT = True
 
 
-# EXPERIMENT_DIR = relativeToFullPath('~/bilbolab/experiments/bilbo')
+# ======================================================================================================================
+# Settings dataclasses for YAML parsing
+# ======================================================================================================================
+@dataclasses.dataclass
+class ExtensionsSettings:
+    display: bool = True
+    limbobar: bool = True
+    timecode: bool = False
+
+
+@dataclasses.dataclass
+class OptitrackSettings:
+    enabled: bool = True
+    server: str = 'palantir.lan'
+
+
+@dataclasses.dataclass
+class TestbedSettings:
+    type: str | None = None
+    size: list[float] | None = None
+
+
+@dataclasses.dataclass
+class ApplicationSettingsYAML:
+    """Settings as loaded from application_settings.yaml"""
+    extensions: ExtensionsSettings = dataclasses.field(default_factory=ExtensionsSettings)
+    optitrack: OptitrackSettings = dataclasses.field(default_factory=OptitrackSettings)
+    testbed: TestbedSettings = dataclasses.field(default_factory=TestbedSettings)
+
+
+def load_application_settings(path: str | None = None) -> ApplicationSettingsYAML:
+    """Load application settings from YAML file."""
+    if path is None:
+        path = get_absolute_path('application_settings.yaml')
+
+    yaml_data = load_yaml(path)
+
+    # Parse nested dataclasses
+    extensions = ExtensionsSettings(**yaml_data.get('extensions', {})) if yaml_data.get('extensions') else ExtensionsSettings()
+    optitrack = OptitrackSettings(**yaml_data.get('optitrack', {})) if yaml_data.get('optitrack') else OptitrackSettings()
+    testbed = TestbedSettings(**yaml_data.get('testbed', {})) if yaml_data.get('testbed') else TestbedSettings()
+
+    return ApplicationSettingsYAML(
+        extensions=extensions,
+        optitrack=optitrack,
+        testbed=testbed
+    )
 
 
 # ======================================================================================================================
-@dataclasses.dataclass
-class BILBO_ApplicationSettings:
-    testbed: str = 'track'
-
-
 class BILBO_Application:
     manager: BILBO_TestbedManager
     soundsystem: SoundSystem
 
-    def __init__(self, settings: BILBO_ApplicationSettings):
+    def __init__(self, settings: ApplicationSettingsYAML):
 
         self.settings = settings
 
@@ -64,8 +106,17 @@ class BILBO_Application:
             self.logger.error("No valid IP address for the server")
             exit_program()
 
+        # Convert testbed size from list to tuple if provided
+        testbed_size = tuple(settings.testbed.size) if settings.testbed.size else None
+
         testbed_settings = BILBO_TestbedManager_Settings(
-            testbed=settings.testbed,
+            testbed_type=settings.testbed.type,
+            testbed_size=testbed_size,
+            optitrack_server=settings.optitrack.server,
+            use_optitrack=settings.optitrack.enabled,
+            use_limbobar=settings.extensions.limbobar,
+            use_display=settings.extensions.display,
+            use_timecode=settings.extensions.timecode,
         )
 
         self.manager = BILBO_TestbedManager(testbed_settings)
@@ -135,8 +186,8 @@ class BILBO_Application:
 
 # ======================================================================================================================
 def run_bilbo_application():
-
-    settings = BILBO_ApplicationSettings(testbed='track')
+    # Load settings from YAML file
+    settings = load_application_settings()
 
     app = BILBO_Application(settings=settings)
     app.init()

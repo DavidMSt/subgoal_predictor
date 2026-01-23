@@ -26,28 +26,48 @@ class BILBO_TestbedManager_Events:
     initialized: Event = Event(copy_data_on_set=False)
 
 
+DEFAULT_TESTBED_SIZE = (10.0, 10.0)  # Default 10x10m for infinite/custom testbed
+
+# Available predefined testbed configurations
+AVAILABLE_TESTBEDS = ['track', 'lab']
+
+
 @dataclasses.dataclass
 class BILBO_TestbedManager_Settings:
-    testbed: str = 'track'  # can be 'track' or 'lab'
+    """Settings for the testbed manager.
+
+    Testbed resolution logic:
+    1. If testbed_type is set (e.g., 'track', 'lab'): Load predefined config from configs/testbeds/
+    2. If testbed_type is None and testbed_size is set: Use custom size
+    3. If both are None: Use default 10x10m testbed
+    """
+    testbed_type: str | None = 'track'  # Name of predefined testbed ('track', 'lab') or None
+    testbed_size: tuple[float, float] | None = None  # Custom size [width, height] in meters
     tracker_max_sample_rate: int = 30
-    tracker_address: str = 'palantir.lan'
+    use_optitrack: bool = True
+    optitrack_server: str = 'palantir.lan'
+    use_limbobar: bool = True
+    use_display: bool = True
+    use_timecode: bool = False
 
 
 @dataclasses.dataclass
 class BILBO_TestbedConfig:
+    """Configuration loaded from a testbed YAML file."""
     size: list[float]
-    origin_position: str
+    origin_position: str = 'corner'
     origin: dict | None = None
     limbo_marker: dict | None = None
 
 
 class BILBO_TestbedManager:
     robot_manager: BILBO_Manager
-    tracker: BILBO_Tracker
+    tracker: BILBO_Tracker | None
     bilbos: dict[str, BILBO_TestbedAgent]
-    extensions: BILBO_TestbedExtensions
+    extensions: BILBO_TestbedExtensions | None
     settings: BILBO_TestbedManager_Settings
-    testbed_config: BILBO_TestbedConfig
+    testbed_config: BILBO_TestbedConfig | None
+    timecode_server: TimecodeServer | None
 
     # === INIT =========================================================================================================
     def __init__(self, settings: BILBO_TestbedManager_Settings):
@@ -55,67 +75,106 @@ class BILBO_TestbedManager:
         self.settings = settings
 
         self.robot_manager = BILBO_Manager(enable_scanner=AUTOSTART_ROBOTS, autostop_robots=AUTOSTOP_ROBOTS)
-        self.tracker = BILBO_Tracker(max_sample_rate=self.settings.tracker_max_sample_rate,
-                                     server_address=self.settings.tracker_address)
         self.events = BILBO_TestbedManager_Events()
 
-        self.tracker.events.new_sample.on(self._on_new_tracker_sample, max_rate=30)
-        self.tracker.events.description_received.on(self._on_tracker_initialized, once=True)
-        self.tracker.events.new_rigid_body.on(self._on_tracker_new_rigid_body)
+        # OptiTrack tracker (optional)
+        if self.settings.use_optitrack:
+            self.tracker = BILBO_Tracker(max_sample_rate=self.settings.tracker_max_sample_rate,
+                                         server_address=self.settings.optitrack_server)
+            self.tracker.events.new_sample.on(self._on_new_tracker_sample, max_rate=30)
+            self.tracker.events.description_received.on(self._on_tracker_initialized, once=True)
+            self.tracker.events.new_rigid_body.on(self._on_tracker_new_rigid_body)
+        else:
+            self.tracker = None
 
         # Joystick Control
         self.joystick_control = BILBO_JoystickControl(bilbo_manager=self.robot_manager, run_in_thread=True)
 
         self.bilbos = {}
 
-        self.timecode_server = TimecodeServer()
-        self.extensions = BILBO_TestbedExtensions()
+        # Timecode server (optional)
+        if self.settings.use_timecode:
+            self.timecode_server = TimecodeServer()
+        else:
+            self.timecode_server = None
+
+        # Testbed extensions (display, limbobar) - only create if any extension is enabled
+        if self.settings.use_display or self.settings.use_limbobar:
+            self.extensions = BILBO_TestbedExtensions(
+                use_limbobar=self.settings.use_limbobar,
+                use_display=self.settings.use_display
+            )
+        else:
+            self.extensions = None
+
+        self.testbed_config = None
 
         self.robot_manager.events.new_robot.on(self._on_new_robot)
         self.robot_manager.events.robot_disconnected.on(self._on_robot_disconnected)
 
-        # # TODO: This is ugly and just for now
-        # self.limbobar = LimboBar(
-        #     geometry=LimboBarGeometry(
-        #         start_x=1.5,
-        #         end_x=1.5,
-        #         start_y=0,
-        #         end_y=2,
-        #         height=0.15
-        #     )
-        # )
-        # self._limbobar_cooldown = False  # True during cooldown period after a hit
-
     # === METHODS ======================================================================================================
     def init(self):
-
-        # Load the testbed config
-        match self.settings.testbed:
-            case 'track':
-                testbed_config = get_absolute_path('../configs/testbeds/testbed-track.yaml')
-                testbed_config_dict = load_yaml(testbed_config)
-                self.testbed_config = from_dict_auto(BILBO_TestbedConfig, testbed_config_dict)
-            case 'lab':
-                testbed_config = get_absolute_path('../configs/testbeds/testbed-lab.yaml')
-                testbed_config_dict = load_yaml(testbed_config)
-                self.testbed_config = from_dict_auto(BILBO_TestbedConfig, testbed_config_dict)
-            case _:
-                raise ValueError(f"Testbed '{self.settings.testbed}' not supported.")
+        # Load or create testbed config
+        self.testbed_config = self._resolve_testbed_config()
+        self.logger.info(f"Testbed size: {self.testbed_config.size[0]}m x {self.testbed_config.size[1]}m")
 
         self.robot_manager.init()
         self.joystick_control.init()
-        self.tracker.init()
+
+        if self.tracker is not None:
+            self.tracker.init()
 
         self.events.initialized.set()
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _resolve_testbed_config(self) -> BILBO_TestbedConfig:
+        """Resolve testbed configuration based on settings.
+
+        Priority:
+        1. Named testbed (testbed_type) → Load from predefined config file
+        2. Custom size (testbed_size) → Create minimal config with given size
+        3. Neither → Use default 10x10m testbed
+        """
+        if self.settings.testbed_type is not None:
+            # Load predefined testbed config
+            if self.settings.testbed_type not in AVAILABLE_TESTBEDS:
+                raise ValueError(
+                    f"Testbed '{self.settings.testbed_type}' not found. "
+                    f"Available testbeds: {AVAILABLE_TESTBEDS}"
+                )
+            config_path = get_absolute_path(f'../configs/testbeds/testbed-{self.settings.testbed_type}.yaml')
+            config_dict = load_yaml(config_path)
+            return from_dict_auto(BILBO_TestbedConfig, config_dict)
+
+        elif self.settings.testbed_size is not None:
+            # Use custom size
+            self.logger.info(f"Using custom testbed size: {self.settings.testbed_size}")
+            return BILBO_TestbedConfig(
+                size=list(self.settings.testbed_size),
+                origin_position='corner'
+            )
+
+        else:
+            # Use default size
+            self.logger.info(f"No testbed specified, using default size: {DEFAULT_TESTBED_SIZE}")
+            return BILBO_TestbedConfig(
+                size=list(DEFAULT_TESTBED_SIZE),
+                origin_position='corner'
+            )
+
+    # ------------------------------------------------------------------------------------------------------------------
     def start(self):
-        self.tracker.start()
-        self.timecode_server.start()
+        if self.tracker is not None:
+            self.tracker.start()
+
+        if self.timecode_server is not None:
+            self.timecode_server.start()
+
         self.robot_manager.start()
         self.joystick_control.start()
 
-        self.extensions.start()
+        if self.extensions is not None:
+            self.extensions.start()
 
     # ------------------------------------------------------------------------------------------------------------------
     def emergency_stop(self):
@@ -131,15 +190,15 @@ class BILBO_TestbedManager:
         self.logger.info(f"New robot connected: {robot.id}")
         speak(f"Robot {robot.id} connected")
 
-        if self.tracker.status != BILBO_Tracker_Status.RUNNING:
-            self.logger.warning(f"Tracker is not running, cannot get optitrack data for robot {robot.id}")
-            tracked_object = None
-        else:
-            # Check if there is a tracked object for this robot
-            tracked_object = self.tracker.add_robot(robot.id, robot.config)
-
-            if tracked_object is None:
-                self.logger.warning(f"OptiTrack is running, but robot {robot.id} does not exist in tracker")
+        tracked_object = None
+        if self.tracker is not None:
+            if self.tracker.status != BILBO_Tracker_Status.RUNNING:
+                self.logger.warning(f"Tracker is not running, cannot get optitrack data for robot {robot.id}")
+            else:
+                # Check if there is a tracked object for this robot
+                tracked_object = self.tracker.add_robot(robot.id, robot.config)
+                if tracked_object is None:
+                    self.logger.warning(f"OptiTrack is running, but robot {robot.id} does not exist in tracker")
 
         container = BILBO_TestbedAgent(id=robot.id,
                                        robot=robot,
@@ -147,7 +206,8 @@ class BILBO_TestbedManager:
 
         self.bilbos[robot.id] = container
 
-        # self.timecode_server.add_target(robot.device.address)
+        if self.timecode_server is not None:
+            self.timecode_server.add_target(robot.device.address)
 
         self.events.new_robot.set(container, flags={'type': 'robot', 'id': robot.id})
 
@@ -161,12 +221,19 @@ class BILBO_TestbedManager:
 
         container = self.bilbos[robot.id]
         del self.bilbos[robot.id]
-        self.tracker.remove_robot(robot.id)
-        self.timecode_server.remove_target(robot.device.address)
+
+        if self.tracker is not None:
+            self.tracker.remove_robot(robot.id)
+
+        if self.timecode_server is not None:
+            self.timecode_server.remove_target(robot.device.address)
+
         self.events.robot_disconnected.set(container, flags={'type': 'robot', 'id': robot.id})
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_tracker_initialized(self, *args, **kwargs):
+        if self.testbed_config is None:
+            return
 
         if self.testbed_config.origin is not None:
             origin_config = from_dict_auto(BILBO_OriginConfig, self.testbed_config.origin)

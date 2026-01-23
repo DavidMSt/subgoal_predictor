@@ -14,40 +14,42 @@ class BILBO_TestbedExtensions:
     _limbo_bar_connected: bool = False
 
     # === INIT =========================================================================================================
-    def __init__(self):
+    def __init__(self, use_limbobar: bool = True, use_display: bool = True):
         self.logger = Logger('BILBO Testbed Extensions', 'DEBUG')
-        self.limbo_bar = TestbedLimboIndicator()
-        self.display = TestbedDisplayClient()
+        self.limbo_bar = TestbedLimboIndicator() if use_limbobar else None
+        self.display = TestbedDisplayClient() if use_display else None
 
         register_exit_callback(self.close)
 
     # === METHODS ======================================================================================================
     def start(self):
-        if not self.display.start():
-            self.logger.error("Could not start display client.")
-            self._display_connected = False
+        if self.display is not None:
+            if not self.display.start():
+                self.logger.error("Could not start display client.")
+                self._display_connected = False
+            else:
+                self._display_connected = True
+                self.display.clear()
 
-        else:
-            self._display_connected = True
-            self.display.clear()
-
-        if not self.limbo_bar.start():
-            self.logger.error("Could not start limbo bar.")
-            self._limbo_bar_connected = False
-        else:
-            self._limbo_bar_connected = True
-            self.limbo_bar.clear()
+        if self.limbo_bar is not None:
+            if not self.limbo_bar.start():
+                self.logger.error("Could not start limbo bar.")
+                self._limbo_bar_connected = False
+            else:
+                self._limbo_bar_connected = True
+                self.limbo_bar.clear()
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
-        if self._display_connected:
+        if self._display_connected and self.display is not None:
             self.display.clear()
-        if self._limbo_bar_connected:
+        if self._limbo_bar_connected and self.limbo_bar is not None:
             self.limbo_bar.clear()
             
     # ------------------------------------------------------------------------------------------------------------------
     def test(self):
-        self.display.set_text("TEST", color=(0, 255, 255))
+        if self.display is not None and self._display_connected:
+            self.display.set_text("TEST", color=(0, 255, 255))
 
 
 if __name__ == "__main__":
