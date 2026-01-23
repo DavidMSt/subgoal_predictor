@@ -24,6 +24,7 @@ class MovementElement_Status(enum.StrEnum):
     FINISHED = 'FINISHED'
 
 
+# ----------------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass
 class MovementElement:
     id: str
@@ -37,6 +38,7 @@ class MovementElement:
         LOWLEVEL_ID += 1
 
 
+# ----------------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass(kw_only=True)
 class MoveTo(MovementElement):
     x: float
@@ -44,23 +46,27 @@ class MoveTo(MovementElement):
     max_speed: float = 0.75
 
 
+# ----------------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass(kw_only=True)
 class TurnTo(MovementElement):
     angle: float
     max_speed: float = 3.0
 
 
+# ----------------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass(kw_only=True)
 class TurnToPoint(MovementElement):
     x: float
     y: float
 
 
+# ----------------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass(kw_only=True)
 class Wait(MovementElement):
     duration: float
 
 
+# ----------------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass(kw_only=True)
 class Beep(MovementElement):
     duration: float
@@ -68,6 +74,21 @@ class Beep(MovementElement):
     frequency: float = 1000.0
 
 
+# --- TRACK ------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass
+class TrackWaypoint:
+    x: float
+    y: float
+    strength: float = 0.5  # between 0 and 1. 0 -> leave out, 1 -> pass exactly
+    stop: bool = False
+
+
+@dataclasses.dataclass(kw_only=True)
+class Track(MovementElement):
+    waypoints: list[TrackWaypoint]
+
+
+# ======================================================================================================================
 class BILBO_PositionControl:
     movement_queue: queue.Queue[MovementElement]
 

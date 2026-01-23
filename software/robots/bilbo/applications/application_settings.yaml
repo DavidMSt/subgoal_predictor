@@ -1,0 +1,8 @@
+use_timecode: false
+use_testbed_display: false
+use_limbobar: false
+use_optitrack: true
+optitrack_version: 4  # 3 or 4
+optitrack_server: bree.lan
+testbed: track  # track, arena, infinite
+testbed_size: ~

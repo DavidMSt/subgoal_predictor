@@ -1,0 +1,22 @@
+origin:
+  id: "origin-bilbo"
+  points: [ 1, 2, 3, 4, 5 ]
+  origin: 1
+  x_axis_end: 4
+  y_axis_end: 5
+  offset_x: 0.01
+  offset_y: 0.01
+  offset_z: 0.02
+  marker_size: 0.01
+
+limbo_marker:
+  id: "limbo-marker"
+  points: [ 1 , 2, 3, 4 ]
+  x_start: 3
+  x_end: 1
+  y_start: 2
+  y_end: 4
+  limbo_direction: -1.57
+
+size: [ 3, 1 ]
+origin_position: 'corner'

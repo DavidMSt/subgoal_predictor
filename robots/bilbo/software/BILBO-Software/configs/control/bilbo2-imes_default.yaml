@@ -8,9 +8,9 @@ general:
 inputs:
   balancing:
     forward:
-      max: 0.3
+      max: 0.2
     turn:
-      max: 0.12
+      max: 0.08
   velocity:
     forward:
       max: 0.75

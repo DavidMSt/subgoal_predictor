@@ -354,7 +354,7 @@ bool BILBO_Control::set_tic_enabled(bool state) {
 /* -------------------------------------------------------------------------------------- */
 bilbo_control_output_t BILBO_Control::update() {
 
-	position_command_t position_command = { 0, 0 };
+//	position_command_t position_command = { 0, 0 };
 	bilbo_position_control_output_t position_output = { 0, 0 };
 
 	bilbo_velocity_control_command_t velocity_command = { .v = 0, .psi_dot = 0 };

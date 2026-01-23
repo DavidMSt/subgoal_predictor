@@ -1,6 +1,3 @@
-import time
-
-from core.utils.events import Event
 from core.utils.exit import register_exit_callback
 from core.utils.network import get_wifi_ssid, check_internet, getSignalStrength
 from robot.bilbo_common import BILBO_Common
@@ -38,8 +35,10 @@ class BILBO_Display:
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
-        # self.display.start()
-        ...
+        # Start the display immediately with the Status page
+        self.display.change_page('Status', start_thread=False)
+        self.display.start()
+        self._display_started = True
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self):
@@ -87,11 +86,5 @@ class BILBO_Display:
         server_connected = self.core.server_connected
 
         self.status_page.set_server_connection(server_connected)
-
-        # Start the display if it hasn't been started yet
-        if not self._display_started:
-            self.display.change_page('Status', start_thread=False)
-            self.display.start()
-            self._display_started = True
 
     # ------------------------------------------------------------------------------------------------------------------
