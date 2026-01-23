@@ -13,7 +13,7 @@ from core.utils.files import get_absolute_path
 from core.utils.js.vite import run_vite_app
 from core.utils.logging_utils import Logger
 from core.utils.network.network import getHostIP
-from core.utils.websockets import WebsocketServer, WebsocketServerClient
+from core.utils.aiohttp_websocket_server import AioHttpWebsocketServer, AioHttpWebsocketClient
 from extensions.gui.settings import WS_PORT_MOBILE, PORT_JS_APP
 from extensions.gui.src.gui import GUI_UpdateMessage, InitMessage
 from extensions.gui.src.lib.messages import AddMessage, AddMessageData, RemoveMessage, RemoveMessageData
@@ -634,9 +634,9 @@ class Folder:
 class App:
     root_folder: Folder | None
 
-    server: WebsocketServer
+    server: AioHttpWebsocketServer
 
-    frontends: list[WebsocketServerClient]
+    frontends: list[AioHttpWebsocketClient]
 
     popups: dict[str, Popup]
 
@@ -673,7 +673,7 @@ class App:
         self.frontends = []
         self.popups = {}
 
-        self.server = WebsocketServer(host=self.host, port=self.ws_port, heartbeats=False)
+        self.server = AioHttpWebsocketServer(host=self.host, port=self.ws_port, heartbeats=False)
         self.server.callbacks.new_client.register(self._new_client_callback)
         self.server.callbacks.client_disconnected.register(self._client_disconnected_callback)
         self.server.callbacks.message.register(self._serverMessageCallback)
@@ -868,7 +868,7 @@ class App:
         self.logger.debug(f"New client connected: {client}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _client_disconnected_callback(self, client: WebsocketServerClient):
+    def _client_disconnected_callback(self, client: AioHttpWebsocketClient):
         self.logger.debug(f"Client disconnected: {client.address}:{client.port}")
 
         if client in self.frontends:
@@ -879,7 +879,6 @@ class App:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _serverMessageCallback(self, client, message, *args, **kwargs):
-        self.logger.debug(f"Message received: {message}")
 
         match message['type']:
             case 'handshake':
@@ -893,7 +892,7 @@ class App:
                 self.logger.warning(f"Unknown message type: {message['type']}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _handleHandshakeMessage(self, client: WebsocketServerClient, message):
+    def _handleHandshakeMessage(self, client: AioHttpWebsocketClient, message):
         self.logger.debug(f"Received handshake message from {client}: {message}")
 
         data = message.get('data')
@@ -918,7 +917,7 @@ class App:
                 return
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _handleEventMessage(self, message, sender: WebsocketServerClient = None):
+    def _handleEventMessage(self, message, sender: AioHttpWebsocketClient = None):
         # 1) must have an id for use with other objects
         msg_id = message.get('id')
 
@@ -955,7 +954,7 @@ class App:
         element.onEvent(message.get('data'), sender=sender)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _handleFrontendHandshake(self, client: WebsocketServerClient, data):
+    def _handleFrontendHandshake(self, client: AioHttpWebsocketClient, data):
         address = client.address
         #
         # # Check if the frontend address is already in use
@@ -970,7 +969,7 @@ class App:
         self._connectFrontend(client)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _connectFrontend(self, client: WebsocketServerClient):
+    def _connectFrontend(self, client: AioHttpWebsocketClient):
         self.frontends.append(client)
         self._initializeFrontend(client)
         self.logger.info(f"New frontend connected: {client.address}:{client.port} ({len(self.frontends)})")

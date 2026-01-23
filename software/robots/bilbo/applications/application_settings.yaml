@@ -13,3 +13,13 @@ optitrack:
 testbed:
   type: track
   size: null
+
+# mDNS: Advertises the GUI on the local network via multicast DNS
+# When enabled, other devices can access the GUI via http://<hostname>.local/gui
+# No DNS configuration needed - works automatically on the local network
+mdns:
+  enabled: true
+  hostname: bilbolab  # Will be accessible as bilbolab.local
+  # To access without port (bilbolab.local/gui instead of bilbolab.local:8400/gui),
+  # set use_port_80 to true. This requires running the application with sudo.
+  use_port_80: true

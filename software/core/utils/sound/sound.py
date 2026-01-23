@@ -522,7 +522,42 @@ class SoundSystem:
             logger.debug(f"Generated file for \"{text}\" using engine \"{engine_name}\"")
             return file_path
         except Exception as e:
-            logger.error(f"Error generating TTS file: {e}")
+            logger.warning(f"Primary TTS engine failed: {e}")
+            # Try fallback engine if primary fails (e.g., edge-tts 403 errors)
+            return self._try_fallback_tts(text, hash_value, index)
+
+    def _try_fallback_tts(self, text, hash_value, index):
+        """
+        Attempt TTS generation with fallback engine or gTTS.
+        """
+        fallback = self.fallback_engine or GTTSVoiceEngine()
+        fallback_name = fallback.__class__.__name__
+
+        # Check if we already have a cached file from this fallback
+        if fallback_name in index.get(text, {}):
+            file_path = index[text][fallback_name]
+            if file_exists(file_path):
+                logger.debug(f"Found cached fallback file for \"{text}\"")
+                return file_path
+
+        file_path = joinPaths(self.tts_folder, f"{hash_value}_{fallback_name}.mp3")
+        logger.info(f"Trying fallback TTS engine: {fallback_name}")
+
+        try:
+            fallback.generate(text, file_path)
+            if self.add_robot_filter:
+                apply_robot_filter(file_path, file_path)
+
+            if text not in index:
+                index[text] = {}
+            index[text][fallback_name] = file_path
+            with open(self.index_file, "w") as f:
+                json.dump(index, f)
+
+            logger.debug(f"Generated file using fallback engine \"{fallback_name}\"")
+            return file_path
+        except Exception as e:
+            logger.error(f"Fallback TTS engine also failed: {e}")
             return None
 
     def _resolve_file_path(self, file):

@@ -348,7 +348,8 @@ async def admin_ui(request):
 """)
 
 
-async def start_reverse_proxy() -> None:
+async def start_reverse_proxy(port: int = 80, host: str = "0.0.0.0") -> None:
+    """Start the reverse proxy server (blocking async function)."""
     await load_routes_from_disk()
 
     app = web.Application()
@@ -366,9 +367,9 @@ async def start_reverse_proxy() -> None:
     # Setup runner with shorter shutdown timeout
     runner = web.AppRunner(app, shutdown_timeout=5)
     await runner.setup()
-    site = web.TCPSite(runner, host="0.0.0.0", port=80)
+    site = web.TCPSite(runner, host=host, port=port)
     await site.start()
-    print("🔁 Reverse proxy listening on port 80")
+    print(f"🔁 Reverse proxy listening on {host}:{port}")
 
     stop_event = asyncio.Event()
 
@@ -378,11 +379,108 @@ async def start_reverse_proxy() -> None:
 
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, _shutdown)
+        try:
+            loop.add_signal_handler(sig, _shutdown)
+        except NotImplementedError:
+            # Signal handlers not supported on Windows
+            pass
 
     await stop_event.wait()
     await runner.cleanup()
     print("✅ Shutdown complete.")
+
+
+class ReverseProxyServer:
+    """
+    Reverse proxy server that can run in a background thread.
+
+    Usage:
+        server = ReverseProxyServer(port=8080)
+        server.start()  # Starts in background thread
+        # ... do other stuff ...
+        server.stop()   # Graceful shutdown
+    """
+
+    def __init__(self, port: int = 80, host: str = "0.0.0.0"):
+        self.port = port
+        self.host = host
+        self._thread = None
+        self._loop = None
+        self._runner = None
+        self._stop_event = None
+        self._started = False
+
+    def start(self) -> bool:
+        """Start the reverse proxy in a background thread. Returns True if started successfully."""
+        if self._started:
+            print("Reverse proxy already running")
+            return True
+
+        import threading
+
+        def run_server():
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            try:
+                self._loop.run_until_complete(self._run())
+            except Exception as e:
+                print(f"Reverse proxy error: {e}")
+            finally:
+                self._loop.close()
+
+        self._thread = threading.Thread(target=run_server, daemon=True)
+        self._thread.start()
+
+        # Wait a bit for the server to start
+        import time
+        time.sleep(0.5)
+        self._started = True
+        return True
+
+    async def _run(self):
+        """Internal async run method."""
+        await load_routes_from_disk()
+
+        app = web.Application()
+        app["websockets"] = set()
+        app.on_shutdown.append(on_shutdown)
+
+        app.router.add_post("/_register", register_host)
+        app.router.add_post("/_unregister", unregister_host)
+        app.router.add_get("/_routes", list_routes)
+        app.router.add_get("/_static_routes", static_routes)
+        app.router.add_get('/admin', admin_ui)
+        app.router.add_route("*", "/{tail:.*}", handle_proxy)
+
+        self._runner = web.AppRunner(app, shutdown_timeout=5)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner, host=self.host, port=self.port)
+        await site.start()
+        print(f"🔁 Reverse proxy listening on {self.host}:{self.port}")
+
+        self._stop_event = asyncio.Event()
+        await self._stop_event.wait()
+
+        await self._runner.cleanup()
+        print("✅ Reverse proxy shutdown complete.")
+
+    def stop(self):
+        """Stop the reverse proxy server."""
+        if not self._started:
+            return
+
+        if self._loop and self._stop_event:
+            self._loop.call_soon_threadsafe(self._stop_event.set)
+
+        if self._thread:
+            self._thread.join(timeout=5)
+
+        self._started = False
+        print("Reverse proxy stopped")
+
+    @property
+    def is_running(self) -> bool:
+        return self._started
 
 
 if __name__ == "__main__":

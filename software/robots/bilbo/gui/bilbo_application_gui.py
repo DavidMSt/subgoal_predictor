@@ -24,7 +24,7 @@ from extensions.babylon.src.lib.objects.bilbo.bilbo import BabylonBilbo
 from extensions.babylon.src.lib.objects.box.box import WallFancy
 from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
 from extensions.cli.cli import CLI
-from extensions.gui.src.app import App, Folder
+from extensions.gui.src.app import App, Folder, FolderPage
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.map.map import MapWidget
 from extensions.gui.src.lib.map.map_objects import Agent
@@ -55,8 +55,14 @@ from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandl
 from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory
 from robots.bilbo.robot.experiment.multi_trial_experiments import DILC_Experiment
 from robots.bilbo.testbed.testbed_objects import BILBO_TestbedAgent
+from core.utils.mdns import MDNSAdvertiser
+from core.utils.network.port_forwarder import PortForwarder
+from extensions.gui.settings import PORT_JS_APP
 
 # from robots.bilbo.robot.experiment.experiments import DILC_Experiment
+
+# mDNS settings - advertise bilbolab.local on the network
+MDNS_HOSTNAME = "bilbolab"  # Will be accessible as http://bilbolab.local/gui (with port 80) or :8400/gui
 
 # === GLOBAL VARIABLES =================================================================================================
 js_control: Optional[BILBO_JoystickControl] = None
@@ -872,6 +878,7 @@ class RobotUI:
         self.overview_page_data = {}
 
         self.build()
+        self.build_folder()
 
     # === METHODS ======================================================================================================
     def build(self):
@@ -1077,7 +1084,7 @@ class RobotUI:
 
         control_group.addWidget(tic_button, column=1, row=8, width=2, height=2)
 
-        self.mode_widget = BilboModeWidget(current_mode = self.robot.control.mode.name)
+        self.mode_widget = BilboModeWidget(current_mode=self.robot.control.mode.name)
         control_group.addWidget(self.mode_widget, column=1, height=3, width=10)
 
         def update_mode_widget(mode: BILBO_Control_Mode, *args, **kwargs):
@@ -1100,10 +1107,6 @@ class RobotUI:
         self.robot.control.events.mode_changed.on(update_mode_widget)
 
         self.robot.control.events.mode_changed.on(update_mode_widget)
-
-
-
-
 
         states_group = Widget_Group(title='States', rows=7, columns=10, show_title=True)
         page.addWidget(states_group, column=12, width=10, height=8)
@@ -2079,6 +2082,102 @@ class RobotUI:
         set_timeout(init_estimation_debug_state, 1.0)
 
     # ------------------------------------------------------------------------------------------------------------------
+    def build_folder(self):
+        self.app_folder = Folder(folder_id=self.robot.id, rows=3, columns=8)
+        self.app_folder.addPage(FolderPage(
+            page_id='control',
+            rows=2, columns=8
+        ))
+
+        # Test Joystick Widget
+        joystick_forward = JoystickWidget(
+            widget_id='joystick_forward',
+            title='Forward',
+            fixed_axis='vertical',
+            return_to_center=True,
+            continuous_updates=True,
+            max_updates_per_second=20,
+            show_values=True,
+            deadzone=0.05,
+        )
+
+        # def on_joystick_position_changed(x, y):
+        #     self.logger.info(f"Joystick position: x={x:.2f}, y={y:.2f}")
+        #
+        # joystick_forward.callbacks.position_changed.register(on_joystick_position_changed)
+        self.app_folder.addObject(joystick_forward, width=3, height=3, column=1, row=1)
+
+        joystick_turn = JoystickWidget(
+            widget_id='joystick_turn',
+            title='Turn',
+            fixed_axis='horizontal',
+            return_to_center=True,
+            continuous_updates=True,
+            max_updates_per_second=20,
+            show_values=True,
+            deadzone=0.05,
+        )
+
+        # joystick_turn.callbacks.position_changed.register(on_joystick_position_changed)
+        self.app_folder.addObject(joystick_turn, width=3, height=3, column=6, row=1)
+
+        self.app_bilbo_mode_widget = BilboModeWidget(widget_id='bilbo_mode_widget',
+                                                     title='Bilbo Mode',
+                                                     current_mode=self.robot.control.mode.name)
+        self.app_folder.addObject(self.app_bilbo_mode_widget, width=2, height=1, column=4, row=1)
+
+        def update_mode_widget(mode: BILBO_Control_Mode, *args, **kwargs):
+            self.app_bilbo_mode_widget.current_mode = mode.name
+
+        def mode_widget_click_callback(mode_id, *args, **kwargs):
+            match mode_id:
+                case 'OFF':
+                    self.robot.control.setControlMode(BILBO_Control_Mode.OFF)
+                case 'DIRECT':
+                    self.robot.control.setControlMode(BILBO_Control_Mode.DIRECT)
+                case 'POSITION':
+                    self.robot.control.setControlMode(BILBO_Control_Mode.POSITION)
+                case 'VELOCITY':
+                    self.robot.control.setControlMode(BILBO_Control_Mode.VELOCITY)
+                case 'BALANCING':
+                    self.robot.control.setControlMode(BILBO_Control_Mode.BALANCING)
+
+        self.app_bilbo_mode_widget.callbacks.mode_clicked.register(mode_widget_click_callback)
+        self.robot.control.events.mode_changed.on(update_mode_widget)
+
+        joystick_forward.disable()
+        joystick_turn.disable()
+
+        def joystick_enable_clicked(*args, **kwargs):
+
+            if self.robot.interfaces.app_joystick_widgets is not None:
+                joystick_forward.disable()
+                joystick_turn.disable()
+                self.robot.interfaces.app_joystick_widgets = None
+                joystick_enable_button.updateConfig(text="Enable Joysticks")
+            else:
+                joystick_forward.enable(True)
+                joystick_turn.enable(True)
+                self.robot.interfaces.set_app_joystick_widgets({
+                    'forward': joystick_forward,
+                    'turn': joystick_turn,
+                })
+                joystick_enable_button.updateConfig(text="Disable Joysticks")
+
+
+
+        joystick_enable_button = Button(widget_id='joystick_enable_button',
+                                        text='Enable Joysticks',
+                                        color=[0.5, 0.3, 0.2],
+                                        callback=joystick_enable_clicked)
+
+        self.app_folder.addObject(joystick_enable_button, width=1, height=1, column=4)
+
+
+
+        self.app.addFolder(self.app_folder)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def on_robot_stream(self, sample: BILBO_Sample, *args, **kwargs):
         if not self._built:
             return
@@ -3010,13 +3109,22 @@ class BILBO_Application_GUI:
     robot_ui: dict[str, RobotUI]
     # robot_categories: dict[str, BILBO_Application_GUI_Robot_Category]
     robot_app_folders: dict[str, BILBO_Application_App_Robot_Folder]
+    mdns_advertiser: MDNSAdvertiser | None
+    port_forwarder: PortForwarder | None
 
     # === INIT =========================================================================================================
     def __init__(self, host,
                  testbed_manager: BILBO_TestbedManager,
                  cli: CLI = None,
-                 joystick_control: BILBO_JoystickControl = None):
+                 joystick_control: BILBO_JoystickControl = None,
+                 enable_mdns: bool = True,
+                 mdns_hostname: str = MDNS_HOSTNAME,
+                 mdns_use_port_80: bool = False):
         self.callbacks = BILBO_Application_GUI_Callbacks()
+        self.host = host
+        self.enable_mdns = enable_mdns
+        self.mdns_hostname = mdns_hostname
+        self.mdns_use_port_80 = mdns_use_port_80
 
         self.gui = GUI(
             id='bilbo_application',
@@ -3056,25 +3164,10 @@ class BILBO_Application_GUI:
         # Reroute all logs to the CLI
         addLogRedirection(self._logRedirection, minimum_level='INFO')
 
-        # DEBUG. Add a joystick to the app page
-
-        # Test Joystick Widget
-        self.test_joystick = JoystickWidget(
-            widget_id='test_joystick',
-            title='Test Joystick',
-            fixed_axis=None,
-            return_to_center=True,
-            continuous_updates=True,
-            max_updates_per_second=20,
-            show_values=True,
-            deadzone=0.05,
-        )
-
-        def on_joystick_position_changed(x, y):
-            self.logger.info(f"Joystick position: x={x:.2f}, y={y:.2f}")
-
-        self.test_joystick.callbacks.position_changed.register(on_joystick_position_changed)
-        self.app.root_folder.addObject(self.test_joystick, width=2, height=2)
+        # mDNS advertiser for network discovery
+        self.mdns_advertiser = None
+        # Port forwarder for port 80 access (optional, requires sudo)
+        self.port_forwarder = None
 
     # === METHODS ======================================================================================================
     def init(self):
@@ -3085,6 +3178,50 @@ class BILBO_Application_GUI:
         self.gui.start()
         self.app.start()
 
+        # Start mDNS advertisement so the GUI is discoverable on the network
+        if self.enable_mdns:
+            self._start_mdns()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _start_mdns(self):
+        """Start mDNS advertisement to make the GUI discoverable on the network.
+
+        If mdns_use_port_80 is True, also starts a port forwarder on port 80 to allow
+        access without specifying a port (requires running with sudo).
+        """
+        # Determine which port to advertise
+        advertised_port = PORT_JS_APP
+
+        if self.mdns_use_port_80:
+            # Start port forwarder: port 80 -> GUI port
+            self.port_forwarder = PortForwarder(listen_port=80, target_port=PORT_JS_APP, target_host=self.host)
+            if self.port_forwarder.start():
+                advertised_port = 80
+            else:
+                self.logger.error("Cannot bind to port 80 - requires sudo. Falling back to port 8400.")
+                self.port_forwarder = None
+
+        # Start mDNS advertisement
+        self.mdns_advertiser = MDNSAdvertiser(
+            hostname=self.mdns_hostname,
+            port=advertised_port
+        )
+        if self.mdns_advertiser.start():
+            if advertised_port == 80:
+                self.logger.info(f"GUI advertised on network: http://{self.mdns_hostname}.local/gui")
+            else:
+                self.logger.info(f"GUI advertised on network: http://{self.mdns_hostname}.local:{advertised_port}/gui")
+        else:
+            self.logger.warning("mDNS advertisement failed. GUI will only be accessible via direct IP:port.")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def close(self):
+        """Clean up resources including mDNS advertisement and port forwarder."""
+        if self.mdns_advertiser:
+            self.mdns_advertiser.stop()
+        if self.port_forwarder:
+            self.port_forwarder.stop()
+
     # ------------------------------------------------------------------------------------------------------------------
     def addRobot(self, robot: BILBO):
 
@@ -3092,7 +3229,6 @@ class BILBO_Application_GUI:
                                           manager=self.testbed_manager,
                                           gui=self.gui,
                                           app=self.app)
-
 
         self.gui.callout_handler.add(callout_type=CalloutType.INFO,
                                      title='Robot Connected',

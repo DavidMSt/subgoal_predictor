@@ -10,8 +10,9 @@ import {Websocket} from "./lib/websocket.js";
 import {Callbacks, getColor, isObject, splitPath} from "./lib/helpers.js";
 import {WidgetGroup} from "./lib/objects/group.js";
 
-const DEFAULT_APP_WEBSOCKET_PORT = 8599
-const SPLASH_TIME = 10; // Time in milliseconds for the splash screen to be displayed
+const DEFAULT_APP_WEBSOCKET_PORT = 8595
+const SPLASH_TIME = 250; // Time in milliseconds for the splash screen to be displayed
+const WEBSOCKET_CONNECT_DELAY = 500; // Delay before connecting WebSocket (helps mobile stability)
 
 // Make a utility function pointer that I can use for debug printing
 let debugPrint = console.log.bind(console, '[App]');
@@ -656,11 +657,14 @@ export class App {
         folderChange = this.setFolder.bind(this);
         activeApp = this;
 
-        // 1) Kick off the splash
+        // // 1) Kick off the splash
         this.showSplash('bilbolab_logo.png', () => {
             // 2) Once done, run the normal GUI setup
             this.initializeApp();
-            this.initializeWebsocket();
+            // 3) Delay WebSocket connection slightly to ensure page is fully ready
+            //    This helps with mobile browser stability
+
+            setTimeout(() => this.initializeWebsocket(), WEBSOCKET_CONNECT_DELAY);
         });
 
 
@@ -674,6 +678,8 @@ export class App {
 
     // -----------------------------------------------------------------------------------------------------------------
     initializeWebsocket() {
+        this.addLineToTerminal('Connecting to websocket...');
+
         console.log(`Connecting to websocket at ${this.websocket_host}:${this.websocket_port}`);
         this.websocket = new Websocket({host: this.websocket_host, port: this.websocket_port})
         this.websocket.on('message', this.onWsMessage.bind(this));
@@ -681,6 +687,7 @@ export class App {
         this.websocket.on('close', this.onWSDisconnected.bind(this));
         this.websocket.on('error', this.onWsError.bind(this));
         this.websocket.connect();
+
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -724,18 +731,36 @@ export class App {
 
     // -----------------------------------------------------------------------------------------------------------------
     onWsConnected() {
-        this.connected = true;
-        this.setConnectionStatus(true);
+        try {
+            console.log('[App] WebSocket connected, preparing handshake...');
+            this.connected = true;
+            this.setConnectionStatus(true);
 
-        const handshake_message = {
-            type: 'handshake',
-            data: {
-                'client_type': 'app_frontend'
-            }
+            // Small delay before sending handshake to ensure connection is stable
+            // This helps with mobile browser quirks
+            setTimeout(() => {
+                try {
+                    if (!this.websocket || !this.websocket.connected) {
+                        console.warn('[App] WebSocket disconnected before handshake could be sent');
+                        return;
+                    }
+
+                    const handshake_message = {
+                        type: 'handshake',
+                        data: {
+                            'client_type': 'app_frontend'
+                        }
+                    }
+
+                    console.log('[App] Sending handshake message...');
+                    this.websocket.send(handshake_message);
+                } catch (e) {
+                    console.error('[App] Error sending handshake:', e);
+                }
+            }, 100);
+        } catch (e) {
+            console.error('[App] Error in onWsConnected:', e);
         }
-
-        // Send the handshake message immediately (like gui.js does)
-        this.websocket.send(handshake_message);
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -747,7 +772,8 @@ export class App {
 
     // -----------------------------------------------------------------------------------------------------------------
     onWsError(err) {
-
+        console.error('[App] WebSocket error:', err);
+        this.addLineToTerminal(`WebSocket error: ${err?.message || 'unknown'}`, 'red');
     }
 
     // -----------------------------------------------------------------------------------------------------------------

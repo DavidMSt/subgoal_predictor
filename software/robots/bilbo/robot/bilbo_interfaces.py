@@ -6,6 +6,7 @@ from enum import Enum
 # === CUSTOM PACKAGES ==================================================================================================
 from core.utils.sound.sound import speak
 from extensions.cli.cli import CommandSet, Command, CommandArgument
+from extensions.gui.src.lib.objects.python.joystick import JoystickWidget
 from extensions.joystick.joystick_manager import Joystick
 from core.utils.curve_utils import shape_joystick, JoystickCurve
 from robots.bilbo.robot.bilbo_control import BILBO_Control
@@ -39,11 +40,14 @@ class BILBO_Interfaces_Events:
 
 # ======================================================================================================================
 class BILBO_Interfaces:
+    app_joystick_widgets: dict[str, JoystickWidget] | None
+
     joystick: Joystick | None
     live_plots: list[dict]
 
-    joystick_thread: threading.Thread | None
-    _exit_joystick_thread: bool
+    _joystick_thread: threading.Thread | None
+    _joystick_stop_event: threading.Event
+    _joystick_lock: threading.Lock
 
     _joystick_event_listeners: list[SubscriberListener]
     joystick_enabled: bool = True
@@ -64,9 +68,11 @@ class BILBO_Interfaces:
                                                     utilities=self.utilities)
 
         self.joystick = None
-        self.joystick_thread = None
+        self.app_joystick_widgets = None
 
-        self._exit_joystick_thread = False
+        self._joystick_thread = None
+        self._joystick_stop_event = threading.Event()
+        self._joystick_lock = threading.Lock()
         self._joystick_event_listeners = []
 
         register_exit_callback(self.close)
@@ -74,9 +80,13 @@ class BILBO_Interfaces:
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
         self.removeJoystick()
+        self.remove_app_joystick_widgets()
 
     # ------------------------------------------------------------------------------------------------------------------
     def addJoystick(self, joystick: Joystick):
+        # Remove any existing joystick first
+        if self.joystick is not None:
+            self.removeJoystick()
 
         self.core.logger.info("Add Joystick")
         speak(f"Joystick {joystick.id} assigned to {self.core.id}")
@@ -122,11 +132,35 @@ class BILBO_Interfaces:
                                                   predicate=pred_flag_contains('button', 'X'),
                                                   discard_data=True,
                                                   )
+        self._joystick_event_listeners.append(listener)
 
         self.set_input_source('WIFI_JOYSTICK')
+        self._start_joystick_thread()
 
-        self._joystick_event_listeners.append(listener)
-        self._startJoystickThread()
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_app_joystick_widgets(self, widgets: dict[str, JoystickWidget]):
+        if 'forward' not in widgets or 'turn' not in widgets:
+            self.core.logger.error("Joystick widgets must contain 'forward' and 'turn' keys")
+            return
+
+        self.app_joystick_widgets = widgets
+        self.core.logger.info("App Joystick Widgets set")
+
+        self.set_input_source('WIFI_JOYSTICK')
+        self._start_joystick_thread()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def remove_app_joystick_widgets(self):
+        if self.app_joystick_widgets is None:
+            return
+
+        self.core.logger.info("Remove App Joystick Widgets")
+        self.app_joystick_widgets = None
+
+        # Stop joystick thread if no input source remains
+        if self.joystick is None:
+            self._stop_joystick_thread()
+            self.set_input_source('NONE')
 
     # ------------------------------------------------------------------------------------------------------------------
     def enable_joystick(self):
@@ -138,25 +172,25 @@ class BILBO_Interfaces:
 
     # ------------------------------------------------------------------------------------------------------------------
     def removeJoystick(self):
-        if self.joystick is not None:
-            self.core.logger.info("Remove Joystick")
-            speak(f"Joystick {self.joystick.id} removed from {self.core.id}")
-            self.joystick.clearAllButtonCallbacks()
+        if self.joystick is None:
+            return
+
+        self.core.logger.info("Remove Joystick")
+        speak(f"Joystick {self.joystick.id} removed from {self.core.id}")
+
+        self.joystick.clearAllButtonCallbacks()
+        for listener in self._joystick_event_listeners:
             try:
-                for listener in self._joystick_event_listeners:
-                    listener.stop()
+                listener.stop()
             except Exception as e:
-                self.core.logger.error(f"Error stopping joystick event listeners: {e}")
-            self._joystick_event_listeners = []
-            self.joystick = None
+                self.core.logger.error(f"Error stopping joystick event listener: {e}")
+        self._joystick_event_listeners = []
+        self.joystick = None
 
-        if self.joystick_thread is not None and self.joystick_thread.is_alive():
-            self._exit_joystick_thread = True
-            self.joystick_thread.join()
-            self.joystick_thread = None
-            self.core.logger.info("Joystick thread closed.")
-
-        self.set_input_source('NONE')
+        # Stop joystick thread if no input source remains
+        if self.app_joystick_widgets is None:
+            self._stop_joystick_thread()
+            self.set_input_source('NONE')
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_input_source(self, input_source: str):
@@ -169,39 +203,61 @@ class BILBO_Interfaces:
         )
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _startJoystickThread(self):
-        self.joystick_thread = threading.Thread(target=self._joystick_task, daemon=True)
-        self.joystick_thread.start()
-        self.core.logger.info(
-            f"Joystick thread started for {self.core.id}."
-        )
+    def _stop_joystick_thread(self):
+        with self._joystick_lock:
+            if self._joystick_thread is None or not self._joystick_thread.is_alive():
+                return
+
+            self._joystick_stop_event.set()
+
+        # Join outside the lock to avoid deadlock
+        self._joystick_thread.join(timeout=2.0)
+
+        with self._joystick_lock:
+            self._joystick_thread = None
+            self.core.logger.info("Joystick thread stopped.")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _start_joystick_thread(self):
+        with self._joystick_lock:
+            # Check if thread is already running
+            if self._joystick_thread is not None and self._joystick_thread.is_alive():
+                return
+
+            # Clear the stop event before starting
+            self._joystick_stop_event.clear()
+
+            self._joystick_thread = threading.Thread(target=self._joystick_task, daemon=True)
+            self._joystick_thread.start()
+            self.core.logger.info(f"Joystick thread started for {self.core.id}.")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _joystick_task(self):
-        self._exit_joystick_thread = False
-        while not self._exit_joystick_thread:
-            if self.joystick is None:
-                self._exit_joystick_thread = True
+        while not self._joystick_stop_event.is_set():
+            # Get input from physical joystick (priority) or app widgets
+            if self.joystick:
+                raw_forward = -self.joystick.getAxis('LEFT_VERTICAL')
+                raw_turn = -self.joystick.getAxis('RIGHT_HORIZONTAL')
+            elif self.app_joystick_widgets:
+                raw_forward = self.app_joystick_widgets['forward'].y
+                raw_turn = -self.app_joystick_widgets['turn'].x
+            else:
+                # No input source available, exit thread
+                self.core.logger.info("Joystick thread exiting: no input source available.")
                 return
 
             if not self.joystick_enabled:
-                time.sleep(JOYSTICK_UPDATE_TIME)
+                self._joystick_stop_event.wait(JOYSTICK_UPDATE_TIME)
                 continue
 
-            # Raw inputs still expected in [-1, 1]
-            raw_forward = -self.joystick.getAxis('LEFT_VERTICAL')
-            raw_turn = -self.joystick.getAxis('RIGHT_HORIZONTAL')
+            forward_joystick = raw_forward
+            turn_joystick = raw_turn
 
-            # Shape them using the global curve
-            forward_joystick = shape_joystick(raw_forward, JoystickCurve.POWER, 2)
-            turn_joystick = shape_joystick(raw_turn, JoystickCurve.POWER, 2)
-
-            # Send normalized, shaped inputs to the controller
             self.core.device.executeFunction(
                 function_name='set_joystick_input',
                 arguments={'forward': forward_joystick, 'turn': turn_joystick}
             )
-            time.sleep(JOYSTICK_UPDATE_TIME)
+            self._joystick_stop_event.wait(JOYSTICK_UPDATE_TIME)
 
     # ------------------------------------------------------------------------------------------------------------------
 

@@ -161,9 +161,9 @@ export class BilboModeWidget extends Widget {
         this._modesContainer.className = 'bmw-modes-container';
         this._modesContainer.style.zIndex = '1';
         this._modesContainer.style.position = 'relative';
-        this._modesContainer.style.display = 'flex';
         this._modesContainer.style.width = '100%';
         this._modesContainer.style.height = '100%';
+        this._modesContainer.style.alignSelf = 'stretch';  // Override parent's align-items: center
         this.element.appendChild(this._modesContainer);
     }
 
@@ -334,10 +334,22 @@ export class BilboModeWidget extends Widget {
         element.dataset.orientation = this._orientation;
         this._modesContainer.dataset.orientation = this._orientation;
 
-        // Configure flex layout based on orientation
-        this._modesContainer.style.flexDirection = this._orientation === 'horizontal' ? 'row' : 'column';
-        this._modesContainer.style.justifyContent = 'space-evenly';
-        this._modesContainer.style.alignItems = 'center';
+        // Use CSS Grid for precise equal distribution and centering
+        const numModes = this._modes.length || 1;
+        if (this._orientation === 'horizontal') {
+            this._modesContainer.style.display = 'grid';
+            this._modesContainer.style.gridTemplateColumns = `repeat(${numModes}, 1fr)`;
+            this._modesContainer.style.gridTemplateRows = '1fr';
+            this._modesContainer.style.alignItems = 'center';
+            this._modesContainer.style.justifyItems = 'center';
+            this._modesContainer.style.transform = 'translateY(-10%)';  // Nudge content up
+        } else {
+            this._modesContainer.style.display = 'grid';
+            this._modesContainer.style.gridTemplateColumns = '1fr';
+            this._modesContainer.style.gridTemplateRows = `repeat(${numModes}, 1fr)`;
+            this._modesContainer.style.alignItems = 'center';
+            this._modesContainer.style.justifyItems = 'center';
+        }
 
         this._rebuildModes();
     }
@@ -585,7 +597,15 @@ export class BilboModeWidget extends Widget {
             this._orientation = data.orientation || 'horizontal';
             this.element.dataset.orientation = this._orientation;
             this._modesContainer.dataset.orientation = this._orientation;
-            this._modesContainer.style.flexDirection = this._orientation === 'horizontal' ? 'row' : 'column';
+            // Update grid layout for new orientation
+            const numModes = this._modes.length || 1;
+            if (this._orientation === 'horizontal') {
+                this._modesContainer.style.gridTemplateColumns = `repeat(${numModes}, 1fr)`;
+                this._modesContainer.style.gridTemplateRows = '1fr';
+            } else {
+                this._modesContainer.style.gridTemplateColumns = '1fr';
+                this._modesContainer.style.gridTemplateRows = `repeat(${numModes}, 1fr)`;
+            }
         }
 
         // Rebuild adjacency if modes or edges changed

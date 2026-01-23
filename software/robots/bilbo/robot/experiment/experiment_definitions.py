@@ -91,38 +91,6 @@ class BILBO_OutputTrajectory:
 
 
 # === EXPERIMENTS ======================================================================================================
-# @dataclasses.dataclass
-# class BILBO_ExperimentMeta:
-#     robot_id: str
-#     description: str
-#     date: str
-#     robot_config: BILBO_Config
-#     control_config: BILBO_ControlConfig
-#
-#
-# @dataclasses.dataclass
-# class BILBO_ExperimentData:
-#     id: str
-#     meta: BILBO_ExperimentMeta
-#     data: BILBO_TrajectoryData
-
-
-# EXPERIMENT_ACTION_TYPE_MAPPING = {
-#     "beep": BeepAction,
-#     "set_mode": SetModeAction,
-#     "set_tic": SetTICAction,
-#     "speak": SpeakAction,
-#     "set_marker": SetMarkerAction,
-#     "run_trajectory": RunTrajectoryAction,
-#     "wait_time": WaitTimeAction,
-#     "wait_ticks": WaitTickAction,
-#     "wait_until_tick": WaitUntilTickAction,
-#     "wait_event": WaitEventAction,
-#     "set_input": SetInputAction,
-#     "enable_external_input": EnableExternalInputAction,
-#     "reset": ResetAction,
-# }
-
 ALLOWED_ACTIONS = [
     'beep', 'set_mode', 'set_tic', 'speak', 'set_marker', 'run_trajectory', 'wait_time', 'wait_ticks',
     'wait_until_tick',

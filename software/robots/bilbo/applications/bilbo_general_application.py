@@ -61,11 +61,19 @@ class TestbedSettings:
 
 
 @dataclasses.dataclass
+class MDNSSettings:
+    enabled: bool = True
+    hostname: str = 'bilbolab'  # Will be accessible as bilbolab.local
+    use_port_80: bool = False  # If True, runs reverse proxy on port 80 (requires sudo)
+
+
+@dataclasses.dataclass
 class ApplicationSettingsYAML:
     """Settings as loaded from application_settings.yaml"""
     extensions: ExtensionsSettings = dataclasses.field(default_factory=ExtensionsSettings)
     optitrack: OptitrackSettings = dataclasses.field(default_factory=OptitrackSettings)
     testbed: TestbedSettings = dataclasses.field(default_factory=TestbedSettings)
+    mdns: MDNSSettings = dataclasses.field(default_factory=MDNSSettings)
 
 
 def load_application_settings(path: str | None = None) -> ApplicationSettingsYAML:
@@ -79,11 +87,13 @@ def load_application_settings(path: str | None = None) -> ApplicationSettingsYAM
     extensions = ExtensionsSettings(**yaml_data.get('extensions', {})) if yaml_data.get('extensions') else ExtensionsSettings()
     optitrack = OptitrackSettings(**yaml_data.get('optitrack', {})) if yaml_data.get('optitrack') else OptitrackSettings()
     testbed = TestbedSettings(**yaml_data.get('testbed', {})) if yaml_data.get('testbed') else TestbedSettings()
+    mdns = MDNSSettings(**yaml_data.get('mdns', {})) if yaml_data.get('mdns') else MDNSSettings()
 
     return ApplicationSettingsYAML(
         extensions=extensions,
         optitrack=optitrack,
-        testbed=testbed
+        testbed=testbed,
+        mdns=mdns
     )
 
 
@@ -135,7 +145,10 @@ class BILBO_Application:
         self.gui = BILBO_Application_GUI(host=self.manager.robot_manager.host,
                                          testbed_manager=self.manager,
                                          cli=self.cli,
-                                         joystick_control=self.manager.joystick_control)
+                                         joystick_control=self.manager.joystick_control,
+                                         enable_mdns=settings.mdns.enabled,
+                                         mdns_hostname=settings.mdns.hostname,
+                                         mdns_use_port_80=settings.mdns.use_port_80)
 
         self.gui.callbacks.emergency_stop.register(self.manager.emergency_stop)
 
@@ -162,6 +175,7 @@ class BILBO_Application:
     def close(self, *args, **kwargs):
         speak('Stop Bilbo application')
         self.logger.info('Closing Bilbo application')
+        self.gui.close()
         time.sleep(2)
         global ENABLE_SPEECH_OUTPUT
         ENABLE_SPEECH_OUTPUT = False
