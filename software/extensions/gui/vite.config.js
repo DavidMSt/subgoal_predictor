@@ -41,6 +41,7 @@ export default defineConfig({
     ],
     // ✅ tell Vite to scan the external code too
     entries: [
+      resolve(__dirname, './index.html'),
       resolve(__dirname, './app.html'),
       resolve(__dirname, './gui.html'),
       // scan all your babylon source files
@@ -51,6 +52,7 @@ export default defineConfig({
     outDir: '../dist',
     rollupOptions: {
       input: {
+        main: path.resolve(__dirname, './index.html'),
         gui: path.resolve(__dirname, './gui.html'),
         app: path.resolve(__dirname, './app.html'),
       },

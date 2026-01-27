@@ -3,8 +3,6 @@ import enum
 
 import numpy as np
 
-HOST_EXPERIMENT_FOLDER = "/Users/lehmann/bilbolab/testbed/software/RobotManager/applications/BILBO/experiments"
-
 BILBO_HOST_NAMES = ['bilbo1', 'bilbo2', 'bilbo3', 'bilbo4', 'bilbo5']
 
 PATH_TO_MAIN = '/home/admin/robot/software/main.py'

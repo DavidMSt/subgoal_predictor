@@ -5,7 +5,7 @@ from core.utils.dataclass_utils import from_dict_auto
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 from robots.bilbo.robot.bilbo_data import BILBO_Sample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_ControlConfig, VelocityControl_Config, \
-    PID_Config, VelocityConfig, PositionControl_Config
+    PID_Config, VelocityConfig
 from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals
 
 
@@ -140,66 +140,6 @@ class BILBO_Control:
             return None
         return from_dict_auto(BILBO_ControlConfig, config)
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def get_position_control_config(self) -> PositionControl_Config:
-
-        position_config_dict = self.device.executeFunction('get_position_control_config',
-                                                           arguments=None,
-                                                           return_type=dict,
-                                                           request_response=True)
-        position_control_config = from_dict_auto(PositionControl_Config, position_config_dict)
-        return position_control_config
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def set_position_forward_pi(self, P: float | None = None, I: float | None = None):
-        config = self.get_position_control_config()
-        if P is not None:
-            config.kp_linear = P
-        if I is not None:
-            config.ki_linear = I
-        self.device.executeFunction('set_position_control_config', arguments={'config': config})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def set_position_turn_pi(self, P: float | None = None, I: float | None = None):
-        config = self.get_position_control_config()
-        if P is not None:
-            config.kp_angular = P
-        if I is not None:
-            config.ki_angular = I
-        self.device.executeFunction('set_position_control_config', arguments={'config': config})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def move_to(self, x, y, max_speed: float | None = None, timeout: float | None = None):
-        self.device.executeFunction('move_to', arguments={'x': x, 'y': y, 'timeout': timeout, 'max_speed': max_speed})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def turn_to(self, psi: float, max_speed: float | None = None, timeout: float | None = None):
-        self.device.executeFunction('turn_to', arguments={'psi': psi, 'timeout': timeout, 'max_speed': max_speed})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def add_move(self, x, y, timeout=None):
-        raise NotImplementedError
-        self.device.executeFunction('add_move', arguments={'x': x, 'y': y, 'timeout': timeout})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def add_turn_heading(self, psi: float, timeout=None):
-        raise NotImplementedError
-        self.device.executeFunction('add_turn_heading', arguments={'psi': psi, 'timeout': timeout})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def add_wait(self, duration: float):
-        raise NotImplementedError
-        self.device.executeFunction('add_wait', arguments={'duration': duration})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def start_navigation(self):
-        raise NotImplementedError
-        self.device.executeFunction('start_navigation', arguments={})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def clear_navigation(self):
-        raise NotImplementedError
-        self.device.executeFunction('clear_navigation', arguments={})
 
     # ------------------------------------------------------------------------------------------------------------------
     def readControlConfiguration(self):

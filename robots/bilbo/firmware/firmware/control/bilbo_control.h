@@ -71,9 +71,6 @@ enum class control_event_t : uint8_t {
 	CONTROL_CONFIG_CHANGED = 2,
 	VIC_CHANGED = 3,
 	TIC_CHANGED = 4,
-	POSITION_ELEMENT_FINISHED = 5,
-	POSITION_ELEMENT_TIMEOUT = 6
-
 };
 
 /* ---------------------------------------------------------------------------------------- */
@@ -84,7 +81,6 @@ struct bilbo_control_data_t {
 	uint8_t tic_enabled;
 
 	bilbo_position_control_data_t position_control_data;
-	bilbo_position_control_output_t position_output;
 
 	bilbo_velocity_control_command_t velocity_command;
 	bilbo_velocity_control_output_t velocity_output;
@@ -126,10 +122,32 @@ public:
 	bool set_vc_pid_psidot(pid_control_config_t config);
 	bool set_vc_ff_psidot(feedforward_config_t config);
 
-	bool set_position_control_config(bilbo_position_control_config_t config);
 	bool set_tic_config(bilbo_tic_config_t config);
 	bool set_vic_config(bilbo_vic_config_t config);
 	bool set_max_torque(float max_torque);
+
+	// Position control configuration
+	bool set_position_control_config(bilbo_position_control_config_t config);
+	bilbo_position_control_config_t get_position_control_config();
+
+	// Position control interface - Path following
+	bool position_clear_path();
+	bool position_add_waypoint(bilbo_waypoint_t waypoint);
+	bool position_add_waypoint_xy(float x, float y,
+	                              bilbo_waypoint_type_t type = bilbo_waypoint_type_t::PASS,
+	                              float weight = 0.75f);
+	bool position_start_path(bilbo_path_start_cmd_t cmd);
+	void position_pause_path();
+	void position_resume_path();
+	void position_abort_path();
+	bilbo_path_state_t position_get_path_state();
+	bilbo_position_control_data_t position_get_data();
+	uint16_t position_get_waypoint_count();
+
+	// Position control interface - Single-point commands
+	bool position_turn_to_heading(turn_to_heading_command_t cmd);
+	bool position_move_to_point(move_to_point_command_t cmd);
+	bool position_reset();
 
 	bilbo_control_config_t get_config();
 
@@ -139,9 +157,6 @@ public:
 	bilbo_control_data_t get_data();
 	bool set_external_input(bilbo_control_input_ext_t input);
 	bool set_velocity_command(bilbo_velocity_control_command_t command);
-	bool set_position_command(position_command_t command);
-	bool set_heading_command(heading_command_t command);
-	void abort_position_command();
 
 	bool set_balancing_gain(float K[8]);
 
@@ -174,14 +189,14 @@ private:
 	bool _external_input_enabled = true;
 	bilbo_control_input_ext_t _external_input;
 	bilbo_velocity_control_command_t _velocity_command;
-	position_command_t _position_command;
 	bilbo_control_data_t _data;
 
 	void _set_torque(bilbo_control_output_t output);
 
 	void _on_tic_disabled(void);
-	void _on_position_command_finished(uint16_t element_id);
-	void _on_position_command_timeout(uint16_t element_id);
+
+	// Callback for position control completion (resets velocity control integrators)
+	void _on_position_command_finished(uint8_t);
 
 };
 

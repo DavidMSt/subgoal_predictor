@@ -1,6 +1,6 @@
 extensions:
-  display: false
-  limbobar: false
+  display: true
+  limbobar: true
   timecode: false
 
 optitrack:
@@ -13,6 +13,13 @@ optitrack:
 testbed:
   type: track
   size: null
+
+#testbed:
+#  type: track
+#  size:
+#    x: [-1.5, 1.5]
+#    y: [-1.5, 1.5]
+
 
 # mDNS: Advertises the GUI on the local network via multicast DNS
 # When enabled, other devices can access the GUI via http://<hostname>.local/gui

@@ -39,11 +39,7 @@ class TWIPR_ControlAddresses(enum.IntEnum):
     SET_CONFIGURATION = 0x29
 
     RW_MAX_WHEEL_SPEED = 0x2A
-
-    SET_POSITION_COMMAND = 0x2B
-    SET_HEADING_COMMAND = 0x2C
-    ABORT_CURRENT_POSITION_COMMAND = 0x2D
-    GET_POSITION_MODE = 0x2E
+    # 0x2B - 0x2F reserved
 
     # 0x30 - 0x3F : CONTROL (CONFIG + ENABLES)
     SET_VELOCITY_CONFIG_V = 0x30
@@ -60,6 +56,26 @@ class TWIPR_ControlAddresses(enum.IntEnum):
     SET_VELOCITY_INTEGRAL_CONTROL_CONFIG = 0x39
     ENABLE_TIC = 0x3A
     ENABLE_VIC = 0x3B
+
+
+class TWIPR_PositionControlAddresses(enum.IntEnum):
+    # 0x60 - 0x6F : POSITION CONTROL
+    SET_CONFIG = 0x60
+    GET_CONFIG = 0x61
+    CLEAR_PATH = 0x62
+    ADD_WAYPOINT = 0x63
+    ADD_WAYPOINT_XY = 0x63  # Same address, different struct
+    START_PATH = 0x64
+    PAUSE_PATH = 0x65
+    RESUME_PATH = 0x66
+    ABORT_PATH = 0x67
+    READ_PATH_STATE = 0x68
+    READ_DATA = 0x69
+    READ_WAYPOINT_COUNT = 0x6A
+    TURN_TO_HEADING = 0x6B
+    MOVE_TO_POINT = 0x6C
+    RESET = 0x6D
+    READ_CURRENT_WAYPOINT = 0x6E
 
 
 class TWIPR_SequencerAddresses(enum.IntEnum):

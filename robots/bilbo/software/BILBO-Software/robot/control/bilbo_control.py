@@ -3,7 +3,6 @@ import dataclasses
 
 import numpy as np
 
-from core.communication.wifi.archive import addresses
 from core.communication.wifi.data_link import CommandArgument
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.dataclass_utils import from_dict_auto
@@ -24,10 +23,18 @@ from robot.estimation.bilbo_estimation import BILBO_Estimation
 from robot.lowlevel.stm32_addresses import TWIPR_AddressTables, TWIPR_ControlAddresses
 from robot.lowlevel.stm32_control import bilbo_velocity_control_command_t, bilbo_control_input_ext_t, \
     bilbo_control_config_t, bilbo_tic_config_t, bilbo_vic_config_t, bilbo_position_control_config_t, \
-    bilbo_velocity_control_config_t, pid_control_config_t, feedforward_config_t, bilbo_ll_control_data, \
-    position_command_t, heading_command_t
+    bilbo_velocity_control_config_t, pid_control_config_t, feedforward_config_t, bilbo_ll_control_data
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample
+
+CONTROL_MODE_COLORS = {
+    None: [5, 5, 5],
+    BILBO_Control_Mode.DIRECT: [5, 5, 5],
+    BILBO_Control_Mode.OFF: [5, 5, 5],
+    BILBO_Control_Mode.BALANCING: [0, 5, 0],
+    BILBO_Control_Mode.VELOCITY: [0, 5, 5],
+    BILBO_Control_Mode.POSITION: [5, 0, 5]
+}
 
 
 # === BILBO Control Callbacks ==========================================================================================
@@ -67,8 +74,6 @@ class BILBO_Control:
     controller_status: BILBO_Control_Controller_Status
     inputs: BILBO_Control_Inputs
 
-    position_control: BILBO_PositionControl | None = None
-
     status: BILBO_Control_Status = BILBO_Control_Status.NORMAL
     _config: BILBO_ControlConfig | None = None
 
@@ -82,6 +87,8 @@ class BILBO_Control:
         self.common = common
         self.estimation = estimation
         self.communication = comm
+
+        self.position_control = BILBO_PositionControl(common=self.common, communication=self.communication)
 
         # --- Register communication callbacks ---
         self.communication.serial.callbacks.event.register(self._lowlevel_control_event_callback,
@@ -200,6 +207,8 @@ class BILBO_Control:
                     self.logger.warning("Cannot set position mode while in OFF mode. Go to BALANCING or VELOCITY first")
                     return
                 self.mode = BILBO_Control_Mode.POSITION
+                # Reset position control and clear any old paths/commands (firmware also does this)
+                self.position_control.reset()
                 result = self._set_lowlevel_control_mode(BILBO_Control_Mode.POSITION)
             case _:
                 self.logger.warning(f"Mode \"{mode}\" is not supported")
@@ -210,10 +219,15 @@ class BILBO_Control:
             self.status = BILBO_Control_Status.ERROR
             return
 
+        self.common.board.setRGBLEDExtern(
+            CONTROL_MODE_COLORS[mode]
+        )
         # Reset the external inputs
         self.inputs.reset()
 
         self.callbacks.mode_change.call(mode, forced_change=False)
+        self.events.mode_change.set(mode)
+        self.common.events.control_mode_change.set(mode)
         self.communication.wifi.sendEvent(
             event='control',
             data={
@@ -335,37 +349,7 @@ class BILBO_Control:
         self.inputs.velocity.forward = forward
         self.inputs.velocity.turn = turn
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def move_to(self, x: float, y: float, max_speed: float | None = None, timeout: float | None = None) -> None:
-        if self.mode != BILBO_Control_Mode.POSITION:
-            self.logger.warning("Cannot \"move to\" while not in POSITION mode")
-            return
-
-        # TODO: Add check if the position controller is currently still navigating
-
-        if max_speed is None:
-            max_speed = -1  # TODO: Magic Number
-
-        if timeout is None:
-            timeout = 0
-
-        self._set_lowlevel_position_command(x, y, max_speed, timeout)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def turn_to(self, psi: float, max_speed: float | None = None, timeout: float | None = None):
-        if self.mode != BILBO_Control_Mode.POSITION:
-            self.logger.warning("Cannot \"turn to\" while not in POSITION mode")
-            return
-        # TODO: Add check if the position controller is currently still navigating
-
-        if max_speed is None:
-            max_speed = -1
-
-        if timeout is None:
-            timeout = 0
-
-        self.logger.info(f"Turning to {psi:.1f}° with max speed {max_speed:.1f} m/s")
-        self._set_lowlevel_heading_command(psi, max_speed, timeout)
+    # NOTE: move_to and turn_to functionality is now in bilbo_position_control.py
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_statefeedback_gain(self, K: list | np.ndarray) -> bool:
@@ -535,41 +519,8 @@ class BILBO_Control:
                                            arguments=[],
                                            description='Loads and applies the default control config')
 
-        self.communication.wifi.newCommand(identifier='move_to',
-                                           function=self.move_to,
-                                           arguments=['x',
-                                                      'y',
-                                                      CommandArgument(
-                                                          name='max_speed',
-                                                          type=float,
-                                                          optional=True,
-                                                          default=None
-                                                      ),
-                                                      CommandArgument(
-                                                          name='timeout',
-                                                          type=float,
-                                                          optional=True,
-                                                          default=None
-                                                      )
-                                                      ]
-                                           )
-        self.communication.wifi.newCommand(identifier='turn_to',
-                                           function=self.turn_to,
-                                           arguments=['psi',
-                                                      CommandArgument(
-                                                          name='max_speed',
-                                                          type=float,
-                                                          optional=True,
-                                                          default=None
-                                                      ),
-                                                      CommandArgument(
-                                                          name='timeout',
-                                                          type=float,
-                                                          optional=True,
-                                                          default=None
-                                                      )
-                                                      ]
-                                           )
+        # NOTE: move_to and turn_to are now handled by bilbo_position_control.py
+        # via position_control_move_to and position_control_turn_to WiFi commands
 
     # ------------------------------------------------------------------------------------------------------------------
     def _lowlevel_sample_callback(self, sample: BILBO_LL_Sample):
@@ -792,33 +743,24 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_position_control_config(self, config: PositionControl_Config) -> bool:
         position_control_config = bilbo_position_control_config_t(
-            kp_linear=config.kp_linear,
-            ki_linear=config.ki_linear,
+            Ts=config.Ts,
             kp_angular=config.kp_angular,
             ki_angular=config.ki_angular,
-            Ts=LOOP_TIME_CONTROL,
-            lookahead_distance=config.lookahead_distance,
-            allow_reverse=config.allow_reverse,
-            backwards_switch_angle=config.backwards_switch_angle,
-            distance_arrival_tolerance=config.distance_arrival_tolerance,
-            angle_arrival_tolerance=config.angle_arrival_tolerance,
-            arrival_time=config.arrival_time,
-            max_speed_forward=config.max_speed_forward,
-            max_speed_turn=config.max_speed_turn,
+            kp_linear=config.kp_linear,
+            ki_linear=config.ki_linear,
+            max_speed=config.max_speed,
+            max_turn_rate=config.max_turn_rate,
+            lookahead_base=config.lookahead_base,
+            lookahead_gain=config.lookahead_gain,
+            lookahead_max=config.lookahead_max,
+            arrival_tolerance=config.arrival_tolerance,
+            arrival_dwell_time=config.arrival_dwell_time,
+            reverse_enter_angle=config.reverse_enter_angle,
+            reverse_exit_angle=config.reverse_exit_angle,
         )
 
-        result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_POSITION_CONFIG,
-            input_type=bilbo_position_control_config_t,
-            output_type=ctypes.c_bool,
-            data=position_control_config
-        )
-
-        if result is None or not result:
-            self.logger.error("Failed to set position PID config")
-            return False
-
+        # Also update the position_control module's config
+        self.position_control.set_config(config)
         return True
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -981,58 +923,7 @@ class BILBO_Control:
             self.logger.warning("Failed to set velocity command. Return value: false")
             return
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _set_lowlevel_position_command(self, x: float, y: float, max_speed: float = -1.0, timeout=0.0, id: int = 0):
-        result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_POSITION_COMMAND,
-            input_type=position_command_t,
-            data={
-                'id': id,
-                'position_ref': {
-                    'x_target': x,
-                    'y_target': y,
-                },
-                'max_speed': max_speed,
-                'timeout': timeout
-            },
-            output_type=ctypes.c_bool,
-        )
-
-        if not result:
-            self.logger.warning("Failed to set position command")
-            return
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _set_lowlevel_heading_command(self, heading: float, max_speed: float = -1.0, timeout=0.0, id: int = 0):
-
-        result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_HEADING_COMMAND,
-            input_type=heading_command_t,
-            data={
-                'id': id,
-                'heading_ref': {
-                    'psi_cmd': heading
-                },
-                'max_angular_speed': max_speed,
-                'timeout': timeout
-            },
-            output_type=ctypes.c_bool,
-        )
-
-        if not result:
-            self.logger.warning("Failed to set heading command")
-            return
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _lowlevel_abort_current_position_command(self):
-        self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.ABORT_CURRENT_POSITION_COMMAND,
-            input_type=None,
-            output_type=None,
-        )
+    # NOTE: Legacy position/heading command methods removed - functionality is now in bilbo_position_control.py
 
     # ------------------------------------------------------------------------------------------------------------------
     def _lowlevel_set_max_wheel_speed(self, speed: float):

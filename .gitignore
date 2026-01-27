@@ -8,5 +8,8 @@ node_modules/
 package-lock.json
 Debug/
 *.mp3
+*.mp4
 testbed/software/RobotManager/utils/sound/tts_files/index.json
 *.parcel-cache/
+CLAUDE.md
+.claude/

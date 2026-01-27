@@ -43,3 +43,7 @@ class BILBO_OriginConfig:
 class BILBO_TestbedConfig:
     origin: BILBO_OriginConfig | None
     size: list
+
+
+
+

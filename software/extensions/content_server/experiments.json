@@ -1,0 +1,482 @@
+{
+  "folders": [
+    {
+      "id": "introduction",
+      "name": "1. Introduction",
+      "description": "Motivation, objectives, and thesis outline",
+      "experiments": [
+        {
+          "id": "thesis_overview",
+          "title": "Thesis Structure Overview",
+          "description": "Visual overview of the thesis organization and chapter dependencies",
+          "date": "2025-01-26",
+          "type": "figures",
+          "figures": [
+            {"name": "Thesis Structure", "file": "thesis_structure.png"},
+            {"name": "Chapter Dependencies", "file": "chapter_deps.png"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "background",
+      "name": "2. Background",
+      "description": "Theoretical foundations and related work",
+      "folders": [
+        {
+          "id": "twipr_systems",
+          "name": "2.1 Two-Wheeled Inverted Pendulum Robots",
+          "description": "Overview of TWIPR systems and applications",
+          "experiments": [
+            {
+              "id": "twipr_overview",
+              "title": "TWIPR System Overview",
+              "description": "Introduction to two-wheeled inverted pendulum robots",
+              "date": "2025-01-26",
+              "type": "pdf",
+              "file": "twipr_overview.pdf"
+            }
+          ]
+        },
+        {
+          "id": "control_theory",
+          "name": "2.2 Control Theory Fundamentals",
+          "description": "State-space control, LQR, and observer design",
+          "experiments": [
+            {
+              "id": "control_block_diagrams",
+              "title": "Control System Block Diagrams",
+              "description": "Block diagrams of the control architecture",
+              "date": "2025-01-26",
+              "type": "figures",
+              "figures": [
+                {"name": "Full System", "file": "control_full.png"},
+                {"name": "Inner Loop", "file": "control_inner.png"},
+                {"name": "Outer Loop", "file": "control_outer.png"}
+              ]
+            },
+            {
+              "id": "lqr_implementation",
+              "title": "LQR Controller Implementation",
+              "description": "Python implementation of the Linear Quadratic Regulator for BILBO's balancing control, including state-space linearization and Riccati equation solver",
+              "date": "2025-01-26",
+              "type": "code",
+              "file": "lqr_controller.py",
+              "language": "python"
+            }
+          ]
+        }
+      ],
+      "experiments": []
+    },
+    {
+      "id": "modeling",
+      "name": "3. Modeling",
+      "description": "Mathematical modeling of the BILBO robot",
+      "folders": [
+        {
+          "id": "kinematic_model",
+          "name": "3.1 Kinematic Model",
+          "description": "Kinematic relationships and coordinate frames",
+          "experiments": [
+            {
+              "id": "coordinate_frames",
+              "title": "Coordinate Frame Visualization",
+              "description": "Visualization of the robot's coordinate frames and transformations",
+              "date": "2025-01-26",
+              "type": "synchronized",
+              "videos": [
+                {"name": "3D View", "file": "exp1_1.mp4"},
+                {"name": "Top View", "file": "exp1_2.mp4"}
+              ],
+              "markers": [
+                {"time": 1, "label": "Body Frame"},
+                {"time": 2, "label": "World Frame"}
+              ]
+            },
+            {
+              "id": "coordinate_frames_diagram",
+              "title": "Coordinate Frame Definitions",
+              "description": "Technical drawings of all coordinate frames",
+              "date": "2025-01-26",
+              "type": "figures",
+              "figures": [
+                {"name": "World Frame", "file": "frame_world.png"},
+                {"name": "Body Frame", "file": "frame_body.png"},
+                {"name": "Wheel Frames", "file": "frame_wheels.png"}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "dynamic_model",
+          "name": "3.2 Dynamic Model",
+          "description": "Equations of motion and dynamic analysis",
+          "experiments": [
+            {
+              "id": "free_fall",
+              "title": "Free Fall Dynamics",
+              "description": "Robot falling without control to validate dynamic model",
+              "date": "2025-01-26",
+              "type": "synchronized",
+              "videos": [
+                {"name": "Side View", "file": "exp1_1.mp4"},
+                {"name": "Angle Plot", "file": "exp1_2.mp4"},
+                {"name": "Velocity Plot", "file": "exp1_3.mp4"}
+              ],
+              "markers": [
+                {"time": 1, "label": "Release"},
+                {"time": 2, "label": "Impact"}
+              ]
+            },
+            {
+              "id": "equations_of_motion",
+              "title": "Equations of Motion",
+              "description": "Derivation of the dynamic equations",
+              "date": "2025-01-26",
+              "type": "pdf",
+              "file": "equations_of_motion.pdf"
+            }
+          ]
+        },
+        {
+          "id": "model_parameters",
+          "name": "3.3 Parameter Identification",
+          "description": "Experimental identification of model parameters",
+          "experiments": [
+            {
+              "id": "inertia_measurement",
+              "title": "Inertia Measurement",
+              "description": "Bifilar pendulum method for inertia identification",
+              "date": "2025-01-26",
+              "type": "synchronized",
+              "videos": [
+                {"name": "Measurement Setup", "file": "exp1_1.mp4"},
+                {"name": "Oscillation Plot", "file": "exp1_2.mp4"}
+              ],
+              "markers": [
+                {"time": 1, "label": "Start"},
+                {"time": 5, "label": "10 Periods"}
+              ]
+            }
+          ]
+        }
+      ],
+      "experiments": []
+    },
+    {
+      "id": "hardware",
+      "name": "4. Hardware Design",
+      "description": "Mechanical and electrical design of BILBO",
+      "folders": [
+        {
+          "id": "mechanical_design",
+          "name": "4.1 Mechanical Design",
+          "description": "CAD design and manufacturing",
+          "experiments": [
+            {
+              "id": "cad_overview",
+              "title": "CAD Model Overview",
+              "description": "Complete CAD model of the BILBO robot",
+              "date": "2025-01-26",
+              "type": "interactive",
+              "model": "bilbo_cad.glb"
+            },
+            {
+              "id": "assembly_photos",
+              "title": "Assembly Photos",
+              "description": "Photos of the assembly process",
+              "date": "2025-01-26",
+              "type": "figures",
+              "figures": [
+                {"name": "Frame Assembly", "file": "assembly_frame.png"},
+                {"name": "Electronics Mount", "file": "assembly_electronics.png"},
+                {"name": "Final Assembly", "file": "assembly_final.png"},
+                {"name": "Size Comparison", "file": "assembly_size.png"}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "electronics",
+          "name": "4.2 Electronics",
+          "description": "PCB design and component selection",
+          "experiments": [
+            {
+              "id": "main_pcb",
+              "title": "Main Control Board",
+              "description": "Schematic and layout of the main PCB",
+              "date": "2025-01-26",
+              "type": "pdf",
+              "file": "main_pcb_schematic.pdf"
+            },
+            {
+              "id": "pcb_photos",
+              "title": "PCB Photos",
+              "description": "Photos of the manufactured PCBs",
+              "date": "2025-01-26",
+              "type": "figures",
+              "figures": [
+                {"name": "Top Side", "file": "pcb_top.png"},
+                {"name": "Bottom Side", "file": "pcb_bottom.png"},
+                {"name": "Populated Board", "file": "pcb_populated.png"}
+              ]
+            }
+          ]
+        }
+      ],
+      "experiments": []
+    },
+    {
+      "id": "control",
+      "name": "5. Control System",
+      "description": "Control system design and implementation",
+      "folders": [
+        {
+          "id": "balancing_control",
+          "name": "5.1 Balancing Control",
+          "description": "LQR-based balancing controller",
+          "folders": [
+            {
+              "id": "lqr_design",
+              "name": "5.1.1 LQR Design",
+              "description": "Linear Quadratic Regulator design and tuning",
+              "experiments": [
+                {
+                  "id": "lqr_tuning",
+                  "title": "LQR Gain Tuning",
+                  "description": "Synchronized view of balancing with different gains",
+                  "date": "2025-01-26",
+                  "type": "synchronized",
+                  "videos": [
+                    {"name": "Conservative Gains", "file": "exp1_1.mp4"},
+                    {"name": "Aggressive Gains", "file": "exp1_2.mp4"}
+                  ],
+                  "markers": [
+                    {"time": 1, "label": "Disturbance"},
+                    {"time": 3, "label": "Recovery"}
+                  ]
+                },
+                {
+                  "id": "lqr_gain_comparison",
+                  "title": "LQR Gain Comparison",
+                  "description": "Side-by-side comparison of different LQR weight matrices",
+                  "date": "2025-01-26",
+                  "type": "collection",
+                  "videos": [
+                    {"name": "Q=diag(1,1,1,1)", "file": "exp1_1.mp4"},
+                    {"name": "Q=diag(10,1,1,1)", "file": "exp1_2.mp4"},
+                    {"name": "Q=diag(1,10,1,1)", "file": "exp1_3.mp4"},
+                    {"name": "Q=diag(100,10,1,1)", "file": "exp1_1.mp4"}
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "disturbance_rejection",
+              "name": "5.1.2 Disturbance Rejection",
+              "description": "Performance under external disturbances",
+              "experiments": [
+                {
+                  "id": "push_test",
+                  "title": "Push Recovery Test",
+                  "description": "Robot recovering from manual push disturbances",
+                  "date": "2025-01-26",
+                  "type": "synchronized",
+                  "videos": [
+                    {"name": "Front View", "file": "exp1_1.mp4"},
+                    {"name": "Side View", "file": "exp1_2.mp4"},
+                    {"name": "State Plot", "file": "exp1_3.mp4"}
+                  ],
+                  "markers": [
+                    {"time": 1, "label": "Push 1"},
+                    {"time": 3, "label": "Push 2"},
+                    {"time": 5, "label": "Push 3"}
+                  ]
+                }
+              ]
+            }
+          ],
+          "experiments": []
+        },
+        {
+          "id": "velocity_control",
+          "name": "5.2 Velocity Control",
+          "description": "Forward velocity and yaw rate control",
+          "experiments": [
+            {
+              "id": "velocity_tracking",
+              "title": "Velocity Tracking",
+              "description": "Step and ramp velocity reference tracking",
+              "date": "2025-01-26",
+              "type": "synchronized",
+              "videos": [
+                {"name": "Robot View", "file": "exp1_1.mp4"},
+                {"name": "Velocity Plot", "file": "exp1_2.mp4"}
+              ],
+              "markers": [
+                {"time": 1, "label": "Step Input"},
+                {"time": 4, "label": "Ramp Input"}
+              ]
+            },
+            {
+              "id": "velocity_pid_comparison",
+              "title": "Velocity PID Tuning Comparison",
+              "description": "Comparison of different PID gain configurations",
+              "date": "2025-01-26",
+              "type": "collection",
+              "videos": [
+                {"name": "Kp=1.0, Ki=0, Kd=0", "file": "exp1_1.mp4"},
+                {"name": "Kp=2.0, Ki=0.1, Kd=0", "file": "exp1_2.mp4"},
+                {"name": "Kp=2.0, Ki=0.5, Kd=0.1", "file": "exp1_3.mp4"}
+              ]
+            }
+          ]
+        },
+        {
+          "id": "position_control",
+          "name": "5.3 Position Control",
+          "description": "XY position and trajectory following",
+          "folders": [
+            {
+              "id": "trajectory_following",
+              "name": "5.3.1 Trajectory Following",
+              "description": "Continuous trajectory tracking",
+              "experiments": [
+                {
+                  "id": "circle_trajectory",
+                  "title": "Circle Trajectory",
+                  "description": "Following a circular path",
+                  "date": "2025-01-26",
+                  "type": "synchronized",
+                  "videos": [
+                    {"name": "Top View", "file": "exp1_1.mp4"},
+                    {"name": "XY Plot", "file": "exp1_2.mp4"}
+                  ],
+                  "markers": [
+                    {"time": 1, "label": "Start"},
+                    {"time": 5, "label": "Complete"}
+                  ]
+                },
+                {
+                  "id": "trajectory_comparison",
+                  "title": "Trajectory Comparison",
+                  "description": "Different trajectory types compared",
+                  "date": "2025-01-26",
+                  "type": "collection",
+                  "videos": [
+                    {"name": "Circle", "file": "exp1_1.mp4"},
+                    {"name": "Figure-8", "file": "exp1_2.mp4"},
+                    {"name": "Square", "file": "exp1_3.mp4"}
+                  ]
+                }
+              ]
+            }
+          ],
+          "experiments": []
+        }
+      ],
+      "experiments": []
+    },
+    {
+      "id": "estimation",
+      "name": "6. State Estimation",
+      "description": "Sensor fusion and state estimation",
+      "experiments": [
+        {
+          "id": "sensor_overview",
+          "title": "Sensor Configuration",
+          "description": "Overview of all sensors used in BILBO",
+          "date": "2025-01-26",
+          "type": "figures",
+          "figures": [
+            {"name": "Sensor Locations", "file": "sensor_locations.png"},
+            {"name": "IMU Axes", "file": "imu_axes.png"}
+          ]
+        },
+        {
+          "id": "vqf_comparison",
+          "title": "VQF Filter Comparison",
+          "description": "Comparing VQF with complementary filter",
+          "date": "2025-01-26",
+          "type": "synchronized",
+          "videos": [
+            {"name": "Motion Test", "file": "exp1_1.mp4"},
+            {"name": "Angle Comparison", "file": "exp1_2.mp4"},
+            {"name": "Error Plot", "file": "exp1_3.mp4"}
+          ],
+          "markers": [
+            {"time": 1, "label": "Slow Motion"},
+            {"time": 3, "label": "Fast Motion"}
+          ]
+        }
+      ]
+    },
+    {
+      "id": "experiments",
+      "name": "7. Experiments & Results",
+      "description": "Experimental validation and results",
+      "folders": [
+        {
+          "id": "performance_tests",
+          "name": "7.1 Performance Tests",
+          "description": "Quantitative performance evaluation",
+          "experiments": [
+            {
+              "id": "performance_summary",
+              "title": "Performance Summary",
+              "description": "Summary of all performance metrics",
+              "date": "2025-01-26",
+              "type": "pdf",
+              "file": "performance_summary.pdf"
+            }
+          ]
+        },
+        {
+          "id": "demo_videos",
+          "name": "7.2 Demonstration Videos",
+          "description": "Various demonstration scenarios",
+          "experiments": [
+            {
+              "id": "outdoor_demo",
+              "title": "Outdoor Demonstration",
+              "description": "BILBO operating in outdoor environments",
+              "date": "2025-01-26",
+              "type": "collection",
+              "videos": [
+                {"name": "Grass Surface", "file": "exp1_1.mp4"},
+                {"name": "Gravel Path", "file": "exp1_2.mp4"},
+                {"name": "Slope Test", "file": "exp1_3.mp4"}
+              ]
+            }
+          ]
+        }
+      ],
+      "experiments": []
+    },
+    {
+      "id": "appendix",
+      "name": "A. Appendix",
+      "description": "Additional materials and documentation",
+      "experiments": [
+        {
+          "id": "full_schematic",
+          "title": "Complete Schematics",
+          "description": "Full electronic schematics of all boards",
+          "date": "2025-01-26",
+          "type": "pdf",
+          "file": "full_schematic.pdf"
+        },
+        {
+          "id": "bill_of_materials",
+          "title": "Bill of Materials",
+          "description": "Complete BOM for BILBO",
+          "date": "2025-01-26",
+          "type": "pdf",
+          "file": "bom.pdf"
+        }
+      ]
+    }
+  ],
+  "experiments": []
+}

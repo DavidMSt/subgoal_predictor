@@ -11,6 +11,7 @@ from core.utils.exit import register_exit_callback
 from core.utils.network import getSignalStrength, check_internet
 from core.utils.timecode.timecode import Timecode
 from core.utils.timecode.timecode_client import TimecodeClient
+from hardware.control_board import RobotControl_Board
 from .bilbo_definitions import BILBO_TestbedConfig
 from .config import BILBO_Config, get_bilbo_config
 from .core import get_logging_provider
@@ -69,6 +70,8 @@ class BILBO_Common:
 
     _exit: bool = False
 
+    board: RobotControl_Board
+
     id: str
     config: BILBO_Config
     testbed_config: BILBO_TestbedConfig
@@ -76,10 +79,12 @@ class BILBO_Common:
     tracker_connected: bool = False
 
     # === INIT =========================================================================================================
-    def __init__(self):
+    def __init__(self, board: RobotControl_Board):
         self.interaction_events = BILBO_Common_Interaction_Events()
         self.events = BILBO_Common_Events()
         self.callbacks = BILBO_Common_Callbacks()
+
+        self.board = board
 
         self.id = self._get_id()
         self.config = self._get_config()

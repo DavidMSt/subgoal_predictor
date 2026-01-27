@@ -239,7 +239,7 @@ class CalloutHandler:
             )
             self.callbacks.send_message.call(message)
             del self.callouts[callout_id]
-            self.logger.info(f"Callout {callout_id} removed.")
+            self.logger.debug(f"Callout {callout_id} removed.")
 
     # ------------------------------------------------------------------------------------------------------------------
     def handleEvent(self, message, sender=None) -> None:

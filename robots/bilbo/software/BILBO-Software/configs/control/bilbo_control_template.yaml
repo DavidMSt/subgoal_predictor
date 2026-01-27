@@ -101,17 +101,17 @@ velocity_control:
       output_slew_rate: 0.0
 
 position_control:
-  mode: 0
-  kp_pos: 0.0
-  ki_pos: 0.0
-  max_position_integral_torque: 0.0
-  kp_psi: 0.0
-  ki_psi: 0.0
-  max_angle_integral_torque: 0.0
-  lookahead_distance: 0.0
-  allow_reverse: false
-  backwards_switch_angle: 0.0
-  slow_radius: 0.0
-  min_speed_cos_scale: 0.0
-  max_common_torque: 0.0
-  max_diff_torque: 0.0
+  Ts: 0.01
+  kp_angular: 0.0
+  ki_angular: 0.0
+  kp_linear: 0.0
+  ki_linear: 0.0
+  max_speed: 0.0
+  max_turn_rate: 0.0
+  lookahead_base: 0.0
+  lookahead_gain: 0.0
+  lookahead_max: 0.0
+  arrival_tolerance: 0.0
+  arrival_dwell_time: 0.0
+  reverse_enter_angle: 0.0
+  reverse_exit_angle: 0.0

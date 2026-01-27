@@ -87,18 +87,29 @@ class VelocityControl_Config:
 
 @dataclasses.dataclass
 class PositionControl_Config:
-    kp_linear: float = 0.0
-    ki_linear: float = 0.0
-    kp_angular: float = 0.0
-    ki_angular: float = 0.0
-    lookahead_distance: float = 0.3
-    allow_reverse: int = 1
-    backwards_switch_angle: float = np.deg2rad(100.0)
-    distance_arrival_tolerance: float = 0.05
-    angle_arrival_tolerance: float = np.deg2rad(5.0)
-    arrival_time: float = 2.0
-    max_speed_forward: float = 0.75
-    max_speed_turn: float = 3
+    """Configuration for the position controller (carrot-chase path following)
+
+    This config is synced to the firmware's bilbo_position_control_config_t.
+
+    Simplified algorithm:
+    - Speed = kp_linear * carrot_distance (simple and robust)
+    - Weight + corner angle determines how carrot advances past waypoints
+    - Reverse mode always enabled with hysteresis
+    """
+    Ts: float = 0.01                        # [s] Update period
+    kp_angular: float = 10.0                # [rad/s per rad] Proportional gain for angular control
+    ki_angular: float = 0.3                 # [rad/s per rad*s] Integral gain for angular control
+    kp_linear: float = 2.0                  # [1/s] Proportional gain: speed = kp_linear * carrot_distance
+    ki_linear: float = 0.0                  # [1/s^2] Integral gain for linear control (usually 0)
+    max_speed: float = 0.4                  # [m/s] Maximum forward velocity
+    max_turn_rate: float = 5.0              # [rad/s] Maximum yaw rate
+    lookahead_base: float = 0.15            # [m] Minimum lookahead distance
+    lookahead_gain: float = 0.3             # [s] Lookahead = base + gain * |velocity|
+    lookahead_max: float = 0.5              # [m] Maximum lookahead distance
+    arrival_tolerance: float = 0.05         # [m] Distance to consider "arrived"
+    arrival_dwell_time: float = 0.5         # [s] Hold time at STOP waypoint
+    reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
+    reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
 
 
 @dataclasses.dataclass

@@ -90,7 +90,10 @@ class BILBO(MainProvider):
             resetSTM32()
             time.sleep(3)
 
-        self.common = BILBO_Common()
+        # Set up the control board
+        self.board = RobotControl_Board()
+
+        self.common = BILBO_Common(board=self.board)
 
         # Read the ID from the ID file
         self.id = self.common._get_id()
@@ -102,9 +105,6 @@ class BILBO(MainProvider):
         self._initialized = False
 
         set_main_provider(self)
-
-        # Set up the control board
-        self.board = RobotControl_Board()
 
         # Start the communication module (WI-FI, Serial and SPI)
         self.communication = BILBO_Communication(board=self.board, core=self.common)

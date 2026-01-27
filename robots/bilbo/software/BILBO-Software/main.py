@@ -1,8 +1,8 @@
+import random
 from datetime import datetime
 
 import time
 
-from _tests.timecode.timecode_listener import TimecodeListener
 from core.utils.files import get_absolute_path
 from robot.bilbo import BILBO
 from core.utils.logging_utils import setLoggerLevel, Logger
@@ -18,16 +18,15 @@ def main():
     bilbo.init()
     bilbo.start()
 
-    # time.sleep(3)
-    # bilbo.control.set_mode(BILBO_Control_Mode.BALANCING)
-    # time.sleep(5)
-    # bilbo.control.enable_tic_control(True)
-    # time.sleep(15)
-    # bilbo.control.set_mode(BILBO_Control_Mode.OFF)
-
     while True:
-        time.sleep(1)
 
+        # # generate random color
+        # red = random.randint(0, 255)
+        # green = random.randint(0, 255)
+        # blue = random.randint(0, 255)
+        #
+        # bilbo.board.setRGBLEDExtern([red, green, blue])
+        time.sleep(1)
 
 
 if __name__ == '__main__':

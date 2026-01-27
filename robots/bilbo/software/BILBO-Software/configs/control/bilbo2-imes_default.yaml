@@ -95,15 +95,17 @@ velocity_control:
       enable_output_slew: false
       output_slew_rate: 0.0
 position_control:
-  kp_linear: 0.6
-  ki_linear: 0.015
-  kp_angular: 2
-  ki_angular: 0.025
-  lookahead_distance: 1.0
-  allow_reverse: 1
-  backwards_switch_angle: 2.5
-  distance_arrival_tolerance: 0.05
-  angle_arrival_tolerance: 0.05
-  arrival_time: 2.0
-  max_speed_forward: 0.75
-  max_speed_turn: 4
+  Ts: 0.01
+  kp_angular: 10.0
+  ki_angular: 0.3
+  kp_linear: 2.0
+  ki_linear: 0.0
+  max_speed: 0.4
+  max_turn_rate: 5.0
+  lookahead_base: 0.15
+  lookahead_gain: 0.3
+  lookahead_max: 0.5
+  arrival_tolerance: 0.05
+  arrival_dwell_time: 0.5
+  reverse_enter_angle: 2.1
+  reverse_exit_angle: 1.05

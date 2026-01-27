@@ -114,30 +114,6 @@ core_utils_RegisterEntry<bool, feedforward_config_t> reg_set_vel_config_psidot_f
 		&register_map, REG_ADDRESS_F_CONTROL_SET_VELOCITY_CONFIG_PSIDOT_FF,
 		&twipr_firmware.control, &BILBO_Control::set_vc_ff_psidot);
 
-core_utils_RegisterEntry<bool, bilbo_position_control_config_t> reg_set_pos_config(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_POSITION_CONFIG,
-		&twipr_firmware.control, &BILBO_Control::set_position_control_config);
-
-core_utils_RegisterEntry<bool, position_command_t> reg_set_position_cmd(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_POSITION_CMD,
-		&twipr_firmware.control, &BILBO_Control::set_position_command);
-
-core_utils_RegisterEntry<bool, heading_command_t> reg_set_heading_cmd(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_HEADING_CMD,
-		&twipr_firmware.control, &BILBO_Control::set_heading_command);
-
-core_utils_RegisterEntry<void, void> reg_set_abort_position_cmd(
-		&register_map, REG_ADDRESS_F_CONTROL_ABORT_CURRENT_POSITION_COMMAND,
-		&twipr_firmware.control, &BILBO_Control::abort_position_command);
-
-core_utils_RegisterEntry<bilbo_position_control_mode_t, void> reg_get_position_control_mode(
-		&register_map, REG_ADDRESS_R_CONTROL_POSITION_MODE,
-		&twipr_firmware.control.position_control, &BILBO_PositionControl::get_current_mode);
-
-
-
-
-
 core_utils_RegisterEntry<bool, bilbo_tic_config_t> reg_set_tic_config(
 		&register_map, REG_ADDRESS_F_CONTROL_SET_TIC_CONFIG,
 		&twipr_firmware.control, &BILBO_Control::set_tic_config);
@@ -200,12 +176,69 @@ core_utils_RegisterEntry<void, bilbo_position_state_t> reg_set_position_state(
 
 core_utils_RegisterEntry<void, bilbo_position_state_t> reg_set_position_update(
 		&register_map,
-		REG_ADDRESS_F_ESTIMATION_SET_POSITION_UPDATE, &twipr_firmware.estimation,
-		&TWIPR_Estimation::set_position_update);
+		REG_ADDRESS_F_ESTIMATION_SET_POSITION_UPDATE,
+		&twipr_firmware.estimation, &TWIPR_Estimation::set_position_update);
 
-core_utils_RegisterEntry<void, void> reg_estimation_reset(
-		&register_map,
-		REG_ADDRESS_F_ESTIMATION_RESET, &twipr_firmware.estimation,
+/* Position Control Register Entries */
+
+core_utils_RegisterEntry<bool, bilbo_position_control_config_t> reg_position_set_config(
+		&register_map, REG_ADDRESS_F_POSITION_SET_CONFIG,
+		&twipr_firmware.control, &BILBO_Control::set_position_control_config);
+
+core_utils_RegisterEntry<bilbo_position_control_config_t, void> reg_position_get_config(
+		&register_map, REG_ADDRESS_F_POSITION_GET_CONFIG,
+		&twipr_firmware.control, &BILBO_Control::get_position_control_config);
+
+core_utils_RegisterEntry<bool, void> reg_position_clear_path(&register_map,
+		REG_ADDRESS_F_POSITION_CLEAR_PATH, &twipr_firmware.control,
+		&BILBO_Control::position_clear_path);
+
+core_utils_RegisterEntry<bool, bilbo_waypoint_t> reg_position_add_waypoint(
+		&register_map, REG_ADDRESS_F_POSITION_ADD_WAYPOINT,
+		&twipr_firmware.control, &BILBO_Control::position_add_waypoint);
+
+core_utils_RegisterEntry<bool, bilbo_path_start_cmd_t> reg_position_start_path(
+		&register_map, REG_ADDRESS_F_POSITION_START_PATH,
+		&twipr_firmware.control, &BILBO_Control::position_start_path);
+
+core_utils_RegisterEntry<void, void> reg_position_pause_path(&register_map,
+		REG_ADDRESS_F_POSITION_PAUSE_PATH, &twipr_firmware.control,
+		&BILBO_Control::position_pause_path);
+
+core_utils_RegisterEntry<void, void> reg_position_resume_path(&register_map,
+		REG_ADDRESS_F_POSITION_RESUME_PATH, &twipr_firmware.control,
+		&BILBO_Control::position_resume_path);
+
+core_utils_RegisterEntry<void, void> reg_position_abort_path(&register_map,
+		REG_ADDRESS_F_POSITION_ABORT_PATH, &twipr_firmware.control,
+		&BILBO_Control::position_abort_path);
+
+core_utils_RegisterEntry<bilbo_path_state_t, void> reg_position_path_state(
+		&register_map, REG_ADDRESS_R_POSITION_PATH_STATE,
+		&twipr_firmware.control, &BILBO_Control::position_get_path_state);
+
+core_utils_RegisterEntry<bilbo_position_control_data_t, void> reg_position_data(
+		&register_map, REG_ADDRESS_R_POSITION_DATA, &twipr_firmware.control,
+		&BILBO_Control::position_get_data);
+
+core_utils_RegisterEntry<uint16_t, void> reg_position_waypoint_count(&register_map,
+		REG_ADDRESS_R_POSITION_WAYPOINT_COUNT, &twipr_firmware.control,
+		&BILBO_Control::position_get_waypoint_count);
+
+core_utils_RegisterEntry<bool, turn_to_heading_command_t> reg_position_turn_to_heading(
+		&register_map, REG_ADDRESS_F_POSITION_TURN_TO_HEADING,
+		&twipr_firmware.control, &BILBO_Control::position_turn_to_heading);
+
+core_utils_RegisterEntry<bool, move_to_point_command_t> reg_position_move_to_point(
+		&register_map, REG_ADDRESS_F_POSITION_MOVE_TO_POINT,
+		&twipr_firmware.control, &BILBO_Control::position_move_to_point);
+
+core_utils_RegisterEntry<bool, void> reg_position_reset(&register_map,
+		REG_ADDRESS_F_POSITION_RESET, &twipr_firmware.control,
+		&BILBO_Control::position_reset);
+
+core_utils_RegisterEntry<void, void> reg_estimation_reset(&register_map,
+REG_ADDRESS_F_ESTIMATION_RESET, &twipr_firmware.estimation,
 		&TWIPR_Estimation::reset);
 
 core_utils_RegisterEntry<velocity_lowpass_filter_config_t, void> reg_get_velocity_lpf(
@@ -230,7 +263,8 @@ core_utils_RegisterEntry<void, psi_dot_lowpass_filter_config_t> reg_set_psidot_l
 
 core_utils_RegisterEntry<void, bool> reg_set_dead_reckoning_enable(
 		&register_map,
-		REG_ADDRESS_F_ESTIMATION_SET_DEAD_RECKONING_ENABLE, &twipr_firmware.estimation,
+		REG_ADDRESS_F_ESTIMATION_SET_DEAD_RECKONING_ENABLE,
+		&twipr_firmware.estimation,
 		&TWIPR_Estimation::set_dead_reckoning_enable);
 
 /* Thread Attributes for Firmware and Control Tasks */
@@ -298,36 +332,37 @@ void TWIPR_Firmware::helperTask() {
 	rc_rgb_led_side_1.setColor(0, 0, 0);
 	rc_rgb_led_side_1.state(1);
 
-
 	elapsedMillis debug_timer;
+
+	this->updateExternalLedStrip(bilbo_control_mode_t::OFF);
 
 	// Main task loop
 	while (true) {
-		// Update control mode LED if timer exceeds 250ms
+		// Update control mode LED periodically as a refresh/fallback (100ms)
 		if (this->timer_control_mode_led >= 250) {
 			this->timer_control_mode_led.reset();
 //			this->setControlModeLed();
-
-			if (this->control.mode == bilbo_control_mode_t::OFF) {
-
-			    // Pale white (very dim)
-			    extender.rgbLEDStrip_extern_setColor({ 3, 3, 3 });
-
-			} else if (this->control.mode == bilbo_control_mode_t::BALANCING) {
-
-			    // Soft green
-			    extender.rgbLEDStrip_extern_setColor({ 0, 6, 0 });
-
-			} else if (this->control.mode == bilbo_control_mode_t::VELOCITY) {
-
-			    // Soft turquoise (green + blue)
-			    extender.rgbLEDStrip_extern_setColor({ 0, 6, 6 });
-
-			} else if (this->control.mode == bilbo_control_mode_t::POSITION) {
-
-			    // Soft purple (red + blue)
-			    extender.rgbLEDStrip_extern_setColor({ 5, 0, 5 });
-			}
+////
+//			if (this->control.mode == bilbo_control_mode_t::OFF) {
+//
+//				// Pale white (very dim)
+//				extender.rgbLEDStrip_extern_setColor( { 3, 3, 3 });
+//
+//			} else if (this->control.mode == bilbo_control_mode_t::BALANCING) {
+//
+//				// Soft green
+//				extender.rgbLEDStrip_extern_setColor( { 0, 6, 0 });
+//
+//			} else if (this->control.mode == bilbo_control_mode_t::VELOCITY) {
+//
+//				// Soft turquoise (green + blue)
+//				extender.rgbLEDStrip_extern_setColor( { 0, 6, 6 });
+//
+//			} else if (this->control.mode == bilbo_control_mode_t::POSITION) {
+//
+//				// Soft purple (red + blue) - includes waypoint path following
+//				extender.rgbLEDStrip_extern_setColor( { 5, 0, 5 });
+//			}
 
 		}
 
@@ -391,6 +426,10 @@ HAL_StatusTypeDef TWIPR_Firmware::init() {
 			&this->estimation, .drive = &this->drive, .Ts =
 	BILBO_CONTROL_TASK_TIME, };
 	this->control.init(bilbo_control_config);
+
+	// Register callback for immediate LED update on mode change
+//	this->control.callbacks.mode_change.registerFunction(this,
+//			&TWIPR_Firmware::updateExternalLedStrip);
 
 	// Drive configuration
 
@@ -647,4 +686,35 @@ void TWIPR_Firmware::setControlModeLed() {
 		rc_rgb_led_side_1.setColor(100, 0, 00); // Red
 	}
 
+}
+
+/**
+ * @brief Updates the external WS2812 LED strip color immediately when mode changes.
+ *
+ * This callback is called whenever the control mode changes to provide
+ * immediate visual feedback. Colors:
+ * - White (dim): OFF mode
+ * - Green: BALANCING mode
+ * - Turquoise (cyan): VELOCITY mode
+ * - Purple: POSITION mode
+ *
+ * @param mode The new control mode
+ */
+void TWIPR_Firmware::updateExternalLedStrip(bilbo_control_mode_t mode) {
+	switch (mode) {
+	case bilbo_control_mode_t::OFF:
+		extender.rgbLEDStrip_extern_setColor({ 3, 3, 3 });  // Pale white
+		break;
+	case bilbo_control_mode_t::BALANCING:
+		extender.rgbLEDStrip_extern_setColor({ 0, 6, 0 });  // Soft green
+		break;
+	case bilbo_control_mode_t::VELOCITY:
+		extender.rgbLEDStrip_extern_setColor({ 0, 6, 6 });  // Turquoise
+		break;
+	case bilbo_control_mode_t::POSITION:
+		extender.rgbLEDStrip_extern_setColor({ 5, 0, 5 });  // Purple
+		break;
+	default:
+		break;
+	}
 }

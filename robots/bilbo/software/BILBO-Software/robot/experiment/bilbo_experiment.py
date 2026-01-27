@@ -52,6 +52,127 @@ LOWLEVEL_STATE_SIGNALS = [
 
 
 # ======================================================================================================================
+# Helper functions for shorthand expansion
+# ======================================================================================================================
+
+def _parse_time(val) -> int:
+    """Parse time value to milliseconds.
+
+    Supports:
+    - '2s' or '2.5s' -> seconds to milliseconds
+    - '500ms' -> milliseconds
+    - 2.0 (float) -> interpreted as seconds
+    - 2000 (int) -> interpreted as milliseconds
+    """
+    if isinstance(val, float):
+        # Floats are interpreted as seconds
+        return int(val * 1000)
+    if isinstance(val, int):
+        # Integers are interpreted as milliseconds
+        return val
+    if isinstance(val, str):
+        val = val.strip().lower()
+        if val.endswith("ms"):
+            return int(float(val[:-2]))
+        if val.endswith("s"):
+            return int(float(val[:-1]) * 1000)
+        # Bare string number - try to be smart about it
+        num = float(val)
+        if '.' in val:
+            # Has decimal point, treat as seconds
+            return int(num * 1000)
+        else:
+            # Integer string, treat as milliseconds
+            return int(num)
+    raise ValueError(f"Invalid time format: {val}")
+
+
+def _expand_shorthand(d: dict | str, debug: bool = True) -> dict:
+    """Expand shorthand action definitions to full format.
+
+    Supports:
+    - "beep" (string) → type: beep
+    - wait: "2s" or wait: 2000 → type: wait_time
+    - wait_ticks: 100 → type: wait_ticks
+    - mode: BALANCING → type: set_mode
+    - speak: "text" → type: speak
+    - beep or beep: 1000 → type: beep
+    - velocity: [0.5, 0.1] → type: set_velocity
+    - parallel: [...] → type: parallel
+    """
+    if debug:
+        print(f"[_expand_shorthand] Input: {d}")
+
+    # Handle string shorthand (e.g., "beep" as a bare string)
+    if isinstance(d, str):
+        if d == "beep":
+            result = {"type": "beep"}
+            if debug:
+                print(f"[_expand_shorthand] String 'beep' -> {result}")
+            return result
+        raise ValueError(f"Unknown string shorthand: {d}")
+
+    # Already has 'type' - no expansion needed
+    if "type" in d:
+        if debug:
+            print(f"[_expand_shorthand] Already has 'type', no expansion: {d}")
+        return d
+
+    expanded = dict(d)  # Copy to avoid mutation
+
+    # wait: "2s" or wait: 2000 → type: wait_time
+    if "wait" in expanded:
+        wait_val = expanded.pop("wait")
+        expanded["type"] = "wait_time"
+        expanded["time_ms"] = _parse_time(wait_val)
+        if debug:
+            print(f"[_expand_shorthand] 'wait: {wait_val}' -> time_ms={expanded['time_ms']} -> {expanded}")
+        return expanded
+
+    # wait_ticks: 100 → type: wait_ticks
+    if "wait_ticks" in expanded:
+        expanded["type"] = "wait_ticks"
+        expanded["ticks"] = expanded.pop("wait_ticks")
+        return expanded
+
+    # mode: BALANCING → type: set_mode
+    if "mode" in expanded:
+        expanded["type"] = "set_mode"
+        return expanded
+
+    # speak: "text" → type: speak
+    if "speak" in expanded:
+        expanded["type"] = "speak"
+        expanded["text"] = expanded.pop("speak")
+        return expanded
+
+    # beep or beep: 1000 → type: beep
+    if "beep" in expanded:
+        expanded["type"] = "beep"
+        beep_val = expanded.pop("beep")
+        if beep_val is not None and beep_val is not True:
+            expanded["frequency"] = beep_val
+        return expanded
+
+    # velocity: [0.5, 0.1] → type: set_velocity
+    if "velocity" in expanded:
+        expanded["type"] = "set_velocity"
+        vel = expanded.pop("velocity")
+        if isinstance(vel, list) and len(vel) >= 2:
+            expanded["forward"] = vel[0]
+            expanded["turn"] = vel[1]
+        return expanded
+
+    # parallel: [...] → type: parallel
+    if "parallel" in expanded:
+        expanded["type"] = "parallel"
+        expanded["actions"] = expanded.pop("parallel")
+        return expanded
+
+    return expanded
+
+
+# ======================================================================================================================
 @dataclasses.dataclass
 class ExperimentActionDefinition:
     id: str
@@ -62,6 +183,8 @@ class ExperimentActionDefinition:
     after: str | None = None  # id of action that must finish first
     time: float | None = None  # absolute time [s] since experiment start
 
+    delay: float | None = None  # relative delay in seconds from previous action
+
     timeout: float | None = None  # per-action timeout (seconds, optional)
 
     # action-specific stuff (parameters for the concrete action class)
@@ -69,60 +192,48 @@ class ExperimentActionDefinition:
 
     # ------------------------------------------------------------------
     @classmethod
-    def from_key_and_dict(cls, action_id: str, d: dict) -> "ExperimentActionDefinition":
+    def from_dict(cls, d: dict, index: int = 0) -> "ExperimentActionDefinition":
         """
-        For new format:
-            actions:
-              action1:
-                type: ...
-                time: ...
-                mode: BALANCING
-        """
+        Parse an action definition from a dict.
 
+        Args:
+            d: Dict containing action definition. Must have 'type' field.
+               'id' is optional - auto-generated as 'action_{index}' if missing.
+            index: Index for auto-generating ID when not provided.
+
+        Returns:
+            ExperimentActionDefinition instance.
+
+        Raises:
+            ValueError: If 'type' field is missing.
+        """
         if "type" not in d:
-            raise ValueError(f"Action '{action_id}' missing required field 'type'")
+            raise ValueError(f"Action at index {index} missing required field 'type': {d}")
 
-        # Extract scheduling fields
-        tick = d.get("tick")
-        after = d.get("after")
-        time = d.get("time")
-        timeout = d.get("timeout")
+        # id is optional - auto-generate if missing
+        action_id = d.get("id", f"action_{index}")
 
-        # Everything else = parameters
-        parameters = {
-            k: v for k, v in d.items()
-            if k not in ("type", "tick", "after", "time", "timeout")
-        }
+        # Reserved fields that should not go into parameters
+        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "parameters"}
+
+        # If 'parameters' is explicitly provided, use it; otherwise collect non-reserved fields
+        if "parameters" in d:
+            parameters = d["parameters"]
+        else:
+            parameters = {
+                k: v for k, v in d.items()
+                if k not in reserved_fields
+            }
 
         return cls(
             id=action_id,
             type=d["type"],
-            tick=tick,
-            after=after,
-            time=time,
-            timeout=timeout,
-            parameters=parameters
-        )
-
-    # ------------------------------------------------------------------
-    @classmethod
-    def from_dict(cls, d: dict) -> "ExperimentActionDefinition":
-        """
-        OLD FORMAT compatibility: a dict that already contains 'id'
-        """
-        if "id" not in d or "type" not in d:
-            raise ValueError(f"Action definition must contain 'id' and 'type': {d}")
-
-        params = d.get("parameters", {})
-
-        return cls(
-            id=d["id"],
-            type=d["type"],
             tick=d.get("tick"),
             after=d.get("after"),
             time=d.get("time"),
+            delay=d.get("delay"),
             timeout=d.get("timeout"),
-            parameters=params,
+            parameters=parameters,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -136,6 +247,8 @@ class ExperimentActionDefinition:
             dict_out["after"] = self.after
         if self.time is not None:
             dict_out["time"] = self.time
+        if self.delay is not None:
+            dict_out["delay"] = self.delay
         if self.timeout is not None:
             dict_out["timeout"] = self.timeout
         if self.parameters:
@@ -229,7 +342,7 @@ class ExperimentAction(abc.ABC):
 
 
 # ======================================================================================================================
-@dataclasses.dataclass
+@dataclasses.dataclass(kw_only=True)
 class BeepAction(ExperimentAction):
     frequency: int = 1000
     time_ms: int = 250
@@ -243,10 +356,13 @@ class BeepAction(ExperimentAction):
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition):
-        return cls(id=definition.id,
-                   frequency=definition.parameters.get('frequency', 1000),
-                   time_ms=definition.parameters.get('time_ms', 250),
-                   repeats=definition.parameters.get('repeats', 1))
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(
+            **kwargs,
+            frequency=definition.parameters.get('frequency', 1000),
+            time_ms=definition.parameters.get('time_ms', 250),
+            repeats=definition.parameters.get('repeats', 1)
+        )
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -489,10 +605,13 @@ class SetInputAction(ExperimentAction):
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> SetInputAction:
         kwargs = cls._common_init_kwargs(definition)
+        input_val = definition.parameters.get('input', [0.0, 0.0])
+        normalized = definition.parameters.get('normalized', False)
+        print(f"[SetInputAction.from_definition] Creating: id={definition.id}, input={input_val}, normalized={normalized}, delay={definition.delay}")
         return cls(
             **kwargs,
-            input=definition.parameters.get('input', [0.0, 0.0]),
-            normalized=definition.parameters.get('normalized', False),
+            input=input_val,
+            normalized=normalized,
         )
 
 
@@ -503,20 +622,24 @@ class WaitTimeAction(ExperimentAction):
 
     def execute(self):
         self._on_started()
+        print(f"[WaitTimeAction {self.id}] Waiting for {self.time_ms} ms ({self.time_ms / 1000.0} seconds)")
         thread = threading.Thread(target=self._execute_blocking, daemon=True)
         thread.start()
         return False
 
     def _execute_blocking(self):
         precise_sleep(self.time_ms / 1000.0)
+        print(f"[WaitTimeAction {self.id}] Wait finished")
         self._on_finished()
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> WaitTimeAction:
         kwargs = cls._common_init_kwargs(definition)
+        time_ms = definition.parameters.get('time_ms', 0)
+        print(f"[WaitTimeAction.from_definition] Creating WaitTimeAction: id={definition.id}, time_ms={time_ms}, parameters={definition.parameters}")
         return cls(
             **kwargs,
-            time_ms=definition.parameters.get('time_ms', 0),
+            time_ms=time_ms,
         )
 
 
@@ -619,6 +742,65 @@ class WaitEventAction(ExperimentAction):
         )
 
 
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass(kw_only=True)
+class ParallelAction(ExperimentAction):
+    """Executes multiple actions simultaneously, finishes when all complete."""
+    sub_actions: list[ExperimentAction] = dataclasses.field(default_factory=list)
+    _pending_count: int = 0
+
+    def __post_init__(self):
+        super().__post_init__()
+        self._pending_count = 0
+
+    def initialize(self, experiment: Experiment):
+        super().initialize(experiment)
+        for sub_action in self.sub_actions:
+            sub_action.initialize(experiment)
+
+    def execute(self) -> bool:
+        self._on_started()
+        self._pending_count = len(self.sub_actions)
+
+        if self._pending_count == 0:
+            self._on_finished()
+            return True
+
+        for sub_action in self.sub_actions:
+            sub_action.callbacks.finished.register(self._sub_action_finished)
+            sub_action.execute()
+
+        return False  # Async - wait for all sub-actions
+
+    def _sub_action_finished(self):
+        self._pending_count -= 1
+        if self._pending_count <= 0:
+            self._on_finished()
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "ParallelAction":
+        kwargs = cls._common_init_kwargs(definition)
+
+        sub_action_defs = definition.parameters.get("actions", [])
+        sub_actions: list[ExperimentAction] = []
+
+        for i, sub_def in enumerate(sub_action_defs):
+            # Expand shorthand and parse
+            expanded = _expand_shorthand(sub_def)
+            sub_action_def = ExperimentActionDefinition.from_dict(expanded, index=i)
+            sub_action_def.id = f"{definition.id}_sub_{i}"
+
+            # Create the action instance (need to import after mapping is defined)
+            action_type = sub_action_def.type
+            if action_type not in EXPERIMENT_ACTION_TYPE_MAPPING:
+                raise ValueError(f"Unknown action type in parallel group: {action_type}")
+
+            action_cls = EXPERIMENT_ACTION_TYPE_MAPPING[action_type]
+            sub_actions.append(action_cls.from_definition(sub_action_def))
+
+        return cls(**kwargs, sub_actions=sub_actions)
+
+
 # ======================================================================================================================
 EXPERIMENT_ACTION_TYPE_MAPPING = {
     "beep": BeepAction,
@@ -635,6 +817,7 @@ EXPERIMENT_ACTION_TYPE_MAPPING = {
     "set_velocity": SetVelocityAction,
     "enable_external_input": EnableExternalInputAction,
     "reset": ResetAction,
+    "parallel": ParallelAction,
 }
 
 
@@ -683,6 +866,16 @@ class ExperimentDefinition:
     # ----------------------------------------------------------------------
     @classmethod
     def from_dict(cls, data: dict) -> "ExperimentDefinition":
+        """
+        Parse an experiment definition from a dict.
+
+        Supports list-based actions format with:
+        - Auto-generated IDs (action_0, action_1, etc.)
+        - Shorthand syntax for common actions (wait, mode, speak, beep, etc.)
+        - Implicit sequential chaining (actions run after the previous one by default)
+        - Delay field for relative timing
+        - Parallel action groups
+        """
         if "id" not in data:
             raise ValueError("Experiment definition requires an 'id'")
         if "description" not in data:
@@ -692,22 +885,23 @@ class ExperimentDefinition:
 
         raw_actions = data["actions"]
 
-        # --- NEW FORMAT: mapping: action_id -> dict ---
-        if isinstance(raw_actions, dict):
-            actions = [
-                ExperimentActionDefinition.from_key_and_dict(action_id, action_dict)
-                for action_id, action_dict in raw_actions.items()
-            ]
+        if not isinstance(raw_actions, list):
+            raise TypeError("'actions' must be a list")
 
-        # --- OLD FORMAT: list of dicts (id included in each entry) ---
-        elif isinstance(raw_actions, list):
-            actions = [
-                ExperimentActionDefinition.from_dict(a)
-                for a in raw_actions
-            ]
+        # Parse actions with shorthand expansion and auto-ID generation
+        print(f"[ExperimentDefinition.from_dict] Parsing {len(raw_actions)} raw actions...")
+        actions = []
+        for i, a in enumerate(raw_actions):
+            print(f"[ExperimentDefinition.from_dict] Raw action {i}: {a}")
+            expanded = _expand_shorthand(a)
+            print(f"[ExperimentDefinition.from_dict] Expanded action {i}: {expanded}")
+            action_def = ExperimentActionDefinition.from_dict(expanded, index=i)
+            print(f"[ExperimentDefinition.from_dict] Action def {i}: id={action_def.id}, type={action_def.type}, params={action_def.parameters}, after={action_def.after}, tick={action_def.tick}, delay={action_def.delay}")
+            actions.append(action_def)
 
-        else:
-            raise TypeError("'actions' must be either a dict or a list")
+        print(f"[ExperimentDefinition.from_dict] Total parsed actions: {len(actions)}")
+        for a in actions:
+            print(f"  - {a.id}: type={a.type}, params={a.parameters}")
 
         return cls(
             id=data["id"],
@@ -884,6 +1078,49 @@ class Experiment:
                     action_definition.tick = 0
 
         # ----------------------------------------------------------------------
+        # 1d) Handle delay fields by inserting synthetic wait actions
+        # ----------------------------------------------------------------------
+        synthetic_actions: list[tuple[int, ExperimentActionDefinition]] = []
+
+        for index, action_definition in enumerate(self.definition.actions):
+            if action_definition.delay is not None:
+                if action_definition.delay < 0:
+                    raise ValueError(
+                        f"Action {action_definition.id} has negative delay: {action_definition.delay}"
+                    )
+
+                delay_ms = int(action_definition.delay * 1000)
+                delay_action_id = f"{action_definition.id}_delay"
+
+                # Determine what the delay action comes after
+                delay_after = action_definition.after
+                delay_tick = action_definition.tick
+
+                # If no explicit scheduling, the delay action runs after the previous action
+                if delay_after is None and delay_tick is None and index > 0:
+                    delay_after = self.definition.actions[index - 1].id
+
+                delay_action_def = ExperimentActionDefinition(
+                    id=delay_action_id,
+                    type="wait_time",
+                    tick=delay_tick,
+                    after=delay_after,
+                    parameters={"time_ms": delay_ms}
+                )
+
+                # Mark where to insert this synthetic action
+                synthetic_actions.append((index, delay_action_def))
+
+                # Update the original action to run after the delay
+                action_definition.after = delay_action_id
+                action_definition.tick = None  # Clear tick since we now use after
+                action_definition.delay = None  # Clear delay to avoid re-processing
+
+        # Insert synthetic actions (in reverse order to maintain correct indices)
+        for insert_index, delay_def in reversed(synthetic_actions):
+            self.definition.actions.insert(insert_index, delay_def)
+
+        # ----------------------------------------------------------------------
         # 2) Create runtime actions + containers from normalized definitions
         # ----------------------------------------------------------------------
         for action_definition in self.definition.actions:
@@ -962,7 +1199,8 @@ class Experiment:
         if self._timeout_ticks is not None and self.tick >= self._timeout_ticks:
             self.events.timeout.set(data=self)
 
-        for action_container in self.action_containers.values():
+        # Iterate over a copy to avoid "dictionary changed size during iteration" errors
+        for action_container in list(self.action_containers.values()):
 
             # Check if the action has already been handled
             if action_container.handled:
@@ -993,7 +1231,7 @@ class Experiment:
                 action_container.handled = True
 
         # Check if all actions are finished
-        if all(action_container.handled for action_container in self.action_containers.values()):
+        if all(action_container.handled for action_container in list(self.action_containers.values())):
             self.finished = True
             self._handle_finished()
         self.tick += 1
@@ -1006,7 +1244,7 @@ class Experiment:
     def execute_action(self, action_container: ExperimentActionContainer):
 
         self.logger.info(
-            f"[Step {self.tick} (Global: {self.experiment_handler.common.tick})] Executing action {action_container.id} ...")
+            f"[Step {self.tick} (Global: {self.experiment_handler.common.tick})] Executing action {action_container.id} ({type(action_container.action).__name__})")
         # Attach the action's events:
         action_container.listeners.append(action_container.action.events.error.on(callback=
         Callback(
@@ -1302,6 +1540,8 @@ class BILBO_ExperimentHandler:
             experiment = Experiment(experiment)
 
         self.logger.info(f"Running experiment {experiment.definition.id} ...")
+        self.logger.info(f"Number of actions: {len(experiment.definition.actions)}")
+
         if self.active_experiment is not None:
             self.logger.warning(
                 f"Experiment {self.active_experiment.definition.id} already running. Cannot start experiment {experiment.definition.id}.")

@@ -30,7 +30,15 @@ void BILBO_Control::init(bilbo_control_init_config_t config) {
 	this->tic_controller.callbacks.disable.registerFunction(this,
 			&BILBO_Control::_on_tic_disabled);
 
-	this->position_control.callbacks.element_finished.registerFunction(this,
+	// Register position control callbacks to reset velocity control integrators
+	// when position control finishes (prevents integrator windup)
+	this->position_control.callbacks.path_finished.registerFunction(this,
+			&BILBO_Control::_on_position_command_finished);
+
+	this->position_control.callbacks.path_timeout.registerFunction(this,
+			&BILBO_Control::_on_position_command_finished);
+
+	this->position_control.callbacks.path_aborted.registerFunction(this,
 			&BILBO_Control::_on_position_command_finished);
 
 }
@@ -91,14 +99,6 @@ bool BILBO_Control::set_vc_ff_psidot(feedforward_config_t config) {
 	this->velocity_control.set_config_turn_ff(config);
 	return true;
 }
-/* -------------------------------------------------------------------------------------- */
-bool BILBO_Control::set_position_control_config(
-		bilbo_position_control_config_t config) {
-	this->control_config.position_control_config = config;
-	this->position_control.set_config(config);
-	return true;
-}
-
 /* -------------------------------------------------------------------------------------- */
 bool BILBO_Control::set_tic_config(bilbo_tic_config_t config) {
 	this->control_config.tic_config = config;
@@ -226,11 +226,12 @@ bool BILBO_Control::set_mode(bilbo_control_mode_t mode) {
 		this->set_tic_enabled(false);
 		this->balancing_control.set_mode(twipr_balancing_control_mode_t::ON);
 		this->velocity_control.reset();
+		// Reset position control and clear any existing waypoints/commands
 		this->position_control.reset();
+		this->position_control.clear_waypoints();
 //		send_info("Set mode to POSITION. Tick: %d", tick_global);
 		break;
 	}
-
 	}
 
 	// Reset controllers when entering a new mode
@@ -290,34 +291,6 @@ bool BILBO_Control::set_velocity_command(
 	return true;
 }
 /* -------------------------------------------------------------------------------------- */
-bool BILBO_Control::set_position_command(position_command_t command) {
-
-	if (this->mode != bilbo_control_mode_t::POSITION) {
-		send_error("Cannot set position command when not in POSITION mode");
-		return false;
-	}
-
-	return this->position_control.set_position_command(command);
-}
-
-/* -------------------------------------------------------------------------------------- */
-bool BILBO_Control::set_heading_command(heading_command_t command) {
-	if (this->mode != bilbo_control_mode_t::POSITION) {
-		send_error("Cannot set heading command when not in POSITION mode");
-		return false;
-	}
-	return this->position_control.set_heading_command(command);
-}
-/* -------------------------------------------------------------------------------------- */
-void BILBO_Control::abort_position_command() {
-	if (this->mode != bilbo_control_mode_t::POSITION) {
-		send_error("Cannot abort position command when not in POSITION mode");
-		return;
-	}
-	this->position_control.abort_current_command();
-}
-/* -------------------------------------------------------------------------------------- */
-
 bool BILBO_Control::set_vic_enabled(bool state) {
 	if (!this->control_config.vic_config.enabled) {
 		return false;
@@ -353,9 +326,6 @@ bool BILBO_Control::set_tic_enabled(bool state) {
 }
 /* -------------------------------------------------------------------------------------- */
 bilbo_control_output_t BILBO_Control::update() {
-
-//	position_command_t position_command = { 0, 0 };
-	bilbo_position_control_output_t position_output = { 0, 0 };
 
 	bilbo_velocity_control_command_t velocity_command = { .v = 0, .psi_dot = 0 };
 	bilbo_velocity_control_output_t velocity_output = { 0, 0 };
@@ -434,22 +404,29 @@ bilbo_control_output_t BILBO_Control::update() {
 		}
 		case bilbo_control_mode_t::POSITION: {
 			// Position control mode
-			// 1. Update the position controller
-			position_output = this->position_control.update(position_state);
+			// All position and heading commands go through position_control
 
-			// 2. Take this output as velocity command
+			// Update position controller (handles path following, turn-to-heading, drive-to-point)
+			bilbo_position_control_output_t position_output =
+					this->position_control.update(position_state, dynamic_state.v);
+
 			velocity_command.v = position_output.v_cmd;
 			velocity_command.psi_dot = position_output.psi_dot_cmd;
+
+			// Update velocity controller with the command
 			velocity_output = this->velocity_control.update(velocity_command,
 					dynamic_state.v, dynamic_state.psi_dot);
-			// 3. Take this output as balancing input
+
+			// Take velocity output as balancing input
 			external_input = { velocity_output.u_l, velocity_output.u_r };
 			balancing_input = { external_input.u_left, external_input.u_right };
 			balancing_output = this->balancing_control.update(dynamic_state,
 					balancing_input);
-			// 4. Update TIC
+
+			// Update TIC
 			float tic_output = this->tic_controller.update(dynamic_state.theta);
-			// 5. Combine outputs
+
+			// Combine outputs
 			output.u_left = balancing_output.u_1 + tic_output;
 			output.u_right = balancing_output.u_2 + tic_output;
 			break;
@@ -464,7 +441,6 @@ bilbo_control_output_t BILBO_Control::update() {
 	this->_data.mode = this->mode;
 	this->_data.tic_enabled = this->tic_controller.is_enabled();
 	this->_data.vic_enabled = this->vic_controller.is_active();
-	this->_data.position_output = position_output;
 	this->_data.position_control_data = this->position_control.get_data();
 	this->_data.velocity_command = velocity_command;
 	this->_data.velocity_output = velocity_output;
@@ -503,23 +479,90 @@ void BILBO_Control::_on_tic_disabled() {
 }
 
 /* -------------------------------------------------------------------------------------- */
-void BILBO_Control::_on_position_command_finished(uint16_t element_id) {
-	this->_data.position_control_data = this->position_control.get_data();
-	control_event_message_data_t event_message_data = { .event =
-			control_event_t::POSITION_ELEMENT_FINISHED, .mode = mode, .data =
-			this->_data, .tick = tick_global };
-
-	BILBO_Message_Control_Event message(event_message_data);
-	sendMessage(message);
+void BILBO_Control::_on_position_command_finished(uint8_t) {
+	// Reset velocity control PID integrators when position control finishes/times out/aborts.
+	// This prevents integrator windup from causing the robot to lean forward after reaching
+	// its target position (especially noticeable on high-friction surfaces like carpet).
+	this->velocity_control.reset();
 }
 
 /* -------------------------------------------------------------------------------------- */
-void BILBO_Control::_on_position_command_timeout(uint16_t element_id) {
-	this->_data.position_control_data = this->position_control.get_data();
-	control_event_message_data_t event_message_data = { .event =
-			control_event_t::POSITION_ELEMENT_TIMEOUT, .mode = mode, .data =
-			this->_data, .tick = tick_global };
+/* POSITION CONTROL INTERFACE                                                             */
+/* -------------------------------------------------------------------------------------- */
 
-	BILBO_Message_Control_Event message(event_message_data);
-	sendMessage(message);
+bool BILBO_Control::set_position_control_config(bilbo_position_control_config_t config) {
+	return this->position_control.set_config(config);
+}
+
+bilbo_position_control_config_t BILBO_Control::get_position_control_config() {
+	return this->position_control.get_config();
+}
+
+bool BILBO_Control::position_clear_path() {
+	this->position_control.clear_waypoints();
+	return true;
+}
+
+bool BILBO_Control::position_add_waypoint(bilbo_waypoint_t waypoint) {
+	return this->position_control.add_waypoint(waypoint);
+}
+
+bool BILBO_Control::position_add_waypoint_xy(float x, float y,
+                                              bilbo_waypoint_type_t type,
+                                              float weight) {
+	return this->position_control.add_waypoint_xy(x, y, type, weight);
+}
+
+bool BILBO_Control::position_start_path(bilbo_path_start_cmd_t cmd) {
+	if (this->mode != bilbo_control_mode_t::POSITION) {
+		send_error("Cannot start position path when not in POSITION mode");
+		return false;
+	}
+
+	bilbo_position_state_t start_state = this->config.estimation->position_state;
+	return this->position_control.start_path(cmd, start_state);
+}
+
+void BILBO_Control::position_pause_path() {
+	this->position_control.pause_path();
+}
+
+void BILBO_Control::position_resume_path() {
+	this->position_control.resume_path();
+}
+
+void BILBO_Control::position_abort_path() {
+	this->position_control.abort_path();
+}
+
+bilbo_path_state_t BILBO_Control::position_get_path_state() {
+	return this->position_control.get_path_state();
+}
+
+bilbo_position_control_data_t BILBO_Control::position_get_data() {
+	return this->position_control.get_data();
+}
+
+uint16_t BILBO_Control::position_get_waypoint_count() {
+	return this->position_control.get_waypoint_count();
+}
+
+bool BILBO_Control::position_turn_to_heading(turn_to_heading_command_t cmd) {
+	if (this->mode != bilbo_control_mode_t::POSITION) {
+		send_error("Cannot turn to heading when not in POSITION mode");
+		return false;
+	}
+	return this->position_control.turn_to_heading(cmd);
+}
+
+bool BILBO_Control::position_move_to_point(move_to_point_command_t cmd) {
+	if (this->mode != bilbo_control_mode_t::POSITION) {
+		send_error("Cannot move to point when not in POSITION mode");
+		return false;
+	}
+	return this->position_control.move_to_point(cmd);
+}
+
+bool BILBO_Control::position_reset() {
+	return this->position_control.reset();
 }

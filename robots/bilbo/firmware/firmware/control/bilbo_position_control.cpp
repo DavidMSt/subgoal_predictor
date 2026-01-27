@@ -1,515 +1,1040 @@
 /*
  * bilbo_position_control.cpp
  *
- *  Created on: Jan 9, 2026
+ *  Created on: Jan 25, 2026
  *      Author: lehmann
  *
- *  Improvements (Jan 2026):
- *   - POSITION_TO_POINT completion now uses distance-only (like Python MoveToTarget)
- *     to avoid ill-conditioned angle-to-target near goal.
- *   - cos(e_psi) speed scaling is clamped to >= 0 to avoid unintentional reversal
- *     due to heading noise / overshoot near the target.
- *   - Angular command is scaled down near the goal (distance-based fade) to reduce
- *     “spin jitter” when close to the target.
+ *  SIMPLIFIED PATH FOLLOWING IMPLEMENTATION
+ *  ========================================
+ *
+ *  Key design principles (practical, tested in real-world):
+ *
+ *  1. DECOUPLED SPEED AND STEERING
+ *     - Speed = kp_linear * max(dist_to_waypoint, carrot_dist)
+ *     - Steering = heading toward carrot (where to steer)
+ *     - Maintains speed through PASS waypoints (carrot advances freely)
+ *     - Slows at tight corners (carrot blocked by weight+angle)
+ *     - Slows at STOP waypoints (carrot stays at waypoint)
+ *
+ *  2. CARROT ON SEGMENTS (for steering only)
+ *     - Carrot always stays on the line between waypoints
+ *     - Cannot go backward on current segment
+ *     - Small lookahead = tight path following
+ *     - Advancing to next segment depends on weight + corner angle
+ *
+ *  3. WEIGHT + ANGLE for corners
+ *     - effective_weight = weight * (corner_angle / PI)
+ *     - Straight path (angle=0): carrot advances freely regardless of weight
+ *     - Sharp corner (angle=PI): full weight effect
+ *
+ *  4. REVERSE MODE always enabled
+ *     - Robot can drive backwards when target is behind
+ *     - Hysteresis prevents oscillation
  */
 
 #include "bilbo_position_control.h"
+#include <cstring>
+#include "twipr_communication.h"
 
-#include <algorithm>
-#include <cmath>
+#ifndef M_PI
+#define M_PI 3.14159265358979323846f
+#endif
 
-// Provided by your system (global tick counter)
-extern uint32_t tick_global;
+static constexpr float EPSILON = 1e-6f;
 
-// ----- helpers -----
-static inline float clampf(float v, float lo, float hi) {
-	return std::max(lo, std::min(v, hi));
-}
-
-static inline float wrapToPi(float a) {
-	// Wrap to [-pi, pi]
-	constexpr float PI = 3.14159265358979323846f;
-	while (a > PI)
-		a -= 2.0f * PI;
-	while (a < -PI)
-		a += 2.0f * PI;
-	return a;
-}
-
-static inline float hypotf_safe(float x, float y) {
-	return std::sqrt(x * x + y * y);
-}
+// ============================================================================
+// CONSTRUCTOR
+// ============================================================================
 
 BILBO_PositionControl::BILBO_PositionControl() {
-	// NOTE: config is expected to be set via set_config().
-	// We still initialize safe internal state.
+	mode = bilbo_position_control_mode_t::IDLE;
+	_path_state = bilbo_path_state_t::IDLE;
+	_waypoint_count = 0;
+	_current_segment = 0;
+	_reverse_mode_active = false;
 
-	this->current_mode = bilbo_position_control_mode_t::NONE;
-
-	this->_position_integral_error = 0.0f;
-	this->_angle_integral_error = 0.0f;
-
-	this->_arrival_hold_time = 0.0f;
-	this->_was_inside_arrival_region = false;
-
-	this->_current_element_id = 0;
-	this->_element_start_tick = 0;
-
-	// Telemetry init (no defaults in struct -> assign explicitly)
-	this->_data.current_mode = bilbo_position_control_mode_t::NONE;
-	this->_data.is_executing_command = false;
-	this->_data.current_output.v_cmd = 0.0f;
-	this->_data.current_output.psi_dot_cmd = 0.0f;
+	memset(_waypoint_buffer, 0, sizeof(_waypoint_buffer));
+	memset(_segment_lengths, 0, sizeof(_segment_lengths));
 }
 
+// ============================================================================
+// CONFIGURATION
+// ============================================================================
+
+bool BILBO_PositionControl::set_config(const bilbo_position_control_config_t& cfg) {
+	if (cfg.Ts <= 0.0f) return false;
+	if (cfg.max_speed <= 0.0f) return false;
+	if (cfg.max_turn_rate <= 0.0f) return false;
+
+	config = cfg;
+	return true;
+}
+
+bilbo_position_control_config_t BILBO_PositionControl::get_config() const {
+	return config;
+}
+
+// ============================================================================
+// SINGLE-POINT COMMANDS
+// ============================================================================
+
+bool BILBO_PositionControl::turn_to_heading(const turn_to_heading_command_t& command) {
+	if (mode != bilbo_position_control_mode_t::IDLE) {
+		return false;
+	}
+
+	_active_turn_command = command;
+	_elapsed_time = 0.0f;
+	_angular_integral = 0.0f;
+	_arrival_timer = 0.0f;
+
+	_set_mode(bilbo_position_control_mode_t::TURN_TO_HEADING);
+	_send_event(position_control_event_t::TURN_TO_HEADING_STARTED);
+	return true;
+}
+
+bool BILBO_PositionControl::move_to_point(const move_to_point_command_t& command) {
+	if (mode != bilbo_position_control_mode_t::IDLE) {
+		return false;
+	}
+
+	_active_move_command = command;
+	_elapsed_time = 0.0f;
+	_angular_integral = 0.0f;
+	_linear_integral = 0.0f;
+	_arrival_timer = 0.0f;
+	_reverse_mode_active = false;
+
+	_set_mode(bilbo_position_control_mode_t::DRIVE_TO_POINT);
+	_send_event(position_control_event_t::MOVE_TO_POINT_STARTED);
+	return true;
+}
+
+// ============================================================================
+// PATH FOLLOWING - WAYPOINT MANAGEMENT
+// ============================================================================
+
+void BILBO_PositionControl::clear_waypoints() {
+	_waypoint_count = 0;
+	_path_state = bilbo_path_state_t::IDLE;
+	_current_segment = 0;
+	_carrot_t = 0.0f;
+	_angular_integral = 0.0f;
+	_linear_integral = 0.0f;
+	_arrival_timer = 0.0f;
+	_reverse_mode_active = false;
+
+	memset(_segment_lengths, 0, sizeof(_segment_lengths));
+}
+
+bool BILBO_PositionControl::add_waypoint(const bilbo_waypoint_t& waypoint) {
+	if (_waypoint_count >= WAYPOINT_BUFFER_SIZE) {
+		_send_event(position_control_event_t::WAYPOINT_BUFFER_FULL);
+		return false;
+	}
+
+	_waypoint_buffer[_waypoint_count] = waypoint;
+	_waypoint_count++;
+	return true;
+}
+
+bool BILBO_PositionControl::add_waypoint_xy(float x, float y,
+                                            bilbo_waypoint_type_t type,
+                                            float weight) {
+	bilbo_waypoint_t wp;
+	wp.x = x;
+	wp.y = y;
+	wp.type = type;
+	wp.weight = _clamp(weight, 0.0f, 1.0f);
+	return add_waypoint(wp);
+}
+
+uint16_t BILBO_PositionControl::get_waypoint_count() const {
+	return _waypoint_count;
+}
+
+bilbo_waypoint_t BILBO_PositionControl::get_current_waypoint() const {
+	bilbo_waypoint_t wp = {0.0f, 0.0f, bilbo_waypoint_type_t::PASS, 0.0f};
+
+	if (_waypoint_count > 0 && _current_segment < _waypoint_count) {
+		wp = _waypoint_buffer[_current_segment];
+	}
+
+	return wp;
+}
+
+// ============================================================================
+// PATH FOLLOWING - EXECUTION CONTROL
+// ============================================================================
+
+bool BILBO_PositionControl::start_path(const bilbo_path_start_cmd_t& command,
+                                       const bilbo_position_state_t& start_state) {
+	if (_waypoint_count == 0) {
+		return false;
+	}
+
+	if (mode != bilbo_position_control_mode_t::IDLE) {
+		return false;
+	}
+
+	// Store start position
+	_start_x = start_state.x;
+	_start_y = start_state.y;
+
+	// Initialize carrot at start
+	_carrot_x = start_state.x;
+	_carrot_y = start_state.y;
+	_carrot_t = 0.0f;
+
+	// Compute segment lengths
+	_compute_segment_lengths();
+
+	// Initialize state
+	_current_segment = 0;
+	_angular_integral = 0.0f;
+	_linear_integral = 0.0f;
+	_arrival_timer = 0.0f;
+	_elapsed_time = 0.0f;
+	_reverse_mode_active = false;
+
+	// Store command
+	_active_path_command = command;
+
+	// Set mode and state
+	_path_state = bilbo_path_state_t::RUNNING;
+	_set_mode(bilbo_position_control_mode_t::FOLLOW_PATH);
+
+	_on_path_started();
+	return true;
+}
+
+void BILBO_PositionControl::pause_path() {
+	if (_path_state == bilbo_path_state_t::RUNNING) {
+		_path_state = bilbo_path_state_t::PAUSED;
+		_send_event(position_control_event_t::PATH_PAUSED);
+	}
+}
+
+void BILBO_PositionControl::resume_path() {
+	if (_path_state == bilbo_path_state_t::PAUSED) {
+		_path_state = bilbo_path_state_t::RUNNING;
+		_send_event(position_control_event_t::PATH_RESUMED);
+	}
+}
+
+void BILBO_PositionControl::abort_path() {
+	if (mode == bilbo_position_control_mode_t::FOLLOW_PATH) {
+		_on_path_aborted();
+		_path_state = bilbo_path_state_t::IDLE;
+		_set_mode(bilbo_position_control_mode_t::IDLE);
+	}
+}
+
+// ============================================================================
+// STATUS QUERIES
+// ============================================================================
+
+bilbo_position_control_mode_t BILBO_PositionControl::get_mode() const {
+	return mode;
+}
+
+bilbo_path_state_t BILBO_PositionControl::get_path_state() const {
+	return _path_state;
+}
+
+bilbo_position_control_data_t BILBO_PositionControl::get_data() const {
+	return data;
+}
+
+bool BILBO_PositionControl::is_running() const {
+	return _path_state == bilbo_path_state_t::RUNNING;
+}
+
+bool BILBO_PositionControl::is_idle() const {
+	return mode == bilbo_position_control_mode_t::IDLE;
+}
+
+bool BILBO_PositionControl::reset() {
+	_angular_integral = 0.0f;
+	_linear_integral = 0.0f;
+	_arrival_timer = 0.0f;
+	_elapsed_time = 0.0f;
+	_reverse_mode_active = false;
+	this->clear_waypoints();
+	this->_set_mode(bilbo_position_control_mode_t::IDLE);
+	return true;
+}
+
+// ============================================================================
+// MAIN UPDATE
+// ============================================================================
+
 bilbo_position_control_output_t BILBO_PositionControl::update(
-		bilbo_position_state_t current_state) {
+		const bilbo_position_state_t& current_state,
+		float current_v) {
 
-	bilbo_position_control_output_t out;
-	out.v_cmd = 0.0f;
-	out.psi_dot_cmd = 0.0f;
+	bilbo_position_control_output_t output = {0.0f, 0.0f};
 
-	// This flag reflects whether we are inside the completion region this tick
-	// (the per-mode controllers update _was_inside_arrival_region and _arrival_hold_time).
-	bool inside_arrival_region = false;
+	_elapsed_time += config.Ts;
 
-	// ----- compute control output for current mode -----
-	switch (this->current_mode) {
-	case bilbo_position_control_mode_t::NONE: {
-		// Idle: keep things quiet
-		this->_position_integral_error = 0.0f;
-		this->_angle_integral_error = 0.0f;
-		this->_arrival_hold_time = 0.0f;
-		this->_was_inside_arrival_region = false;
+	switch (mode) {
+	case bilbo_position_control_mode_t::IDLE:
+		break;
 
-		out.v_cmd = 0.0f;
-		out.psi_dot_cmd = 0.0f;
+	case bilbo_position_control_mode_t::TURN_TO_HEADING:
+		output = _update_turn_to_heading(current_state);
+		break;
+
+	case bilbo_position_control_mode_t::DRIVE_TO_POINT:
+		output = _update_drive_to_point(current_state, current_v);
+		break;
+
+	case bilbo_position_control_mode_t::FOLLOW_PATH:
+		output = _update_follow_path(current_state, current_v);
 		break;
 	}
 
-	case bilbo_position_control_mode_t::POSITION_TO_POINT: {
-		const float max_v =
-				(this->_current_position_command.max_speed > 0.0f) ?
-						this->_current_position_command.max_speed :
-						this->config.max_speed_forward;
+	// Update telemetry
+	data.mode = mode;
+	data.path_state = _path_state;
+	data.buffer_capacity = WAYPOINT_BUFFER_SIZE;
+	data.buffer_used = _waypoint_count;
+	data.output = output;
+	data.elapsed_time = _elapsed_time;
 
-		out = this->_position_control_to_point(current_state,
-				this->_current_position_command.position_ref.x_target,
-				this->_current_position_command.position_ref.y_target, max_v);
+	return output;
+}
 
-		inside_arrival_region = this->_was_inside_arrival_region;
-		break;
+// ============================================================================
+// PATH FOLLOWING UPDATE
+// ============================================================================
+
+bilbo_position_control_output_t BILBO_PositionControl::_update_follow_path(
+		const bilbo_position_state_t& current_state,
+		float current_v) {
+
+	bilbo_position_control_output_t output = {0.0f, 0.0f};
+
+	if (_path_state != bilbo_path_state_t::RUNNING || _waypoint_count == 0) {
+		return output;
 	}
 
-	case bilbo_position_control_mode_t::TURN_TO_HEADING: {
-		const float max_w =
-				(this->_current_heading_command.max_angular_speed > 0.0f) ?
-						this->_current_heading_command.max_angular_speed :
-						this->config.max_speed_turn;
-
-		out = this->_turn_to_heading(current_state,
-				this->_current_heading_command.heading_ref.psi_target, max_w);
-
-		inside_arrival_region = this->_was_inside_arrival_region;
-		break;
+	// Check timeout
+	if (_active_path_command.timeout > 0.0f &&
+		_elapsed_time > _active_path_command.timeout) {
+		_on_path_timeout();
+		_path_state = bilbo_path_state_t::IDLE;
+		_set_mode(bilbo_position_control_mode_t::IDLE);
+		return output;
 	}
 
-	default: {
-		// Unknown -> safe stop
-		out.v_cmd = 0.0f;
-		out.psi_dot_cmd = 0.0f;
-		this->current_mode = bilbo_position_control_mode_t::NONE;
-		break;
+	// Check final arrival
+	if (_check_final_arrival(current_state)) {
+		_on_path_finished();
+		_path_state = bilbo_path_state_t::IDLE;
+		_set_mode(bilbo_position_control_mode_t::IDLE);
+		return output;
 	}
+
+	// Compute lookahead distance
+	float lookahead = _compute_lookahead(current_v);
+
+	// Advance carrot along path
+	_advance_carrot(current_state, lookahead);
+
+	// Compute control output
+	output = _compute_control(current_state, current_v);
+
+	// Check intermediate STOP waypoints
+	_check_intermediate_stop(current_state);
+
+	// Update telemetry
+	data.waypoint_count = _waypoint_count;
+	data.current_segment = _current_segment;
+	data.carrot_x = _carrot_x;
+	data.carrot_y = _carrot_y;
+
+	return output;
+}
+
+// ============================================================================
+// PATH GEOMETRY METHODS
+// ============================================================================
+
+void BILBO_PositionControl::_compute_segment_lengths() {
+	for (uint16_t i = 0; i < _waypoint_count; i++) {
+		float ax, ay, bx, by;
+		_get_segment_points(i, ax, ay, bx, by);
+		_segment_lengths[i] = _distance(ax, ay, bx, by);
+	}
+}
+
+void BILBO_PositionControl::_get_segment_points(uint16_t segment_idx,
+                                                float& ax, float& ay,
+                                                float& bx, float& by) const {
+	if (segment_idx == 0) {
+		ax = _start_x;
+		ay = _start_y;
+	} else {
+		ax = _waypoint_buffer[segment_idx - 1].x;
+		ay = _waypoint_buffer[segment_idx - 1].y;
 	}
 
-	// ----- timeout handling -----
-	// If a timeout is configured (>0), abort when elapsed >= timeout.
-	if (this->is_executing_command()) {
-		float timeout_s = 0.0f;
+	bx = _waypoint_buffer[segment_idx].x;
+	by = _waypoint_buffer[segment_idx].y;
+}
 
-		if (this->current_mode
-				== bilbo_position_control_mode_t::POSITION_TO_POINT) {
-			timeout_s = this->_current_position_command.timeout;
-		} else if (this->current_mode
-				== bilbo_position_control_mode_t::TURN_TO_HEADING) {
-			timeout_s = this->_current_heading_command.timeout;
-		}
+/**
+ * Compute corner angle at a waypoint.
+ * Returns angle in [0, PI]: 0 = straight, PI = U-turn
+ */
+float BILBO_PositionControl::_compute_corner_angle_at(uint16_t waypoint_idx) const {
+	if (waypoint_idx >= _waypoint_count - 1) {
+		return 0.0f;  // Last waypoint has no outgoing segment
+	}
 
-		if (timeout_s > 0.0f) {
-			// elapsed time = (tick_global - start_tick) * Ts
-			const uint32_t elapsed_ticks = static_cast<uint32_t>(tick_global
-					- this->_element_start_tick);
-			const float elapsed_s = static_cast<float>(elapsed_ticks)
-					* this->config.Ts;
+	// Incoming vector: previous -> this waypoint
+	float ax, ay, bx, by;
+	_get_segment_points(waypoint_idx, ax, ay, bx, by);
+	float v1x = bx - ax;
+	float v1y = by - ay;
 
-			if (elapsed_s >= timeout_s) {
-				this->_on_timeout();
+	// Outgoing vector: this waypoint -> next
+	const bilbo_waypoint_t& next_wp = _waypoint_buffer[waypoint_idx + 1];
+	float v2x = next_wp.x - bx;
+	float v2y = next_wp.y - by;
 
-				// Immediately output stop
-				out.v_cmd = 0.0f;
-				out.psi_dot_cmd = 0.0f;
+	// Compute angle between vectors
+	float mag1 = sqrtf(v1x * v1x + v1y * v1y);
+	float mag2 = sqrtf(v2x * v2x + v2y * v2y);
 
-				// Update telemetry and return
-				this->_data.current_mode = this->current_mode;
-				this->_data.current_output = out;
-				this->_data.is_executing_command = this->is_executing_command();
-				return out;
+	if (mag1 < EPSILON || mag2 < EPSILON) {
+		return 0.0f;
+	}
+
+	float dot = v1x * v2x + v1y * v2y;
+	float cos_angle = _clamp(dot / (mag1 * mag2), -1.0f, 1.0f);
+
+	return acosf(cos_angle);  // [0, PI]
+}
+
+// ============================================================================
+// CARROT ADVANCEMENT
+// ============================================================================
+
+/**
+ * Project robot position onto a segment and return t parameter [0,1]
+ */
+float BILBO_PositionControl::_project_robot_to_segment(
+		const bilbo_position_state_t& robot_state,
+		uint16_t segment_idx) const {
+
+	float ax, ay, bx, by;
+	_get_segment_points(segment_idx, ax, ay, bx, by);
+
+	float dx = bx - ax;
+	float dy = by - ay;
+	float len_sq = dx * dx + dy * dy;
+
+	if (len_sq < EPSILON) {
+		return 1.0f;  // Degenerate segment
+	}
+
+	float t = ((robot_state.x - ax) * dx + (robot_state.y - ay) * dy) / len_sq;
+	return _clamp(t, 0.0f, 1.0f);
+}
+
+/**
+ * Advance carrot along the path.
+ *
+ * Key algorithm:
+ * 1. Project robot onto current segment
+ * 2. Place carrot at robot_t + lookahead/segment_length
+ * 3. If carrot wants to go past waypoint, check weight + corner angle
+ * 4. Carrot can never go backward
+ */
+void BILBO_PositionControl::_advance_carrot(
+		const bilbo_position_state_t& robot_state,
+		float lookahead) {
+
+	if (_current_segment >= _waypoint_count) {
+		return;
+	}
+
+	// Get current segment info
+	float ax, ay, bx, by;
+	_get_segment_points(_current_segment, ax, ay, bx, by);
+	float seg_len = _segment_lengths[_current_segment];
+
+	// Project robot onto segment
+	float robot_t = _project_robot_to_segment(robot_state, _current_segment);
+
+	// Convert lookahead to t-parameter
+	float lookahead_t = (seg_len > EPSILON) ? (lookahead / seg_len) : 1.0f;
+
+	// Desired carrot position
+	float desired_t = robot_t + lookahead_t;
+
+	// Check if carrot wants to advance past current waypoint
+	if (desired_t >= 1.0f && _current_segment < _waypoint_count - 1) {
+		const bilbo_waypoint_t& wp = _waypoint_buffer[_current_segment];
+		bool is_stop = (wp.type == bilbo_waypoint_type_t::STOP);
+
+		if (is_stop) {
+			// STOP waypoint: carrot stays at waypoint until robot arrives
+			desired_t = 1.0f;
+		} else {
+			// PASS waypoint: weight + corner angle determines advancement
+
+			// Compute corner angle
+			float corner_angle = _compute_corner_angle_at(_current_segment);
+
+			// Effective weight: weight is modulated by corner sharpness
+			// - Straight path (angle=0): effective_weight = 0 (free advancement)
+			// - Sharp corner (angle=PI): effective_weight = full weight
+			// Using sqrt for less aggressive modulation - allows user weight to have
+			// more effect even on moderate corners (e.g., 30° corner: sqrt(0.1)=0.32 vs 0.1)
+			float angle_factor = sqrtf(corner_angle / M_PI);  // [0, 1], sqrt for gentler modulation
+			float effective_weight = wp.weight * angle_factor;
+
+			// Distance robot needs to be from waypoint before carrot can advance
+			float robot_threshold = (1.0f - effective_weight) * lookahead;
+			float robot_dist_to_wp = _distance(robot_state.x, robot_state.y,
+			                                   wp.x, wp.y);
+
+			if (robot_dist_to_wp > robot_threshold) {
+				// Robot too far: carrot stops at waypoint
+				desired_t = 1.0f;
+			} else {
+				// Robot close enough: advance to next segment
+				float overshoot = desired_t - 1.0f;
+				_on_waypoint_passed(_current_segment);
+				_current_segment++;
+				_angular_integral = 0.0f;  // Reset integrator for new segment
+
+				if (_current_segment < _waypoint_count) {
+					// Continue on next segment
+					float next_seg_len = _segment_lengths[_current_segment];
+					_carrot_t = (next_seg_len > EPSILON) ?
+						(overshoot * seg_len / next_seg_len) : 0.0f;
+					_carrot_t = _clamp(_carrot_t, 0.0f, 1.0f);
+
+					// Update segment points for carrot calculation
+					_get_segment_points(_current_segment, ax, ay, bx, by);
+					_carrot_x = ax + _carrot_t * (bx - ax);
+					_carrot_y = ay + _carrot_t * (by - ay);
+					return;
+				}
 			}
 		}
 	}
 
-	// ----- completion handling (arrival-hold) -----
-	if (this->is_executing_command()) {
-		if (inside_arrival_region
-				&& this->_arrival_hold_time >= this->config.arrival_time) {
-			this->_on_command_finished();
+	// Carrot can never go backward on current segment
+	_carrot_t = fmaxf(_carrot_t, _clamp(desired_t, 0.0f, 1.0f));
 
-			// Stop output at completion moment
-			out.v_cmd = 0.0f;
-			out.psi_dot_cmd = 0.0f;
-		}
-	}
-
-	// ----- telemetry -----
-	this->_data.current_mode = this->current_mode;
-	this->_data.current_position_command = this->_current_position_command;
-	this->_data.current_heading_command = this->_current_heading_command;
-	this->_data.current_output = out;
-	this->_data.is_executing_command = this->is_executing_command();
-
-	return out;
+	// Compute carrot XY
+	_carrot_x = ax + _carrot_t * (bx - ax);
+	_carrot_y = ay + _carrot_t * (by - ay);
 }
 
-void BILBO_PositionControl::set_config(bilbo_position_control_config_t config) {
-	this->config = config;
-	this->reset();
-}
+// ============================================================================
+// CONTROL OUTPUT
+// ============================================================================
 
-void BILBO_PositionControl::reset() {
-	this->abort_current_command();
-
-	this->_position_integral_error = 0.0f;
-	this->_angle_integral_error = 0.0f;
-
-	this->_arrival_hold_time = 0.0f;
-	this->_was_inside_arrival_region = false;
-
-	this->_current_element_id = 0;
-	this->_element_start_tick = static_cast<uint32_t>(tick_global);
-
-	this->_data.current_mode = bilbo_position_control_mode_t::NONE;
-	this->_data.is_executing_command = false;
-	this->_data.current_output.v_cmd = 0.0f;
-	this->_data.current_output.psi_dot_cmd = 0.0f;
-}
-
-bilbo_position_control_config_t BILBO_PositionControl::get_config() {
-	return this->config;
-}
-
-bool BILBO_PositionControl::set_position_command(position_command_t command) {
-	if (this->is_executing_command()) {
-		return false;
-	}
-
-	this->reset();
-
-	this->_current_position_command = command;
-	this->_current_element_id = command.id;
-	this->_element_start_tick = static_cast<uint32_t>(tick_global);
-
-	this->current_mode = bilbo_position_control_mode_t::POSITION_TO_POINT;
-	return true;
-}
-
-bool BILBO_PositionControl::set_heading_command(heading_command_t command) {
-	if (this->is_executing_command()) {
-		return false;
-	}
-
-	this->reset();
-
-	this->_current_heading_command = command;
-	this->_current_element_id = command.id;
-	this->_element_start_tick = static_cast<uint32_t>(tick_global);
-
-	this->current_mode = bilbo_position_control_mode_t::TURN_TO_HEADING;
-	return true;
-}
-
-void BILBO_PositionControl::abort_current_command() {
-	this->current_mode = bilbo_position_control_mode_t::NONE;
-}
-
-bool BILBO_PositionControl::is_executing_command() {
-	return this->current_mode != bilbo_position_control_mode_t::NONE;
-}
-
-bilbo_position_control_data_t BILBO_PositionControl::get_data() {
-	return this->_data;
-}
-
-void BILBO_PositionControl::_on_command_finished() {
-
-	// Stop execution and reset internal state.
-	if (this->current_mode
-			== bilbo_position_control_mode_t::POSITION_TO_POINT) {
-		send_info("Position command %u to (%.1f %.1f) finished",
-				this->_current_element_id,
-				this->_current_position_command.position_ref.x_target,
-				this->_current_position_command.position_ref.y_target);
-	} else if (this->current_mode
-			== bilbo_position_control_mode_t::TURN_TO_HEADING) {
-		send_info("Heading command %u to %.1f rad finished",
-				this->_current_element_id,
-				this->_current_heading_command.heading_ref.psi_target);
-	}
-
-	// Fire finished callback with element id
-	this->callbacks.element_finished.call(this->_current_element_id);
-
-	// Stop execution + clear internal state
-	this->current_mode = bilbo_position_control_mode_t::NONE;
-
-	this->_position_integral_error = 0.0f;
-	this->_angle_integral_error = 0.0f;
-
-	this->_arrival_hold_time = 0.0f;
-	this->_was_inside_arrival_region = false;
-
-	this->_current_element_id = 0;
-}
-
-void BILBO_PositionControl::_on_timeout() {
-
-	// Stop execution and reset internal state.
-	if (this->current_mode
-			== bilbo_position_control_mode_t::POSITION_TO_POINT) {
-		send_info("Position command %u to (%.1f %.1f) timed out!",
-				this->_current_element_id,
-				this->_current_position_command.position_ref.x_target,
-				this->_current_position_command.position_ref.y_target);
-	} else if (this->current_mode
-			== bilbo_position_control_mode_t::TURN_TO_HEADING) {
-		send_info("Heading command %u to %.1f rad timed out!",
-				this->_current_element_id,
-				this->_current_heading_command.heading_ref.psi_target);
-	}
-
-	// Fire timeout callback with element id
-	this->callbacks.element_timeout.call(this->_current_element_id);
-	// Timeout hook: abort current element and reset internals.
-	this->abort_current_command();
-
-	this->_position_integral_error = 0.0f;
-	this->_angle_integral_error = 0.0f;
-
-	this->_arrival_hold_time = 0.0f;
-	this->_was_inside_arrival_region = false;
-
-	this->_current_element_id = 0;
+float BILBO_PositionControl::_compute_lookahead(float v) const {
+	float lookahead = config.lookahead_base +
+	                  config.lookahead_gain * fabsf(v);
+	return _clamp(lookahead, config.lookahead_base, config.lookahead_max);
 }
 
 /**
- * @brief POSITION_TO_POINT controller (carrot chasing) that outputs (v, w).
+ * Compute velocity and yaw rate commands.
  *
- * Improvements vs old version:
- *  - Completion uses distance-only (no heading-to-target check) to avoid noisy atan2 near goal.
- *  - v scaling uses cos(e_psi) but clamps to >= 0 so v never flips sign due to heading error.
- *  - w command is faded down near the goal so we don't “spin jitter” when dist is tiny.
+ * Key features:
+ * 1. Speed = kp_linear * max(dist_to_waypoint, carrot_dist)
+ *    - Maintains speed through PASS waypoints when carrot advances
+ *    - Slows at tight corners (carrot can't advance due to weight+angle)
+ *    - Slows at STOP waypoints (carrot stays at waypoint)
+ * 2. Heading toward carrot (small lookahead = tight path following)
+ * 3. Reverse mode with hysteresis (always enabled)
+ * 4. cos(heading_error) speed scaling
+ * 5. PI angular control with anti-windup
  */
-bilbo_position_control_output_t BILBO_PositionControl::_position_control_to_point(
-		bilbo_position_state_t current_state, float x_target, float y_target,
-		float max_speed_forward_override) {
+bilbo_position_control_output_t BILBO_PositionControl::_compute_control(
+		const bilbo_position_state_t& robot_state,
+		float current_v) {
 
-	constexpr float PI = 3.14159265358979323846f;
-	const float Ts = this->config.Ts;
+	bilbo_position_control_output_t output = {0.0f, 0.0f};
 
-	// Resolve forward speed limit
-	float v_max =
-			(max_speed_forward_override > 0.0f) ?
-					max_speed_forward_override : this->config.max_speed_forward;
-	v_max = std::max(0.0f, v_max);
+	// Distance and angle to carrot (for steering)
+	float dx_carrot = _carrot_x - robot_state.x;
+	float dy_carrot = _carrot_y - robot_state.y;
+	float carrot_dist = sqrtf(dx_carrot * dx_carrot + dy_carrot * dy_carrot);
+	float angle_to_carrot = atan2f(dy_carrot, dx_carrot);
 
-	// Turn speed limit from config
-	float w_max = std::max(0.0f, this->config.max_speed_turn);
+	// Distance to current target waypoint
+	const bilbo_waypoint_t& target_wp = _waypoint_buffer[_current_segment];
+	float dist_to_waypoint = _distance(robot_state.x, robot_state.y,
+	                                   target_wp.x, target_wp.y);
 
-	// Vector to goal
-	const float dx = x_target - current_state.x;
-	const float dy = y_target - current_state.y;
-	const float dist = hypotf_safe(dx, dy);
+	// Speed distance: use the larger of carrot_dist and dist_to_waypoint
+	// - Keeps speed up when carrot advances past PASS waypoints
+	// - Slows down at tight corners (carrot blocked by weight+angle)
+	// - Slows down at STOP waypoints (carrot stays at waypoint)
+	float speed_dist = fmaxf(carrot_dist, dist_to_waypoint);
 
-	// Heading to the target point (only used for reverse selection, not for completion)
-	const float angle_to_target = std::atan2(dy, dx);
-	const float e_psi_to_target = wrapToPi(angle_to_target - current_state.psi);
+	// Heading error to carrot (forward)
+	float heading_error_fwd = _normalize_angle(angle_to_carrot - robot_state.psi);
 
-	// Decide whether to allow driving backwards
-	bool reverse_mode = false;
-	if (this->config.allow_reverse) {
-		if (std::fabs(e_psi_to_target) > this->config.backwards_switch_angle) {
-			reverse_mode = true;
-		}
+	// -------------------------------------------------------------------------
+	// Reverse mode with hysteresis (always enabled)
+	// -------------------------------------------------------------------------
+
+	float abs_heading_error = fabsf(heading_error_fwd);
+
+	if (!_reverse_mode_active && abs_heading_error > config.reverse_enter_angle) {
+		_reverse_mode_active = true;
+		_angular_integral = 0.0f;  // Reset on mode switch
+	} else if (_reverse_mode_active && abs_heading_error < config.reverse_exit_angle) {
+		_reverse_mode_active = false;
+		_angular_integral = 0.0f;  // Reset on mode switch
 	}
 
-	// --- Carrot (lookahead) point computation ---
-	const float look = std::max(0.0f, this->config.lookahead_distance);
-	float cx = x_target;
-	float cy = y_target;
-
-	if (dist > 1e-6f && look > 1e-6f) {
-		const float step_back = std::max(0.0f, dist - look);
-		const float invd = 1.0f / (dist + 1e-9f);
-		cx = x_target - dx * invd * step_back;
-		cy = y_target - dy * invd * step_back;
+	// In reverse mode, flip the target heading
+	float heading_error = heading_error_fwd;
+	if (_reverse_mode_active) {
+		heading_error = _normalize_angle(heading_error_fwd + M_PI);
 	}
 
-	// Desired heading toward carrot
-	float psi_carrot = std::atan2(cy - current_state.y, cx - current_state.x);
+	data.heading_error = heading_error;
+	data.carrot_distance = carrot_dist;
 
-	// In reverse mode, we want to "face away" from the carrot and drive backwards.
-	if (reverse_mode) {
-		psi_carrot = wrapToPi(psi_carrot + PI);
+	// -------------------------------------------------------------------------
+	// Velocity command: v = kp_linear * speed_dist
+	// -------------------------------------------------------------------------
+
+	float max_speed = config.max_speed;
+	if (_active_path_command.max_speed > 0.0f) {
+		max_speed = fminf(max_speed, _active_path_command.max_speed);
 	}
 
-	// Heading error used for angular control and speed scaling
-	const float e_psi = wrapToPi(psi_carrot - current_state.psi);
+	// PI control on speed_dist = max(carrot_dist, dist_to_waypoint)
+	float v_p = config.kp_linear * speed_dist;
+	float v_i = _linear_integral;
+	float v_unsat = v_p + v_i;
+	float v_sat = _clamp(v_unsat, 0.0f, max_speed);
 
-	// ---------------- Linear PI (distance) ----------------
-	const float v_pi_unsat = this->config.kp_linear * dist
-			+ this->_position_integral_error;
-
-	const float v_pi_sat =
-			(v_max > 0.0f) ? clampf(v_pi_unsat, -v_max, v_max) : 0.0f;
-
-	// Anti-windup (conditional integration)
-	{
-		const bool saturated = (std::fabs(v_pi_unsat - v_pi_sat) > 1e-6f);
-		const float err = dist; // always >= 0
-		const bool would_push_further = (saturated && (v_pi_unsat > v_pi_sat)
-				&& (err > 0.0f));
-
-		if (!would_push_further) {
-			this->_position_integral_error += this->config.ki_linear * err * Ts;
-		}
+	// Anti-windup for linear integral
+	if (fabsf(v_unsat - v_sat) < EPSILON) {
+		_linear_integral += config.ki_linear * speed_dist * config.Ts;
+		_linear_integral = _clamp(_linear_integral, 0.0f, max_speed);
 	}
 
-	// Speed scaling by cos(e_psi) to avoid charging forward while misaligned.
-	// IMPORTANT: clamp to >= 0 so we never flip direction due to heading error near goal.
-	float cos_scale = std::cos(e_psi);
-	if (cos_scale < 0.0f) {
-		cos_scale = 0.0f;
-	}
+	// Scale by cos(heading_error) - slow down when not facing carrot
+	float cos_scale = fmaxf(0.0f, cosf(heading_error));
+	float v_cmd = v_sat * cos_scale;
 
-	float v_cmd = v_pi_sat * cos_scale;
-
-	// If reverse_mode, we already made psi_carrot point "backwards".
-	// That means cos(e_psi) scales correctly; now command negative forward speed.
-	if (reverse_mode) {
+	// Reverse mode: negate velocity
+	if (_reverse_mode_active) {
 		v_cmd = -v_cmd;
 	}
 
-	// ---------------- Angular PI (heading) ----------------
-	const float w_pi_unsat = this->config.kp_angular * e_psi
-			+ this->_angle_integral_error;
-	const float w_pi_sat =
-			(w_max > 0.0f) ? clampf(w_pi_unsat, -w_max, w_max) : 0.0f;
+	output.v_cmd = v_cmd;
+	data.speed_limit = v_sat;
 
-	// Anti-windup (conditional integration)
-	{
-		const bool saturated = (std::fabs(w_pi_unsat - w_pi_sat) > 1e-6f);
-		const float err = e_psi;
-		const bool would_push_further = (saturated
-				&& ((w_pi_unsat > w_pi_sat && err > 0.0f)
-						|| (w_pi_unsat < w_pi_sat && err < 0.0f)));
+	// -------------------------------------------------------------------------
+	// Angular command: PI control on heading error
+	// -------------------------------------------------------------------------
 
-		if (!would_push_further) {
-			this->_angle_integral_error += this->config.ki_angular * err * Ts;
-		}
+	float w_p = config.kp_angular * heading_error;
+	float w_i = _angular_integral;
+	float w_unsat = w_p + w_i;
+	float w_sat = _clamp(w_unsat, -config.max_turn_rate, config.max_turn_rate);
+
+	// Anti-windup
+	bool is_saturated = fabsf(w_unsat - w_sat) > EPSILON;
+	bool would_push_further = is_saturated && (
+		(w_unsat > w_sat && heading_error > 0.0f) ||
+		(w_unsat < w_sat && heading_error < 0.0f));
+
+	if (!would_push_further) {
+		_angular_integral += config.ki_angular * heading_error * config.Ts;
+		float max_integral = config.max_turn_rate / fmaxf(config.ki_angular, 0.01f);
+		_angular_integral = _clamp(_angular_integral, -max_integral, max_integral);
 	}
 
-	// Fade out turning near the goal to avoid jitter when dist is tiny and atan2 is noisy.
-	// Use a radius based on the existing arrival tolerance so you don't need new config fields.
-	// Within ~2*tolerance, w is reduced to 0 at the goal.
-	const float fade_radius = std::max(1e-4f, 2.0f * this->config.distance_arrival_tolerance);
-	const float w_fade = clampf(dist / fade_radius, 0.0f, 1.0f);
+	// Fade yaw rate near arrival to prevent jitter
+	float fade_radius = 2.0f * config.arrival_tolerance;
+	float w_fade = _clamp(speed_dist / fade_radius, 0.0f, 1.0f);
 
-	const float w_cmd = w_pi_sat * w_fade;
+	output.psi_dot_cmd = w_sat * w_fade;
 
-	// ---------------- Completion detection ----------------
-	// IMPORTANT CHANGE: distance-only completion.
-	// Requiring heading-to-target near goal makes atan2 extremely sensitive and causes “spin jitter”.
-	const bool inside = (dist <= this->config.distance_arrival_tolerance);
-
-	if (inside) {
-		this->_arrival_hold_time += Ts;
-		this->_was_inside_arrival_region = true;
-	} else {
-		this->_arrival_hold_time = 0.0f;
-		this->_was_inside_arrival_region = false;
-	}
-
-	bilbo_position_control_output_t out;
-	out.v_cmd = v_cmd;
-	out.psi_dot_cmd = w_cmd;
-	return out;
+	return output;
 }
 
-/**
- * @brief TURN_TO_HEADING controller that outputs (0, w).
- *
- * Anti-windup:
- *  - Conditional integration when w saturates.
- *
- * Completion:
- *  - inside if |heading_error| <= angle_arrival_tolerance
- *  - must stay inside continuously for arrival_time seconds.
- */
-bilbo_position_control_output_t BILBO_PositionControl::_turn_to_heading(
-		bilbo_position_state_t current_state, float psi_target,
-		float max_turn_speed_override) {
+// ============================================================================
+// ARRIVAL / COMPLETION
+// ============================================================================
 
-	const float Ts = this->config.Ts;
+bool BILBO_PositionControl::_check_final_arrival(
+		const bilbo_position_state_t& robot_state) {
 
-	float w_max =
-			(max_turn_speed_override > 0.0f) ?
-					max_turn_speed_override : this->config.max_speed_turn;
-	w_max = std::max(0.0f, w_max);
+	if (_current_segment < _waypoint_count - 1) {
+		return false;
+	}
 
-	const float e_psi = wrapToPi(psi_target - current_state.psi);
+	const bilbo_waypoint_t& final_wp = _waypoint_buffer[_waypoint_count - 1];
+	float dist = _distance(robot_state.x, robot_state.y, final_wp.x, final_wp.y);
 
-	const float w_pi_unsat = this->config.kp_angular * e_psi
-			+ this->_angle_integral_error;
-	const float w_pi_sat =
-			(w_max > 0.0f) ? clampf(w_pi_unsat, -w_max, w_max) : 0.0f;
-
-	// Anti-windup (conditional integration)
-	{
-		const bool saturated = (std::fabs(w_pi_unsat - w_pi_sat) > 1e-6f);
-		const float err = e_psi;
-		const bool would_push_further = (saturated
-				&& ((w_pi_unsat > w_pi_sat && err > 0.0f)
-						|| (w_pi_unsat < w_pi_sat && err < 0.0f)));
-
-		if (!would_push_further) {
-			this->_angle_integral_error += this->config.ki_angular * err * Ts;
+	if (dist < config.arrival_tolerance) {
+		_arrival_timer += config.Ts;
+		if (_arrival_timer >= config.arrival_dwell_time) {
+			return true;
 		}
-	}
-
-	// Completion detection: only angular tolerance
-	const bool inside = (std::fabs(e_psi)
-			<= this->config.angle_arrival_tolerance);
-
-	if (inside) {
-		this->_arrival_hold_time += Ts;
-		this->_was_inside_arrival_region = true;
 	} else {
-		this->_arrival_hold_time = 0.0f;
-		this->_was_inside_arrival_region = false;
+		_arrival_timer = 0.0f;
 	}
 
-	bilbo_position_control_output_t out;
-	out.v_cmd = 0.0f;
-	out.psi_dot_cmd = w_pi_sat;
-	return out;
+	return false;
+}
+
+void BILBO_PositionControl::_check_intermediate_stop(
+		const bilbo_position_state_t& robot_state) {
+
+	if (_current_segment >= _waypoint_count - 1) {
+		return;  // Handled by _check_final_arrival
+	}
+
+	const bilbo_waypoint_t& wp = _waypoint_buffer[_current_segment];
+
+	if (wp.type != bilbo_waypoint_type_t::STOP) {
+		return;
+	}
+
+	float dist = _distance(robot_state.x, robot_state.y, wp.x, wp.y);
+
+	if (dist < config.arrival_tolerance) {
+		_on_waypoint_reached(_current_segment);
+
+		_arrival_timer += config.Ts;
+		if (_arrival_timer >= config.arrival_dwell_time) {
+			_on_waypoint_completed(_current_segment);
+			_current_segment++;
+			_carrot_t = 0.0f;
+			_arrival_timer = 0.0f;
+			_angular_integral = 0.0f;
+		}
+	} else {
+		_arrival_timer = 0.0f;
+	}
+}
+
+// ============================================================================
+// MODE TRANSITIONS
+// ============================================================================
+
+void BILBO_PositionControl::_set_mode(bilbo_position_control_mode_t new_mode) {
+	if (mode != new_mode) {
+		mode = new_mode;
+		_send_event(position_control_event_t::MODE_CHANGED);
+		callbacks.mode_changed.call(new_mode);
+	}
+}
+
+// ============================================================================
+// EVENT HANDLERS
+// ============================================================================
+
+void BILBO_PositionControl::_on_path_started() {
+	_send_event(position_control_event_t::PATH_STARTED);
+}
+
+void BILBO_PositionControl::_on_waypoint_passed(uint16_t waypoint_idx) {
+	_send_event(position_control_event_t::WAYPOINT_PASSED, waypoint_idx);
+	callbacks.waypoint_passed.call(waypoint_idx);
+}
+
+void BILBO_PositionControl::_on_waypoint_reached(uint16_t waypoint_idx) {
+	_send_event(position_control_event_t::WAYPOINT_REACHED, waypoint_idx);
+	callbacks.waypoint_reached.call(waypoint_idx);
+}
+
+void BILBO_PositionControl::_on_waypoint_completed(uint16_t waypoint_idx) {
+	_send_event(position_control_event_t::WAYPOINT_COMPLETED, waypoint_idx);
+	callbacks.waypoint_completed.call(waypoint_idx);
+}
+
+void BILBO_PositionControl::_on_path_finished() {
+	_send_event(position_control_event_t::PATH_FINISHED);
+	callbacks.path_finished.call(0);
+}
+
+void BILBO_PositionControl::_on_path_timeout() {
+	_send_event(position_control_event_t::PATH_TIMEOUT);
+	callbacks.path_timeout.call(0);
+}
+
+void BILBO_PositionControl::_on_path_aborted() {
+	_send_event(position_control_event_t::PATH_ABORTED);
+	callbacks.path_aborted.call(0);
+}
+
+void BILBO_PositionControl::_send_event(position_control_event_t event,
+                                        uint16_t waypoint_idx) {
+	position_control_event_data_t event_data;
+	event_data.event = event;
+	event_data.data = data;
+	event_data.tick = tick_global;
+	event_data.waypoint_index = waypoint_idx;
+	event_data.command_id = 0;
+
+	BILBO_Message_PositionControl_Event msg(event_data);
+	sendMessage(msg);
+}
+
+// ============================================================================
+// TURN TO HEADING
+// ============================================================================
+
+bilbo_position_control_output_t BILBO_PositionControl::_update_turn_to_heading(
+		const bilbo_position_state_t& current_state) {
+
+	bilbo_position_control_output_t output = {0.0f, 0.0f};
+
+	float heading_error = _normalize_angle(
+		_active_turn_command.heading_ref - current_state.psi);
+
+	data.heading_error = heading_error;
+
+	float max_rate = (_active_turn_command.max_angular_speed > 0.0f) ?
+		_active_turn_command.max_angular_speed : config.max_turn_rate;
+
+	// PI control
+	float w_p = config.kp_angular * heading_error;
+	float w_i = _angular_integral;
+	float w_unsat = w_p + w_i;
+	float w_sat = _clamp(w_unsat, -max_rate, max_rate);
+
+	// Anti-windup
+	bool is_saturated = fabsf(w_unsat - w_sat) > EPSILON;
+	bool would_push_further = is_saturated && (
+		(w_unsat > w_sat && heading_error > 0.0f) ||
+		(w_unsat < w_sat && heading_error < 0.0f));
+
+	if (!would_push_further) {
+		_angular_integral += config.ki_angular * heading_error * config.Ts;
+		float max_integral = max_rate / fmaxf(config.ki_angular, 0.01f);
+		_angular_integral = _clamp(_angular_integral, -max_integral, max_integral);
+	}
+
+	output.psi_dot_cmd = w_sat;
+
+	// Check completion
+	float angle_tolerance = 0.05f;  // ~3 degrees
+	if (fabsf(heading_error) < angle_tolerance) {
+		_arrival_timer += config.Ts;
+		if (_arrival_timer >= config.arrival_dwell_time) {
+			_angular_integral = 0.0f;
+			_arrival_timer = 0.0f;
+			_set_mode(bilbo_position_control_mode_t::IDLE);
+			_send_event(position_control_event_t::TURN_TO_HEADING_COMPLETED);
+			return output;
+		}
+	} else {
+		_arrival_timer = 0.0f;
+	}
+
+	// Check timeout
+	if (_active_turn_command.timeout > 0.0f &&
+		_elapsed_time > _active_turn_command.timeout) {
+		_angular_integral = 0.0f;
+		_arrival_timer = 0.0f;
+		_set_mode(bilbo_position_control_mode_t::IDLE);
+		_send_event(position_control_event_t::TURN_TO_HEADING_TIMEOUT);
+	}
+
+	return output;
+}
+
+// ============================================================================
+// DRIVE TO POINT
+// ============================================================================
+
+bilbo_position_control_output_t BILBO_PositionControl::_update_drive_to_point(
+		const bilbo_position_state_t& current_state,
+		float current_v) {
+
+	bilbo_position_control_output_t output = {0.0f, 0.0f};
+
+	float dx = _active_move_command.x_target - current_state.x;
+	float dy = _active_move_command.y_target - current_state.y;
+	float dist = sqrtf(dx * dx + dy * dy);
+
+	// -------------------------------------------------------------------------
+	// Check completion
+	// -------------------------------------------------------------------------
+
+	if (dist < config.arrival_tolerance) {
+		_arrival_timer += config.Ts;
+		if (_arrival_timer >= config.arrival_dwell_time) {
+			_angular_integral = 0.0f;
+			_linear_integral = 0.0f;
+			_arrival_timer = 0.0f;
+			_reverse_mode_active = false;
+			_set_mode(bilbo_position_control_mode_t::IDLE);
+			_send_event(position_control_event_t::MOVE_TO_POINT_COMPLETED);
+			return output;
+		}
+		// Inside tolerance, waiting for dwell
+		data.speed_limit = 0.0f;
+		data.remaining_path_length = dist;
+		return output;
+	}
+	_arrival_timer = 0.0f;
+
+	// -------------------------------------------------------------------------
+	// Reverse mode with hysteresis
+	// -------------------------------------------------------------------------
+
+	float angle_to_target = atan2f(dy, dx);
+	float heading_error_fwd = _normalize_angle(angle_to_target - current_state.psi);
+	float abs_heading_error = fabsf(heading_error_fwd);
+
+	if (!_reverse_mode_active && abs_heading_error > config.reverse_enter_angle) {
+		_reverse_mode_active = true;
+		_angular_integral = 0.0f;
+	} else if (_reverse_mode_active && abs_heading_error < config.reverse_exit_angle) {
+		_reverse_mode_active = false;
+		_angular_integral = 0.0f;
+	}
+
+	// Carrot on line to target
+	float lookahead = config.lookahead_base;
+	float carrot_x = _active_move_command.x_target;
+	float carrot_y = _active_move_command.y_target;
+
+	if (dist > EPSILON && lookahead > EPSILON) {
+		float step_back = fmaxf(0.0f, dist - lookahead);
+		float inv_dist = 1.0f / (dist + EPSILON);
+		carrot_x = _active_move_command.x_target - dx * inv_dist * step_back;
+		carrot_y = _active_move_command.y_target - dy * inv_dist * step_back;
+	}
+
+	// Heading toward carrot
+	float dx_carrot = carrot_x - current_state.x;
+	float dy_carrot = carrot_y - current_state.y;
+	float psi_carrot = atan2f(dy_carrot, dx_carrot);
+	float carrot_dist = sqrtf(dx_carrot * dx_carrot + dy_carrot * dy_carrot);
+
+	// In reverse mode, flip heading
+	if (_reverse_mode_active) {
+		psi_carrot = _normalize_angle(psi_carrot + M_PI);
+	}
+
+	float heading_error = _normalize_angle(psi_carrot - current_state.psi);
+	data.heading_error = heading_error;
+
+	// -------------------------------------------------------------------------
+	// Velocity command
+	// -------------------------------------------------------------------------
+
+	float max_speed = (_active_move_command.max_speed > 0.0f) ?
+		_active_move_command.max_speed : config.max_speed;
+
+	float v_p = config.kp_linear * carrot_dist;
+	float v_i = _linear_integral;
+	float v_unsat = v_p + v_i;
+	float v_sat = _clamp(v_unsat, 0.0f, max_speed);
+
+	if (fabsf(v_unsat - v_sat) < EPSILON) {
+		_linear_integral += config.ki_linear * carrot_dist * config.Ts;
+		_linear_integral = _clamp(_linear_integral, 0.0f, max_speed);
+	}
+
+	float cos_scale = fmaxf(0.0f, cosf(heading_error));
+	float v_cmd = v_sat * cos_scale;
+
+	if (_reverse_mode_active) {
+		v_cmd = -v_cmd;
+	}
+
+	output.v_cmd = v_cmd;
+
+	// -------------------------------------------------------------------------
+	// Angular command
+	// -------------------------------------------------------------------------
+
+	float w_p = config.kp_angular * heading_error;
+	float w_i = _angular_integral;
+	float w_unsat = w_p + w_i;
+	float w_sat = _clamp(w_unsat, -config.max_turn_rate, config.max_turn_rate);
+
+	bool is_saturated = fabsf(w_unsat - w_sat) > EPSILON;
+	bool would_push_further = is_saturated && (
+		(w_unsat > w_sat && heading_error > 0.0f) ||
+		(w_unsat < w_sat && heading_error < 0.0f));
+
+	if (!would_push_further) {
+		_angular_integral += config.ki_angular * heading_error * config.Ts;
+		float max_integral = config.max_turn_rate / fmaxf(config.ki_angular, 0.01f);
+		_angular_integral = _clamp(_angular_integral, -max_integral, max_integral);
+	}
+
+	// Fade near goal
+	float fade_radius = 2.0f * config.arrival_tolerance;
+	float w_fade = _clamp(dist / fade_radius, 0.0f, 1.0f);
+
+	output.psi_dot_cmd = w_sat * w_fade;
+
+	// -------------------------------------------------------------------------
+	// Check timeout
+	// -------------------------------------------------------------------------
+
+	if (_active_move_command.timeout > 0.0f &&
+		_elapsed_time > _active_move_command.timeout) {
+		_angular_integral = 0.0f;
+		_linear_integral = 0.0f;
+		_arrival_timer = 0.0f;
+		_reverse_mode_active = false;
+		_set_mode(bilbo_position_control_mode_t::IDLE);
+		_send_event(position_control_event_t::MOVE_TO_POINT_TIMEOUT);
+	}
+
+	// Update telemetry
+	data.carrot_x = carrot_x;
+	data.carrot_y = carrot_y;
+	data.speed_limit = v_sat;
+	data.remaining_path_length = dist;
+
+	return output;
+}
+
+// ============================================================================
+// UTILITY METHODS
+// ============================================================================
+
+float BILBO_PositionControl::_normalize_angle(float angle) {
+	while (angle > M_PI) {
+		angle -= 2.0f * M_PI;
+	}
+	while (angle < -M_PI) {
+		angle += 2.0f * M_PI;
+	}
+	return angle;
+}
+
+float BILBO_PositionControl::_distance(float x1, float y1, float x2, float y2) {
+	float dx = x2 - x1;
+	float dy = y2 - y1;
+	return sqrtf(dx * dx + dy * dy);
+}
+
+float BILBO_PositionControl::_clamp(float value, float lo, float hi) {
+	if (value < lo) return lo;
+	if (value > hi) return hi;
+	return value;
+}
+
+float BILBO_PositionControl::_dot(float ax, float ay, float bx, float by) {
+	return ax * bx + ay * by;
 }

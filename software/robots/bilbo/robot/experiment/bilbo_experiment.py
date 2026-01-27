@@ -1,117 +1,64 @@
+"""
+BILBO Experiment Handler (Host Side)
+
+This module provides the host-side experiment handling for BILBO robots.
+It sends experiment definitions to the robot and handles experiment events.
+
+The actual experiment execution happens on the robot side in:
+  robots/bilbo/software/BILBO-Software/robot/experiment/bilbo_experiment.py
+"""
 from __future__ import annotations
 
-import abc
 import dataclasses
 import enum
 import json
 import tempfile
 import threading
 from dataclasses import asdict
-from typing import Any, Union
+from typing import Any
 
 import numpy as np
-import yaml
-from dacite import Config
 
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.data import generate_time_vector, generate_time_vector_by_length
 from core.utils.dataclass_utils import from_dict_auto, asdict_optimized
-from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals, wait_for_events, OR, TIMEOUT, \
-    EventContainer
+from core.utils.events import (
+    event_definition, Event, EventFlag, pred_flag_equals,
+    wait_for_events, OR, TIMEOUT, EventContainer
+)
 from core.utils.files import file_exists
 from core.utils.logging_utils import Logger
 from core.utils.plotting.plot import quick_plot
 from core.utils.sound.sound import speak
+from robots.bilbo.definitions import EXPERIMENT_DIR
 from robots.bilbo.robot.bilbo_control import BILBO_Control
-# === CUSTOM PACKAGES ==================================================================================================
 from robots.bilbo.robot.bilbo_core import BILBO_Core
-from robots.bilbo.robot.bilbo_definitions import MAX_STEPS_TRAJECTORY, HOST_EXPERIMENT_FOLDER
-from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory, BILBO_TrajectoryData, \
-    ExperimentDefinition, ExperimentData, ExperimentActionDefinition
+from robots.bilbo.robot.bilbo_definitions import MAX_STEPS_TRAJECTORY
+from robots.bilbo.robot.experiment.experiment_definitions import (
+    BILBO_InputTrajectory,
+    BILBO_TrajectoryData,
+    ExperimentDefinition,
+    ExperimentData,
+    ExperimentActionDefinition,
+    ExperimentBuilder,
+    # Action helper functions for programmatic experiment creation
+    beep,
+    set_mode,
+    speak as speak_action,
+    wait_time,
+    wait_ticks,
+    set_velocity,
+    set_input,
+    run_trajectory,
+    set_marker,
+    enable_external_input,
+    reset,
+    parallel,
+    set_tic,
+    wait_event,
+    wait_until_tick,
+)
 from robots.bilbo.robot.experiment.experiment_helpers import generate_random_input_trajectory
-
-
-# # ======================================================================================================================
-# class BILBO_Experiment_Status(enum.StrEnum):
-#     NONE = "none"
-#     RUNNING_TRAJECTORY = "running_trajectory"
-#     CALCULATING = "calculating"
-#     WAITING_FOR_USER = "waiting_for_user"
-#     FINISHED = "finished"
-#     ABORTED = "aborted"
-#
-#
-# @event_definition
-# class BILBO_Experiment_Events(EventContainer):
-#     started: Event
-#     finished: Event
-#     aborted: Event
-#     status_changed: Event = Event(flags=EventFlag('status', BILBO_Experiment_Status))
-#
-#
-# @callback_definition
-# class BILBO_Experiment_Callbacks:
-#     stopped: CallbackContainer
-#
-#
-# class BILBO_Experiment(abc.ABC):
-#     type: str
-#     events: BILBO_Experiment_Events
-#
-#     status: BILBO_Experiment_Status
-#
-#     _thread: threading.Thread | None = None
-#     _stopEvent: Event
-#     _exit: bool = False
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def __init__(self, core: BILBO_Core, experiment_handler: BILBO_ExperimentHandler, control: BILBO_Control):
-#         self.core = core
-#         self.experiment_handler = experiment_handler
-#         self.control = control
-#         self.events = BILBO_Experiment_Events()
-#         self.callbacks = BILBO_Experiment_Callbacks()
-#
-#         self.status = BILBO_Experiment_Status.NONE
-#         self.logger = Logger("Experiment")
-#         self._thread = threading.Thread(target=self.task, daemon=True)
-#         self._stopEvent = Event()
-#
-#     # === PROPERTIES ===================================================================================================
-#     @property
-#     def status(self):
-#         return self._status
-#
-#     @status.setter
-#     def status(self, value: BILBO_Experiment_Status):
-#         self._status = value
-#         self.events.status_changed.set(data=value, flags={'status': value})
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def start(self):
-#         self.events.started.set()
-#         self._thread.start()
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def stop(self, aborted: bool = False):
-#         self._exit = True
-#         self._stopEvent.set()
-#
-#         if aborted:
-#             self.events.aborted.set()
-#         else:
-#             self.events.finished.set()
-#
-#         self.callbacks.stopped.call()
-#         self.logger.info("Experiment stopped")
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     @abc.abstractmethod
-#     def task(self):
-#         ...
-
-
-# ======================================================================================================================
 
 
 # ======================================================================================================================
@@ -123,29 +70,35 @@ class BILBO_ExperimentHandler_Status(enum.StrEnum):
 # ======================================================================================================================
 @event_definition
 class BILBO_ExperimentHandler_Events:
+    """Events emitted by the experiment handler."""
     status_changed: Event = Event(flags=EventFlag('status', BILBO_ExperimentHandler_Status))
 
+    # Low-level trajectory events (from robot)
     ll_trajectory_finished: Event = Event(flags=EventFlag('trajectory_id', int))
     ll_trajectory_aborted: Event = Event(flags=EventFlag('trajectory_id', int))
     ll_trajectory_started: Event = Event(flags=EventFlag('trajectory_id', int))
 
-    trajectory_finished: Event = Event(flags=EventFlag('trajectory_id', (int, str)),
-                                       data_type=BILBO_TrajectoryData)
-
+    # High-level trajectory event
+    trajectory_finished: Event = Event(
+        flags=EventFlag('trajectory_id', (int, str)),
+        data_type=BILBO_TrajectoryData
+    )
     trajectory_loaded: Event = Event()
-
     waiting_for_user: Event = Event()
 
+    # Experiment lifecycle events (public)
     experiment_started: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
     experiment_finished: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
     experiment_error: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
     experiment_timeout: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
 
+    # Legacy event
     dilc_experiment_started: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
 
 
 @event_definition
 class BILBO_ExperimentHandler_InternalEvents:
+    """Internal events for experiment handling (used for blocking waits)."""
     experiment_started: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
     experiment_finished: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
     experiment_error: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
@@ -154,15 +107,35 @@ class BILBO_ExperimentHandler_InternalEvents:
 
 # ======================================================================================================================
 class BILBO_ExperimentHandler:
-    # experiment: BILBO_Experiment | None = None
-    control: BILBO_Control
+    """Host-side experiment handler for BILBO robots.
 
+    This class manages:
+    - Sending experiment definitions to the robot
+    - Running trajectories on the robot
+    - Handling experiment lifecycle events (started, finished, error, timeout)
+    - Downloading experiment data from the robot
+
+    Example usage:
+        # Create experiment from YAML
+        exp = ExperimentDefinition.from_file("my_experiment.yaml")
+        data = experiment_handler.run_experiment(exp, blocking=True)
+
+        # Create experiment programmatically
+        exp = (ExperimentBuilder("test", "Test experiment")
+               .speak("Starting")
+               .wait(time_s=1.0)
+               .set_mode("BALANCING")
+               .wait(time_s=5.0)
+               .set_mode("OFF")
+               .build())
+        data = experiment_handler.run_experiment(exp, blocking=True)
+    """
+    control: BILBO_Control
     status: BILBO_ExperimentHandler_Status = BILBO_ExperimentHandler_Status.IDLE
     current_trajectory: BILBO_InputTrajectory | None = None
 
     _loadedTrajectory: BILBO_InputTrajectory | None = None
-
-    _last_experiment_data: ExperimentData | None = None
+    _last_experiment_data: ExperimentData | dict | None = None
 
     # === INIT =========================================================================================================
     def __init__(self, core: BILBO_Core, control: BILBO_Control):
@@ -175,19 +148,35 @@ class BILBO_ExperimentHandler:
         self.events = BILBO_ExperimentHandler_Events()
         self._events_internal = BILBO_ExperimentHandler_InternalEvents()
 
-        self.device.events.event.on(self._trajectory_event_callback,
-                                    predicate=pred_flag_equals('event', 'trajectory')
-                                    )
+        # Register event handlers for robot events
+        self.device.events.event.on(
+            self._trajectory_event_callback,
+            predicate=pred_flag_equals('event', 'trajectory')
+        )
 
-        self.device.events.event.on(self._experiment_event_callback,
-                                    predicate=pred_flag_equals('event', 'experiment'))
+        self.device.events.event.on(
+            self._experiment_event_callback,
+            predicate=pred_flag_equals('event', 'experiment')
+        )
 
-    # === METHODS ======================================================================================================
-    def run_experiment(self,
-                       experiment_definition: ExperimentDefinition,
-                       experiment_file_folder: str | None = None,
-                       blocking: bool = False) -> ExperimentData | None | bool:
+    # === PUBLIC METHODS ===============================================================================================
+    def run_experiment(
+        self,
+        experiment_definition: ExperimentDefinition,
+        experiment_file_folder: str | None = None,
+        blocking: bool = False
+    ) -> ExperimentData | dict | None | bool:
+        """Run an experiment on the robot.
 
+        Args:
+            experiment_definition: The experiment to run
+            experiment_file_folder: Optional folder to save experiment data (if blocking)
+            blocking: If True, wait for experiment to complete and return data
+
+        Returns:
+            - If blocking: ExperimentData dict on success, None on failure
+            - If not blocking: True on successful start, None on failure
+        """
         self.logger.info(f"Starting experiment \"{experiment_definition.id}\"...")
 
         if self.status != BILBO_ExperimentHandler_Status.IDLE:
@@ -198,9 +187,7 @@ class BILBO_ExperimentHandler:
 
         result = self.device.executeFunction(
             function_name='run_experiment',
-            arguments={
-                'experiment': definition_dict,
-            },
+            arguments={'experiment': definition_dict},
             return_type=bool,
         )
 
@@ -216,73 +203,42 @@ class BILBO_ExperimentHandler:
             return None
 
         self.logger.info(f"Experiment \"{experiment_definition.id}\" started successfully")
+        self.status = BILBO_ExperimentHandler_Status.EXPERIMENT_RUNNING
+        self.events.experiment_started.set(flags={'experiment_id': experiment_definition.id})
 
         if blocking:
-            self.logger.info(f"Waiting for experiment \"{experiment_definition.id}\"to finish...")
-            data, result = wait_for_events(
-                events=OR(
-                    (self._events_internal.experiment_finished,
-                     pred_flag_equals('experiment_id', experiment_definition.id)),
-                    (self._events_internal.experiment_error,
-                     pred_flag_equals('experiment_id', experiment_definition.id)),
-                    (self._events_internal.experiment_timeout,
-                     pred_flag_equals('experiment_id', experiment_definition.id)),
-                ),
-                timeout=experiment_definition.timeout
+            return self._wait_for_experiment_completion(
+                experiment_definition,
+                experiment_file_folder
             )
-
-            if data is TIMEOUT:
-                self.logger.error("Experiment timed out")
-                return None
-
-            if result.caused_by(self.events.experiment_timeout):
-                self.logger.error("Experiment timed out")
-                return None
-
-            elif result.caused_by(self.events.experiment_error):
-                self.logger.error("Experiment failed")
-                return None
-
-            self.logger.info(f"Experiment \"{experiment_definition.id}\" finished successfully")
-
-            # TODO: Testing the data
-            self.logger.info(f"Experiment data: {data}")
-
-            # Download the file
-            if experiment_file_folder is None:
-                # with tempfile.TemporaryDirectory(prefix="experiment_") as tmpdir:
-                tmpdir = '/Users/lehmann/Desktop/'
-                filename = self.core.file_handler.download_file(data, tmpdir)
-
-                with open(filename, 'r') as f:
-                    experiment_data = json.load(f)
-
-                self._last_experiment_data = experiment_data
-                return experiment_data
-            else:
-                filename = self.core.file_handler.download_file(data, experiment_file_folder)
-
-                with open(filename, 'r') as f:
-                    experiment_data = json.load(f)
-
-                self._last_experiment_data = experiment_data
-                return experiment_data
 
         return True
 
-    # ------------------------------------------------------------------------------------------------------------------
     def stop_experiment(self):
-        ...
+        """Stop the currently running experiment."""
+        # TODO: Implement experiment stopping
+        self.logger.warning("stop_experiment not yet implemented")
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def run_experiment_from_file(self, file: str, blocking: bool = True) -> ExperimentData | None:
+    def run_experiment_from_file(
+        self,
+        file: str,
+        blocking: bool = True
+    ) -> ExperimentData | dict | None:
+        """Load and run an experiment from a YAML or JSON file.
 
-        if not file.endswith(".yaml"):
+        Args:
+            file: Path to experiment file (YAML or JSON)
+            blocking: If True, wait for completion
+
+        Returns:
+            Experiment data on success, None on failure
+        """
+        if not file.endswith((".yaml", ".yml", ".json")):
             file += ".yaml"
 
         if not file_exists(file):
             # Check if the file is in the experiments folder
-            file_in_experiments_folder = f"{HOST_EXPERIMENT_FOLDER}/{file}"
+            file_in_experiments_folder = f"{EXPERIMENT_DIR}/{file}"
 
             if not file_exists(file_in_experiments_folder):
                 self.logger.error(f"Experiment file not found: {file}")
@@ -293,8 +249,15 @@ class BILBO_ExperimentHandler:
         definition = ExperimentDefinition.from_file(file)
         return self.run_experiment(definition, blocking=blocking)
 
-    # ------------------------------------------------------------------------------------------------------------------
     def run_trajectory(self, trajectory: BILBO_InputTrajectory) -> BILBO_TrajectoryData | None:
+        """Run a trajectory on the robot (blocking).
+
+        Args:
+            trajectory: The input trajectory to run
+
+        Returns:
+            Trajectory data on success, None on failure
+        """
         assert len(trajectory.inputs) <= MAX_STEPS_TRAJECTORY
         assert trajectory.length == len(trajectory.inputs)
         assert trajectory.time_vector.shape[0] == trajectory.length
@@ -309,11 +272,11 @@ class BILBO_ExperimentHandler:
         )
 
         # Wait for either "finished" or "aborted" for this trajectory id
-
         data, result = wait_for_events(
-            events=
-            OR((self.events.ll_trajectory_finished, pred_flag_equals('trajectory_id', int(trajectory.id))),
-               self.events.ll_trajectory_aborted),
+            events=OR(
+                (self.events.ll_trajectory_finished, pred_flag_equals('trajectory_id', int(trajectory.id))),
+                self.events.ll_trajectory_aborted
+            ),
             timeout=float(trajectory.time_vector[-1] + 5.0),
             stale_event_time=0.5,
         )
@@ -339,13 +302,19 @@ class BILBO_ExperimentHandler:
         self.logger.important(f"Trajectory \"{trajectory.name}\" finished.")
         return trajectory_data
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def run_random_trajectory(self, time_s, frequency=2, gain=0.25):
+    def run_random_trajectory(self, time_s: float, frequency: float = 2, gain: float = 0.25):
+        """Generate and run a random trajectory.
 
+        Args:
+            time_s: Duration in seconds
+            frequency: Frequency parameter for random generation
+            gain: Gain parameter for random generation
+        """
         trajectory = generate_random_input_trajectory(1, time_s, frequency, gain)
         self.logger.info(
             f"Generated random trajectory: {trajectory.id} (Length: {trajectory.time_vector[-1]} s). "
-            f"Waiting for resume event...")
+            f"Waiting for resume event..."
+        )
 
         self._loadedTrajectory = trajectory
         self.events.trajectory_loaded.set(data=trajectory)
@@ -356,130 +325,40 @@ class BILBO_ExperimentHandler:
         if data is None:
             return
 
-        # Plot the input and output data
-
-        # time_vector = data.input_trajectory.time_vector
-        #
-        # # Plot input trajectory
-        # ax1.plot(time_vector, data.input_trajectory.inputs)
-        # ax1.set_xlabel('Time [s]')
-        # ax1.set_ylabel('Input')
-        # ax1.set_title('Input Trajectory')
-        # ax1.grid(True)
-        #
-        # # Plot states
-        # ax2.plot(time_vector, data.states)
-        # ax2.set_xlabel('Time [s]')
-        # ax2.set_ylabel('States')
-        # ax2.set_title('System States')
-        # ax2.grid(True)
-        #
-        # fig.tight_layout()
-        #
-
-        # return self.run_trajectory(trajectory=trajectory)
-
-    # ------------------------------------------------------------------------------------------------------------------
     def start_trajectory(self):
+        """Start a pre-loaded trajectory."""
         raise NotImplementedError("Not implemented yet")
 
-    # ------------------------------------------------------------------------------------------------------------------
     def sendTrajectory(self):
+        """Send a trajectory to the robot without starting it."""
         raise NotImplementedError("Not implemented yet")
 
-    # ------------------------------------------------------------------------------------------------------------------
     def stopTrajectory(self):
+        """Stop the currently running trajectory."""
         raise NotImplementedError("Not implemented yet")
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def _trajectory_event_callback(self, message, *args, **kwargs):
-        if 'event' not in message.data:
-            self.logger.error(f"Robot {self.id}: Received trajectory event without event field")
-
-        match message.data['event']:
-            case 'finished':
-                self.logger.info(f"Trajectory {message.data['trajectory_id']} finished.")
-                # speak(f"{self.id}: Trajectory {message.data['trajectory_id']} finished")
-                self.current_trajectory = None
-                self._loadedTrajectory = None
-                # self.status = BILBO_ExperimentHandler_Status.IDLE
-                self.events.ll_trajectory_finished.set(data=message.data,
-                                                       flags={'trajectory_id': int(message.data['trajectory_id'])})
-
-                self.events.status_changed.set(data=self.status, flags={'status': self.status})
-
-            case 'started':
-                self.logger.info(f"Trajectory {message.data['trajectory_id']} started.")
-                # speak(f"{self.id}: Trajectory {message.data['trajectory_id']} started")
-                self.current_trajectory = self._loadedTrajectory
-                # self.status = BILBO_ExperimentHandler_Status.RUNNING
-                self.events.ll_trajectory_started.set(data=message.data,
-                                                      flags={'trajectory_id': message.data['trajectory_id']})
-                self.events.status_changed.set(data=self.status, flags={'status': self.status})
-
-            case 'aborted':
-                self.logger.info(f"Trajectory {message.data['trajectory_id']} aborted.")
-                speak(f"{self.id}: Trajectory {message.data['trajectory_id']} aborted")
-                self.current_trajectory = None
-                self._loadedTrajectory = None
-                # self.status = BILBO_ExperimentHandler_Status.IDLE
-                self.events.ll_trajectory_aborted.set(data=message.data,
-                                                      flags={'trajectory_id': message.data['trajectory_id']})
-                self.events.status_changed.set(data=self.status, flags={'status': self.status})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _experiment_event_callback(self, message, *args, **kwargs):
-        if 'event' not in message.data:
-            self.logger.error(f"Robot {self.id}: Received experiment event without event field")
-
-        event = message.data['event']
-        experiment_id = message.data['experiment_id']
-        data = message.data.get('data', None)
-
-        self.logger.debug(f"Received experiment event \"{event}\" for experiment \"{experiment_id}\"")
-        self.logger.debug(f"Experiment data: {data}")
-
-        if event == 'started':
-            self.logger.debug(f"Experiment \"{experiment_id}\" started")
-            self._events_internal.experiment_started.set(flags={'experiment_id': experiment_id}, data=data)
-        elif event == 'finished':
-            self.logger.debug(f"Experiment \"{experiment_id}\" finished")
-            self._events_internal.experiment_finished.set(flags={'experiment_id': experiment_id}, data=data)
-        elif event == 'error':
-            self.logger.warning(f"Experiment \"{experiment_id}\" failed")
-            self._events_internal.experiment_error.set(flags={'experiment_id': experiment_id}, data=data)
-        elif event == 'timeout':
-            self.logger.warning(f"Experiment \"{experiment_id}\" timed out")
-            self._events_internal.experiment_timeout.set(flags={'experiment_id': experiment_id}, data=data)
-        else:
-            self.logger.error(f"Unknown experiment event: {event}")
-
-    # ------------------------------------------------------------------------------------------------------------------
     def getCurrentTrajectory(self) -> BILBO_InputTrajectory | None:
+        """Get the currently running trajectory."""
         return self.current_trajectory
 
-    # ------------------------------------------------------------------------------------------------------------------
     def getLoadedTrajectory(self) -> BILBO_InputTrajectory | None:
+        """Get the loaded (but not necessarily running) trajectory."""
         return self._loadedTrajectory
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def test_trajectory_experiment(self):
+    def get_last_experiment_data(self) -> ExperimentData | dict | None:
+        """Get the data from the last completed experiment."""
+        return self._last_experiment_data
 
+    # === CONVENIENCE METHODS ==========================================================================================
+    def test_trajectory_experiment(self):
+        """Run a simple test trajectory experiment."""
         u = -0.5 * np.ones(100 * 1)
         traj = BILBO_InputTrajectory.from_vector(vector=u, name='test_trajectory', id=1)
 
-        exp_definition = ExperimentDefinition(
-            id='test_experiment',
-            description='Test experiment',
-            actions=[
-                ExperimentActionDefinition(
-                    id='traj',
-                    type='run_trajectory',
-                    parameters={
-                        'input_trajectory': traj,
-                    }
-                )
-            ]
+        exp_definition = (
+            ExperimentBuilder("test_experiment", "Test experiment")
+            .run_trajectory(traj)
+            .build()
         )
 
         data = self.run_experiment(exp_definition, blocking=True)
@@ -489,26 +368,16 @@ class BILBO_ExperimentHandler:
         else:
             self.logger.important(f"Experiment \"test_trajectory\" succeeded.")
 
-        pass
-
-    # ------------------------------------------------------------------------------------------------------------------
-    # @staticmethod
-    # def getTrajectoryExperimentDataFromDict(data: dict) -> BILBO_ExperimentData:
-    #     config = Config(
-    #         cast=[int, float],  # allow casting numbers where JSON gives str/float
-    #         strict=False,  # ignore unknown fields if the device returns extra data
-    #     )
-    #     return from_dict_auto(BILBO_ExperimentData, data)
-
-    # ------------------------------------------------------------------------------------------------------------------
     def plot_last_experiment(self):
+        """Plot data from the last experiment."""
+        if self._last_experiment_data is None:
+            self.logger.warning("No experiment data available")
+            return
+
         samples = self._last_experiment_data['samples']
         theta = [sample['lowlevel']['estimation']['state']['theta'] for sample in samples]
         mode = [sample['control']['mode'] for sample in samples]
-        # input = [sample['lowlevel']['control']['data']['input_left'] for sample in samples]
-        # mode_ll = [sample['lowlevel']['control']['mode'] for sample in samples]
         v = [sample['lowlevel']['estimation']['state']['v'] for sample in samples]
-
         tick_ll = [sample['lowlevel']['tick'] for sample in samples]
 
         t = generate_time_vector_by_length(start=0, num_samples=len(theta), dt=0.01)
@@ -529,21 +398,6 @@ class BILBO_ExperimentHandler:
             title='Mode',
         )
 
-        # quick_plot(
-        #     x=t,
-        #     y=input,
-        #     xlabel='Time [s]',
-        #     ylabel='Input',
-        #     title='Input',
-        # )
-        # quick_plot(
-        #     x=t,
-        #     y=mode_ll,
-        #     xlabel='Time [s]',
-        #     ylabel='Mode LL',
-        #     title='Mode LL',
-        # )
-
         quick_plot(
             x=t,
             y=v,
@@ -559,3 +413,170 @@ class BILBO_ExperimentHandler:
             ylabel='Tick LL',
             title='Tick LL',
         )
+
+    # === PRIVATE METHODS ==============================================================================================
+    def _wait_for_experiment_completion(
+        self,
+        experiment_definition: ExperimentDefinition,
+        experiment_file_folder: str | None
+    ) -> ExperimentData | dict | None:
+        """Wait for experiment to complete and download data."""
+        self.logger.info(f"Waiting for experiment \"{experiment_definition.id}\" to finish...")
+
+        # Set a generous timeout for the wait
+        wait_timeout = experiment_definition.timeout if experiment_definition.timeout else 300.0
+        wait_timeout += 10.0  # Add buffer
+
+        data, result = wait_for_events(
+            events=OR(
+                (self._events_internal.experiment_finished,
+                 pred_flag_equals('experiment_id', experiment_definition.id)),
+                (self._events_internal.experiment_error,
+                 pred_flag_equals('experiment_id', experiment_definition.id)),
+                (self._events_internal.experiment_timeout,
+                 pred_flag_equals('experiment_id', experiment_definition.id)),
+            ),
+            timeout=wait_timeout
+        )
+
+        self.status = BILBO_ExperimentHandler_Status.IDLE
+
+        if data is TIMEOUT:
+            self.logger.error("Experiment timed out (host-side timeout)")
+            return None
+
+        if result.caused_by(self._events_internal.experiment_timeout):
+            self.logger.error("Experiment timed out (robot-side timeout)")
+            self.events.experiment_timeout.set(flags={'experiment_id': experiment_definition.id})
+            return None
+
+        if result.caused_by(self._events_internal.experiment_error):
+            self.logger.error("Experiment failed")
+            self.events.experiment_error.set(flags={'experiment_id': experiment_definition.id})
+            return None
+
+        self.logger.info(f"Experiment \"{experiment_definition.id}\" finished successfully")
+
+        # Download the experiment data file from the robot
+        return self._download_experiment_data(data, experiment_file_folder)
+
+    def _download_experiment_data(
+        self,
+        file_path: str,
+        experiment_file_folder: str | None
+    ) -> dict | None:
+        """Download experiment data from the robot."""
+        if experiment_file_folder is None:
+            # Use desktop as default location
+            download_dir = '/Users/lehmann/Desktop/'
+        else:
+            download_dir = experiment_file_folder
+
+        try:
+            filename = self.core.file_handler.download_file(file_path, download_dir)
+
+            with open(filename, 'r') as f:
+                experiment_data = json.load(f)
+
+            self._last_experiment_data = experiment_data
+            return experiment_data
+
+        except Exception as e:
+            self.logger.error(f"Failed to download experiment data: {e}")
+            return None
+
+    def _trajectory_event_callback(self, message, *args, **kwargs):
+        """Handle trajectory events from the robot."""
+        if 'event' not in message.data:
+            self.logger.error(f"Robot {self.id}: Received trajectory event without event field")
+            return
+
+        match message.data['event']:
+            case 'finished':
+                self.logger.info(f"Trajectory {message.data['trajectory_id']} finished.")
+                self.current_trajectory = None
+                self._loadedTrajectory = None
+                self.events.ll_trajectory_finished.set(
+                    data=message.data,
+                    flags={'trajectory_id': int(message.data['trajectory_id'])}
+                )
+                self.events.status_changed.set(data=self.status, flags={'status': self.status})
+
+            case 'started':
+                self.logger.info(f"Trajectory {message.data['trajectory_id']} started.")
+                self.current_trajectory = self._loadedTrajectory
+                self.events.ll_trajectory_started.set(
+                    data=message.data,
+                    flags={'trajectory_id': message.data['trajectory_id']}
+                )
+                self.events.status_changed.set(data=self.status, flags={'status': self.status})
+
+            case 'aborted':
+                self.logger.info(f"Trajectory {message.data['trajectory_id']} aborted.")
+                speak(f"{self.id}: Trajectory {message.data['trajectory_id']} aborted")
+                self.current_trajectory = None
+                self._loadedTrajectory = None
+                self.events.ll_trajectory_aborted.set(
+                    data=message.data,
+                    flags={'trajectory_id': message.data['trajectory_id']}
+                )
+                self.events.status_changed.set(data=self.status, flags={'status': self.status})
+
+    def _experiment_event_callback(self, message, *args, **kwargs):
+        """Handle experiment events from the robot."""
+        if 'event' not in message.data:
+            self.logger.error(f"Robot {self.id}: Received experiment event without event field")
+            return
+
+        event = message.data['event']
+        experiment_id = message.data['experiment_id']
+        data = message.data.get('data', None)
+
+        self.logger.debug(f"Received experiment event \"{event}\" for experiment \"{experiment_id}\"")
+
+        match event:
+            case 'started':
+                self.logger.debug(f"Experiment \"{experiment_id}\" started")
+                self._events_internal.experiment_started.set(
+                    flags={'experiment_id': experiment_id},
+                    data=data
+                )
+
+            case 'finished':
+                self.logger.debug(f"Experiment \"{experiment_id}\" finished")
+                self.status = BILBO_ExperimentHandler_Status.IDLE
+                self._events_internal.experiment_finished.set(
+                    flags={'experiment_id': experiment_id},
+                    data=data
+                )
+                self.events.experiment_finished.set(
+                    flags={'experiment_id': experiment_id},
+                    data=data
+                )
+
+            case 'error':
+                self.logger.warning(f"Experiment \"{experiment_id}\" failed")
+                self.status = BILBO_ExperimentHandler_Status.IDLE
+                self._events_internal.experiment_error.set(
+                    flags={'experiment_id': experiment_id},
+                    data=data
+                )
+                self.events.experiment_error.set(
+                    flags={'experiment_id': experiment_id},
+                    data=data
+                )
+
+            case 'timeout':
+                self.logger.warning(f"Experiment \"{experiment_id}\" timed out")
+                self.status = BILBO_ExperimentHandler_Status.IDLE
+                self._events_internal.experiment_timeout.set(
+                    flags={'experiment_id': experiment_id},
+                    data=data
+                )
+                self.events.experiment_timeout.set(
+                    flags={'experiment_id': experiment_id},
+                    data=data
+                )
+
+            case _:
+                self.logger.error(f"Unknown experiment event: {event}")

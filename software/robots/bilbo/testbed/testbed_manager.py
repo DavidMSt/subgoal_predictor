@@ -1,6 +1,5 @@
 import dataclasses
 
-
 from robots.bilbo.settings import AUTOSTOP_ROBOTS, AUTOSTART_ROBOTS
 from robots.bilbo.testbed.devices.testbed_extensions import BILBO_TestbedExtensions
 from robots.bilbo.testbed.testbed_objects import BILBO_TestbedAgent
@@ -26,7 +25,10 @@ class BILBO_TestbedManager_Events:
     initialized: Event = Event(copy_data_on_set=False)
 
 
-DEFAULT_TESTBED_SIZE = (10.0, 10.0)  # Default 10x10m for infinite/custom testbed
+DEFAULT_TESTBED_SIZE = {
+    'x': [-5, 5],
+    'y': [-5, 5]
+}
 
 # Available predefined testbed configurations
 AVAILABLE_TESTBEDS = ['track', 'lab']
@@ -42,7 +44,8 @@ class BILBO_TestbedManager_Settings:
     3. If both are None: Use default 10x10m testbed
     """
     testbed_type: str | None = 'track'  # Name of predefined testbed ('track', 'lab') or None
-    testbed_size: tuple[float, float] | None = None  # Custom size [width, height] in meters
+    testbed_size: dict[str, list[
+        float]] | None = None  # Custom size (dict with 'x' and 'y' keys. Size is a list with [min, max] values) or None
     tracker_max_sample_rate: int = 30
     use_optitrack: bool = True
     optitrack_server: str = 'palantir.lan'
@@ -54,7 +57,7 @@ class BILBO_TestbedManager_Settings:
 @dataclasses.dataclass
 class BILBO_TestbedConfig:
     """Configuration loaded from a testbed YAML file."""
-    size: list[float]
+    size: dict[str, list[float]]
     origin_position: str = 'corner'
     origin: dict | None = None
     limbo_marker: dict | None = None
@@ -116,7 +119,8 @@ class BILBO_TestbedManager:
     def init(self):
         # Load or create testbed config
         self.testbed_config = self._resolve_testbed_config()
-        self.logger.info(f"Testbed size: {self.testbed_config.size[0]}m x {self.testbed_config.size[1]}m")
+
+        # self.logger.info(f"Testbed size: {self.testbed_config.size['x'][0]}m x {self.testbed_config.size['x'][1]}m x {self.testbed_config.size['y'][0]}m x {self.testbed_config.size['y'][1]}m")
 
         self.robot_manager.init()
         self.joystick_control.init()
@@ -150,7 +154,7 @@ class BILBO_TestbedManager:
             # Use custom size
             self.logger.info(f"Using custom testbed size: {self.settings.testbed_size}")
             return BILBO_TestbedConfig(
-                size=list(self.settings.testbed_size),
+                size=self.settings.testbed_size,
                 origin_position='corner'
             )
 
@@ -158,7 +162,7 @@ class BILBO_TestbedManager:
             # Use default size
             self.logger.info(f"No testbed specified, using default size: {DEFAULT_TESTBED_SIZE}")
             return BILBO_TestbedConfig(
-                size=list(DEFAULT_TESTBED_SIZE),
+                size=DEFAULT_TESTBED_SIZE,
                 origin_position='corner'
             )
 

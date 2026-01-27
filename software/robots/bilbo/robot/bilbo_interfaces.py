@@ -12,6 +12,7 @@ from core.utils.curve_utils import shape_joystick, JoystickCurve
 from robots.bilbo.robot.bilbo_control import BILBO_Control
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
+from robots.bilbo.robot.bilbo_position_control import BILBO_PositionControl
 from robots.bilbo.robot.bilbo_data import bilboSampleFromDict
 from core.utils.callbacks import CallbackContainer, callback_definition, Callback
 from core.utils.events import event_definition, Event, pred_flag_contains, SubscriberListener
@@ -55,15 +56,18 @@ class BILBO_Interfaces:
     # ------------------------------------------------------------------------------------------------------------------
     def __init__(self, core: BILBO_Core,
                  control: BILBO_Control,
+                 position_control: BILBO_PositionControl,
                  utilities: BILBO_Utilities,
                  experiments: BILBO_ExperimentHandler):
 
         self.core = core
         self.control = control
+        self.position_control = position_control
         self.utilities = utilities
         self.experiments = experiments
         self.cli_command_set = BILBO_CLI_CommandSet(core=self.core,
                                                     control=self.control,
+                                                    position_control=self.position_control,
                                                     experiments=self.experiments,
                                                     utilities=self.utilities)
 
@@ -265,10 +269,11 @@ class BILBO_Interfaces:
 # ======================================================================================================================
 class BILBO_CLI_CommandSet(CommandSet):
 
-    def __init__(self, core: BILBO_Core, control: BILBO_Control, experiments: BILBO_ExperimentHandler,
-                 utilities: BILBO_Utilities):
+    def __init__(self, core: BILBO_Core, control: BILBO_Control, position_control: BILBO_PositionControl,
+                 experiments: BILBO_ExperimentHandler, utilities: BILBO_Utilities):
         self.core = core
         self.control = control
+        self.position_control = position_control
         self.experiments = experiments
         self.utilities = utilities
 
@@ -403,31 +408,31 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                    allow_positionals=False
                                                    )
 
-        get_position_control_config_command = Command(
-            name='getPosConfig',
-            function=self._read_position_control_config,
-            description='Reads the position control configuration from the robot',
-            arguments=[]
-        )
-
-        set_position_control_forward_pi_command = Command(
-            name='setPosForwardPI',
-            function=self.control.set_position_forward_pi,
-            arguments=[
-                CommandArgument(name='P', type=float, optional=True, default=None),
-                CommandArgument(name='I', type=float, optional=True, default=None),
-            ],
-            allow_positionals=False
-        )
-        set_position_control_turn_pi_command = Command(
-            name='setPosTurnPI',
-            function=self.control.set_position_turn_pi,
-            arguments=[
-                CommandArgument(name='P', type=float, optional=True, default=None),
-                CommandArgument(name='I', type=float, optional=True, default=None),
-            ],
-            allow_positionals=False
-        )
+        # get_position_control_config_command = Command(
+        #     name='getPosConfig',
+        #     function=self._read_position_control_config,
+        #     description='Reads the position control configuration from the robot',
+        #     arguments=[]
+        # )
+        #
+        # set_position_control_forward_pi_command = Command(
+        #     name='setPosForwardPI',
+        #     function=self.control.set_position_forward_pi,
+        #     arguments=[
+        #         CommandArgument(name='P', type=float, optional=True, default=None),
+        #         CommandArgument(name='I', type=float, optional=True, default=None),
+        #     ],
+        #     allow_positionals=False
+        # )
+        # set_position_control_turn_pi_command = Command(
+        #     name='setPosTurnPI',
+        #     function=self.control.set_position_turn_pi,
+        #     arguments=[
+        #         CommandArgument(name='P', type=float, optional=True, default=None),
+        #         CommandArgument(name='I', type=float, optional=True, default=None),
+        #     ],
+        #     allow_positionals=False
+        # )
 
         control_command_set = CommandSet(name='control', commands=[
             set_control_mode_command,
@@ -500,105 +505,158 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                       dilc_example_command,
                                                       test_experiment_command])
 
-        navigation_command_set = CommandSet(name='navigation')
+        navigation_command_set = CommandSet(name='nav')
 
-        # add_move_command = Command(name='add_move',
-        #                            function=self.control.add_move,
-        #                            allow_positionals=True,
-        #                            arguments=[
-        #                                CommandArgument(name='x', type=float, short_name='x'),
-        #                                CommandArgument(name='y', type=float, short_name='y'),
-        #                                CommandArgument(name='timeout',
-        #                                                short_name='t',
-        #                                                type=float,
-        #                                                optional=True,
-        #                                                default=None),
-        #                            ])
-        #
-        # add_turn_heading_command = Command(name='add_turn_heading',
-        #                                    function=self.control.add_turn_heading,
-        #                                    allow_positionals=True,
-        #                                    arguments=[
-        #                                        CommandArgument(name='psi', short_name='p', type=float),
-        #                                        CommandArgument(name='timeout', short_name='t', type=float,
-        #                                                        optional=True,
-        #                                                        default=None),
-        #                                    ])
-        #
-        # add_wait_command = Command(name='add_wait',
-        #                            function=self.control.add_wait,
-        #                            arguments=[
-        #                                CommandArgument('duration', type=float, short_name='d')
-        #                            ])
-        #
-        # start_navigation_command = Command(name='start',
-        #                                    function=self.control.start_navigation,
-        #                                    description='Starts the navigation sequence',
-        #                                    arguments=[])
-        #
-        # clear_navigation_command = Command(name='clear_nav',
-        #                                    function=self.control.clear_navigation,
-        #                                    description='Clears the navigation sequence', )
+        # Position mode command
+        position_mode_command = Command(
+            name='mode',
+            function=Callback(
+                function=self.control.setControlMode,
+                inputs={'mode': BILBO_Control_Mode.POSITION},
+            ),
+            description='Switch to position control mode',
+            arguments=[]
+        )
 
-        move_to_command = Command(name='moveTo',
-                                  function=self.control.move_to,
-                                  allow_positionals=True,
-                                  arguments=[
-                                      CommandArgument(name='x', type=float, short_name='x'),
-                                      CommandArgument(name='y', type=float, short_name='y'),
-                                      CommandArgument(
-                                          name='max_speed',
-                                          short_name='s',
-                                          type=float,
-                                          optional=True,
-                                          default=None
-                                      ),
-                                      CommandArgument(name='timeout',
-                                                      short_name='t',
-                                                      type=float,
-                                                      optional=True,
-                                                      default=None),
-                                  ])
+        # Simple movement commands
+        move_to_command = Command(
+            name='moveTo',
+            function=self.position_control.move_to,
+            description='Move to a single point',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='x', type=float, description='X coordinate [m]'),
+                CommandArgument(name='y', type=float, description='Y coordinate [m]'),
+                CommandArgument(name='max_speed', short_name='s', type=float, optional=True, default=0.0,
+                               description='Max speed [m/s] (0=default)'),
+                CommandArgument(name='timeout', short_name='t', type=float, optional=True, default=0.0,
+                               description='Timeout [s] (0=none)'),
+            ]
+        )
 
-        turn_to_command = Command(name='turnTo',
-                                  function=self.control.turn_to,
-                                  allow_positionals=True,
-                                  arguments=[
-                                      CommandArgument(name='psi', short_name='p', type=float),
-                                      CommandArgument(name='max_speed',
-                                                      short_name='s',
-                                                      type=float,
-                                                      optional=True,
-                                                      default=None
-                                                      ),
-                                      CommandArgument(name='timeout',
-                                                      short_name='t',
-                                                      type=float,
-                                                      optional=True,
-                                                      default=None),
-                                  ])
+        turn_to_command = Command(
+            name='turnTo',
+            function=self.position_control.turn_to,
+            description='Turn to a heading',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='heading', short_name='h', type=float, description='Heading [rad]'),
+                CommandArgument(name='max_angular_speed', short_name='s', type=float, optional=True, default=0.0,
+                               description='Max angular speed [rad/s] (0=default)'),
+                CommandArgument(name='timeout', short_name='t', type=float, optional=True, default=0.0,
+                               description='Timeout [s] (0=none)'),
+            ]
+        )
 
-        position_mode_command = Command(name='mode',
-                                        function=Callback(
-                                            function=self.control.setControlMode,
-                                            inputs={'mode': BILBO_Control_Mode.POSITION},
-                                        ),
-                                        arguments=[]
-                                        )
+        # Waypoint management commands
+        clear_waypoints_command = Command(
+            name='clearWp',
+            function=self.position_control.clear_waypoints,
+            description='Clear all waypoints',
+            arguments=[]
+        )
 
-        navigation_command_set.addCommand(get_position_control_config_command)
-        navigation_command_set.addCommand(set_position_control_forward_pi_command)
-        navigation_command_set.addCommand(set_position_control_turn_pi_command)
+        add_waypoint_command = Command(
+            name='addWp',
+            function=self.position_control.add_waypoint,
+            description='Add a waypoint (type: 0=PASS, 1=STOP)',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='x', type=float, description='X coordinate [m]'),
+                CommandArgument(name='y', type=float, description='Y coordinate [m]'),
+                CommandArgument(name='type', short_name='T', type=int, optional=True, default=0,
+                               description='Type: 0=PASS, 1=STOP'),
+                CommandArgument(name='weight', short_name='w', type=float, optional=True, default=0.75,
+                               description='Corner sharpness [0-1]'),
+            ]
+        )
+
+        list_waypoints_command = Command(
+            name='listWp',
+            function=self._print_waypoints,
+            description='List current waypoints',
+            arguments=[]
+        )
+
+        # Path control commands
+        start_path_command = Command(
+            name='start',
+            function=self.position_control.start_path,
+            description='Start following waypoint path',
+            arguments=[
+                CommandArgument(name='allow_reverse', short_name='r', type=bool, optional=True, default=False,
+                               description='Allow reverse driving'),
+                CommandArgument(name='timeout', short_name='t', type=float, optional=True, default=0.0,
+                               description='Timeout [s] (0=none)'),
+                CommandArgument(name='max_speed', short_name='s', type=float, optional=True, default=0.0,
+                               description='Max speed [m/s] (0=default)'),
+            ]
+        )
+
+        pause_path_command = Command(
+            name='pause',
+            function=self.position_control.pause_path,
+            description='Pause path execution',
+            arguments=[]
+        )
+
+        resume_path_command = Command(
+            name='resume',
+            function=self.position_control.resume_path,
+            description='Resume paused path',
+            arguments=[]
+        )
+
+        abort_path_command = Command(
+            name='abort',
+            function=self.position_control.abort_path,
+            description='Abort path execution',
+            arguments=[]
+        )
+
+        # State commands
+        get_state_command = Command(
+            name='state',
+            function=self._print_position_control_state,
+            description='Show position control state',
+            arguments=[]
+        )
+
+        reset_command = Command(
+            name='reset',
+            function=self.position_control.reset,
+            description='Reset position control',
+            arguments=[]
+        )
+
+        # Load path commands
+        load_path_command = Command(
+            name='loadPath',
+            function=self._load_path_from_file,
+            description='Load path from YAML/JSON file',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='file', short_name='f', type=str,
+                               description='Path to .yaml/.yml/.json file'),
+                CommandArgument(name='start', short_name='s', type=bool, optional=True, default=False,
+                               description='Start path immediately after loading'),
+            ]
+        )
+
+        # Add all commands to navigation set
         navigation_command_set.addCommand(position_mode_command)
         navigation_command_set.addCommand(move_to_command)
         navigation_command_set.addCommand(turn_to_command)
-
-        # navigation_command_set.addCommand(add_move_command)
-        # navigation_command_set.addCommand(add_turn_heading_command)
-        # navigation_command_set.addCommand(add_wait_command)
-        # navigation_command_set.addCommand(start_navigation_command)
-        # navigation_command_set.addCommand(clear_navigation_command)
-        # navigation_command_set.addCommand(position_mode_command)
+        navigation_command_set.addCommand(clear_waypoints_command)
+        navigation_command_set.addCommand(add_waypoint_command)
+        navigation_command_set.addCommand(list_waypoints_command)
+        navigation_command_set.addCommand(start_path_command)
+        navigation_command_set.addCommand(pause_path_command)
+        navigation_command_set.addCommand(resume_path_command)
+        navigation_command_set.addCommand(abort_path_command)
+        navigation_command_set.addCommand(get_state_command)
+        navigation_command_set.addCommand(reset_command)
+        navigation_command_set.addCommand(load_path_command)
 
         super().__init__(name=f"{self.core.id}", commands=[beep_command,
                                                            speak_command,
@@ -675,57 +733,48 @@ class BILBO_CLI_CommandSet(CommandSet):
         log_velocity_channel("Angular velocity (psidot)", cfg.psidot)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _read_position_control_config(self):
-        cfg = self.control.get_position_control_config()
-        if cfg is None:
+    def _print_waypoints(self):
+        """Print current waypoint list"""
+        waypoints = self.position_control.get_waypoints()
+        if not waypoints:
+            self.core.logger.info("No waypoints in queue")
             return
 
-        self.core.logger.info("Position Control Configuration:")
+        self.core.logger.info(f"Waypoints ({len(waypoints)}):")
+        for i, wp in enumerate(waypoints):
+            type_name = "STOP" if wp.type.value == 1 else "PASS"
+            self.core.logger.info(f"  [{i}] ({wp.x:.3f}, {wp.y:.3f}) {type_name} w={wp.weight:.2f}")
 
-        # --- PI gains ---
-        self.core.logger.info("  PI gains:")
-        self.core.logger.info(f"    linear:  Kp={cfg.kp_linear}, Ki={cfg.ki_linear}")
-        self.core.logger.info(f"    angular: Kp={cfg.kp_angular}, Ki={cfg.ki_angular}")
+    # ------------------------------------------------------------------------------------------------------------------
+    def _print_position_control_state(self):
+        """Print current position control state"""
+        state = self.position_control.get_state()
+        if state is None:
+            self.core.logger.error("Failed to get position control state")
+            return
 
-        # --- Path / behavior ---
-        self.core.logger.info("  Behavior:")
-        self.core.logger.info(f"    lookahead_distance={cfg.lookahead_distance} m")
-        self.core.logger.info(f"    allow_reverse={bool(cfg.allow_reverse)} ({cfg.allow_reverse})")
+        self.core.logger.info("Position Control State:")
+        self.core.logger.info(f"  Mode: {state.get('mode_name', 'UNKNOWN')} ({state.get('mode', -1)})")
+        self.core.logger.info(f"  Path State: {state.get('path_state', 0)}")
+        self.core.logger.info(f"  Waypoints: {state.get('waypoint_count', 0)}")
+        self.core.logger.info(f"  Current Index: {state.get('current_waypoint_index', 0)}")
+        self.core.logger.info(f"  Is Busy: {state.get('is_busy', False)}")
 
-        # backwards_switch_angle is stored in rad in the dataclass
-        try:
-            bsa_deg = math.degrees(cfg.backwards_switch_angle)
-        except Exception:
-            bsa_deg = None
+        # Print data if available
+        data = state.get('data', {})
+        if data:
+            self.core.logger.info("  Telemetry:")
+            self.core.logger.info(f"    Carrot: ({data.get('carrot_x', 0):.3f}, {data.get('carrot_y', 0):.3f})")
+            self.core.logger.info(f"    Cross-track error: {data.get('cross_track_error', 0):.3f} m")
+            self.core.logger.info(f"    Heading error: {data.get('heading_error', 0):.3f} rad")
+            self.core.logger.info(f"    Speed limit: {data.get('speed_limit', 0):.3f} m/s")
+            self.core.logger.info(f"    Elapsed time: {data.get('elapsed_time', 0):.2f} s")
 
-        if bsa_deg is None:
-            self.core.logger.info(f"    backwards_switch_angle={cfg.backwards_switch_angle} rad")
+    # ------------------------------------------------------------------------------------------------------------------
+    def _load_path_from_file(self, file: str, start: bool = False):
+        """Load path from file and optionally start execution"""
+        result = self.position_control.load_path_from_file(filepath=file, start=start)
+        if result:
+            self.core.logger.info(f"Path loaded from {file}" + (" and started" if start else ""))
         else:
-            self.core.logger.info(
-                f"    backwards_switch_angle={cfg.backwards_switch_angle} rad ({bsa_deg:.2f} deg)"
-            )
-
-        # --- Arrival criteria ---
-        self.core.logger.info("  Arrival criteria:")
-        self.core.logger.info(
-            f"    distance_arrival_tolerance={cfg.distance_arrival_tolerance} m"
-        )
-
-        try:
-            angle_tol_deg = math.degrees(cfg.angle_arrival_tolerance)
-        except Exception:
-            angle_tol_deg = None
-
-        if angle_tol_deg is None:
-            self.core.logger.info(f"    angle_arrival_tolerance={cfg.angle_arrival_tolerance} rad")
-        else:
-            self.core.logger.info(
-                f"    angle_arrival_tolerance={cfg.angle_arrival_tolerance} rad ({angle_tol_deg:.2f} deg)"
-            )
-
-        self.core.logger.info(f"    arrival_time={cfg.arrival_time} s")
-
-        # --- Limits ---
-        self.core.logger.info("  Limits:")
-        self.core.logger.info(f"    max_speed_forward={cfg.max_speed_forward} m/s")
-        self.core.logger.info(f"    max_speed_turn={cfg.max_speed_turn} rad/s")
+            self.core.logger.error(f"Failed to load path from {file}")

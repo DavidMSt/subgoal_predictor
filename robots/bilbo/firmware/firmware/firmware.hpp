@@ -83,6 +83,7 @@ private:
 	elapsedMillis timer_control_mode_led;
 
 	void setControlModeLed();
+	void updateExternalLedStrip(bilbo_control_mode_t mode);
 };
 
 void start_firmware_task(void *argument);

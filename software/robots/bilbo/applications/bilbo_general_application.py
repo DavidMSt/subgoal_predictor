@@ -57,7 +57,7 @@ class OptitrackSettings:
 @dataclasses.dataclass
 class TestbedSettings:
     type: str | None = None
-    size: list[float] | None = None
+    size: dict | None = None
 
 
 @dataclasses.dataclass
@@ -84,8 +84,10 @@ def load_application_settings(path: str | None = None) -> ApplicationSettingsYAM
     yaml_data = load_yaml(path)
 
     # Parse nested dataclasses
-    extensions = ExtensionsSettings(**yaml_data.get('extensions', {})) if yaml_data.get('extensions') else ExtensionsSettings()
-    optitrack = OptitrackSettings(**yaml_data.get('optitrack', {})) if yaml_data.get('optitrack') else OptitrackSettings()
+    extensions = ExtensionsSettings(**yaml_data.get('extensions', {})) if yaml_data.get(
+        'extensions') else ExtensionsSettings()
+    optitrack = OptitrackSettings(**yaml_data.get('optitrack', {})) if yaml_data.get(
+        'optitrack') else OptitrackSettings()
     testbed = TestbedSettings(**yaml_data.get('testbed', {})) if yaml_data.get('testbed') else TestbedSettings()
     mdns = MDNSSettings(**yaml_data.get('mdns', {})) if yaml_data.get('mdns') else MDNSSettings()
 
@@ -117,7 +119,7 @@ class BILBO_Application:
             exit_program()
 
         # Convert testbed size from list to tuple if provided
-        testbed_size = tuple(settings.testbed.size) if settings.testbed.size else None
+        testbed_size = settings.testbed.size if settings.testbed.size else None
 
         testbed_settings = BILBO_TestbedManager_Settings(
             testbed_type=settings.testbed.type,
@@ -142,7 +144,8 @@ class BILBO_Application:
         self.soundsystem.start()
 
         # GUI
-        self.gui = BILBO_Application_GUI(host=self.manager.robot_manager.host,
+        self.gui = BILBO_Application_GUI(settings=self.settings,
+                                         host=self.manager.robot_manager.host,
                                          testbed_manager=self.manager,
                                          cli=self.cli,
                                          joystick_control=self.manager.joystick_control,

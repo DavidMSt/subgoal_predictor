@@ -24,7 +24,11 @@ from typing import List
 
 import numpy as np
 
-from core.utils.ctypes_utils import STRUCTURE
+from core.communication.serial.serial_interface import SerialMessage, SerialCommandType
+from robot.lowlevel.stm32_messages import (
+    BILBO_LL_MESSAGE_CONTROL_EVENT,
+    BILBO_LL_MESSAGE_POSITION_CONTROL_EVENT,
+)
 
 
 # =============================================================================
@@ -63,9 +67,45 @@ class twipr_balancing_control_status_t(enum.IntEnum):
 
 
 class bilbo_position_control_mode_t(enum.IntEnum):
-    # enum class bilbo_position_control_mode_t : uint8_t
-    STANDALONE = 0
-    VELOCITY_CASCADE = 1
+    """Position control operating modes (enum class bilbo_position_control_mode_t : uint8_t)"""
+    IDLE = 0             # No active command, outputs zero
+    TURN_TO_HEADING = 1  # Rotating in place to target heading
+    DRIVE_TO_POINT = 2   # Driving to a single point
+    FOLLOW_PATH = 3      # Following waypoint path
+
+
+class bilbo_waypoint_type_t(enum.IntEnum):
+    """Waypoint arrival behavior (enum class bilbo_waypoint_type_t : uint8_t)"""
+    PASS = 0  # Smooth transition, corner cutting allowed based on weight
+    STOP = 1  # Must stop at this waypoint
+
+
+class bilbo_path_state_t(enum.IntEnum):
+    """Path execution state machine (enum class bilbo_path_state_t : uint8_t)"""
+    IDLE = 0     # No path loaded or path completed
+    RUNNING = 1  # Actively following path
+    PAUSED = 2   # Execution paused, internal state preserved
+
+
+class position_control_event_t(enum.IntEnum):
+    """Position control events (enum class position_control_event_t : uint8_t)"""
+    PATH_STARTED = 0
+    WAYPOINT_PASSED = 1
+    WAYPOINT_REACHED = 2
+    WAYPOINT_COMPLETED = 3
+    PATH_PAUSED = 4
+    PATH_RESUMED = 5
+    PATH_FINISHED = 6
+    PATH_TIMEOUT = 7
+    PATH_ABORTED = 8
+    MOVE_TO_POINT_STARTED = 9
+    MOVE_TO_POINT_COMPLETED = 10
+    MOVE_TO_POINT_TIMEOUT = 11
+    TURN_TO_HEADING_STARTED = 12
+    TURN_TO_HEADING_COMPLETED = 13
+    TURN_TO_HEADING_TIMEOUT = 14
+    MODE_CHANGED = 15
+    WAYPOINT_BUFFER_FULL = 16
 
 
 class control_event_t(enum.IntEnum):
@@ -93,6 +133,7 @@ def _require_len(name: str, arr: List[float], n: int) -> None:
 # =============================================================================
 # Low-level helper structs (mirror of C++ structs)
 # =============================================================================
+
 
 @dataclass
 class bilbo_control_input_ext:
@@ -407,59 +448,10 @@ class bilbo_velocity_control_sample_t(ctypes.Structure):
 
 
 # =============================================================================
-# Position control (bilbo_position_control.h)
+# Position control (bilbo_position_control.h) - NEW PATH FOLLOWING IMPLEMENTATION
 # =============================================================================
 
-
-@dataclass
-class bilbo_position_control_config:
-    kp_linear: float = 0.0
-    ki_linear: float = 0.0
-    kp_angular: float = 0.0
-    ki_angular: float = 0.0
-    Ts: float = 0.0
-    lookahead_distance: float = 0.3
-    allow_reverse: int = 1
-    backwards_switch_angle: float = np.deg2rad(100.0)
-    distance_arrival_tolerance: float = 0.05
-    angle_arrival_tolerance: float = np.deg2rad(5.0)
-    arrival_time: float = 2.0
-    max_speed_forward: float = 0.75
-    max_speed_turn: float = 3
-
-
-class bilbo_position_control_config_t(ctypes.Structure):
-    # struct bilbo_position_control_config_t { ... }  (see header)
-    _fields_ = [
-        ("kp_linear", ctypes.c_float),
-        ("ki_linear", ctypes.c_float),
-        ("kp_angular", ctypes.c_float),
-        ("ki_angular", ctypes.c_float),
-        ("Ts", ctypes.c_float),
-        ("lookahead_distance", ctypes.c_float),
-        ("allow_reverse", ctypes.c_uint8),
-        ("backwards_switch_angle", ctypes.c_float),
-        ("distance_arrival_tolerance", ctypes.c_float),
-        ("angle_arrival_tolerance", ctypes.c_float),
-        ("arrival_time", ctypes.c_float),
-        ("max_speed_forward", ctypes.c_float),
-        ("max_speed_turn", ctypes.c_float),
-    ]
-
-
-@dataclass
-class bilbo_position_control_output:
-    v_cmd: float = 0.0
-    psi_dot_cmd: float = 0.0
-
-
-class bilbo_position_control_output_t(ctypes.Structure):
-    # struct bilbo_position_control_output_t { float u_l; float u_r; };
-    _fields_ = [
-        ("v_cmd", ctypes.c_float),
-        ("psi_dot_cmd", ctypes.c_float),
-    ]
-
+# --- Position state (from twipr_estimation.h) ---
 
 @dataclass
 class bilbo_position_state:
@@ -469,7 +461,6 @@ class bilbo_position_state:
 
 
 class bilbo_position_state_t(ctypes.Structure):
-    # referenced in C++ (from twipr_estimation.h)
     _fields_ = [
         ("x", ctypes.c_float),
         ("y", ctypes.c_float),
@@ -477,86 +468,232 @@ class bilbo_position_state_t(ctypes.Structure):
     ]
 
 
+# --- Waypoint definition ---
 
 @dataclass
-class heading_reference:
-    psi_cmd: float = 0.0
+class bilbo_waypoint:
+    """Single waypoint definition"""
+    x: float = 0.0                                      # [m] world X coordinate
+    y: float = 0.0                                      # [m] world Y coordinate
+    type: bilbo_waypoint_type_t = bilbo_waypoint_type_t.PASS
+    weight: float = 0.75                                # [0-1] corner sharpness (1=sharp, 0=smooth)
 
-class heading_reference_t(ctypes.Structure):
+
+class bilbo_waypoint_t(ctypes.Structure):
     _fields_ = [
-        ("psi_cmd", ctypes.c_float),
+        ("x", ctypes.c_float),
+        ("y", ctypes.c_float),
+        ("type", ctypes.c_uint8),
+        ("weight", ctypes.c_float),
     ]
 
+
+# --- Path start command ---
+
 @dataclass
-class heading_command:
-    id: int = 0
-    heading_ref: heading_reference = field(default_factory=heading_reference)
-    max_angular_speed: float = -1.0
-    timeout: float = 0
+class bilbo_path_start_cmd:
+    """Command to start path execution"""
+    allow_reverse: int = 0      # If non-zero, robot may drive backwards when more efficient
+    timeout: float = 0.0        # [s] Maximum time for path execution, 0 = no timeout
+    max_speed: float = 0.0      # [m/s] Speed override, 0 = use config default
 
 
-class heading_command_t(ctypes.Structure):
+class bilbo_path_start_cmd_t(ctypes.Structure):
     _fields_ = [
-        ("id", ctypes.c_uint16),
-        ("heading_ref", heading_reference_t),
-        ("max_angular_speed", ctypes.c_float),
+        ("allow_reverse", ctypes.c_uint8),
         ("timeout", ctypes.c_float),
+        ("max_speed", ctypes.c_float),
     ]
 
 
+# --- Turn to heading command ---
+
 @dataclass
-class position_reference:
-    x_target: float = 0.0
-    y_target: float = 0.0
+class turn_to_heading_command:
+    """Command for turn-to-heading mode"""
+    id: int = 0                     # command ID for tracking
+    heading_ref: float = 0.0        # [rad] target heading
+    timeout: float = 0.0            # [s] command timeout (0 = no timeout)
+    max_angular_speed: float = 0.0  # [rad/s] maximum angular speed (0 = use config)
 
 
-class position_reference_t(ctypes.Structure):
+class turn_to_heading_command_t(ctypes.Structure):
     _fields_ = [
+        ("id", ctypes.c_uint8),
+        ("heading_ref", ctypes.c_float),
+        ("timeout", ctypes.c_float),
+        ("max_angular_speed", ctypes.c_float),
+    ]
+
+
+# --- Move to point command ---
+
+@dataclass
+class move_to_point_command:
+    """Command for drive-to-point mode"""
+    id: int = 0                 # command ID for tracking
+    x_target: float = 0.0       # [m] target X position
+    y_target: float = 0.0       # [m] target Y position
+    timeout: float = 0.0        # [s] command timeout (0 = no timeout)
+    max_speed: float = 0.0      # [m/s] maximum forward speed (0 = use config)
+
+
+class move_to_point_command_t(ctypes.Structure):
+    _fields_ = [
+        ("id", ctypes.c_uint8),
         ("x_target", ctypes.c_float),
         ("y_target", ctypes.c_float),
+        ("timeout", ctypes.c_float),
+        ("max_speed", ctypes.c_float),
     ]
 
+
+# --- Position control output ---
 
 @dataclass
-class position_command:
-    id: int = 0
-    position_ref: position_reference = field(default_factory=position_reference)
-    max_speed: float = -1.0
-    timeout: float = 0
+class bilbo_position_control_output:
+    v_cmd: float = 0.0          # [m/s] forward velocity command
+    psi_dot_cmd: float = 0.0    # [rad/s] yaw rate command
 
 
-class position_command_t(ctypes.Structure):
-    # struct position_command_t { uint16_t id; position_reference_t position_ref; float max_speed; };
+class bilbo_position_control_output_t(ctypes.Structure):
     _fields_ = [
-        ("id", ctypes.c_uint16),
-        ("position_ref", position_reference_t),
-        ("max_speed", ctypes.c_float),
-        ("timeout", ctypes.c_float),
+        ("v_cmd", ctypes.c_float),
+        ("psi_dot_cmd", ctypes.c_float),
     ]
 
 
-class position_control_mode(enum.IntEnum):
-    NONE = 0
-    POSITION = 1
-    ANGLE = 2
+# --- Position control configuration ---
 
+@dataclass
+class bilbo_position_control_config:
+    """Configuration parameters for position control (carrot-chase path following)
+
+    Simplified algorithm:
+    - Speed = kp_linear * carrot_distance (simple and robust)
+    - Weight + corner angle determines how carrot advances past waypoints
+    - Reverse mode always enabled with hysteresis
+    """
+
+    # Timing
+    Ts: float = 0.01                        # [s] Update period (100 Hz = 0.01s)
+
+    # Angular control gains
+    kp_angular: float = 10.0                # [rad/s per rad] Proportional gain
+    ki_angular: float = 0.3                 # [rad/s per rad*s] Integral gain
+
+    # Linear control gains (speed toward carrot)
+    kp_linear: float = 2.0                  # [1/s] speed = kp_linear * carrot_distance
+    ki_linear: float = 0.0                  # [1/s^2] Integral gain (usually 0)
+
+    # Speed limits
+    max_speed: float = 0.4                  # [m/s] Maximum forward velocity
+    max_turn_rate: float = 5.0              # [rad/s] Maximum yaw rate
+
+    # Lookahead parameters (carrot position)
+    lookahead_base: float = 0.15            # [m] Minimum lookahead distance
+    lookahead_gain: float = 0.3             # [s] Lookahead = base + gain * |velocity|
+    lookahead_max: float = 0.5              # [m] Maximum lookahead distance
+
+    # Arrival and dwell
+    arrival_tolerance: float = 0.05         # [m] Distance to consider "arrived"
+    arrival_dwell_time: float = 0.5         # [s] Hold time at STOP waypoint
+
+    # Reverse mode (always enabled)
+    reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
+    reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
+
+
+class bilbo_position_control_config_t(ctypes.Structure):
+    _fields_ = [
+        ("Ts", ctypes.c_float),
+        ("kp_angular", ctypes.c_float),
+        ("ki_angular", ctypes.c_float),
+        ("kp_linear", ctypes.c_float),
+        ("ki_linear", ctypes.c_float),
+        ("max_speed", ctypes.c_float),
+        ("max_turn_rate", ctypes.c_float),
+        ("lookahead_base", ctypes.c_float),
+        ("lookahead_gain", ctypes.c_float),
+        ("lookahead_max", ctypes.c_float),
+        ("arrival_tolerance", ctypes.c_float),
+        ("arrival_dwell_time", ctypes.c_float),
+        ("reverse_enter_angle", ctypes.c_float),
+        ("reverse_exit_angle", ctypes.c_float),
+    ]
+
+
+# --- Position control telemetry data ---
 
 @dataclass
 class bilbo_position_control_data:
-    current_mode: position_control_mode = position_control_mode.NONE
-    current_position_command: position_command = field(default_factory=position_command)
-    current_heading_command: heading_command = field(default_factory=heading_command)
-    current_output: bilbo_position_control_output = field(default_factory=bilbo_position_control_output)
-    is_executing_command: int = 0
+    """Telemetry and debug data from position control"""
+    mode: bilbo_position_control_mode_t = bilbo_position_control_mode_t.IDLE
+    path_state: bilbo_path_state_t = bilbo_path_state_t.IDLE
+
+    # Buffer status
+    buffer_capacity: int = 0            # maximum waypoints the buffer can hold
+    buffer_used: int = 0                # current number of waypoints in buffer
+
+    # Path progress
+    waypoint_count: int = 0             # total waypoints in path
+    current_segment: int = 0            # current segment index
+
+    # Carrot (lookahead) position
+    carrot_x: float = 0.0               # [m] current carrot X
+    carrot_y: float = 0.0               # [m] current carrot Y
+    carrot_distance: float = 0.0        # [m] distance from robot to carrot
+
+    # Control state
+    heading_error: float = 0.0          # [rad] heading error to carrot
+    speed_limit: float = 0.0            # [m/s] current speed limit
+
+    # Output
+    output: bilbo_position_control_output = field(default_factory=bilbo_position_control_output)
+
+    # Timing
+    elapsed_time: float = 0.0           # [s] time since path started
+    remaining_path_length: float = 0.0  # [m] approximate remaining distance
 
 
 class bilbo_position_control_data_t(ctypes.Structure):
     _fields_ = [
-        ("current_mode", ctypes.c_uint8),
-        ("current_position_command", position_command_t),
-        ("current_heading_command", heading_command_t),
-        ("current_output", bilbo_position_control_output_t),
-        ("is_executing_command", ctypes.c_uint8),
+        ("mode", ctypes.c_uint8),
+        ("path_state", ctypes.c_uint8),
+        ("buffer_capacity", ctypes.c_uint16),
+        ("buffer_used", ctypes.c_uint16),
+        ("waypoint_count", ctypes.c_uint16),
+        ("current_segment", ctypes.c_uint16),
+        ("carrot_x", ctypes.c_float),
+        ("carrot_y", ctypes.c_float),
+        ("carrot_distance", ctypes.c_float),
+        ("heading_error", ctypes.c_float),
+        ("speed_limit", ctypes.c_float),
+        ("output", bilbo_position_control_output_t),
+        ("elapsed_time", ctypes.c_float),
+        ("remaining_path_length", ctypes.c_float),
+    ]
+
+
+# --- Position control event data ---
+
+@dataclass
+class position_control_event_data:
+    """Event message data from position control"""
+    event: position_control_event_t = position_control_event_t.PATH_STARTED
+    data: bilbo_position_control_data = field(default_factory=bilbo_position_control_data)
+    tick: int = 0
+    waypoint_index: int = 0     # index of waypoint for waypoint events
+    command_id: int = 0         # command ID for single-point commands
+
+
+class position_control_event_data_t(ctypes.Structure):
+    _fields_ = [
+        ("event", ctypes.c_uint8),
+        ("data", bilbo_position_control_data_t),
+        ("tick", ctypes.c_uint32),
+        ("waypoint_index", ctypes.c_uint16),
+        ("command_id", ctypes.c_uint8),
     ]
 
 
@@ -605,7 +742,6 @@ class bilbo_ll_control_data:
     tic_enabled: int = 0
 
     position_control_data: bilbo_position_control_data = field(default_factory=bilbo_position_control_data)
-    position_output: bilbo_position_control_output = field(default_factory=bilbo_position_control_output)
 
     velocity_command: bilbo_velocity_control_command = field(default_factory=bilbo_velocity_control_command)
     velocity_output: bilbo_velocity_control_output = field(default_factory=bilbo_velocity_control_output)
@@ -626,7 +762,6 @@ class bilbo_ll_control_data_t(ctypes.Structure):
         ("tic_enabled", ctypes.c_uint8),
 
         ("position_control_data", bilbo_position_control_data_t),
-        ("position_output", bilbo_position_control_output_t),
 
         ("velocity_command", bilbo_velocity_control_command_t),
         ("velocity_output", bilbo_velocity_control_output_t),
@@ -637,56 +772,31 @@ class bilbo_ll_control_data_t(ctypes.Structure):
         ("output", bilbo_control_output_t),
     ]
 
-
-@dataclass
-class control_event_message_data:
-    event: int = 0
-    mode: int = 0
-    data: bilbo_ll_control_data = field(default_factory=bilbo_ll_control_data)
-    config: bilbo_control_config = field(default_factory=bilbo_control_config)
-    tick: int = 0
-
-
+# =============================================================================
+# MESSAGES
+# =============================================================================
 class control_event_message_data_t(ctypes.Structure):
-    # typedef struct control_event_message_data_t {
-    #   control_event_t event;
-    #   bilbo_control_mode_t mode;
-    #   bilbo_control_data_t data;
-    #   bilbo_control_config_t config;
-    #   uint32_t tick;
-    # } control_event_message_data_t;
     _fields_ = [
         ("event", ctypes.c_uint8),
         ("mode", ctypes.c_uint8),
         ("data", bilbo_ll_control_data_t),
-        ("config", bilbo_control_config_t),
-        ("tick", ctypes.c_uint32),
+        ("tick", ctypes.c_uint32)
     ]
 
 
-# =============================================================================
-# Backwards-compat convenience types (optional)
-# =============================================================================
-
-BILBO_Control_Mode_LL = bilbo_control_mode_t
-BILBO_Control_Status_LL = bilbo_control_status_t
-BilboPositionControlMode = bilbo_position_control_mode_t
+class BILBO_Control_Event_Message(SerialMessage):
+    module = 1
+    address = BILBO_LL_MESSAGE_CONTROL_EVENT
+    command = SerialCommandType.UART_CMD_EVENT
+    data_type = control_event_message_data_t
 
 
-# =============================================================================
-# Legacy STRUCTURE-based definitions (kept only if you rely on that decorator)
-# =============================================================================
+class BILBO_PositionControl_Event_Message(SerialMessage):
+    """Message for position control events (path following, turn-to-heading, drive-to-point)"""
+    module = 1
+    address = BILBO_LL_MESSAGE_POSITION_CONTROL_EVENT
+    command = SerialCommandType.UART_CMD_EVENT
+    data_type = position_control_event_data_t
 
-@STRUCTURE
-class bilbo_control_external_input_t:
-    """
-    Updated external input to match bilbo_control_input_ext_t from STM32:
-      struct bilbo_control_input_ext_t { float u_left; float u_right; };
 
-    If you truly need the old multi-field external input, keep it under a different name
-    and do NOT send it to the STM32 expecting the new firmware struct layout.
-    """
-    FIELDS = [
-        ("u_left", ctypes.c_float),
-        ("u_right", ctypes.c_float),
-    ]
+

@@ -1,5 +1,0 @@
-
-
-
-class BILBO_WaypointControl:
-    ...

@@ -6,11 +6,15 @@ from typing import Dict, Optional, Callable
 import numpy as np
 from qmt import wrapToPi
 
+from core.utils.uuid_utils import generate_uuid
 from extensions.gui.src.lib.objects.python.bilbo_mode import BilboModeWidget
 from extensions.gui.src.lib.objects.python.joystick_assignment import JoystickAssignmentWidget
 # === CUSTOM MODULES ===================================================================================================
 from robots.bilbo.gui.applications.dilc_app import DILC_APP
 from robots.bilbo.gui.applications.input_viewer import InputViewerApplication
+from robots.bilbo.robot.bilbo_position_control import (
+    MoveToPointCommand, TurnToHeadingCommand, PathData, Waypoint, WaypointType
+)
 from robots.bilbo.testbed.testbed_manager import BILBO_TestbedManager
 from core.utils.callbacks import callback_definition, CallbackContainer, Callback
 from core.utils.colors import get_color_from_palette, random_color_from_palette, get_palette
@@ -27,7 +31,7 @@ from extensions.cli.cli import CLI
 from extensions.gui.src.app import App, Folder, FolderPage
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.map.map import MapWidget
-from extensions.gui.src.lib.map.map_objects import Agent
+from extensions.gui.src.lib.map.map_objects import Agent, Point, Line, MapObject
 from extensions.gui.src.lib.objects.objects import Widget_Group, ContextMenuItem, ContextMenuGroup
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.objects.python.buttons import MultiStateButton, Button
@@ -846,16 +850,21 @@ class RobotUI:
     plots: list[RT_Plot_Widget]
     overview_page_data: dict
 
+    _additional_map_objects: list[MapObject] = []
+
     # === INIT =========================================================================================================
-    def __init__(self, robot: BILBO, manager: BILBO_TestbedManager, gui: GUI, app: App):
+    def __init__(self, robot: BILBO, manager: BILBO_TestbedManager, gui: GUI, app: App, application_settings):
         self.robot = robot
         self.gui = gui
         self.app = app
         self.manager = manager
+        self.application_settings = application_settings
 
         self.pages: Dict[str, Page] = {}
         self.category = Category(id=robot.id, icon='🤖')
         self.gui.categories['robots'].addCategory(self.category)
+
+        self._additional_map_objects: list[MapObject] = []
 
         self.folder = Folder(folder_id=robot.id)
 
@@ -1574,10 +1583,14 @@ class RobotUI:
         testbed_size = self.manager.testbed_config.size
         self.map_widget = MapWidget(widget_id='map_widget',
                                     title='Testbed',
-                                    limits={"x": [0, self.manager.testbed_config.size[0]],
-                                            "y": [0, self.manager.testbed_config.size[1]]},
-                                    initial_display_center=[self.manager.testbed_config.size[0] / 2,
-                                                            self.manager.testbed_config.size[1] / 2],
+                                    limits={"x": [self.manager.testbed_config.size['x'][0],
+                                                  self.manager.testbed_config.size['x'][1]],
+                                            "y": [self.manager.testbed_config.size['y'][0],
+                                                  self.manager.testbed_config.size['y'][1]]},
+                                    initial_display_center=[(self.manager.testbed_config.size['x'][0] +
+                                                             self.manager.testbed_config.size['x'][1]) / 2,
+                                                            (self.manager.testbed_config.size['y'][0] +
+                                                             self.manager.testbed_config.size['y'][1]) / 2],
                                     tiles=True,
                                     tile_size=0.5,
                                     show_grid=False,
@@ -1607,13 +1620,232 @@ class RobotUI:
             x = data['x']
             y = data['y']
             safety_margin = 0.2
-            if safety_margin < x < testbed_size[0] - safety_margin and safety_margin < y < testbed_size[
-                1] - safety_margin:
-                self.robot.control.move_to(x, y)
+            if testbed_size['x'][0] < x < testbed_size['x'][1] and testbed_size['y'][0] < y < testbed_size['y'][1]:
+                self.robot.position_control.move_to(x, y)
             else:
                 self.logger.warning(f"Position out of bounds: {x}, {y}")
 
         self.map_widget.map.events.double_click.on(map_double_click)
+
+        # === POSITION CONTROL VISUALIZATION ===
+        # Colors for different waypoint types
+        WAYPOINT_COLORS = {
+            WaypointType.PASS: [0.2, 0.6, 1.0, 1.0],   # Blue for pass-through
+            WaypointType.STOP: [1.0, 0.4, 0.2, 1.0],   # Orange for stop
+        }
+        WAYPOINT_DIM_ALPHA = 0.3  # Alpha for completed waypoints
+        PATH_LINE_COLOR = [0.4, 0.7, 1.0, 0.6]  # Light blue for path lines
+        MOVE_TO_POINT_COLOR = [0.9, 0.3, 0.9, 1.0]  # Magenta for move_to_point target
+        TURN_TO_HEADING_COLOR = [0.2, 0.9, 0.5, 0.8]  # Green for turn_to_heading indicator
+
+        # Track path waypoint objects separately for completion dimming
+        self._path_waypoint_objects: list[Point] = []
+        self._path_line_objects: list[Line] = []
+
+        def _clear_position_objects():
+            """Clear all position control visualization objects"""
+            for obj in self._additional_map_objects:
+                try:
+                    self.map_widget.map.removeObject(obj)
+                except Exception:
+                    pass
+            self._additional_map_objects = []
+            self._path_waypoint_objects = []
+            self._path_line_objects = []
+
+        def _on_position_mode_changed(*args, **kwargs):
+            _clear_position_objects()
+
+        self.robot.position_control.events.mode_changed.on(_on_position_mode_changed)
+
+        def _on_path_loaded(path_data: PathData, *args, **kwargs):
+            """Visualize loaded path with waypoints and connecting lines"""
+            if not path_data or not path_data.waypoints:
+                return
+
+            _clear_position_objects()
+
+            prev_point = None
+            for i, wp in enumerate(path_data.waypoints):
+                # Create waypoint point
+                wp_color = WAYPOINT_COLORS.get(wp.type, WAYPOINT_COLORS[WaypointType.PASS]).copy()
+                point = Point(
+                    id=f"waypoint_{i}",
+                    x=wp.x,
+                    y=wp.y,
+                    size=0.06 if wp.type == WaypointType.STOP else 0.04,
+                    color=wp_color,
+                    border_color=[1, 1, 1, 0.8],
+                    border_width=2,
+                    show_name=False,
+                )
+                self.map_widget.map.addObject(point)
+                self._additional_map_objects.append(point)
+                self._path_waypoint_objects.append(point)
+
+                # Create line from previous waypoint
+                if prev_point is not None:
+                    line = Line(
+                        id=f"path_line_{i}",
+                        start=prev_point,
+                        end=point,
+                        color=PATH_LINE_COLOR,
+                        width=2,
+                        style='dashed',
+                        show_name=False,
+                    )
+                    self.map_widget.map.addObject(line)
+                    self._additional_map_objects.append(line)
+                    self._path_line_objects.append(line)
+
+                prev_point = point
+
+        self.robot.position_control.events.path_loaded.on(_on_path_loaded)
+
+        def _on_path_started(path_data: PathData, *args, **kwargs):
+            """Visualize started path (same as loaded, ensures visualization)"""
+            if not path_data or not path_data.waypoints:
+                return
+
+            # If waypoints aren't already visualized, visualize them
+            if not self._path_waypoint_objects:
+                _on_path_loaded(path_data)
+
+        self.robot.position_control.events.path_started.on(_on_path_started)
+
+        def _on_path_finished(*args, **kwargs):
+            """Clear path visualization when finished"""
+            _clear_position_objects()
+
+        self.robot.position_control.events.path_finished.on(_on_path_finished)
+        self.robot.position_control.events.path_aborted.on(_on_path_finished)
+        self.robot.position_control.events.path_timeout.on(_on_path_finished)
+
+        def _on_waypoint_completed(data: dict, *args, **kwargs):
+            """Dim completed waypoint"""
+            if data is None:
+                return
+            idx = data.get('index', 0)
+
+            # Dim the completed waypoint
+            if idx < len(self._path_waypoint_objects):
+                wp_obj = self._path_waypoint_objects[idx]
+                # Get current color and reduce alpha
+                current_color = wp_obj.config.get('color', [0.5, 0.5, 0.5, 1.0])
+                dimmed_color = current_color[:3] + [WAYPOINT_DIM_ALPHA]
+                wp_obj.updateConfig(color=dimmed_color)
+
+            # Also dim the line leading to this waypoint
+            if idx < len(self._path_line_objects):
+                line_obj = self._path_line_objects[idx]
+                current_color = line_obj.config.get('color', PATH_LINE_COLOR)
+                dimmed_color = current_color[:3] + [WAYPOINT_DIM_ALPHA]
+                line_obj.updateConfig(color=dimmed_color)
+
+        self.robot.position_control.events.waypoint_completed.on(_on_waypoint_completed)
+
+        def _on_move_to_point_started(command: MoveToPointCommand, *args, **kwargs):
+            """Show move_to_point target"""
+            if command is None:
+                return
+
+            point = Point(
+                id=f"move_to_target_{generate_uuid()[:8]}",
+                x=command.x,
+                y=command.y,
+                size=0.07,
+                color=MOVE_TO_POINT_COLOR,
+                border_color=[1, 1, 1, 0.9],
+                border_width=2,
+                shape='circle',
+                show_name=False,
+            )
+            self.map_widget.map.addObject(point)
+            self._additional_map_objects.append(point)
+
+        self.robot.position_control.events.move_to_point_started.on(_on_move_to_point_started)
+
+        def _on_move_to_point_completed(*args, **kwargs):
+            """Dim move_to_point target when completed"""
+            # Find and dim the target point (last added point with move_to color)
+            for obj in reversed(self._additional_map_objects):
+                if isinstance(obj, Point) and obj.id.startswith('move_to_target_'):
+                    current_color = obj.config.get('color', MOVE_TO_POINT_COLOR)
+                    dimmed_color = current_color[:3] + [WAYPOINT_DIM_ALPHA]
+                    obj.updateConfig(color=dimmed_color)
+                    break
+
+        self.robot.position_control.events.move_to_point_completed.on(_on_move_to_point_completed)
+        self.robot.position_control.events.move_to_point_timeout.on(_on_move_to_point_completed)
+
+        def _on_turn_to_heading_started(command: TurnToHeadingCommand, *args, **kwargs):
+            """Show turn_to_heading indicator as a line from robot"""
+            if command is None:
+                return
+
+            # Get current robot position
+            robot_x = self.robot_map_agent_estimated.data.get('x', 0)
+            robot_y = self.robot_map_agent_estimated.data.get('y', 0)
+
+            # Calculate endpoint of heading indicator line
+            import math
+            line_length = 0.3
+            end_x = robot_x + line_length * math.cos(command.heading)
+            end_y = robot_y + line_length * math.sin(command.heading)
+
+            # Create start point (at robot position, small)
+            start_point = Point(
+                id=f"heading_start_{generate_uuid()[:8]}",
+                x=robot_x,
+                y=robot_y,
+                size=0.02,
+                color=TURN_TO_HEADING_COLOR,
+                show_name=False,
+            )
+            self.map_widget.map.addObject(start_point)
+            self._additional_map_objects.append(start_point)
+
+            # Create end point (at target heading)
+            end_point = Point(
+                id=f"heading_end_{generate_uuid()[:8]}",
+                x=end_x,
+                y=end_y,
+                size=0.04,
+                color=TURN_TO_HEADING_COLOR,
+                border_color=[1, 1, 1, 0.8],
+                border_width=1,
+                shape='triangle',
+                show_name=False,
+            )
+            self.map_widget.map.addObject(end_point)
+            self._additional_map_objects.append(end_point)
+
+            # Create line between them
+            line = Line(
+                id=f"heading_line_{generate_uuid()[:8]}",
+                start=start_point,
+                end=end_point,
+                color=TURN_TO_HEADING_COLOR,
+                width=2,
+                style='solid',
+                show_name=False,
+            )
+            self.map_widget.map.addObject(line)
+            self._additional_map_objects.append(line)
+
+        self.robot.position_control.events.turn_to_heading_started.on(_on_turn_to_heading_started)
+
+        def _on_turn_to_heading_completed(*args, **kwargs):
+            """Dim turn_to_heading indicator when completed"""
+            # Find and dim the heading indicator objects
+            for obj in self._additional_map_objects:
+                if isinstance(obj, (Point, Line)) and ('heading_' in obj.id):
+                    current_color = obj.config.get('color', TURN_TO_HEADING_COLOR)
+                    dimmed_color = current_color[:3] + [WAYPOINT_DIM_ALPHA]
+                    obj.updateConfig(color=dimmed_color)
+
+        self.robot.position_control.events.turn_to_heading_completed.on(_on_turn_to_heading_completed)
+        self.robot.position_control.events.turn_to_heading_timeout.on(_on_turn_to_heading_completed)
 
         navigation_group = Widget_Group(widget_id='navigation_group',
                                         title='Navigation',
@@ -2164,16 +2396,12 @@ class RobotUI:
                 })
                 joystick_enable_button.updateConfig(text="Disable Joysticks")
 
-
-
         joystick_enable_button = Button(widget_id='joystick_enable_button',
                                         text='Enable Joysticks',
                                         color=[0.5, 0.3, 0.2],
                                         callback=joystick_enable_clicked)
 
         self.app_folder.addObject(joystick_enable_button, width=1, height=1, column=4)
-
-
 
         self.app.addFolder(self.app_folder)
 
@@ -2361,6 +2589,7 @@ class RobotUI:
     # ------------------------------------------------------------------------------------------------------------------
     def _start_control_config_update(self):
         """Start periodic update of the control config table every 1 second."""
+        return
         self._control_config_timer = None
 
         def update_config():
@@ -2467,7 +2696,10 @@ class RobotUI:
 
         except Exception as e:
             self.logger.warning(f"Failed to update control config table: {e}")
-            self._control_config_timer.stop()
+            try:
+                self._control_config_timer.stop()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
@@ -3049,12 +3281,18 @@ class BILBO_GUI_OverviewPage:
     def _on_testbed_initialized(self, *args, **kwargs):
         # Babylon
         testbed_size = self.manager.testbed_config.size
+
+        target_x = (testbed_size['x'][0] + testbed_size['x'][1]) / 2
+        target_y = (testbed_size['y'][0] + testbed_size['y'][1]) / 2
+        size_x = testbed_size['x'][1] - testbed_size['x'][0]
+        size_y = testbed_size['y'][1] - testbed_size['y'][0]
+
         self.babylon_visualization = BabylonVisualization(
             id='babylon', babylon_config=
             {
                 'title': 'BILBO Testbed',
                 'camera': {
-                    'target': [testbed_size[0] / 2, testbed_size[1] / 2, 0],
+                    'target': [target_x, target_y, 0],
                     'position': [1.5, -0.9, 1.334]
                 }
             }
@@ -3064,8 +3302,8 @@ class BILBO_GUI_OverviewPage:
         self.babylon_visualization.start()
 
         floor = SimpleFloor('floor',
-                            size_x=testbed_size[0],
-                            size_y=testbed_size[1],
+                            size_x=size_x,
+                            size_y=size_y,
                             origin=self.manager.testbed_config.origin_position)
         self.babylon_visualization.addObject(floor)
 
@@ -3113,13 +3351,17 @@ class BILBO_Application_GUI:
     port_forwarder: PortForwarder | None
 
     # === INIT =========================================================================================================
-    def __init__(self, host,
+    def __init__(self,
+                 settings,
+                 host,
                  testbed_manager: BILBO_TestbedManager,
                  cli: CLI = None,
                  joystick_control: BILBO_JoystickControl = None,
                  enable_mdns: bool = True,
                  mdns_hostname: str = MDNS_HOSTNAME,
                  mdns_use_port_80: bool = False):
+
+        self.application_settings = settings
         self.callbacks = BILBO_Application_GUI_Callbacks()
         self.host = host
         self.enable_mdns = enable_mdns
@@ -3228,7 +3470,8 @@ class BILBO_Application_GUI:
         self.robot_ui[robot.id] = RobotUI(robot=robot,
                                           manager=self.testbed_manager,
                                           gui=self.gui,
-                                          app=self.app)
+                                          app=self.app,
+                                          application_settings=self.application_settings)
 
         self.gui.callout_handler.add(callout_type=CalloutType.INFO,
                                      title='Robot Connected',

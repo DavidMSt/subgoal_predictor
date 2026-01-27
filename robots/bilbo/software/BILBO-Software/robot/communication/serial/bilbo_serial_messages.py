@@ -2,7 +2,8 @@ import ctypes
 import enum
 
 from core.communication.serial.serial_interface import SerialMessage, SerialCommandType
-from robot.lowlevel.stm32_control import bilbo_ll_control_data_t
+from robot.lowlevel.stm32_control import bilbo_ll_control_data_t, BILBO_Control_Event_Message, \
+    BILBO_PositionControl_Event_Message
 from robot.lowlevel.stm32_messages import *
 from core.utils.logging_utils import Logger
 
@@ -80,23 +81,6 @@ class BILBO_Error_Message(SerialMessage):
 
 
 # ======================================================================================================================
-
-
-class control_event_message_data_t(ctypes.Structure):
-    _fields_ = [
-        ("event", ctypes.c_uint8),
-        ("mode", ctypes.c_uint8),
-        ("data", bilbo_ll_control_data_t),
-        ("tick", ctypes.c_uint32)
-    ]
-
-
-class BILBO_Control_Event_Message(SerialMessage):
-    module = 1
-    address = BILBO_LL_MESSAGE_CONTROL_EVENT
-    command = SerialCommandType.UART_CMD_EVENT
-    data_type = control_event_message_data_t
-
-
-# ======================================================================================================================
-BILBO_SERIAL_MESSAGES = [BILBO_Debug_Message, BILBO_Sequencer_Event_Message, BILBO_Control_Event_Message]
+BILBO_SERIAL_MESSAGES = [BILBO_Debug_Message,
+                         BILBO_Sequencer_Event_Message,
+                         BILBO_Control_Event_Message, BILBO_PositionControl_Event_Message]
