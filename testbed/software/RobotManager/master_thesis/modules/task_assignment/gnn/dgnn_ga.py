@@ -8,7 +8,7 @@ from torch.utils.data import random_split, Subset
 
 from master_thesis.modules.task_assignment.gnn.helpers.graph_dataset import BipartiteAssignmentDataset, load_datasets
 from master_thesis.modules.task_assignment.gnn.helpers.train_utils import train_epoch, validate
-from master_thesis.modules.task_assignment.gnn.cost_computation import compute_cost_matrix
+from master_thesis.modules.task_assignment.gnn.cost_computation import compute_squared_cost_matrix
 
 class MLPModule(nn.Module):
     def __init__(self, input_dim, output_dim, hidden_dim = None) -> None:

@@ -10,7 +10,7 @@ from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
 from master_thesis.modules.task_assignment.gnn.helpers.loss_functions import dgnn_ga_loss, balanced_bce_loss
-from master_thesis.modules.task_assignment.gnn.cost_computation import compute_cost_matrix
+from master_thesis.modules.task_assignment.gnn.cost_computation import compute_squared_cost_matrix
 
 
 def generate_comm_edges(n_robots: int, density: float, device: torch.device) -> torch.Tensor:
@@ -100,7 +100,7 @@ def train_epoch(
             agent_pos_list, task_pos_list, labels_pg, n_a_per_g, n_t_per_g
         ):
             # Compute cost matrix
-            cost_matrix = compute_cost_matrix(agent_pos, task_pos)
+            cost_matrix = compute_squared_cost_matrix(agent_pos, task_pos)
 
             # Sample random communication density for this graph (paper: 20-100%)
             density = torch.empty(1).uniform_(*comm_density_range).item()
@@ -199,7 +199,7 @@ def validate(
             agent_pos_list, task_pos_list, labels_pg, n_a_per_g, n_t_per_g
         )):
             # Compute cost matrix
-            cost_matrix = compute_cost_matrix(agent_pos, task_pos)
+            cost_matrix = compute_squared_cost_matrix(agent_pos, task_pos)
 
             # Generate communication edges with specified density
             comm_edges = generate_comm_edges(int(n_a), comm_density, device)
