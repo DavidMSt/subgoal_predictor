@@ -10,15 +10,15 @@ optitrack:
 # Testbed configuration:
 # - type: Name of a predefined testbed (e.g., 'track', 'lab') or null for custom/infinite
 # - size: [width, height] in meters. Only used if type is null. If both are null, defaults to 10x10m
-testbed:
-  type: track
-  size: null
-
 #testbed:
 #  type: track
-#  size:
-#    x: [-1.5, 1.5]
-#    y: [-1.5, 1.5]
+#  size: null
+
+testbed:
+  type: null
+  size:
+    x: [-1.5, 1.5]
+    y: [-1.5, 1.5]
 
 
 # mDNS: Advertises the GUI on the local network via multicast DNS

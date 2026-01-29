@@ -38,8 +38,16 @@
             </div>
         </div>
 
+        <!-- Loading overlay for synchronized videos -->
+        <div v-if="experimentType === 'synchronized' && !allVideosReady" class="buffering-overlay">
+            <div class="buffering-content">
+                <div class="buffering-spinner"></div>
+                <div class="buffering-text">Buffering videos... {{ readyVideos }}/{{ experiment?.videos?.length || 0 }}</div>
+            </div>
+        </div>
+
         <!-- Normal grid view - Synchronized type -->
-        <div v-if="maximizedVideo === null && experimentType === 'synchronized'" class="video-grid" :class="gridClass">
+        <div v-if="maximizedVideo === null && experimentType === 'synchronized'" class="video-grid" :class="[gridClass, { 'videos-loading': !allVideosReady }]">
             <div
                 v-for="(video, index) in experiment.videos"
                 :key="index"
@@ -57,11 +65,15 @@
                     ref="videoRefs"
                     :src="`/videos/${video.file}`"
                     @loadedmetadata="onVideoLoaded(index)"
+                    @canplaythrough.once="onVideoCanPlayThrough(index)"
                     @timeupdate="onTimeUpdate(index)"
                     @ended="onVideoEnded"
                     @error="onVideoError(index, $event)"
-                    preload="metadata"
+                    @waiting="onVideoWaiting(index)"
+                    @canplay="onVideoCanPlay(index)"
+                    preload="auto"
                     playsinline
+                    muted
                 ></video>
                 <div v-if="videoErrors[index]" class="video-error">
                     Video not found: {{ video.file }}
@@ -88,10 +100,11 @@
                     ref="collectionVideoRefs"
                     :src="`/videos/${video.file}`"
                     @loadedmetadata="onCollectionVideoLoaded(index)"
+                    @loadeddata="onCollectionVideoLoadedData(index)"
                     @timeupdate="onCollectionTimeUpdate(index)"
                     @ended="onCollectionVideoEnded(index)"
                     @error="onVideoError(index, $event)"
-                    preload="metadata"
+                    preload="auto"
                     playsinline
                 ></video>
                 <!-- Center play button overlay -->
@@ -120,7 +133,14 @@
         </div>
 
         <!-- Maximized view (Zoom-style spotlight) - Synchronized type -->
-        <div v-else-if="experimentType === 'synchronized'" class="spotlight-view">
+        <div v-else-if="experimentType === 'synchronized'" class="spotlight-view" :class="{ 'videos-loading': !allSpotlightVideosReady }">
+            <!-- Loading overlay for spotlight videos -->
+            <div v-if="!allSpotlightVideosReady" class="buffering-overlay spotlight-buffering">
+                <div class="buffering-content">
+                    <div class="buffering-spinner"></div>
+                    <div class="buffering-text">Buffering... {{ spotlightReadyVideos }}/{{ (experiment?.videos?.length || 0) * 2 }}</div>
+                </div>
+            </div>
             <div class="spotlight-main">
                 <!-- Render all videos, show only the selected one -->
                 <div
@@ -141,9 +161,13 @@
                         ref="spotlightVideoRefs"
                         :src="`/videos/${video.file}`"
                         @loadedmetadata="onSpotlightVideoLoaded(index)"
+                        @canplaythrough.once="onSpotlightCanPlayThrough(index)"
                         @timeupdate="onSpotlightTimeUpdate(index)"
+                        @waiting="onVideoWaiting(index)"
+                        @canplay="onVideoCanPlay(index)"
                         preload="auto"
                         playsinline
+                        muted
                     ></video>
                 </div>
             </div>
@@ -160,6 +184,7 @@
                         ref="sidebarVideoRefs"
                         :src="`/videos/${video.file}`"
                         @loadedmetadata="onSidebarVideoLoaded(index)"
+                        @canplaythrough.once="onSidebarCanPlayThrough(index)"
                         preload="auto"
                         playsinline
                         muted
@@ -186,7 +211,9 @@
                         @loadedmetadata="onCollectionSpotlightLoaded"
                         @timeupdate="onCollectionSpotlightTimeUpdate"
                         @ended="onCollectionSpotlightEnded"
-                        preload="metadata"
+                        @waiting="onCollectionSpotlightWaiting"
+                        @canplay="onCollectionSpotlightCanPlay"
+                        preload="auto"
                         playsinline
                     ></video>
                     <!-- Center play button overlay -->
@@ -210,7 +237,7 @@
                     <div class="sidebar-label">{{ video.name }}</div>
                     <video
                         :src="`/videos/${video.file}`"
-                        preload="metadata"
+                        preload="auto"
                         playsinline
                         muted
                     ></video>
@@ -221,14 +248,16 @@
         <!-- Controls for synchronized type -->
         <div v-if="experimentType === 'synchronized'" class="controls-container">
             <div class="timeline-controls">
-                <button class="play-btn" @click="togglePlayPause">
-                    <span v-if="isPlaying" class="pause-icon">&#10074;&#10074;</span>
+                <button class="play-btn" :class="{ loading: !isReadyToPlay }" @click="togglePlayPause" :disabled="!isReadyToPlay">
+                    <span v-if="!isReadyToPlay" class="loading-spinner"></span>
+                    <span v-else-if="isPlaying" class="pause-icon">&#10074;&#10074;</span>
                     <span v-else class="play-icon">&#9654;</span>
                 </button>
 
                 <div class="timeline-wrapper">
                     <div class="time-display">
                         {{ formatTime(currentTime) }} / {{ formatTime(duration) }}
+                        <span v-if="isBuffering && isPlaying" class="buffering-badge">Buffering...</span>
                     </div>
 
                     <div class="timeline-with-markers">
@@ -408,6 +437,8 @@ const duration = ref(0)
 const playbackSpeed = ref(1)
 const videoErrors = ref({})
 const loadedVideos = ref(0)
+const readyVideos = ref(0)
+const spotlightReadyVideos = ref(0)
 const maximizedVideo = ref(null)
 const speedDropdownOpen = ref(false)
 const isMuted = ref(false)
@@ -427,6 +458,13 @@ const collectionSpotlightDuration = ref(0)
 // Dragging state for timeline scrubbing
 const isDragging = ref(false)
 const wasPlayingBeforeDrag = ref(false)
+
+// Sync interval for keeping videos aligned
+let syncInterval = null
+const SYNC_THRESHOLD = 0.15 // seconds - resync if drift exceeds this
+const SYNC_COOLDOWN = 500 // ms - minimum time between resyncs per video
+const lastSyncTime = {} // track last sync time per video index
+const videosBuffering = ref({}) // track which videos are buffering
 const draggingCollectionIndex = ref(null)
 const collectionWasPlayingBeforeDrag = ref(false)
 const isDraggingSpotlight = ref(false)
@@ -436,6 +474,27 @@ const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]
 
 const experimentType = computed(() => {
     return experiment.value?.type || 'synchronized'
+})
+
+const allVideosReady = computed(() => {
+    if (!experiment.value?.videos) return false
+    const totalVideos = experiment.value.videos.length
+    return readyVideos.value >= totalVideos
+})
+
+const allSpotlightVideosReady = computed(() => {
+    if (!experiment.value?.videos || maximizedVideo.value === null) return false
+    // In spotlight mode, we need main videos + sidebar videos = 2x total
+    const totalVideos = experiment.value.videos.length * 2
+    return spotlightReadyVideos.value >= totalVideos
+})
+
+// Combined ready state for current view mode
+const isReadyToPlay = computed(() => {
+    if (maximizedVideo.value !== null) {
+        return allSpotlightVideosReady.value
+    }
+    return allVideosReady.value
 })
 
 const gridClass = computed(() => {
@@ -456,6 +515,10 @@ const progressPercent = computed(() => {
 const collectionSpotlightProgress = computed(() => {
     if (collectionSpotlightDuration.value === 0) return 0
     return (collectionSpotlightTime.value / collectionSpotlightDuration.value) * 100
+})
+
+const isBuffering = computed(() => {
+    return Object.values(videosBuffering.value).some(v => v)
 })
 
 function goBack() {
@@ -490,9 +553,52 @@ function onVideoLoaded(index) {
         if (video.duration > duration.value) {
             duration.value = video.duration
         }
-        // Apply saved volume settings
-        video.muted = isMuted.value
+        // Volume will be applied when playing (videos start muted for iOS compatibility)
         video.volume = volume.value
+    }
+}
+
+function onVideoCanPlayThrough(index) {
+    readyVideos.value++
+}
+
+function onVideoWaiting(index) {
+    // Video is buffering - track it and pause all if playing
+    videosBuffering.value[index] = true
+    if (isPlaying.value && Object.values(videosBuffering.value).some(v => v)) {
+        // At least one video is buffering - pause all to let them catch up
+        const videos = getAllVideos()
+        videos.forEach(video => {
+            if (video && !video.paused) {
+                video.pause()
+            }
+        })
+    }
+}
+
+function onVideoCanPlay(index) {
+    // Video finished buffering
+    videosBuffering.value[index] = false
+
+    // If we were playing and all videos are now ready, resume
+    if (isPlaying.value && !Object.values(videosBuffering.value).some(v => v)) {
+        const videos = getAllVideos()
+        const masterTime = videos[0]?.currentTime || currentTime.value
+
+        // Sync all videos to master time before resuming
+        videos.forEach((video, idx) => {
+            if (video) {
+                video.currentTime = masterTime
+            }
+        })
+
+        // Resume playback
+        Promise.all(videos.map(video => {
+            if (video) {
+                return video.play().catch(e => console.log('Resume play error:', e))
+            }
+            return Promise.resolve()
+        }))
     }
 }
 
@@ -501,8 +607,11 @@ function onVideoError(index, event) {
 }
 
 function onTimeUpdate(index) {
-    if (index === 0 && videoRefs.value[0]) {
-        currentTime.value = videoRefs.value[0].currentTime
+    // Only track time from video 0 (master) to prevent playhead jitter
+    if (index !== 0) return
+    const video = videoRefs.value[0]
+    if (video) {
+        currentTime.value = video.currentTime
     }
 }
 
@@ -512,15 +621,25 @@ function onSpotlightVideoLoaded(index) {
         if (video.duration > duration.value) {
             duration.value = video.duration
         }
-        video.muted = isMuted.value
+        // Volume will be applied when playing (videos start muted for iOS compatibility)
         video.volume = volume.value
     }
 }
 
+function onSpotlightCanPlayThrough(index) {
+    spotlightReadyVideos.value++
+}
+
+function onSidebarCanPlayThrough(index) {
+    spotlightReadyVideos.value++
+}
+
 function onSpotlightTimeUpdate(index) {
-    // Only update time from the currently visible video
-    if (index === maximizedVideo.value && spotlightVideoRefs.value[index]) {
-        currentTime.value = spotlightVideoRefs.value[index].currentTime
+    // Only track time from video 0 (master) to prevent playhead jitter
+    if (index !== 0) return
+    const video = spotlightVideoRefs.value[0]
+    if (video) {
+        currentTime.value = video.currentTime
     }
 }
 
@@ -537,6 +656,7 @@ function onSidebarVideoLoaded(index) {
 }
 
 function onVideoEnded() {
+    stopSyncInterval()
     isPlaying.value = false
 }
 
@@ -563,9 +683,72 @@ function togglePlayPause() {
     }
 }
 
+function syncVideos() {
+    // Sync all videos to master (video 0)
+    const videos = getAllVideos()
+    if (!videos || videos.length < 2) return
+
+    const master = videos[0]
+    if (!master || master.paused) return
+
+    // If any video is buffering, don't try to sync - let buffering detection handle it
+    if (Object.values(videosBuffering.value).some(v => v)) return
+
+    const masterTime = master.currentTime
+    const now = Date.now()
+
+    for (let i = 1; i < videos.length; i++) {
+        const video = videos[i]
+        if (!video) continue
+
+        // Skip if this video is buffering (readyState < 3 means not enough data)
+        if (video.readyState < 3) continue
+
+        const drift = Math.abs(video.currentTime - masterTime)
+        if (drift > SYNC_THRESHOLD) {
+            // Check cooldown to prevent rapid re-syncing
+            const lastSync = lastSyncTime[i] || 0
+            if (now - lastSync > SYNC_COOLDOWN) {
+                // Use playbackRate adjustment for small drifts to avoid jumps
+                if (drift < 0.5) {
+                    // Gently speed up or slow down to catch up
+                    const targetRate = video.currentTime < masterTime ? 1.05 : 0.95
+                    video.playbackRate = playbackSpeed.value * targetRate
+                    // Reset to normal after a short delay
+                    setTimeout(() => {
+                        if (video) video.playbackRate = playbackSpeed.value
+                    }, 200)
+                } else {
+                    // Large drift - need to hard sync
+                    video.currentTime = masterTime
+                }
+                lastSyncTime[i] = now
+            }
+        }
+    }
+}
+
+function startSyncInterval() {
+    stopSyncInterval()
+    // Clear cooldown tracking
+    Object.keys(lastSyncTime).forEach(k => delete lastSyncTime[k])
+    // Check sync every 250ms for smoother playback
+    syncInterval = setInterval(syncVideos, 250)
+}
+
+function stopSyncInterval() {
+    if (syncInterval) {
+        clearInterval(syncInterval)
+        syncInterval = null
+    }
+}
+
 function playAll() {
     const videos = getAllVideos()
     if (!videos || videos.length === 0) return
+
+    // Reset buffering state
+    Object.keys(videosBuffering.value).forEach(k => delete videosBuffering.value[k])
 
     // If video ended (at or near the end), restart from beginning
     let targetTime = currentTime.value
@@ -574,17 +757,41 @@ function playAll() {
         currentTime.value = 0
     }
 
-    videos.forEach(video => {
+    // For iOS compatibility: mute all videos except the first one
+    // iOS only allows one video with audio, but multiple muted videos can play
+    videos.forEach((video, index) => {
         if (video) {
             video.currentTime = targetTime
             video.playbackRate = playbackSpeed.value
-            video.play().catch(e => console.log('Play error:', e))
+            // First video keeps user's mute preference, others are force-muted for iOS
+            if (index === 0) {
+                video.muted = isMuted.value
+                video.volume = volume.value
+            } else {
+                video.muted = true
+            }
         }
     })
-    isPlaying.value = true
+
+    // Start all videos using Promise.all for proper synchronization
+    const playPromises = videos.map(video => {
+        if (video) {
+            return video.play().catch(e => {
+                console.log('Play error:', e)
+                return null
+            })
+        }
+        return Promise.resolve()
+    })
+
+    Promise.all(playPromises).then(() => {
+        isPlaying.value = true
+        startSyncInterval()
+    })
 }
 
 function pauseAll() {
+    stopSyncInterval()
     const videos = getAllVideos()
     videos.forEach(video => {
         if (video) video.pause()
@@ -743,16 +950,19 @@ function maximizeVideo(index) {
     const time = currentTime.value
 
     pauseAll()
+    spotlightReadyVideos.value = 0  // Reset ready state for spotlight videos
     maximizedVideo.value = index
 
     nextTick(() => {
         // Sync all spotlight videos to current time
+        // Only first video can have audio (iOS compatibility)
         const mainVideos = spotlightVideoRefs.value.filter(v => v)
-        mainVideos.forEach(video => {
+        mainVideos.forEach((video, idx) => {
             video.currentTime = time
-            video.muted = isMuted.value
             video.volume = volume.value
             video.playbackRate = playbackSpeed.value
+            // Only first video respects mute setting, others muted for iOS
+            video.muted = idx === 0 ? isMuted.value : true
         })
 
         // Sync sidebar videos (always muted)
@@ -767,13 +977,14 @@ function maximizeVideo(index) {
 
         if (wasPlaying) {
             setTimeout(() => {
-                mainVideos.forEach(video => {
+                // Use Promise.all for proper iOS synchronization
+                const allVideos = [...mainVideos, ...sidebarVideos]
+                Promise.all(allVideos.map(video =>
                     video.play().catch(e => console.log('Play error:', e))
+                )).then(() => {
+                    isPlaying.value = true
+                    startSyncInterval()
                 })
-                sidebarVideos.forEach(video => {
-                    video.play().catch(e => console.log('Play error:', e))
-                })
-                isPlaying.value = true
             }, 50)
         }
     })
@@ -815,6 +1026,16 @@ function onCollectionVideoLoaded(index) {
         // Apply saved volume settings
         videos[index].muted = isMuted.value
         videos[index].volume = volume.value
+    }
+}
+
+function onCollectionVideoLoadedData(index) {
+    // Force render the first frame as a thumbnail
+    // This fixes the issue where videos show as black on iOS until played
+    const videos = collectionVideoRefs.value
+    if (videos && videos[index]) {
+        // Seek to very start to ensure first frame is rendered
+        videos[index].currentTime = 0.001
     }
 }
 
@@ -1012,6 +1233,19 @@ function onCollectionSpotlightEnded() {
     collectionSpotlightPlaying.value = false
 }
 
+function onCollectionSpotlightWaiting() {
+    // Video is buffering - show loading state but keep playing state
+    // The video element will automatically resume when buffer is ready
+}
+
+function onCollectionSpotlightCanPlay() {
+    // Video finished buffering and is ready to play
+    // If we should be playing, ensure playback continues
+    if (collectionSpotlightPlaying.value && collectionSpotlightRef.value?.paused) {
+        collectionSpotlightRef.value.play().catch(e => console.log('Resume play error:', e))
+    }
+}
+
 function toggleCollectionSpotlight() {
     if (!collectionSpotlightRef.value) return
 
@@ -1195,26 +1429,32 @@ function setVolume(event) {
 
 function applyVolumeToAllVideos() {
     // Apply to synchronized videos (grid mode)
+    // Only first video can have audio (iOS compatibility), others stay muted
     if (videoRefs.value) {
-        videoRefs.value.forEach(video => {
+        videoRefs.value.forEach((video, index) => {
             if (video) {
-                video.muted = isMuted.value
                 video.volume = volume.value
+                // Only first video respects mute setting, others stay muted for iOS
+                if (index === 0) {
+                    video.muted = isMuted.value
+                }
             }
         })
     }
 
     // Apply to spotlight videos (maximized mode)
     if (spotlightVideoRefs.value) {
-        spotlightVideoRefs.value.forEach(video => {
+        spotlightVideoRefs.value.forEach((video, index) => {
             if (video) {
-                video.muted = isMuted.value
                 video.volume = volume.value
+                if (index === 0) {
+                    video.muted = isMuted.value
+                }
             }
         })
     }
 
-    // Apply to collection videos
+    // Apply to collection videos (each plays independently, so all can have audio)
     if (collectionVideoRefs.value) {
         collectionVideoRefs.value.forEach(video => {
             if (video) {
@@ -1247,7 +1487,7 @@ function handleKeydown(event) {
                 toggleCollectionSpotlight()
             }
             // In grid view for collection, space does nothing (use individual buttons)
-        } else {
+        } else if (isReadyToPlay.value) {
             togglePlayPause()
         }
     } else if (event.code === 'ArrowLeft') {
@@ -1283,6 +1523,8 @@ async function loadExperiment() {
     duration.value = 0
     videoErrors.value = {}
     loadedVideos.value = 0
+    readyVideos.value = 0
+    spotlightReadyVideos.value = 0
     maximizedVideo.value = null
     collectionPlaying.value = {}
     collectionTimes.value = {}
@@ -1329,6 +1571,7 @@ onUnmounted(() => {
     window.removeEventListener('mouseup', stopCollectionDrag)
     window.removeEventListener('mousemove', onSpotlightDrag)
     window.removeEventListener('mouseup', stopSpotlightDrag)
+    stopSyncInterval()
     pauseAll()
 })
 </script>
@@ -1340,6 +1583,7 @@ onUnmounted(() => {
     flex: 1;
     min-height: 0;
     overflow: hidden;
+    position: relative;
 }
 
 .viewer-header {
@@ -1534,6 +1778,11 @@ onUnmounted(() => {
     gap: 12px;
     min-height: 0;
     overflow: hidden;
+    position: relative;
+}
+
+.spotlight-buffering {
+    border-radius: 12px;
 }
 
 .spotlight-main {
@@ -1651,6 +1900,23 @@ onUnmounted(() => {
     font-size: 13px;
     color: #888;
     font-variant-numeric: tabular-nums;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.buffering-badge {
+    font-size: 11px;
+    color: #f59e0b;
+    background: rgba(245, 158, 11, 0.15);
+    padding: 2px 8px;
+    border-radius: 4px;
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
 }
 
 .timeline-with-markers {
@@ -1878,6 +2144,79 @@ onUnmounted(() => {
     justify-content: center;
     height: 50vh;
     color: #888;
+}
+
+/* Buffering overlay */
+.buffering-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 20;
+    border-radius: 12px;
+}
+
+.buffering-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+}
+
+.buffering-spinner {
+    width: 48px;
+    height: 48px;
+    border: 3px solid #333;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.buffering-text {
+    color: #888;
+    font-size: 14px;
+}
+
+.video-grid.videos-loading {
+    opacity: 0.5;
+}
+
+.spotlight-view.videos-loading {
+    /* Don't dim spotlight view as much, just show overlay */
+}
+
+/* Play button loading state */
+.play-btn.loading {
+    background: #333;
+    cursor: wait;
+}
+
+.play-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.play-btn:disabled:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+.loading-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
 
 /* Center play button overlay for collection videos */

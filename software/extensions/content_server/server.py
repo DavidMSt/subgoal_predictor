@@ -259,8 +259,12 @@ def search_experiments():
 
 @app.route('/videos/<path:filename>')
 def serve_video(filename):
-    """Serve video files"""
-    return send_from_directory(VIDEOS_DIR, filename)
+    """Serve video files with caching headers"""
+    response = send_from_directory(VIDEOS_DIR, filename)
+    # Enable browser caching for video files
+    response.headers['Cache-Control'] = 'public, max-age=31536000'
+    response.headers['Accept-Ranges'] = 'bytes'
+    return response
 
 
 @app.route('/thumbnails/<path:filename>')
@@ -306,7 +310,7 @@ if __name__ == '__main__':
     print(f"Experiments file: {EXPERIMENTS_FILE}")
 
     # Start Vite dev server
-    start_vite_dev_server(port=9300, host="localhost")
+    start_vite_dev_server(port=9300, host="0.0.0.0")
     atexit.register(stop_vite_dev_server)
 
     # Start Flask server
