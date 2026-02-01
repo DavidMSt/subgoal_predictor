@@ -37,6 +37,10 @@ Battery_ADC battery_adc;
 elapsedMillis timer_test = 10000;
 elapsedMillis timer_battery_adc = 0;
 
+// Previous state for external RGB LEDs (for change detection)
+static uint8_t prev_extern_rgb[16][3] = {{0}};
+static bool extern_rgb_initialized = false;
+
 /* ================================================================================= */
 void firmware_init() {
 
@@ -112,12 +116,16 @@ void firmware_update() {
 		timer_led_update = 0;
 		updateInternRGBLEDsFromRegisters();
 		updateStatusLEDFromRegisters();
-		update_external_rgb_led();
+		bool extern_changed = update_external_rgb_led();
 
-//
-		neopixel_extern.update();
-		neopixel_extern.send();
-		HAL_Delay(10);
+		// Only update and send external LEDs if colors have changed
+		if (extern_changed) {
+			neopixel_extern.update();
+			neopixel_extern.send();
+			HAL_Delay(10);
+		}
+
+		// Internal LEDs (status indicators) - always update for blink support
 		neopixel_intern.update();
 		neopixel_intern.send();
 
@@ -215,16 +223,36 @@ void updateBuzzerFromRegisters() {
 
 }
 
-void update_external_rgb_led() {
+bool update_external_rgb_led() {
+	bool changed = false;
+
+	// On first call, force an update
+	if (!extern_rgb_initialized) {
+		extern_rgb_initialized = true;
+		changed = true;
+	}
+
 	for (int i = 0; i < 16; ++i) {
 		uint16_t base = REG_EXTERNAL_RGB_LED_1_CONFIG + (i * 6);
 		uint8_t r = register_map[base + 1]; // RED
 		uint8_t g = register_map[base + 2]; // GREEN
 		uint8_t b = register_map[base + 3]; // BLUE
 
+		// Check if this LED's color changed
+		if (r != prev_extern_rgb[i][0] ||
+			g != prev_extern_rgb[i][1] ||
+			b != prev_extern_rgb[i][2]) {
+			changed = true;
+			prev_extern_rgb[i][0] = r;
+			prev_extern_rgb[i][1] = g;
+			prev_extern_rgb[i][2] = b;
+		}
+
 		neopixel_extern.led[i].continious_output = 1; // color only, no blinking
 		neopixel_extern.led[i].setColor(r, g, b);
 	}
+
+	return changed;
 }
 
 void set_rgb_led_data(WS2812_LED *led, uint8_t reg_config, uint8_t reg_red,

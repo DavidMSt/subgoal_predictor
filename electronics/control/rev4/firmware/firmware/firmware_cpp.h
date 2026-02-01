@@ -26,7 +26,7 @@ void checkSD();
 void set_rgb_led_data(WS2812_LED *led, uint8_t reg_config, uint8_t reg_red,
 		uint8_t reg_green, uint8_t reg_blue, uint8_t reg_blink_time,
 		uint8_t reg_blink_counter);
-void update_external_rgb_led();
+bool update_external_rgb_led();
 void updateInternRGBLEDsFromRegisters();
 void updateBuzzerFromRegisters();
 void updateStatusLEDFromRegisters();

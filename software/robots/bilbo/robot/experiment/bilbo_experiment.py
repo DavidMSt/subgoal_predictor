@@ -57,6 +57,9 @@ from robots.bilbo.robot.experiment.experiment_definitions import (
     set_tic,
     wait_event,
     wait_until_tick,
+    func,
+    set_feedback_gain,
+    reset_control,
 )
 from robots.bilbo.robot.experiment.experiment_helpers import generate_random_input_trajectory
 
