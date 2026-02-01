@@ -93,7 +93,7 @@ class BILBO(MainProvider):
         # Set up the control board
         self.board = RobotControl_Board()
 
-        self.common = BILBO_Common(board=self.board)
+        self.common = BILBO_Common(bilbo=self, board=self.board)
 
         # Read the ID from the ID file
         self.id = self.common._get_id()

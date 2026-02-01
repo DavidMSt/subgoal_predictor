@@ -176,6 +176,33 @@ Common actions have shorthand forms for cleaner YAML files.
 # Parent action finishes when ALL sub-actions complete
 ```
 
+### Position Control
+
+```yaml
+# Move to position (shorthand)
+- move_to: [1.0, 0.5]                    # [x, y] coordinates
+- move_to: {x: 1.0, y: 0.5, max_speed: 0.3}
+
+# Turn to heading (shorthand)
+- turn_to: 1.57                          # radians
+- turn_to: {heading_deg: 90}             # degrees
+
+# Set waypoints (shorthand)
+- waypoints:
+    - [0.5, 0.0]                         # [x, y]
+    - [1.0, 0.5, "STOP"]                 # [x, y, type]
+    - [1.5, 0.0, 0.9]                    # [x, y, weight]
+    - [2.0, 0.5, "STOP", 0.8]            # [x, y, type, weight]
+    - {x: 2.5, y: 0.0, type: PASS, weight: 0.75}  # full dict
+
+# Load path from file (shorthand)
+- path: "waypoints.yaml"
+- path: {waypoints: [...], start: true}
+
+# Stop path (shorthand)
+- stop_path:
+```
+
 ---
 
 ## All Action Types
@@ -427,6 +454,253 @@ Sub-actions support all shorthand syntax. The parallel action completes when ALL
 
 ---
 
+## Position Control Actions
+
+Position control actions require the robot to be in `POSITION` mode. These actions interface with the position control subsystem to move the robot to specific locations or follow paths.
+
+### `move_to` - Move to Position
+
+Moves the robot to a target position using position control.
+
+```yaml
+- type: move_to
+  x: 1.0
+  y: 0.5
+  max_speed: 0.3
+  timeout: 30.0
+  wait: true
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `x` | float | 0.0 | Target X coordinate [m] |
+| `y` | float | 0.0 | Target Y coordinate [m] |
+| `max_speed` | float | 0.0 | Maximum speed [m/s] (0 = use default) |
+| `timeout` | float | 0.0 | Command timeout [s] (0 = no timeout) |
+| `wait` | bool | true | If true, wait for completion before continuing |
+
+**Shorthand:**
+```yaml
+- move_to: [1.0, 0.5]                           # [x, y]
+- move_to: {x: 1.0, y: 0.5, max_speed: 0.3}     # with options
+```
+
+---
+
+### `turn_to` - Turn to Heading
+
+Rotates the robot in place to face a target heading.
+
+```yaml
+- type: turn_to
+  heading: 1.57
+  max_angular_speed: 2.0
+  timeout: 10.0
+  wait: true
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `heading` | float | 0.0 | Target heading [rad] |
+| `heading_deg` | float | None | Target heading [deg] (alternative to `heading`) |
+| `max_angular_speed` | float | 0.0 | Maximum turn rate [rad/s] (0 = use default) |
+| `timeout` | float | 0.0 | Command timeout [s] (0 = no timeout) |
+| `wait` | bool | true | If true, wait for completion before continuing |
+
+**Shorthand:**
+```yaml
+- turn_to: 1.57                                 # heading in radians
+- turn_to: {heading_deg: 90}                    # heading in degrees
+- turn_to: {heading_deg: 90, max_angular_speed: 2.0}
+```
+
+---
+
+### `set_waypoints` - Set Path Waypoints
+
+Sets waypoints for path following. Must be in POSITION mode.
+
+```yaml
+- type: set_waypoints
+  clear_existing: true
+  waypoints:
+    - x: 0.5
+      y: 0.0
+      type: PASS
+      weight: 0.75
+    - x: 1.0
+      y: 0.5
+      type: STOP
+      weight: 0.9
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `waypoints` | list | [] | List of waypoint definitions |
+| `clear_existing` | bool | true | Clear existing waypoints before adding |
+
+**Waypoint format options:**
+```yaml
+# Minimal (just coordinates)
+- [0.5, 0.0]
+
+# With type
+- [1.0, 0.5, "STOP"]        # type: "PASS" or "STOP"
+
+# With weight
+- [1.5, 0.0, 0.9]           # weight: 0.0-1.0 (corner sharpness)
+
+# With type and weight
+- [2.0, 0.5, "STOP", 0.8]
+
+# Full dict format
+- x: 2.5
+  y: 0.0
+  type: PASS                # PASS = smooth through, STOP = stop at waypoint
+  weight: 0.75              # 1.0 = sharp corner, 0.0 = smooth curve
+```
+
+**Shorthand:**
+```yaml
+- waypoints:
+    - [0.5, 0.0]
+    - [1.0, 0.5, "STOP"]
+    - [1.5, 0.0, 0.9]
+```
+
+---
+
+### `start_path` - Start Path Following
+
+Starts following the loaded waypoints.
+
+```yaml
+- type: start_path
+  allow_reverse: false
+  timeout: 60.0
+  max_speed: 0.3
+  wait: true
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `allow_reverse` | bool | false | Allow robot to drive backwards when efficient |
+| `timeout` | float | 0.0 | Path execution timeout [s] (0 = no timeout) |
+| `max_speed` | float | 0.0 | Maximum speed [m/s] (0 = use default) |
+| `wait` | bool | true | If true, wait for path completion before continuing |
+
+---
+
+### `load_path` - Load Path from Dict or File
+
+Loads waypoints from a path definition (dict or file) and optionally starts following.
+
+```yaml
+# Load from inline definition
+- type: load_path
+  start: true
+  clear_existing: true
+  path:
+    max_speed: 0.3
+    allow_reverse: false
+    timeout: 60.0
+    waypoints:
+      - [0.5, 0.0]
+      - [1.0, 0.5]
+      - [1.5, 0.0, "STOP"]
+
+# Load from file
+- type: load_path
+  path: "waypoints.yaml"
+  start: true
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `path` | dict/string | required | Path definition dict or file path (YAML/JSON) |
+| `start` | bool | false | Start path immediately after loading |
+| `clear_existing` | bool | true | Clear existing waypoints before loading |
+| `allow_reverse` | bool | None | Override allow_reverse setting |
+| `timeout` | float | None | Override timeout setting |
+| `max_speed` | float | None | Override max_speed setting |
+| `wait` | bool | true | If start=true, wait for path completion |
+
+**Path file format (YAML):**
+```yaml
+max_speed: 0.3              # optional [m/s]
+allow_reverse: false        # optional
+timeout: 60.0               # optional [s]
+waypoints:
+  - x: 0.5
+    y: 0.0
+  - x: 1.0
+    y: 0.5
+    type: STOP
+    weight: 0.9
+```
+
+**Shorthand:**
+```yaml
+# Load and start from file
+- path: "waypoints.yaml"
+
+# Load inline with start
+- path:
+    start: true
+    waypoints:
+      - [0.5, 0.0]
+      - [1.0, 0.5, "STOP"]
+```
+
+---
+
+### `stop_path` - Stop/Abort Path
+
+Aborts the current path execution.
+
+```yaml
+- type: stop_path
+```
+
+No parameters.
+
+**Shorthand:**
+```yaml
+- stop_path:
+```
+
+---
+
+### `wait_position_event` - Wait for Position Control Event
+
+Waits for a specific position control event.
+
+```yaml
+- type: wait_position_event
+  event: path_finished
+  timeout: 120.0
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `event` | string | "" | Event name to wait for |
+| `timeout` | float | None | Timeout in seconds |
+
+**Available events:**
+- `path_finished` - Path completed successfully
+- `path_timeout` - Path execution timed out
+- `path_aborted` - Path was aborted
+- `path_started` - Path execution started
+- `move_to_point_completed` - Move-to command completed
+- `move_to_point_timeout` - Move-to command timed out
+- `turn_to_heading_completed` - Turn-to command completed
+- `turn_to_heading_timeout` - Turn-to command timed out
+- `waypoint_completed` - A waypoint was completed
+- `waypoint_reached` - Robot reached a waypoint
+- `waypoint_passed` - Robot passed through a waypoint
+
+---
+
 ## Complete Examples
 
 ### Example 1: Simple Balance Test
@@ -566,6 +840,199 @@ actions:
     text: "Done"
 ```
 
+### Example 7: Simple Move To Position
+
+```yaml
+id: move_to_test
+description: Move to a single position
+actions:
+  - speak: "Moving to position"
+  - mode: POSITION
+  - wait: 1s
+  - move_to: [1.0, 0.5]
+  - speak: "Arrived"
+  - mode: OFF
+```
+
+### Example 8: Turn to Heading
+
+```yaml
+id: turn_test
+description: Turn to face different directions
+actions:
+  - speak: "Turning test"
+  - mode: POSITION
+  - wait: 1s
+  - turn_to: {heading_deg: 90}
+  - speak: "Facing East"
+  - turn_to: {heading_deg: 180}
+  - speak: "Facing South"
+  - turn_to: {heading_deg: 0}
+  - speak: "Facing North"
+  - mode: OFF
+```
+
+### Example 9: Path Following with Waypoints
+
+```yaml
+id: path_following
+description: Follow a rectangular path
+actions:
+  - speak: "Starting path following"
+  - mode: POSITION
+  - wait: 1s
+
+  # Set waypoints for a rectangle
+  - waypoints:
+      - [0.5, 0.0]
+      - [0.5, 0.5]
+      - [0.0, 0.5]
+      - [0.0, 0.0, "STOP"]
+
+  # Start following
+  - type: start_path
+    max_speed: 0.25
+    wait: true
+
+  - speak: "Path complete"
+  - mode: OFF
+```
+
+### Example 10: Load Path from File
+
+```yaml
+id: file_path_test
+description: Load and follow a path from file
+actions:
+  - speak: "Loading path from file"
+  - mode: POSITION
+  - wait: 1s
+
+  # Load and start path
+  - type: load_path
+    path: "~/robot/paths/figure_eight.yaml"
+    start: true
+    max_speed: 0.3
+    wait: true
+
+  - speak: "Path finished"
+  - mode: OFF
+```
+
+### Example 11: Complex Navigation Sequence
+
+```yaml
+id: navigation_demo
+description: Demonstrate various position control features
+timeout: 120.0
+actions:
+  - speak: "Navigation demonstration"
+  - mode: POSITION
+  - wait: 1s
+
+  # Move to starting position
+  - type: set_marker
+    marker_id: phase
+    marker_value: move_to_start
+  - move_to: {x: 0.5, y: 0.0, max_speed: 0.2}
+
+  # Turn to face the path direction
+  - type: set_marker
+    marker_id: phase
+    marker_value: align
+  - turn_to: {heading_deg: 45}
+
+  # Set up waypoints with different types
+  - type: set_marker
+    marker_id: phase
+    marker_value: path_setup
+  - waypoints:
+      - [0.7, 0.2]                    # Pass through
+      - [1.0, 0.5, 0.5]               # Smooth corner (low weight)
+      - [1.2, 0.3]                    # Pass through
+      - [1.0, 0.0, "STOP", 0.9]       # Stop with sharp approach
+
+  # Follow the path
+  - type: set_marker
+    marker_id: phase
+    marker_value: following
+  - type: start_path
+    max_speed: 0.25
+    allow_reverse: false
+    wait: true
+
+  # Return to origin
+  - type: set_marker
+    marker_id: phase
+    marker_value: return
+  - move_to: [0.0, 0.0]
+  - turn_to: {heading_deg: 0}
+
+  - speak: "Demo complete"
+  - mode: OFF
+```
+
+### Example 12: Path with Inline Definition
+
+```yaml
+id: inline_path
+description: Load path from inline definition
+actions:
+  - speak: "Inline path test"
+  - mode: POSITION
+  - wait: 1s
+
+  - type: load_path
+    start: true
+    wait: true
+    path:
+      max_speed: 0.3
+      allow_reverse: false
+      timeout: 60.0
+      waypoints:
+        - x: 0.5
+          y: 0.0
+        - x: 1.0
+          y: 0.5
+          type: PASS
+          weight: 0.6
+        - x: 0.5
+          y: 1.0
+        - x: 0.0
+          y: 0.5
+          type: STOP
+          weight: 0.9
+
+  - speak: "Finished"
+  - mode: OFF
+```
+
+### Example 13: Non-Blocking Position Commands
+
+```yaml
+id: async_navigation
+description: Position commands without waiting
+actions:
+  - mode: POSITION
+  - wait: 1s
+
+  # Start move without waiting
+  - type: move_to
+    x: 1.0
+    y: 0.5
+    wait: false
+
+  # Do other things while moving
+  - parallel:
+      - speak: "Moving in background"
+      - type: wait_position_event
+        event: move_to_point_completed
+        timeout: 30.0
+
+  - speak: "Arrived"
+  - mode: OFF
+```
+
 ---
 
 ## Tips and Best Practices
@@ -583,6 +1050,27 @@ actions:
 6. **Parallel for feedback** - Use parallel actions to provide audio feedback without blocking the main sequence.
 
 7. **Explicit IDs for dependencies** - When using `after`, give actions explicit IDs for clarity.
+
+### Position Control Tips
+
+8. **Set mode to POSITION first** - Position control actions require `mode: POSITION` before they can execute.
+
+9. **Use `wait: true` (default)** - Most position commands should wait for completion to ensure proper sequencing.
+
+10. **Set appropriate timeouts** - Position commands can take varying amounts of time; set timeouts to handle stuck situations.
+
+11. **Waypoint types matter**:
+    - Use `PASS` for smooth path following (robot curves through waypoints)
+    - Use `STOP` when the robot must come to a full stop at a waypoint
+
+12. **Waypoint weights control cornering**:
+    - `weight: 1.0` = sharp corner (follows waypoint closely)
+    - `weight: 0.0` = smooth curve (may cut corners significantly)
+    - `weight: 0.75` = balanced default
+
+13. **Path files for reusable routes** - Store frequently used paths in YAML files for easy reuse.
+
+14. **Use `wait_position_event` for complex logic** - When you need to react to specific events like `waypoint_completed`.
 
 ---
 

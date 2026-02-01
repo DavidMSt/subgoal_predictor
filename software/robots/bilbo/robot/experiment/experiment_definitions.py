@@ -136,7 +136,86 @@ def _expand_shorthand(d: dict | str) -> dict:
         expanded["actions"] = expanded.pop("parallel")
         return expanded
 
+    # move_to: [x, y] or move_to: {x: ..., y: ...} -> type: move_to
+    if "move_to" in expanded:
+        expanded["type"] = "move_to"
+        move_val = expanded.pop("move_to")
+        if isinstance(move_val, list) and len(move_val) >= 2:
+            expanded["x"] = move_val[0]
+            expanded["y"] = move_val[1]
+        elif isinstance(move_val, dict):
+            expanded.update(move_val)
+        return expanded
+
+    # turn_to: angle or turn_to: {heading: ...} -> type: turn_to
+    if "turn_to" in expanded:
+        expanded["type"] = "turn_to"
+        turn_val = expanded.pop("turn_to")
+        if isinstance(turn_val, (int, float)):
+            expanded["heading"] = turn_val
+        elif isinstance(turn_val, dict):
+            expanded.update(turn_val)
+        return expanded
+
+    # waypoints: [...] -> type: set_waypoints
+    if "waypoints" in expanded:
+        expanded["type"] = "set_waypoints"
+        wp_val = expanded.pop("waypoints")
+        expanded["waypoints"] = _normalize_waypoints(wp_val)
+        return expanded
+
+    # path: "file.yaml" or path: {...} -> type: load_path
+    if "path" in expanded:
+        expanded["type"] = "load_path"
+        return expanded
+
+    # stop_path -> type: stop_path
+    if "stop_path" in expanded:
+        expanded["type"] = "stop_path"
+        expanded.pop("stop_path")
+        return expanded
+
     return expanded
+
+
+def _normalize_waypoints(waypoints: list) -> list[dict]:
+    """Normalize waypoints to list of dicts with x, y, type, weight.
+
+    Supports shorthand formats:
+    - [x, y] -> {"x": x, "y": y}
+    - [x, y, "STOP"] -> {"x": x, "y": y, "type": "STOP"}
+    - [x, y, weight] -> {"x": x, "y": y, "weight": weight}
+    - [x, y, "STOP", weight] -> {"x": x, "y": y, "type": "STOP", "weight": weight}
+    - {"x": x, "y": y, ...} -> as-is
+    """
+    result = []
+    for wp in waypoints:
+        if isinstance(wp, dict):
+            # Already a dict, just ensure defaults
+            normalized = {
+                "x": wp.get("x", 0.0),
+                "y": wp.get("y", 0.0),
+                "type": wp.get("type", "PASS"),
+                "weight": wp.get("weight", 0.75),
+            }
+        elif isinstance(wp, (list, tuple)):
+            if len(wp) < 2:
+                raise ValueError(f"Waypoint must have at least x, y: {wp}")
+            normalized = {"x": wp[0], "y": wp[1], "type": "PASS", "weight": 0.75}
+            if len(wp) >= 3:
+                if isinstance(wp[2], str):
+                    normalized["type"] = wp[2].upper()
+                else:
+                    normalized["weight"] = wp[2]
+            if len(wp) >= 4:
+                if isinstance(wp[2], str):
+                    normalized["weight"] = wp[3]
+                else:
+                    normalized["type"] = wp[3].upper() if isinstance(wp[3], str) else "PASS"
+        else:
+            raise ValueError(f"Invalid waypoint format: {wp}")
+        result.append(normalized)
+    return result
 
 
 # ======================================================================================================================
@@ -226,13 +305,21 @@ class BILBO_OutputTrajectory:
 ActionType = Literal[
     "beep", "set_mode", "set_tic", "speak", "set_marker", "run_trajectory",
     "wait_time", "wait_ticks", "wait_until_tick", "wait_event", "set_input",
-    "set_velocity", "enable_external_input", "reset", "parallel"
+    "set_velocity", "enable_external_input", "reset", "parallel",
+    "func", "set_feedback_gain", "reset_control",
+    # Position control actions
+    "move_to", "turn_to", "set_waypoints", "start_path", "load_path", "stop_path",
+    "wait_position_event"
 ]
 
 ALLOWED_ACTIONS: list[str] = [
     "beep", "set_mode", "set_tic", "speak", "set_marker", "run_trajectory",
     "wait_time", "wait_ticks", "wait_until_tick", "wait_event", "set_input",
-    "set_velocity", "enable_external_input", "reset", "parallel"
+    "set_velocity", "enable_external_input", "reset", "parallel",
+    "func", "set_feedback_gain", "reset_control",
+    # Position control actions
+    "move_to", "turn_to", "set_waypoints", "start_path", "load_path", "stop_path",
+    "wait_position_event"
 ]
 
 
@@ -338,6 +425,100 @@ class ParallelActionParams:
     actions: list[dict] = dataclasses.field(default_factory=list)
 
 
+@dataclasses.dataclass
+class FuncActionParams:
+    """Parameters for func action (execute arbitrary function on robot)."""
+    function: str = ""
+    args: list = dataclasses.field(default_factory=list)
+    kwargs: dict = dataclasses.field(default_factory=dict)
+
+
+@dataclasses.dataclass
+class SetFeedbackGainActionParams:
+    """Parameters for set_feedback_gain action."""
+    K: list = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass
+class ResetControlActionParams:
+    """Parameters for reset_control action (no parameters needed)."""
+    pass
+
+
+# ======================================================================================================================
+# POSITION CONTROL ACTION PARAMS
+# ======================================================================================================================
+
+@dataclasses.dataclass
+class MoveToActionParams:
+    """Parameters for move_to action (move to a position)."""
+    x: float = 0.0
+    y: float = 0.0
+    max_speed: float = 0.0  # 0 = use default
+    timeout: float = 0.0  # 0 = no timeout
+    wait: bool = True  # If True, wait for completion before continuing
+
+
+@dataclasses.dataclass
+class TurnToActionParams:
+    """Parameters for turn_to action (turn to a heading)."""
+    heading: float = 0.0  # Target heading in radians
+    heading_deg: float | None = None  # Alternative: specify in degrees
+    max_angular_speed: float = 0.0  # 0 = use default
+    timeout: float = 0.0  # 0 = no timeout
+    wait: bool = True  # If True, wait for completion before continuing
+
+
+@dataclasses.dataclass
+class WaypointDef:
+    """A single waypoint definition."""
+    x: float
+    y: float
+    type: str = "PASS"  # "PASS" or "STOP"
+    weight: float = 0.75  # Corner sharpness [0-1], 1=sharp, 0=smooth
+
+
+@dataclasses.dataclass
+class SetWaypointsActionParams:
+    """Parameters for set_waypoints action."""
+    waypoints: list[dict | WaypointDef] = dataclasses.field(default_factory=list)
+    clear_existing: bool = True
+
+
+@dataclasses.dataclass
+class StartPathActionParams:
+    """Parameters for start_path action."""
+    allow_reverse: bool = False
+    timeout: float = 0.0  # 0 = no timeout
+    max_speed: float = 0.0  # 0 = use default
+    wait: bool = True  # If True, wait for path completion before continuing
+
+
+@dataclasses.dataclass
+class LoadPathActionParams:
+    """Parameters for load_path action."""
+    path: dict | str | None = None  # Path dict or file path
+    start: bool = False  # If True, start path after loading
+    clear_existing: bool = True
+    allow_reverse: bool | None = None  # Override for allow_reverse
+    timeout: float | None = None  # Override for timeout
+    max_speed: float | None = None  # Override for max_speed
+    wait: bool = True  # If True and start=True, wait for path completion
+
+
+@dataclasses.dataclass
+class StopPathActionParams:
+    """Parameters for stop_path action (abort current path)."""
+    pass
+
+
+@dataclasses.dataclass
+class WaitPositionEventActionParams:
+    """Parameters for wait_position_event action."""
+    event: str = ""  # Event name: path_finished, move_to_point_completed, turn_to_heading_completed, etc.
+    timeout: float | None = None
+
+
 # Mapping from action type string to parameter dataclass
 ACTION_PARAMS_MAPPING: dict[str, type] = {
     "beep": BeepActionParams,
@@ -355,6 +536,17 @@ ACTION_PARAMS_MAPPING: dict[str, type] = {
     "run_trajectory": RunTrajectoryActionParams,
     "reset": ResetActionParams,
     "parallel": ParallelActionParams,
+    "func": FuncActionParams,
+    "set_feedback_gain": SetFeedbackGainActionParams,
+    "reset_control": ResetControlActionParams,
+    # Position control actions
+    "move_to": MoveToActionParams,
+    "turn_to": TurnToActionParams,
+    "set_waypoints": SetWaypointsActionParams,
+    "start_path": StartPathActionParams,
+    "load_path": LoadPathActionParams,
+    "stop_path": StopPathActionParams,
+    "wait_position_event": WaitPositionEventActionParams,
 }
 
 
@@ -894,6 +1086,231 @@ def wait_until_tick(tick_target: int, **scheduling) -> ExperimentActionDefinitio
     )
 
 
+def func(function: str, args: list = None, kwargs: dict = None, **scheduling) -> ExperimentActionDefinition:
+    """Create a func action to execute an arbitrary function on the robot.
+
+    Args:
+        function: Dot-separated path to the function, e.g. ".control.set_mode"
+        args: Positional arguments to pass to the function
+        kwargs: Keyword arguments to pass to the function
+    """
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "func"),
+        type="func",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters={"function": function, "args": args or [], "kwargs": kwargs or {}}
+    )
+
+
+def set_feedback_gain(K: list, **scheduling) -> ExperimentActionDefinition:
+    """Create a set_feedback_gain action to set the state feedback gain K."""
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "set_feedback_gain"),
+        type="set_feedback_gain",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters={"K": K}
+    )
+
+
+def reset_control(**scheduling) -> ExperimentActionDefinition:
+    """Create a reset_control action to reload control parameters from config."""
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "reset_control"),
+        type="reset_control",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters={}
+    )
+
+
+# ======================================================================================================================
+# POSITION CONTROL HELPER FUNCTIONS
+# ======================================================================================================================
+
+def move_to(x: float, y: float, max_speed: float = 0.0, timeout: float = 0.0,
+            wait: bool = True, **scheduling) -> ExperimentActionDefinition:
+    """Create a move_to action to move to a position.
+
+    Args:
+        x, y: Target position in world coordinates [m]
+        max_speed: Maximum speed (0 = use default)
+        timeout: Command timeout (0 = no timeout)
+        wait: If True, wait for completion before continuing
+    """
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "move_to"),
+        type="move_to",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters={"x": x, "y": y, "max_speed": max_speed, "timeout": timeout, "wait": wait}
+    )
+
+
+def turn_to(heading: float = 0.0, heading_deg: float | None = None,
+            max_angular_speed: float = 0.0, timeout: float = 0.0,
+            wait: bool = True, **scheduling) -> ExperimentActionDefinition:
+    """Create a turn_to action to turn to a heading.
+
+    Args:
+        heading: Target heading in radians
+        heading_deg: Alternative: specify heading in degrees (overrides heading)
+        max_angular_speed: Maximum turn rate (0 = use default)
+        timeout: Command timeout (0 = no timeout)
+        wait: If True, wait for completion before continuing
+    """
+    params = {"max_angular_speed": max_angular_speed, "timeout": timeout, "wait": wait}
+    if heading_deg is not None:
+        params["heading_deg"] = heading_deg
+    else:
+        params["heading"] = heading
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "turn_to"),
+        type="turn_to",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters=params
+    )
+
+
+def set_waypoints(waypoints: list[dict | list | tuple], clear_existing: bool = True,
+                  **scheduling) -> ExperimentActionDefinition:
+    """Create a set_waypoints action.
+
+    Args:
+        waypoints: List of waypoints. Each can be:
+            - [x, y] - simple coordinate pair
+            - [x, y, "STOP"] - with type
+            - [x, y, weight] - with weight
+            - [x, y, "STOP", weight] - with both
+            - {"x": x, "y": y, "type": "PASS", "weight": 0.75} - full dict
+        clear_existing: If True, clear existing waypoints first
+    """
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "set_waypoints"),
+        type="set_waypoints",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters={"waypoints": _normalize_waypoints(waypoints), "clear_existing": clear_existing}
+    )
+
+
+def start_path(allow_reverse: bool = False, timeout: float = 0.0, max_speed: float = 0.0,
+               wait: bool = True, **scheduling) -> ExperimentActionDefinition:
+    """Create a start_path action to start following the loaded waypoints.
+
+    Args:
+        allow_reverse: If True, robot may drive backwards when efficient
+        timeout: Maximum time for path execution (0 = no timeout)
+        max_speed: Speed override (0 = use config default)
+        wait: If True, wait for path completion before continuing
+    """
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "start_path"),
+        type="start_path",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters={"allow_reverse": allow_reverse, "timeout": timeout, "max_speed": max_speed, "wait": wait}
+    )
+
+
+def load_path(path: dict | str, start: bool = False, clear_existing: bool = True,
+              allow_reverse: bool | None = None, timeout: float | None = None,
+              max_speed: float | None = None, wait: bool = True,
+              **scheduling) -> ExperimentActionDefinition:
+    """Create a load_path action to load waypoints from a dict or file.
+
+    Args:
+        path: Path dict or file path (YAML/JSON)
+        start: If True, automatically start path after loading
+        clear_existing: If True, clear existing waypoints before loading
+        allow_reverse: Override for allow_reverse setting
+        timeout: Override for timeout setting
+        max_speed: Override for max_speed setting
+        wait: If True and start=True, wait for path completion
+    """
+    params = {"path": path, "start": start, "clear_existing": clear_existing, "wait": wait}
+    if allow_reverse is not None:
+        params["allow_reverse"] = allow_reverse
+    if timeout is not None:
+        params["timeout"] = timeout
+    if max_speed is not None:
+        params["max_speed"] = max_speed
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "load_path"),
+        type="load_path",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters=params
+    )
+
+
+def stop_path(**scheduling) -> ExperimentActionDefinition:
+    """Create a stop_path action to abort the current path."""
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "stop_path"),
+        type="stop_path",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters={}
+    )
+
+
+def wait_position_event(event: str, timeout: float | None = None,
+                        **scheduling) -> ExperimentActionDefinition:
+    """Create a wait_position_event action to wait for a position control event.
+
+    Args:
+        event: Event name, one of:
+            - "path_finished", "path_timeout", "path_aborted"
+            - "move_to_point_completed", "move_to_point_timeout"
+            - "turn_to_heading_completed", "turn_to_heading_timeout"
+            - "waypoint_completed", "waypoint_reached"
+        timeout: Timeout in seconds (None = no timeout)
+    """
+    params = {"event": event}
+    if timeout is not None:
+        params["timeout"] = timeout
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "wait_position_event"),
+        type="wait_position_event",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters=params
+    )
+
+
 # ======================================================================================================================
 # EXPERIMENT BUILDER
 # ======================================================================================================================
@@ -976,6 +1393,46 @@ class ExperimentBuilder:
 
     def parallel(self, *actions: ExperimentActionDefinition | dict) -> "ExperimentBuilder":
         return self.add(parallel(list(actions), id=self._next_id("parallel")))
+
+    def func(self, function: str, args: list = None, kwargs: dict = None) -> "ExperimentBuilder":
+        return self.add(func(function, args, kwargs, id=self._next_id("func")))
+
+    def set_feedback_gain(self, K: list) -> "ExperimentBuilder":
+        return self.add(set_feedback_gain(K, id=self._next_id("set_feedback_gain")))
+
+    def reset_control(self) -> "ExperimentBuilder":
+        return self.add(reset_control(id=self._next_id("reset_control")))
+
+    # Position control methods
+    def move_to(self, x: float, y: float, max_speed: float = 0.0, timeout: float = 0.0,
+                wait: bool = True) -> "ExperimentBuilder":
+        return self.add(move_to(x, y, max_speed, timeout, wait, id=self._next_id("move_to")))
+
+    def turn_to(self, heading: float = 0.0, heading_deg: float | None = None,
+                max_angular_speed: float = 0.0, timeout: float = 0.0,
+                wait: bool = True) -> "ExperimentBuilder":
+        return self.add(turn_to(heading, heading_deg, max_angular_speed, timeout, wait,
+                               id=self._next_id("turn_to")))
+
+    def set_waypoints(self, waypoints: list[dict | list | tuple],
+                      clear_existing: bool = True) -> "ExperimentBuilder":
+        return self.add(set_waypoints(waypoints, clear_existing, id=self._next_id("set_waypoints")))
+
+    def start_path(self, allow_reverse: bool = False, timeout: float = 0.0, max_speed: float = 0.0,
+                   wait: bool = True) -> "ExperimentBuilder":
+        return self.add(start_path(allow_reverse, timeout, max_speed, wait, id=self._next_id("start_path")))
+
+    def load_path(self, path: dict | str, start: bool = False, clear_existing: bool = True,
+                  allow_reverse: bool | None = None, timeout: float | None = None,
+                  max_speed: float | None = None, wait: bool = True) -> "ExperimentBuilder":
+        return self.add(load_path(path, start, clear_existing, allow_reverse, timeout, max_speed, wait,
+                                 id=self._next_id("load_path")))
+
+    def stop_path(self) -> "ExperimentBuilder":
+        return self.add(stop_path(id=self._next_id("stop_path")))
+
+    def wait_position_event(self, event: str, timeout: float | None = None) -> "ExperimentBuilder":
+        return self.add(wait_position_event(event, timeout, id=self._next_id("wait_position_event")))
 
     def build(self) -> ExperimentDefinition:
         """Build and return the experiment definition."""

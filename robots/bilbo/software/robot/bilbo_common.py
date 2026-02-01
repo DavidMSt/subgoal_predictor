@@ -79,12 +79,13 @@ class BILBO_Common:
     tracker_connected: bool = False
 
     # === INIT =========================================================================================================
-    def __init__(self, board: RobotControl_Board):
+    def __init__(self, bilbo, board: RobotControl_Board):
         self.interaction_events = BILBO_Common_Interaction_Events()
         self.events = BILBO_Common_Events()
         self.callbacks = BILBO_Common_Callbacks()
 
         self.board = board
+        self.bilbo = bilbo
 
         self.id = self._get_id()
         self.config = self._get_config()
@@ -181,6 +182,53 @@ class BILBO_Common:
     # ------------------------------------------------------------------------------------------------------------------
     def end_of_step(self):
         self.callbacks.end_of_step.call()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def run_function_on_robot(self, function: str, *args, arguments: dict | None = None, **kwargs):
+        """
+        Run a function on the robot by navigating through the object hierarchy.
+
+        Args:
+            function: A dot-separated path to the function, e.g. ".control.set_mode"
+            *args: Positional arguments to pass to the function
+            arguments: Optional dict of keyword arguments (merged with kwargs)
+            **kwargs: Keyword arguments to pass to the function
+
+        Returns:
+            The return value of the called function
+
+        Example:
+            run_function_on_robot(".control.set_mode", mode=1)
+            run_function_on_robot(".control.set_mode", arguments={'mode': 1})
+        """
+        # Merge arguments dict with kwargs (kwargs takes precedence)
+        if arguments is not None:
+            kwargs = {**arguments, **kwargs}
+
+        # Remove leading dot if present and split the path
+        if function.startswith('.'):
+            function = function[1:]
+
+        parts = function.split('.')
+
+        # Start from bilbo and navigate through the path
+        obj = self.bilbo
+        for part in parts[:-1]:
+            if not hasattr(obj, part):
+                raise AttributeError(f"Object {type(obj).__name__} has no attribute '{part}'")
+            obj = getattr(obj, part)
+
+        # Get the final function
+        func_name = parts[-1]
+        if not hasattr(obj, func_name):
+            raise AttributeError(f"Object {type(obj).__name__} has no attribute '{func_name}'")
+
+        func = getattr(obj, func_name)
+
+        if not callable(func):
+            raise TypeError(f"'{func_name}' is not callable")
+
+        return func(*args, **kwargs)
 
     # === PRIVATE METHODS ==============================================================================================
     def _get_config(self) -> BILBO_Config:

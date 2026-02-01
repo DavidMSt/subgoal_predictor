@@ -169,6 +169,43 @@ def _expand_shorthand(d: dict | str, debug: bool = True) -> dict:
         expanded["actions"] = expanded.pop("parallel")
         return expanded
 
+    # move_to: [x, y] or move_to: {x: ..., y: ...} → type: move_to
+    if "move_to" in expanded:
+        expanded["type"] = "move_to"
+        move_val = expanded.pop("move_to")
+        if isinstance(move_val, list) and len(move_val) >= 2:
+            expanded["x"] = move_val[0]
+            expanded["y"] = move_val[1]
+        elif isinstance(move_val, dict):
+            expanded.update(move_val)
+        return expanded
+
+    # turn_to: angle or turn_to: {heading: ...} → type: turn_to
+    if "turn_to" in expanded:
+        expanded["type"] = "turn_to"
+        turn_val = expanded.pop("turn_to")
+        if isinstance(turn_val, (int, float)):
+            expanded["heading"] = turn_val
+        elif isinstance(turn_val, dict):
+            expanded.update(turn_val)
+        return expanded
+
+    # waypoints: [...] → type: set_waypoints
+    if "waypoints" in expanded:
+        expanded["type"] = "set_waypoints"
+        return expanded
+
+    # path: "file.yaml" or path: {...} → type: load_path
+    if "path" in expanded:
+        expanded["type"] = "load_path"
+        return expanded
+
+    # stop_path → type: stop_path
+    if "stop_path" in expanded:
+        expanded["type"] = "stop_path"
+        expanded.pop("stop_path")
+        return expanded
+
     return expanded
 
 
@@ -801,6 +838,503 @@ class ParallelAction(ExperimentAction):
         return cls(**kwargs, sub_actions=sub_actions)
 
 
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass(kw_only=True)
+class FuncAction(ExperimentAction):
+    """Execute a function on the robot by path, e.g. '.control.set_mode'."""
+    function: str
+    args: list = dataclasses.field(default_factory=list)
+    kwargs: dict = dataclasses.field(default_factory=dict)
+
+    def execute(self) -> bool:
+        self._on_started()
+        try:
+            result = self.experiment.experiment_handler.common.run_function_on_robot(
+                self.function, *self.args, **self.kwargs
+            )
+            self.data = result
+        except Exception as e:
+            self.logger.error(f"Failed to execute function '{self.function}': {e}")
+            self._on_error()
+            return True
+        self._on_finished()
+        return True
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "FuncAction":
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(
+            **kwargs,
+            function=definition.parameters.get('function', ''),
+            args=definition.parameters.get('args', []),
+            kwargs=definition.parameters.get('kwargs', {}),
+        )
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass(kw_only=True)
+class SetFeedbackGainAction(ExperimentAction):
+    """Set the state feedback gain K for balancing control."""
+    K: list
+
+    def execute(self) -> bool:
+        self._on_started()
+        result = self.experiment.experiment_handler.control.set_statefeedback_gain(self.K)
+        if not result:
+            self.logger.error(f"Failed to set state feedback gain to {self.K}")
+            self._on_error()
+            return True
+        self._on_finished()
+        return True
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "SetFeedbackGainAction":
+        kwargs = cls._common_init_kwargs(definition)
+        K = definition.parameters.get('K', None)
+        if K is None:
+            raise ValueError("SetFeedbackGainAction requires 'K' parameter")
+        return cls(
+            **kwargs,
+            K=K,
+        )
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass(kw_only=True)
+class ResetControlAction(ExperimentAction):
+    """Reload control parameters from the config file."""
+
+    def execute(self) -> bool:
+        self._on_started()
+        result = self.experiment.experiment_handler.control.load_and_set_default_config()
+        if result is None:
+            self.logger.error("Failed to reset control config")
+            self._on_error()
+            return True
+        self._on_finished()
+        return True
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "ResetControlAction":
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(**kwargs)
+
+
+# ======================================================================================================================
+# POSITION CONTROL ACTIONS
+# ======================================================================================================================
+
+def _normalize_waypoints(waypoints: list) -> list[dict]:
+    """Normalize waypoints to list of dicts with x, y, type, weight."""
+    result = []
+    for wp in waypoints:
+        if isinstance(wp, dict):
+            normalized = {
+                "x": wp.get("x", 0.0),
+                "y": wp.get("y", 0.0),
+                "type": wp.get("type", "PASS"),
+                "weight": wp.get("weight", 0.75),
+            }
+        elif isinstance(wp, (list, tuple)):
+            if len(wp) < 2:
+                raise ValueError(f"Waypoint must have at least x, y: {wp}")
+            normalized = {"x": wp[0], "y": wp[1], "type": "PASS", "weight": 0.75}
+            if len(wp) >= 3:
+                if isinstance(wp[2], str):
+                    normalized["type"] = wp[2].upper()
+                else:
+                    normalized["weight"] = wp[2]
+            if len(wp) >= 4:
+                if isinstance(wp[2], str):
+                    normalized["weight"] = wp[3]
+                else:
+                    normalized["type"] = wp[3].upper() if isinstance(wp[3], str) else "PASS"
+        else:
+            raise ValueError(f"Invalid waypoint format: {wp}")
+        result.append(normalized)
+    return result
+
+
+@dataclasses.dataclass(kw_only=True)
+class MoveToAction(ExperimentAction):
+    """Move to a position using position control."""
+    x: float = 0.0
+    y: float = 0.0
+    max_speed: float = 0.0
+    timeout: float = 0.0
+    wait: bool = True
+
+    def execute(self) -> bool:
+        self._on_started()
+        position_control = self.experiment.experiment_handler.control.position_control
+        result = position_control.move_to_point(
+            x=self.x, y=self.y,
+            max_speed=self.max_speed,
+            timeout=self.timeout
+        )
+        if not result:
+            self.logger.error(f"Failed to start move_to ({self.x}, {self.y})")
+            self._on_error()
+            return True
+
+        if self.wait:
+            # Wait for completion asynchronously
+            thread = threading.Thread(target=self._wait_for_completion, daemon=True)
+            thread.start()
+            return False
+        else:
+            self._on_finished()
+            return True
+
+    def _wait_for_completion(self):
+        position_control = self.experiment.experiment_handler.control.position_control
+        # Wait for either completion or timeout event
+        result = wait_for_events(
+            OR(position_control.events.move_to_point_completed,
+               position_control.events.move_to_point_timeout),
+            timeout=self.timeout if self.timeout > 0 else None
+        )
+        if result is TIMEOUT:
+            self.logger.warning(f"MoveToAction: wait timed out")
+        self._on_finished()
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "MoveToAction":
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(
+            **kwargs,
+            x=definition.parameters.get('x', 0.0),
+            y=definition.parameters.get('y', 0.0),
+            max_speed=definition.parameters.get('max_speed', 0.0),
+            timeout=definition.parameters.get('timeout', 0.0),
+            wait=definition.parameters.get('wait', True),
+        )
+
+
+@dataclasses.dataclass(kw_only=True)
+class TurnToAction(ExperimentAction):
+    """Turn to a heading using position control."""
+    heading: float = 0.0
+    max_angular_speed: float = 0.0
+    timeout: float = 0.0
+    wait: bool = True
+
+    def __post_init__(self):
+        super().__post_init__()
+        # Convert degrees to radians if heading_deg was provided
+        if hasattr(self, '_heading_deg') and self._heading_deg is not None:
+            import math
+            self.heading = math.radians(self._heading_deg)
+
+    def execute(self) -> bool:
+        self._on_started()
+        position_control = self.experiment.experiment_handler.control.position_control
+        result = position_control.turn_to_heading(
+            heading=self.heading,
+            max_angular_speed=self.max_angular_speed,
+            timeout=self.timeout
+        )
+        if not result:
+            self.logger.error(f"Failed to start turn_to ({self.heading} rad)")
+            self._on_error()
+            return True
+
+        if self.wait:
+            thread = threading.Thread(target=self._wait_for_completion, daemon=True)
+            thread.start()
+            return False
+        else:
+            self._on_finished()
+            return True
+
+    def _wait_for_completion(self):
+        position_control = self.experiment.experiment_handler.control.position_control
+        result = wait_for_events(
+            OR(position_control.events.turn_to_heading_completed,
+               position_control.events.turn_to_heading_timeout),
+            timeout=self.timeout if self.timeout > 0 else None
+        )
+        if result is TIMEOUT:
+            self.logger.warning(f"TurnToAction: wait timed out")
+        self._on_finished()
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "TurnToAction":
+        import math
+        kwargs = cls._common_init_kwargs(definition)
+        heading = definition.parameters.get('heading', 0.0)
+        heading_deg = definition.parameters.get('heading_deg')
+        if heading_deg is not None:
+            heading = math.radians(heading_deg)
+        return cls(
+            **kwargs,
+            heading=heading,
+            max_angular_speed=definition.parameters.get('max_angular_speed', 0.0),
+            timeout=definition.parameters.get('timeout', 0.0),
+            wait=definition.parameters.get('wait', True),
+        )
+
+
+@dataclasses.dataclass(kw_only=True)
+class SetWaypointsAction(ExperimentAction):
+    """Set waypoints for path following."""
+    waypoints: list = dataclasses.field(default_factory=list)
+    clear_existing: bool = True
+
+    def execute(self) -> bool:
+        self._on_started()
+        position_control = self.experiment.experiment_handler.control.position_control
+
+        if self.clear_existing:
+            if not position_control.clear_waypoints():
+                self.logger.error("Failed to clear existing waypoints")
+                self._on_error()
+                return True
+
+        # Normalize and add waypoints
+        from robot.control.bilbo_position_control import Waypoint, WaypointType
+        for wp_dict in self.waypoints:
+            wp_type_str = wp_dict.get('type', 'PASS')
+            wp_type = WaypointType.STOP if str(wp_type_str).upper() == 'STOP' else WaypointType.PASS
+            wp = Waypoint(
+                x=wp_dict['x'],
+                y=wp_dict['y'],
+                type=wp_type,
+                weight=wp_dict.get('weight', 0.75)
+            )
+            if not position_control.add_waypoint(wp):
+                self.logger.error(f"Failed to add waypoint ({wp.x}, {wp.y})")
+                self._on_error()
+                return True
+
+        self.logger.info(f"Set {len(self.waypoints)} waypoints")
+        self._on_finished()
+        return True
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "SetWaypointsAction":
+        kwargs = cls._common_init_kwargs(definition)
+        waypoints = definition.parameters.get('waypoints', [])
+        # Normalize waypoints
+        waypoints = _normalize_waypoints(waypoints)
+        return cls(
+            **kwargs,
+            waypoints=waypoints,
+            clear_existing=definition.parameters.get('clear_existing', True),
+        )
+
+
+@dataclasses.dataclass(kw_only=True)
+class StartPathAction(ExperimentAction):
+    """Start following the loaded waypoint path."""
+    allow_reverse: bool = False
+    timeout: float = 0.0
+    max_speed: float = 0.0
+    wait: bool = True
+
+    def execute(self) -> bool:
+        self._on_started()
+        position_control = self.experiment.experiment_handler.control.position_control
+        result = position_control.start_path(
+            allow_reverse=self.allow_reverse,
+            timeout=self.timeout,
+            max_speed=self.max_speed
+        )
+        if not result:
+            self.logger.error("Failed to start path")
+            self._on_error()
+            return True
+
+        if self.wait:
+            thread = threading.Thread(target=self._wait_for_completion, daemon=True)
+            thread.start()
+            return False
+        else:
+            self._on_finished()
+            return True
+
+    def _wait_for_completion(self):
+        position_control = self.experiment.experiment_handler.control.position_control
+        result = wait_for_events(
+            OR(position_control.events.path_finished,
+               position_control.events.path_timeout,
+               position_control.events.path_aborted),
+            timeout=self.timeout if self.timeout > 0 else None
+        )
+        if result is TIMEOUT:
+            self.logger.warning(f"StartPathAction: wait timed out")
+        self._on_finished()
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "StartPathAction":
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(
+            **kwargs,
+            allow_reverse=definition.parameters.get('allow_reverse', False),
+            timeout=definition.parameters.get('timeout', 0.0),
+            max_speed=definition.parameters.get('max_speed', 0.0),
+            wait=definition.parameters.get('wait', True),
+        )
+
+
+@dataclasses.dataclass(kw_only=True)
+class LoadPathAction(ExperimentAction):
+    """Load and optionally start a path from dict or file."""
+    path: dict | str | None = None
+    start: bool = False
+    clear_existing: bool = True
+    allow_reverse: bool | None = None
+    path_timeout: float | None = None  # Renamed to avoid conflict with action timeout
+    max_speed: float | None = None
+    wait: bool = True
+
+    def execute(self) -> bool:
+        self._on_started()
+        position_control = self.experiment.experiment_handler.control.position_control
+
+        if self.path is None:
+            self.logger.error("LoadPathAction: no path specified")
+            self._on_error()
+            return True
+
+        # Load path from file or dict
+        if isinstance(self.path, str):
+            result = position_control.load_path_from_file(
+                filepath=self.path,
+                start=self.start,
+                clear_existing=self.clear_existing,
+                allow_reverse=self.allow_reverse,
+                timeout=self.path_timeout,
+                max_speed=self.max_speed
+            )
+        else:
+            result = position_control.load_path(
+                path_data=self.path,
+                start=self.start,
+                clear_existing=self.clear_existing,
+                allow_reverse=self.allow_reverse,
+                timeout=self.path_timeout,
+                max_speed=self.max_speed
+            )
+
+        if not result:
+            self.logger.error("Failed to load path")
+            self._on_error()
+            return True
+
+        if self.start and self.wait:
+            thread = threading.Thread(target=self._wait_for_completion, daemon=True)
+            thread.start()
+            return False
+        else:
+            self._on_finished()
+            return True
+
+    def _wait_for_completion(self):
+        position_control = self.experiment.experiment_handler.control.position_control
+        effective_timeout = self.path_timeout if self.path_timeout and self.path_timeout > 0 else None
+        result = wait_for_events(
+            OR(position_control.events.path_finished,
+               position_control.events.path_timeout,
+               position_control.events.path_aborted),
+            timeout=effective_timeout
+        )
+        if result is TIMEOUT:
+            self.logger.warning(f"LoadPathAction: wait timed out")
+        self._on_finished()
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "LoadPathAction":
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(
+            **kwargs,
+            path=definition.parameters.get('path'),
+            start=definition.parameters.get('start', False),
+            clear_existing=definition.parameters.get('clear_existing', True),
+            allow_reverse=definition.parameters.get('allow_reverse'),
+            path_timeout=definition.parameters.get('timeout'),
+            max_speed=definition.parameters.get('max_speed'),
+            wait=definition.parameters.get('wait', True),
+        )
+
+
+@dataclasses.dataclass(kw_only=True)
+class StopPathAction(ExperimentAction):
+    """Stop/abort the current path."""
+
+    def execute(self) -> bool:
+        self._on_started()
+        position_control = self.experiment.experiment_handler.control.position_control
+        result = position_control.abort_path()
+        if not result:
+            self.logger.warning("Failed to stop path (may not be running)")
+        self._on_finished()
+        return True
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "StopPathAction":
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(**kwargs)
+
+
+@dataclasses.dataclass(kw_only=True)
+class WaitPositionEventAction(ExperimentAction):
+    """Wait for a position control event."""
+    event: str = ""
+    event_timeout: float | None = None  # Renamed to avoid conflict
+
+    def execute(self) -> bool:
+        self._on_started()
+        thread = threading.Thread(target=self._wait_for_event, daemon=True)
+        thread.start()
+        return False
+
+    def _wait_for_event(self):
+        position_control = self.experiment.experiment_handler.control.position_control
+
+        # Map event names to event objects
+        event_map = {
+            'path_finished': position_control.events.path_finished,
+            'path_timeout': position_control.events.path_timeout,
+            'path_aborted': position_control.events.path_aborted,
+            'path_started': position_control.events.path_started,
+            'path_paused': position_control.events.path_paused,
+            'path_resumed': position_control.events.path_resumed,
+            'move_to_point_started': position_control.events.move_to_point_started,
+            'move_to_point_completed': position_control.events.move_to_point_completed,
+            'move_to_point_timeout': position_control.events.move_to_point_timeout,
+            'turn_to_heading_started': position_control.events.turn_to_heading_started,
+            'turn_to_heading_completed': position_control.events.turn_to_heading_completed,
+            'turn_to_heading_timeout': position_control.events.turn_to_heading_timeout,
+            'waypoint_completed': position_control.events.waypoint_completed,
+            'waypoint_reached': position_control.events.waypoint_reached,
+            'waypoint_passed': position_control.events.waypoint_passed,
+        }
+
+        if self.event not in event_map:
+            self.logger.error(f"Unknown position event: {self.event}. Valid events: {list(event_map.keys())}")
+            self._on_error()
+            return
+
+        target_event = event_map[self.event]
+        result = target_event.wait(timeout=self.event_timeout)
+        if result is TIMEOUT:
+            self.logger.warning(f"WaitPositionEventAction: wait for '{self.event}' timed out")
+            self.events.timeout.set()
+        self._on_finished()
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "WaitPositionEventAction":
+        kwargs = cls._common_init_kwargs(definition)
+        # Remove generic timeout from kwargs as we use event_timeout
+        kwargs.pop("timeout", None)
+        return cls(
+            **kwargs,
+            event=definition.parameters.get('event', ''),
+            event_timeout=definition.parameters.get('timeout'),
+        )
+
+
 # ======================================================================================================================
 EXPERIMENT_ACTION_TYPE_MAPPING = {
     "beep": BeepAction,
@@ -818,6 +1352,17 @@ EXPERIMENT_ACTION_TYPE_MAPPING = {
     "enable_external_input": EnableExternalInputAction,
     "reset": ResetAction,
     "parallel": ParallelAction,
+    "func": FuncAction,
+    "set_feedback_gain": SetFeedbackGainAction,
+    "reset_control": ResetControlAction,
+    # Position control actions
+    "move_to": MoveToAction,
+    "turn_to": TurnToAction,
+    "set_waypoints": SetWaypointsAction,
+    "start_path": StartPathAction,
+    "load_path": LoadPathAction,
+    "stop_path": StopPathAction,
+    "wait_position_event": WaitPositionEventAction,
 }
 
 

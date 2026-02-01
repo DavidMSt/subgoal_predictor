@@ -353,7 +353,19 @@ class BILBO_Control:
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_statefeedback_gain(self, K: list | np.ndarray) -> bool:
-        raise NotImplementedError
+        """Set the state feedback gain K for balancing control."""
+        if isinstance(K, np.ndarray):
+            K = K.tolist()
+
+        if len(K) != 8:
+            self.logger.error(f"State feedback gain must have 8 elements, got {len(K)}")
+            return False
+
+        result = self._set_lowlevel_state_feedback_gain(K)
+        if result:
+            self._config.balancing_control.K = K
+            self.logger.info(f"State feedback gain set to {K}")
+        return result
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_forward_velocity_pid_config(self, config: PID_Config | dict) -> bool:
