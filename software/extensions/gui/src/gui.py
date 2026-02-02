@@ -237,6 +237,7 @@ class Category:
             )
         )
         self.sendMessage(message)
+        page.onDelete()
 
     # ------------------------------------------------------------------------------------------------------------------
     def addCategory(self, category: Category):
@@ -269,6 +270,7 @@ class Category:
             )
         )
         self.sendMessage(message)
+        category.onDelete()
 
     # ------------------------------------------------------------------------------------------------------------------
     def update(self):
@@ -308,6 +310,16 @@ class Category:
     def onMessage(self, message, sender=None):
         self.logger.debug(f"Received message: {message}")
         object_path = message['id']
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def onDelete(self):
+        """Clean up all pages and subcategories when this category is deleted."""
+        # Clean up all pages
+        for page in self.pages.values():
+            page.onDelete()
+        # Clean up all subcategories
+        for category in self.categories.values():
+            category.onDelete()
 
     # ------------------------------------------------------------------------------------------------------------------
     def sendMessage(self, message):
@@ -629,6 +641,12 @@ class Page:
     # ------------------------------------------------------------------------------------------------------------------
     def onMessage(self, message, sender=None):
         self.logger.debug(f"Received message: {message}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def onDelete(self):
+        """Clean up all widgets when this page is deleted."""
+        for widget in self.objects.values():
+            widget.onDelete()
 
     # ------------------------------------------------------------------------------------------------------------------
     def sendMessage(self, message):
@@ -1227,6 +1245,7 @@ class GUI:
             )
         )
         self.broadcast(message)
+        category.onDelete()
 
     # ------------------------------------------------------------------------------------------------------------------
     def openPopup(self, popup: Popup, client=None):

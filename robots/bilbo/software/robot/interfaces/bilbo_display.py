@@ -14,6 +14,7 @@ class BILBO_Display:
 
     _display_started: bool = False
 
+
     # === INIT =========================================================================================================
     def __init__(self, core: BILBO_Common):
         self.core = core

@@ -1856,7 +1856,7 @@ class RobotUI:
         page.addWidget(navigation_group, column=22, row=9, width=9, height=10)
 
         psi_zero_button = Button(widget_id='psi_zero_button', text='Ψ=0', color=[0.4, 0.4, 0.4])
-        psi_zero_button.callbacks.click.register(lambda *args, **kwargs: self.robot.control.turn_to(0))
+        psi_zero_button.callbacks.click.register(lambda *args, **kwargs: self.robot.position_control.turn_to(0))
         navigation_group.addWidget(psi_zero_button, row=1, column=1, width=2, height=2)
 
         page.addWidget(self.map_widget, row=9, width=10, height=10)
@@ -2712,6 +2712,11 @@ class RobotUI:
 
         try:
             self.gui.categories['robots'].removeCategory(self.category)
+        except Exception:
+            pass
+
+        try:
+            self.app.removeFolder(self.folder)
         except Exception:
             pass
 

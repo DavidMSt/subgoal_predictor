@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.offsetbox import AnnotationBbox, TextArea, HPacker, DrawingArea, OffsetImage
 
-from core.utils.colors import get_palette
+from core.utils.colors import get_palette, darken_color
 from core.utils.uuid_utils import generate_uuid
 
 
@@ -413,6 +413,365 @@ class Label:
         return x1 - x0, y1 - y0
 
 
+# === PHASE BAR ========================================================================================================
+@dataclasses.dataclass
+class PhaseConfig:
+    """Configuration for a single phase in a phase bar."""
+    color: str | Sequence[float] = 'tab:blue'
+    alpha: float = 0.85
+    layer: int = 0
+    edge_color: str | Sequence[float] | None = None  # None = auto darker version of color
+    edge_width: float = 0.5
+    text_color: str | Sequence[float] | None = None  # None = auto (contrast with background)
+
+
+@dataclasses.dataclass
+class PhaseBarConfig:
+    """Configuration for the phase bar system on an axis."""
+    position: str = "bottom_inside"  # "top_inside", "bottom_inside", "bottom_outside"
+    height: float = 0.06  # Height as fraction of axis height
+    fontsize: float = 7
+    global_alpha: float = 1.0
+    layer_gap: float = 0.005  # Gap between layers as fraction of axis height
+    min_width_for_inside_text: float | None = None  # Min data width to show text inside; None = always inside
+    show_text: bool = True
+    text_padding: float = 2  # Horizontal padding in points for text
+    default_color: str | Sequence[float] = 'tab:gray'  # Default color when not specified
+
+    # Positioning adjustments
+    bottom_padding: float = 0.02  # Padding above x-axis for bottom_inside (axes fraction)
+    top_padding: float = 0.02  # Padding below top for top_inside (axes fraction)
+    outside_offset: float = 0.25  # How far below axis for bottom_outside (axes fraction)
+
+    # Styling
+    horizontal_padding: float = 0.002  # Padding on each side of phase (axes fraction of width)
+    corner_radius: float = 0.008  # Corner rounding radius (axes fraction)
+    auto_edge_darken: float = 0.25  # How much to darken color for auto edge (0-1)
+
+
+class Phase:
+    """Represents a single phase in a phase bar."""
+    id: str
+    start: float
+    end: float
+    config: PhaseConfig
+
+    rect_artist: mpatches.FancyBboxPatch | None = None
+    text_artist: Artist | None = None
+
+    def __init__(
+            self,
+            phase_id: str,
+            start: float,
+            end: float,
+            config: PhaseConfig | None = None,
+            **overrides,
+    ):
+        self.id = phase_id
+        self.start = start
+        self.end = end
+
+        if config is None:
+            config = PhaseConfig()
+        self.config = config
+        if overrides:
+            self.config = dataclasses.replace(self.config, **overrides)
+
+    @staticmethod
+    def _get_contrast_color(color) -> str:
+        """Return 'white' or 'black' based on background luminance."""
+        import matplotlib.colors as mcolors
+        try:
+            rgb = mcolors.to_rgb(color)
+            # Perceived luminance formula
+            luminance = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+            return 'white' if luminance < 0.5 else 'black'
+        except Exception:
+            return 'black'
+
+    def plot(
+            self,
+            ax: Axes,
+            bar_config: PhaseBarConfig,
+            y_base: float,
+            y_height: float,
+            transform,
+            x_padding_data: float = 0.0,
+    ) -> tuple[mpatches.FancyBboxPatch, Artist | None]:
+        """
+        Draw this phase on the given axes.
+
+        Parameters
+        ----------
+        ax : Axes
+            The matplotlib axes to draw on.
+        bar_config : PhaseBarConfig
+            The phase bar configuration.
+        y_base : float
+            The y position (bottom) of this phase bar in the appropriate coordinate system.
+        y_height : float
+            The height of this phase bar.
+        transform : Transform
+            The matplotlib transform to use (blended for mixed coordinates).
+        x_padding_data : float
+            Horizontal padding in data units to apply to each side.
+
+        Returns
+        -------
+        tuple[FancyBboxPatch, Artist | None]
+            The rectangle and text artists created.
+        """
+        cfg = self.config
+        effective_alpha = cfg.alpha * bar_config.global_alpha
+
+        # Apply horizontal padding
+        x_start = self.start + x_padding_data
+        x_end = self.end - x_padding_data
+        width = x_end - x_start
+
+        # Determine edge color (auto-darken if not specified)
+        if cfg.edge_color is not None:
+            edge_color = cfg.edge_color
+        else:
+            edge_color = darken_color(cfg.color, bar_config.auto_edge_darken)
+
+        # Use FancyBboxPatch for rounded corners
+        # Note: rounding_size is in data coordinates for x, axes fraction for y
+        # We use a mutation_scale to control the rounding
+        rect = mpatches.FancyBboxPatch(
+            (x_start, y_base),
+            width=width,
+            height=y_height,
+            boxstyle=mpatches.BoxStyle.Round(pad=0, rounding_size=bar_config.corner_radius),
+            facecolor=cfg.color,
+            edgecolor=edge_color,
+            linewidth=cfg.edge_width,
+            alpha=effective_alpha,
+            transform=transform,
+            clip_on=False,
+            zorder=5,
+            mutation_aspect=1,
+        )
+        ax.add_patch(rect)
+        self.rect_artist = rect
+
+        # Text label
+        self.text_artist = None
+        if bar_config.show_text and self.id:
+            # Determine text color
+            text_color = cfg.text_color
+            if text_color is None:
+                text_color = self._get_contrast_color(cfg.color)
+
+            # Check if text should be inside or above
+            show_inside = True
+            if bar_config.min_width_for_inside_text is not None:
+                phase_width = self.end - self.start
+                if phase_width < bar_config.min_width_for_inside_text:
+                    show_inside = False
+
+            x_center = (self.start + self.end) / 2
+
+            if show_inside:
+                # Text inside the bar
+                y_center = y_base + y_height / 2
+                self.text_artist = ax.text(
+                    x_center,
+                    y_center,
+                    self.id,
+                    ha='center',
+                    va='center',
+                    fontsize=bar_config.fontsize,
+                    color=text_color,
+                    alpha=effective_alpha,
+                    transform=transform,
+                    clip_on=False,
+                    zorder=6,
+                )
+            else:
+                # Text above the bar
+                y_top = y_base + y_height
+                self.text_artist = ax.text(
+                    x_center,
+                    y_top,
+                    self.id,
+                    ha='center',
+                    va='bottom',
+                    fontsize=bar_config.fontsize,
+                    color=cfg.color,  # Use bar color for outside text
+                    alpha=effective_alpha,
+                    transform=transform,
+                    clip_on=False,
+                    zorder=6,
+                )
+
+        return rect, self.text_artist
+
+
+# === PHASE BACKGROUND =================================================================================================
+@dataclasses.dataclass
+class PhaseBackgroundConfig:
+    """Configuration for the phase background system on an axis."""
+    alpha: float = 0.15  # Global opacity for background colors
+    label_position: str = "top"  # "top" or "bottom"
+    show_labels: bool = True
+    show_dividers: bool = True  # Vertical lines between phases
+    divider_color: str | Sequence[float] = "gray"
+    divider_width: float = 0.5
+    divider_style: str = "--"
+    divider_alpha: float = 0.5
+    fontsize: float = 8
+    label_alpha: float = 1.0  # Label text alpha (1.0 = fully visible)
+    label_offset: float = 0.02  # Offset from top/bottom as axes fraction
+
+    # Label background box
+    label_box: bool = True  # Whether to show a background box behind labels
+    label_box_color: str | Sequence[float] = "white"
+    label_box_alpha: float = 0.75
+    label_box_padding: float = 0.3  # Padding inside the box
+    label_box_edgecolor: str | Sequence[float] | None = None  # None = no edge
+    label_box_edgewidth: float = 0.5
+
+    # Label color (None = use darkened phase color for better visibility)
+    label_color_darken: float = 0.3  # How much to darken phase color for label
+
+
+@dataclasses.dataclass
+class BackgroundPhaseConfig:
+    """Configuration for a single background phase."""
+    color: str | Sequence[float] = 'tab:blue'
+    alpha: float | None = None  # None = use global alpha
+    label_color: str | Sequence[float] | None = None  # None = use phase color
+
+
+class BackgroundPhase:
+    """Represents a single background phase region."""
+    id: str
+    start: float
+    end: float
+    config: BackgroundPhaseConfig
+
+    span_artist: mpatches.Polygon | None = None
+    line_artist: Line2D | None = None
+    text_artist: Artist | None = None
+
+    def __init__(
+            self,
+            phase_id: str,
+            start: float,
+            end: float,
+            config: BackgroundPhaseConfig | None = None,
+            **overrides,
+    ):
+        self.id = phase_id
+        self.start = start
+        self.end = end
+
+        if config is None:
+            config = BackgroundPhaseConfig()
+        self.config = config
+        if overrides:
+            self.config = dataclasses.replace(self.config, **overrides)
+
+    def plot(
+            self,
+            ax: Axes,
+            bg_config: PhaseBackgroundConfig,
+            is_last: bool = False,
+    ) -> tuple[mpatches.Polygon, Line2D | None, Artist | None]:
+        """
+        Draw this background phase on the given axes.
+
+        Parameters
+        ----------
+        ax : Axes
+            The matplotlib axes to draw on.
+        bg_config : PhaseBackgroundConfig
+            The phase background configuration.
+        is_last : bool
+            Whether this is the last phase (affects divider drawing).
+
+        Returns
+        -------
+        tuple[Polygon, Line2D | None, Artist | None]
+            The span, divider line, and text artists created.
+        """
+        cfg = self.config
+        effective_alpha = cfg.alpha if cfg.alpha is not None else bg_config.alpha
+
+        # Draw background span using axvspan
+        self.span_artist = ax.axvspan(
+            self.start,
+            self.end,
+            facecolor=cfg.color,
+            alpha=effective_alpha,
+            edgecolor='none',
+            zorder=0,
+        )
+
+        # Draw divider line at the end of this phase (unless it's the last one)
+        self.line_artist = None
+        if bg_config.show_dividers and not is_last:
+            self.line_artist = ax.axvline(
+                x=self.end,
+                color=bg_config.divider_color,
+                linewidth=bg_config.divider_width,
+                linestyle=bg_config.divider_style,
+                alpha=bg_config.divider_alpha,
+                zorder=1,
+            )
+
+        # Draw label
+        self.text_artist = None
+        if bg_config.show_labels and self.id:
+            x_center = (self.start + self.end) / 2
+
+            # Determine label color: explicit > darkened phase color
+            if cfg.label_color is not None:
+                label_color = cfg.label_color
+            else:
+                # Darken the phase color for better visibility
+                label_color = darken_color(cfg.color, bg_config.label_color_darken)
+
+            if bg_config.label_position == "top":
+                y_pos = 1.0 - bg_config.label_offset
+                va = "top"
+            else:  # "bottom"
+                y_pos = bg_config.label_offset
+                va = "bottom"
+
+            # Use blended transform: x in data, y in axes
+            from matplotlib.transforms import blended_transform_factory
+            transform = blended_transform_factory(ax.transData, ax.transAxes)
+
+            # Build bbox properties if label_box is enabled
+            bbox_props = None
+            if bg_config.label_box:
+                bbox_props = dict(
+                    boxstyle=f"round,pad={bg_config.label_box_padding}",
+                    facecolor=bg_config.label_box_color,
+                    alpha=bg_config.label_box_alpha,
+                    edgecolor=bg_config.label_box_edgecolor if bg_config.label_box_edgecolor else 'none',
+                    linewidth=bg_config.label_box_edgewidth,
+                )
+
+            self.text_artist = ax.text(
+                x_center,
+                y_pos,
+                self.id,
+                ha='center',
+                va=va,
+                fontsize=bg_config.fontsize,
+                color=label_color,
+                alpha=bg_config.label_alpha,
+                transform=transform,
+                zorder=10,
+                bbox=bbox_props,
+            )
+
+        return self.span_artist, self.line_artist, self.text_artist
+
+
 # === SERIES ===========================================================================================================
 @dataclasses.dataclass
 class SeriesConfig:
@@ -605,6 +964,10 @@ class Axis:
     series: dict[str, Series]
     lines: dict[str, Line]
     labels: dict[str, Label]
+    phases: dict[str, Phase]
+    phase_bar_config: PhaseBarConfig | None = None
+    background_phases: dict[str, BackgroundPhase]
+    phase_background_config: PhaseBackgroundConfig | None = None
 
     _palette_index: int = 0
 
@@ -628,6 +991,10 @@ class Axis:
         self.series = {}
         self.lines = {}
         self.labels = {}
+        self.phases: dict[str, Phase] = {}
+        self.phase_bar_config: PhaseBarConfig | None = None
+        self.background_phases: dict[str, BackgroundPhase] = {}
+        self.phase_background_config: PhaseBackgroundConfig | None = None
 
     # ------------------------------------------------------------------------------------------------------------------
     def add_series(self, series: Series) -> Series:
@@ -688,6 +1055,410 @@ class Axis:
         if self.ax is not None:
             line.plot(self.ax)
             self.update_legend()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def add_vertical_line(
+            self,
+            x: float,
+            config: LineConfig | None = None,
+            label: str | None = None,
+            label_position: str = "above",
+            label_config: LabelConfig | dict | None = None,
+            **config_overrides,
+    ) -> tuple[Line2D, Label | None]:
+        """
+        Add a vertical line at the specified x position spanning the full axis height.
+
+        Parameters
+        ----------
+        x : float
+            The x position for the vertical line.
+        config : LineConfig | None
+            Line configuration (color, linewidth, style, alpha). If None, uses defaults.
+        label : str | None
+            Optional text label to display at the line.
+        label_position : str
+            Where to place the label: "above" (top of axis) or "below" (bottom of axis).
+            Default is "above".
+        label_config : LabelConfig | dict | None
+            Configuration for the label. Can be:
+            - LabelConfig: used directly (with vertical_alignment overridden by label_position)
+            - dict: fields to override on the default LabelConfig (e.g., {'fontsize': 10, 'color': 'red'})
+            - None: uses sensible defaults
+        **config_overrides :
+            Override specific LineConfig fields (e.g., color='red', linewidth=2).
+
+        Returns
+        -------
+        tuple[Line2D, Label | None]
+            The created matplotlib Line2D artist and the Label object (if label was provided).
+        """
+        if self.ax is None:
+            raise RuntimeError(
+                "Axis must be attached to a Matplotlib Axes before adding vertical lines. "
+                "Call plot.set_axis(row, col, axis) first."
+            )
+
+        # Build line config
+        if config is None:
+            config = LineConfig()
+        if config_overrides:
+            config = dataclasses.replace(config, **config_overrides)
+
+        # Create vertical line using axvline (spans full y-axis automatically)
+        line_artist = self.ax.axvline(
+            x=x,
+            color=config.color,
+            linewidth=config.linewidth,
+            linestyle=config.style,
+            alpha=config.alpha,
+        )
+
+        # Optionally add label
+        label_obj: Label | None = None
+        if label is not None:
+            # Determine y position based on label_position
+            # Labels are placed INSIDE the axis area to remain visible
+            y_min, y_max = self.ax.get_ylim()
+            y_range = y_max - y_min
+            padding = 0.02 * y_range  # Small padding from edge
+
+            if label_position == "above":
+                y_pos = y_max - padding
+                v_align = "top"  # Top of label at y_pos, extends downward (visible)
+            else:  # "below"
+                y_pos = y_min + padding
+                v_align = "bottom"  # Bottom of label at y_pos, extends upward (visible)
+
+            # Build label config: start with defaults, then apply overrides
+            default_label_config = LabelConfig(
+                background_box=True,
+                background_color="white",
+                background_alpha=0.8,
+                vertical_alignment=v_align,
+                horizontal_alignment="center",
+                fontsize=8,
+                box_padding=0.2,
+                offset_x=0,
+                offset_y=0,
+            )
+
+            if label_config is None:
+                label_config = default_label_config
+            elif isinstance(label_config, dict):
+                # Apply dict overrides to the default config
+                label_config = dataclasses.replace(default_label_config, **label_config)
+            else:
+                # LabelConfig provided - override alignment based on position
+                label_config = dataclasses.replace(
+                    label_config,
+                    vertical_alignment=v_align,
+                )
+
+            label_obj = Label(text=label, position=(x, y_pos), config=label_config)
+            self.add_label(label_obj)
+
+        return line_artist, label_obj
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def configure_phase_bar(
+            self,
+            config: PhaseBarConfig | dict | None = None,
+            **overrides,
+    ) -> PhaseBarConfig:
+        """
+        Configure the phase bar for this axis.
+
+        Must be called before adding phases. Can be called with a PhaseBarConfig,
+        a dict of overrides, or keyword arguments.
+
+        Parameters
+        ----------
+        config : PhaseBarConfig | dict | None
+            Phase bar configuration. Can be:
+            - PhaseBarConfig: used directly
+            - dict: fields to override on default PhaseBarConfig
+            - None: uses defaults (can still override with **overrides)
+        **overrides :
+            Override specific PhaseBarConfig fields.
+
+        Returns
+        -------
+        PhaseBarConfig
+            The configured phase bar config.
+
+        Examples
+        --------
+        >>> axis.configure_phase_bar(position="top_inside", height=0.08)
+        >>> axis.configure_phase_bar({'position': 'bottom_outside', 'fontsize': 9})
+        >>> axis.configure_phase_bar(PhaseBarConfig(position="bottom_inside"))
+        """
+        if config is None:
+            self.phase_bar_config = PhaseBarConfig()
+        elif isinstance(config, dict):
+            self.phase_bar_config = PhaseBarConfig(**config)
+        else:
+            self.phase_bar_config = config
+
+        if overrides:
+            self.phase_bar_config = dataclasses.replace(self.phase_bar_config, **overrides)
+
+        return self.phase_bar_config
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def add_phase(
+            self,
+            phase_id: str,
+            start: float,
+            end: float,
+            config: PhaseConfig | dict | None = None,
+            **overrides,
+    ) -> Phase:
+        """
+        Add a phase to the phase bar.
+
+        Parameters
+        ----------
+        phase_id : str
+            The identifier/label for this phase (displayed as text).
+        start : float
+            Start time/x-value for the phase.
+        end : float
+            End time/x-value for the phase.
+        config : PhaseConfig | dict | None
+            Phase configuration. Can be:
+            - PhaseConfig: used directly
+            - dict: fields to override on default PhaseConfig
+            - None: uses defaults
+        **overrides :
+            Override specific PhaseConfig fields (e.g., color='red', layer=1).
+
+        Returns
+        -------
+        Phase
+            The created Phase object.
+
+        Examples
+        --------
+        >>> axis.add_phase("Init", start=0, end=2, color="blue")
+        >>> axis.add_phase("Run", start=2, end=8, config={'color': 'green', 'layer': 1})
+        """
+        if self.ax is None:
+            raise RuntimeError(
+                "Axis must be attached to a Matplotlib Axes before adding phases. "
+                "Call plot.set_axis(row, col, axis) first."
+            )
+
+        # Auto-configure phase bar if not done
+        if self.phase_bar_config is None:
+            self.configure_phase_bar()
+
+        # Build phase config
+        if config is None:
+            phase_config = PhaseConfig(color=self.phase_bar_config.default_color)
+        elif isinstance(config, dict):
+            defaults = {'color': self.phase_bar_config.default_color}
+            defaults.update(config)
+            phase_config = PhaseConfig(**defaults)
+        else:
+            phase_config = config
+
+        if overrides:
+            phase_config = dataclasses.replace(phase_config, **overrides)
+
+        # Create the phase
+        phase = Phase(phase_id=phase_id, start=start, end=end, config=phase_config)
+        self.phases[phase_id] = phase
+
+        # Draw the phase
+        self._draw_phase(phase)
+
+        return phase
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _draw_phase(self, phase: Phase) -> None:
+        """Internal method to draw a phase on the axis."""
+        if self.ax is None or self.phase_bar_config is None:
+            return
+
+        bar_cfg = self.phase_bar_config
+        layer = phase.config.layer
+
+        # Calculate x padding in data units
+        x_min, x_max = self.ax.get_xlim()
+        x_range = x_max - x_min
+        x_padding_data = bar_cfg.horizontal_padding * x_range
+
+        # Calculate y position based on position setting and layer
+        # We use a blended transform: x in data coords, y in axes coords
+        from matplotlib.transforms import blended_transform_factory
+        transform = blended_transform_factory(self.ax.transData, self.ax.transAxes)
+
+        if bar_cfg.position == "bottom_outside":
+            # Draw below the axis, accounting for tick labels and xlabel
+            y_base = -bar_cfg.outside_offset - (bar_cfg.height + bar_cfg.layer_gap) * layer
+            y_height = bar_cfg.height
+        elif bar_cfg.position == "bottom_inside":
+            # Draw at the bottom inside the axis with padding above x-axis
+            y_base = bar_cfg.bottom_padding + (bar_cfg.height + bar_cfg.layer_gap) * layer
+            y_height = bar_cfg.height
+        else:  # "top_inside"
+            # Draw at the top inside the axis with padding below top
+            y_base = 1.0 - bar_cfg.top_padding - bar_cfg.height - (bar_cfg.height + bar_cfg.layer_gap) * layer
+            y_height = bar_cfg.height
+
+        phase.plot(self.ax, bar_cfg, y_base, y_height, transform, x_padding_data)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def redraw_phases(self) -> None:
+        """Redraw all phases (useful after axis limits change)."""
+        # Remove existing artists
+        for phase in self.phases.values():
+            if phase.rect_artist is not None:
+                phase.rect_artist.remove()
+                phase.rect_artist = None
+            if phase.text_artist is not None:
+                phase.text_artist.remove()
+                phase.text_artist = None
+
+        # Redraw all phases
+        for phase in self.phases.values():
+            self._draw_phase(phase)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def configure_phase_background(
+            self,
+            config: PhaseBackgroundConfig | dict | None = None,
+            **overrides,
+    ) -> PhaseBackgroundConfig:
+        """
+        Configure the phase background for this axis.
+
+        Parameters
+        ----------
+        config : PhaseBackgroundConfig | dict | None
+            Phase background configuration. Can be:
+            - PhaseBackgroundConfig: used directly
+            - dict: fields to override on default PhaseBackgroundConfig
+            - None: uses defaults (can still override with **overrides)
+        **overrides :
+            Override specific PhaseBackgroundConfig fields.
+
+        Returns
+        -------
+        PhaseBackgroundConfig
+            The configured phase background config.
+
+        Examples
+        --------
+        >>> axis.configure_phase_background(alpha=0.2, show_dividers=True)
+        >>> axis.configure_phase_background({'label_position': 'bottom', 'fontsize': 9})
+        """
+        if config is None:
+            self.phase_background_config = PhaseBackgroundConfig()
+        elif isinstance(config, dict):
+            self.phase_background_config = PhaseBackgroundConfig(**config)
+        else:
+            self.phase_background_config = config
+
+        if overrides:
+            self.phase_background_config = dataclasses.replace(self.phase_background_config, **overrides)
+
+        return self.phase_background_config
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def add_background_phase(
+            self,
+            phase_id: str,
+            start: float,
+            end: float,
+            config: BackgroundPhaseConfig | dict | None = None,
+            **overrides,
+    ) -> BackgroundPhase:
+        """
+        Add a background phase (colored region) to the plot.
+
+        Parameters
+        ----------
+        phase_id : str
+            The identifier/label for this phase (displayed as text if show_labels=True).
+        start : float
+            Start time/x-value for the phase.
+        end : float
+            End time/x-value for the phase.
+        config : BackgroundPhaseConfig | dict | None
+            Phase configuration. Can be:
+            - BackgroundPhaseConfig: used directly
+            - dict: fields to override on default BackgroundPhaseConfig
+            - None: uses defaults
+        **overrides :
+            Override specific BackgroundPhaseConfig fields (e.g., color='red', alpha=0.2).
+
+        Returns
+        -------
+        BackgroundPhase
+            The created BackgroundPhase object.
+
+        Examples
+        --------
+        >>> axis.add_background_phase("Init", start=0, end=2, color="lightblue")
+        >>> axis.add_background_phase("Run", start=2, end=8, config={'color': 'lightgreen'})
+        """
+        if self.ax is None:
+            raise RuntimeError(
+                "Axis must be attached to a Matplotlib Axes before adding background phases. "
+                "Call plot.set_axis(row, col, axis) first."
+            )
+
+        # Auto-configure phase background if not done
+        if self.phase_background_config is None:
+            self.configure_phase_background()
+
+        # Build phase config
+        if config is None:
+            phase_config = BackgroundPhaseConfig()
+        elif isinstance(config, dict):
+            phase_config = BackgroundPhaseConfig(**config)
+        else:
+            phase_config = config
+
+        if overrides:
+            phase_config = dataclasses.replace(phase_config, **overrides)
+
+        # Create the phase
+        phase = BackgroundPhase(phase_id=phase_id, start=start, end=end, config=phase_config)
+        self.background_phases[phase_id] = phase
+
+        # Draw the phase (we need to determine if it's the last one)
+        self._redraw_background_phases()
+
+        return phase
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _redraw_background_phases(self) -> None:
+        """Internal method to redraw all background phases."""
+        if self.ax is None or self.phase_background_config is None:
+            return
+
+        # Remove existing artists
+        for phase in self.background_phases.values():
+            if phase.span_artist is not None:
+                phase.span_artist.remove()
+                phase.span_artist = None
+            if phase.line_artist is not None:
+                phase.line_artist.remove()
+                phase.line_artist = None
+            if phase.text_artist is not None:
+                phase.text_artist.remove()
+                phase.text_artist = None
+
+        # Sort phases by start time to determine which is last
+        sorted_phases = sorted(self.background_phases.values(), key=lambda p: p.start)
+
+        # Draw all phases
+        for i, phase in enumerate(sorted_phases):
+            is_last = (i == len(sorted_phases) - 1)
+            phase.plot(self.ax, self.phase_background_config, is_last=is_last)
 
     # ------------------------------------------------------------------------------------------------------------------
     def attach_to(self, ax: Axes) -> None:

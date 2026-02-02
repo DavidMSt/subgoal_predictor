@@ -329,7 +329,9 @@ class BILBO_Control:
         else:
             torque_left = forward + turn
             torque_right = forward - turn
-        self.set_external_input(torque_left, torque_right)
+
+        if self.mode == BILBO_Control_Mode.BALANCING:
+            self.set_external_input(torque_left, torque_right)
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_velocity(self, forward: float, turn: float, normalized: bool = True) -> None:

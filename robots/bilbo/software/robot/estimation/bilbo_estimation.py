@@ -208,7 +208,7 @@ class BILBO_Estimation:
         enable_dead_reckoning = self.common.config.estimation.enable_dead_reckoning
         self._dead_reckoning_enabled = enable_dead_reckoning
         self.set_dead_reckoning_enabled(enable_dead_reckoning)
-
+        self.reset()
         self.tracker.init()
 
     # ------------------------------------------------------------------------------------------------------------------

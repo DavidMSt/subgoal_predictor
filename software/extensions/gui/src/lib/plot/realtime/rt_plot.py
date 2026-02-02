@@ -487,3 +487,6 @@ class RT_Plot_Widget(Widget):
 
     def _update_plot(self, update_data: dict) -> None:
         self.sendUpdate(update_data)
+
+    def onDelete(self):
+        self.plot.stop()

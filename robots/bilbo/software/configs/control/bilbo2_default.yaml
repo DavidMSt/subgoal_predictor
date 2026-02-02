@@ -98,9 +98,9 @@ position_control:
   Ts: 0.01
   kp_angular: 10.0
   ki_angular: 0.3
-  kp_linear: 1
+  kp_linear: 1.25
   ki_linear: 0.015
-  max_speed: 0.5
+  max_speed: 0.75
   max_turn_rate: 5.0
   lookahead_base: 1
   lookahead_gain: 0.0

@@ -164,12 +164,20 @@ class BILBO_Interfaces:
     # ------------------------------------------------------------------------------------------------------------------
     def enable_external_input(self):
         self.external_input_enabled = True
-        self.control.set_external_input(0, 0)
+        # Zero the relevant input for the current mode
+        if self.control.mode == BILBO_Control_Mode.BALANCING:
+            self.control.set_external_input(0, 0)
+        elif self.control.mode == BILBO_Control_Mode.VELOCITY:
+            self.control.set_velocity(0, 0)
 
     # ------------------------------------------------------------------------------------------------------------------
     def disable_external_input(self):
         self.external_input_enabled = False
-        self.control.set_external_input(0, 0)
+        # Zero the relevant input for the current mode
+        if self.control.mode == BILBO_Control_Mode.BALANCING:
+            self.control.set_external_input(0, 0)
+        elif self.control.mode == BILBO_Control_Mode.VELOCITY:
+            self.control.set_velocity(0, 0)
 
     # === PRIVATE METHODS ==============================================================================================
     def _onJoystickConnected(self, joystick, *args, **kwargs):
@@ -259,17 +267,16 @@ class BILBO_Interfaces:
             if not self.external_input_enabled:
                 continue
 
-            input = (0, 0)
             match self.input_source:
                 case InputSource.JOYSTICK:
                     if self._joystick is not None:
                         axis_forward = self._joystick.get_axis("LEFT_VERTICAL")
                         axis_turn = -self._joystick.get_axis("RIGHT_HORIZONTAL")
                         axis_boost = (self._joystick.get_axis("TRIGGER_RIGHT") + 1) / 2  # now is 0 to 1
-                        input = (axis_forward, axis_turn)
 
                         match self.control.mode:
                             case BILBO_Control_Mode.BALANCING:
+
                                 # print(f"axis_forward: {axis_forward:.1f}, axis_turn: {axis_turn:.1f}")
                                 self.control.set_external_input_forward_turn(axis_forward, axis_turn, normalized=True)
                             case BILBO_Control_Mode.VELOCITY:
