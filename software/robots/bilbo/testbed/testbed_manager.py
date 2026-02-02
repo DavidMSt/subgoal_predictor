@@ -58,7 +58,6 @@ class BILBO_TestbedManager_Settings:
 class BILBO_TestbedConfig:
     """Configuration loaded from a testbed YAML file."""
     size: dict[str, list[float]]
-    origin_position: str = 'corner'
     origin: dict | None = None
     limbo_marker: dict | None = None
 
@@ -154,16 +153,14 @@ class BILBO_TestbedManager:
             # Use custom size
             self.logger.info(f"Using custom testbed size: {self.settings.testbed_size}")
             return BILBO_TestbedConfig(
-                size=self.settings.testbed_size,
-                origin_position='corner'
+                size=self.settings.testbed_size
             )
 
         else:
             # Use default size
             self.logger.info(f"No testbed specified, using default size: {DEFAULT_TESTBED_SIZE}")
             return BILBO_TestbedConfig(
-                size=DEFAULT_TESTBED_SIZE,
-                origin_position='corner'
+                size=DEFAULT_TESTBED_SIZE
             )
 
     # ------------------------------------------------------------------------------------------------------------------

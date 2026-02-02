@@ -10,16 +10,22 @@ class SimpleFloor(BabylonObject):
         super().__init__(object_id, **kwargs)
 
         default_config = {
-            'size_x': 5,
-            'size_y': 5,
+            'size_x': [-2.5, 2.5],  # [min, max] range in meters, or scalar for centered floor
+            'size_y': [-2.5, 2.5],  # [min, max] range in meters, or scalar for centered floor
             'tile_size': 0.5,
             'texture': 'floor_bright.png',
-            'offset_x': 0,
-            'offset_y': 0,
-            'origin': 'center'  # 'center' or 'corner'
         }
 
         self.config = update_dict(default_config, kwargs)
+
+        # Normalize size_x and size_y to [min, max] format
+        # Supports both scalar (legacy: centered at origin) and array [min, max] formats
+        if not isinstance(self.config['size_x'], list):
+            half = self.config['size_x'] / 2
+            self.config['size_x'] = [-half, half]
+        if not isinstance(self.config['size_y'], list):
+            half = self.config['size_y'] / 2
+            self.config['size_y'] = [-half, half]
 
     # ------------------------------------------------------------------------------------------------------------------
     def getConfig(self) -> dict:

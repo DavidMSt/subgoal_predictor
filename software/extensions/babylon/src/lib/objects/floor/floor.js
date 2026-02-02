@@ -133,29 +133,39 @@ export class BabylonSimpleFloor extends BabylonObject {
         super(id, scene, payload);
 
         const defaultConfig = {
-            size_x: 5,          // total width of the floor (X axis)
-            size_y: 5,          // total depth of the floor (Z axis)
-            tile_size: 0.5,     // desired size of a single tile
+            size_x: [-2.5, 2.5],  // [min, max] range in meters, or scalar for centered floor
+            size_y: [-2.5, 2.5],  // [min, max] range in meters, or scalar for centered floor
+            tile_size: 0.5,       // desired size of a single tile
             texture: 'floor_bright.png',
             color: [0.7, 0.7, 0.7],
-
-            // NEW
-            offset_x: 0,        // offset in world X
-            offset_y: 0,        // offset in world Z
-            origin: 'center',   // 'center' | 'corner'
         };
 
         this.config = { ...defaultConfig, ...this.config };
 
-        const tilesX = Math.max(1, Math.round(this.config.size_x / this.config.tile_size));
-        const tilesY = Math.max(1, Math.round(this.config.size_y / this.config.tile_size));
+        // Normalize size_x and size_y to [min, max] format
+        // Supports both scalar (legacy: centered at origin) and array [min, max] formats
+        if (!Array.isArray(this.config.size_x)) {
+            const half = this.config.size_x / 2;
+            this.config.size_x = [-half, half];
+        }
+        if (!Array.isArray(this.config.size_y)) {
+            const half = this.config.size_y / 2;
+            this.config.size_y = [-half, half];
+        }
+
+        // Compute actual dimensions from ranges
+        const widthX = this.config.size_x[1] - this.config.size_x[0];
+        const widthY = this.config.size_y[1] - this.config.size_y[0];
+
+        const tilesX = Math.max(1, Math.round(widthX / this.config.tile_size));
+        const tilesY = Math.max(1, Math.round(widthY / this.config.tile_size));
         const subdivisions = Math.max(tilesX, tilesY);
 
         this.mesh = MeshBuilder.CreateGround(
             id + '_ground',
             {
-                width: this.config.size_x,
-                height: this.config.size_y,
+                width: widthX,
+                height: widthY,
                 subdivisions,
                 updatable: false,
             },
@@ -193,22 +203,16 @@ export class BabylonSimpleFloor extends BabylonObject {
     }
 
     /**
-     * Computes mesh position based on origin mode and offsets
+     * Computes mesh position based on the size ranges.
+     * The mesh center is placed at the center of the range.
      */
     _applyOriginAndOffset() {
-        let x = 0;
-        let z = 0;
+        // Center of the floor is the midpoint of each range
+        const centerX = (this.config.size_x[0] + this.config.size_x[1]) / 2;
+        const centerY = (this.config.size_y[0] + this.config.size_y[1]) / 2;
 
-        if (this.config.origin === 'corner') {
-            // Move center so that (0,0) is the lower-left corner
-            x = this.config.size_x / 2;
-            z = -this.config.size_y / 2;
-        }
-
-        x += this.config.offset_x;
-        z += this.config.offset_y;
-
-        this.mesh.position.set(x, 0, z);
+        // In Babylon, Y maps to world Z (with negation for coordinate system)
+        this.mesh.position.set(centerX, 0, -centerY);
     }
 
     highlight(state) {}

@@ -3284,8 +3284,6 @@ class BILBO_GUI_OverviewPage:
 
         target_x = (testbed_size['x'][0] + testbed_size['x'][1]) / 2
         target_y = (testbed_size['y'][0] + testbed_size['y'][1]) / 2
-        size_x = testbed_size['x'][1] - testbed_size['x'][0]
-        size_y = testbed_size['y'][1] - testbed_size['y'][0]
 
         self.babylon_visualization = BabylonVisualization(
             id='babylon', babylon_config=
@@ -3302,9 +3300,8 @@ class BILBO_GUI_OverviewPage:
         self.babylon_visualization.start()
 
         floor = SimpleFloor('floor',
-                            size_x=size_x,
-                            size_y=size_y,
-                            origin=self.manager.testbed_config.origin_position)
+                            size_x=testbed_size['x'],
+                            size_y=testbed_size['y'])
         self.babylon_visualization.addObject(floor)
 
         # testbed_size = [3, 3]  # Size in meters

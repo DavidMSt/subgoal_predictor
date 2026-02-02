@@ -21,4 +21,3 @@ limbo_marker:
 size:
   x: [ 0, 3 ]
   y: [ 0, 1 ]
-origin_position: 'corner'

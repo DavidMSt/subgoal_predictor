@@ -17,8 +17,8 @@ optitrack:
 testbed:
   type: null
   size:
-    x: [-1.5, 1.5]
-    y: [-1.5, 1.5]
+    x: [0, 3]
+    y: [0, 3]
 
 
 # mDNS: Advertises the GUI on the local network via multicast DNS
