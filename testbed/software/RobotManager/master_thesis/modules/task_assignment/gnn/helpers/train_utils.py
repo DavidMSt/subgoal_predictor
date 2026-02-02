@@ -5,23 +5,42 @@ Based on Goarin & Loianno, "Graph Neural Network for Decentralized Multi-Robot G
 """
 
 import torch
-import torch.nn.functional as F
-from torch_geometric.loader import DataLoader
-from tqdm import tqdm
-
-from master_thesis.modules.task_assignment.gnn.helpers.loss_functions import dgnn_ga_loss, balanced_bce_loss
-from master_thesis.modules.task_assignment.gnn.cost_computation import compute_squared_cost_matrix
-
-import torch
 import os
 from torch.utils.data import Dataset, ConcatDataset
-from torch_geometric.data import HeteroData
+from torch.utils.data import DataLoader
+import random
+from tqdm import tqdm
+from itertools import chain
+
+from master_thesis.modules.task_assignment.gnn.helpers.loss_functions import dgnn_ga_loss
+
+class AssignmentDataset(Dataset):
+    """Dataset for DGNN-GA task assignment.
+
+    Loads cost matrices and optimal assignment labels.
+    Format: {'cost': (n_samples, N, N), 'labels': (n_samples, N, N)}
+    """
+
+    def __init__(self, data_path: str) -> None:
+        data = torch.load(data_path, map_location='cpu', weights_only=True)
+        self.costs = data['cost'].float()      # (n_samples, N, N)
+        self.labels = data['labels'].float()   # (n_samples, N, N)
+        self.team_size = data.get('team_size', self.costs.shape[1])
+
+    def __len__(self):
+        return self.costs.shape[0]
+
+    def __getitem__(self, idx):
+        return {
+            'cost': self.costs[idx],    # (N, N)
+            'label': self.labels[idx]   # (N, N)
+        }
 
 
 def load_datasets(
     data_dir: str = 'master_thesis/modules/task_assignment/gnn/datasets',
     team_sizes: list[int] | None = None,
-) -> ConcatDataset:
+) -> dict[str, AssignmentDataset]:
     """Load and combine multiple team size datasets.
 
     Args:
@@ -40,84 +59,15 @@ def load_datasets(
                 team_sizes.append(n)
         team_sizes.sort()
 
-    datasets = []
+    datasets_dict = {}
     for n in team_sizes:
         path = os.path.join(data_dir, f'dataset_n{n:02d}.pt')
         if os.path.exists(path):
-            datasets.append(BipartiteAssignmentDataset(path))
-            print(f"Loaded {path}: {len(datasets[-1])} samples")
+            datasets_dict[n] = AssignmentDataset(path)
+            print(f"Loaded {path}: {len(datasets_dict[n])} samples")
 
-    return ConcatDataset(datasets)
+    return datasets_dict
 
-
-class BipartiteAssignmentDataset(Dataset):
-    """Dataset for bipartite graph task assignment.
-
-    Loads generated datasets and converts them to HeteroData format
-    for PyTorch Geometric GNN models.
-    """
-
-    def __init__(self, data_path: str) -> None:
-        obj = torch.load(data_path, map_location='cpu')
-        self.samples = obj['samples']
-        self.metadata = {k: v for k, v in obj.items() if k != 'samples'}
-        self.in_dims = self[0].num_node_features if len(self.samples) > 0 else 4
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, index):
-        s = self.samples[index]
-        XA = s['XA'].float()
-        XT = s['XT'].float()
-        y_agent = s['y_cols'].long()
-        matches = s['matches']
-
-        n_a, n_t = XA.size(0), XT.size(0)
-
-        # Fully connected bipartite graph
-        ai = torch.arange(n_a).repeat_interleave(n_t)
-        tj = torch.arange(n_t).repeat(n_a)
-        edge_index = torch.stack([ai, tj], 0)
-
-        # Edge features: relative position and distance
-        rel = XT[tj, :2] - XA[ai, :2]
-        dist = rel.norm(dim=1, keepdim=True)
-        edge_attr = torch.cat([rel, dist], 1)
-
-        # Edge labels for assignment
-        y_edge = torch.zeros(edge_index.size(1), dtype=torch.long)
-        for a, t in matches:
-            y_edge[a * n_t + t] = 1
-
-        data = HeteroData()
-        data['agent'].x = XA
-        data['agent'].y = y_agent
-        data['task'].x = XT
-        data[('agent', 'sees', 'task')].edge_index = edge_index
-        data[('agent', 'sees', 'task')].edge_attr = edge_attr
-        data[('agent', 'assigns', 'task')].y = y_edge
-        data.n_tasks = torch.tensor([n_t])
-
-        return data
-
-    @property
-    def team_size(self) -> int | None:
-        return self.metadata.get('team_size', None)
-
-
-if __name__ == "__main__":
-    import sys
-    path = sys.argv[1] if len(sys.argv) > 1 else 'master_thesis/modules/task_assignment/gnn/datasets/dataset_n05.pt'
-
-    ds = BipartiteAssignmentDataset(path)
-    print(f"Loaded {len(ds)} samples, team_size={ds.team_size}")
-
-    if len(ds) > 0:
-        sample = ds[0]
-        print(f"Agent features: {sample['agent'].x.shape}")
-        print(f"Task features: {sample['task'].x.shape}")
-        print(f"Edge index: {sample[('agent', 'sees', 'task')].edge_index.shape}")
 
 
 def generate_comm_edges(n_robots: int, density: float, device: torch.device) -> torch.Tensor:
@@ -151,10 +101,9 @@ def generate_comm_edges(n_robots: int, density: float, device: torch.device) -> 
 
 
 @torch.enable_grad
-# todo: do bucket batching here (multiple batches per group size, don't do a full shuffle and shuffle on batch level only)
 def train_epoch(
     model: torch.nn.Module,
-    loader: DataLoader,
+    train_loader_dict: dict[str, DataLoader],
     opt: torch.optim.Optimizer,
     device: torch.device,
     beta: float = 0.8,
@@ -176,78 +125,40 @@ def train_epoch(
     Returns:
         Dict with average losses for the epoch
     """
+
+    # put model into training mode
     model.train()
+
+    # initialize losses
     total_loss = 0.0
     total_bce = 0.0
     total_match = 0.0
-    n_batches = 0
 
-    pbar = tqdm(loader, desc="Training", leave=False)
-    for batch in pbar:
-        batch = batch.to(device)
+    # convert to list to save chained samples to memory, afterwards shuffle to mix groups (otherwise each group size consecutively) 
+    all_batches = list(chain.from_iterable(train_loader_dict.values())) 
+    random.shuffle(all_batches)
 
-        # Get agents/tasks per graph in batch
-        n_a_per_g = torch.bincount(batch['agent'].batch)
-        n_t_per_g = torch.bincount(batch['task'].batch)
+    for batch_sample in tqdm(all_batches, desc='training process'):
+        opt.zero_grad() # clear gradients from previous step
 
-        # Get positions and labels split by graph
-        agent_pos_list = batch['agent'].x[:, :2].split(n_a_per_g.tolist())
-        task_pos_list = batch['task'].x[:, :2].split(n_t_per_g.tolist())
+        cost = batch_sample['cost'].to(device)
+        label = batch_sample['label'].to(device)
 
-        # Labels are stored on assignment edges
-        edges_pg = n_a_per_g * n_t_per_g
-        labels_batch = batch[('agent', 'assigns', 'task')].y.float()
-        labels_pg = torch.split(labels_batch, edges_pg.tolist())
+        pred = model(cost) # forward pass
+        loss, loss_bce, loss_match = dgnn_ga_loss(predictions=pred, targets=label, alpha=alpha, beta=beta)
 
-        # Process each graph and accumulate losses
-        losses = []
-        bce_losses = []
-        match_losses = []
+        loss.backward() # compute the gradients
+        opt.step() # udpate the models' parameters
 
-        for agent_pos, task_pos, labels_flat, n_a, n_t in zip(
-            agent_pos_list, task_pos_list, labels_pg, n_a_per_g, n_t_per_g
-        ):
-            # Compute cost matrix
-            cost_matrix = compute_squared_cost_matrix(agent_pos, task_pos)
- 
+        total_loss += loss
+        total_bce += loss_bce
+        total_match += loss_match
 
-            # Sample random communication density for this graph (paper: 20-100%)
-            density = torch.empty(1).uniform_(*comm_density_range).item()
-            comm_edges = generate_comm_edges(int(n_a), density, device)
+        raise AssertionError('connectivity has to still be implemented')
 
-            # Forward pass with communication edges
-            pred_matrix = model(cost_matrix, edge_indices_rr=comm_edges)  # (N_r, N_g)
 
-            # Reshape labels to matrix
-            labels_matrix = labels_flat.view(int(n_a), int(n_t))
 
-            # Compute DGNN-GA loss
-            loss, l_bce, l_match = dgnn_ga_loss(
-                pred_matrix, labels_matrix, beta=beta, alpha=alpha
-            )
-
-            losses.append(loss)
-            bce_losses.append(l_bce)
-            match_losses.append(l_match)
-
-        # Backward pass
-        opt.zero_grad()
-        batch_loss = torch.stack(losses).mean()
-        batch_loss.backward()
-        opt.step()
-
-        total_loss += batch_loss.item()
-        total_bce += torch.stack(bce_losses).mean().item()
-        total_match += torch.stack(match_losses).mean().item()
-        n_batches += 1
-
-        pbar.set_postfix(loss=f"{total_loss/n_batches:.4f}")
-
-    return {
-        'loss': total_loss / n_batches,
-        'bce_loss': total_bce / n_batches,
-        'match_loss': total_match / n_batches
-    }
+        
 
 
 @torch.no_grad()

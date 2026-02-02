@@ -13,7 +13,7 @@ from master_thesis.containers.general_containers.agent_container import FRODOAge
 from master_thesis.containers.general_containers.task_container import TaskContainer
 
 
-def compute_cost_matrix(
+def compute_squared_cost_matrix(
     agent_positions: torch.Tensor,
     task_positions: torch.Tensor,
 ) -> torch.Tensor:
@@ -27,10 +27,10 @@ def compute_cost_matrix(
     Returns:
         Cost matrix of shape (N_r, N_g)
     """
-    return torch.cdist(agent_positions, task_positions)
+    return torch.cdist(agent_positions, task_positions).pow(2)
 
 
-def compute_cost_matrix_from_containers(
+def compute_squared_cost_matrix_from_containers(
     agents: List[FRODOAgentContainer],
     tasks: List[TaskContainer],
     device: torch.device = None,
@@ -59,4 +59,4 @@ def compute_cost_matrix_from_containers(
         device=device
     )
 
-    return compute_cost_matrix(agent_positions, task_positions)
+    return compute_squared_cost_matrix(agent_positions, task_positions).pow(2)

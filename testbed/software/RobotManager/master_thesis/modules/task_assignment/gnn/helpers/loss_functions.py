@@ -52,7 +52,8 @@ def matching_loss(predictions: torch.Tensor) -> torch.Tensor:
     Returns:
         Scalar loss
     """
-    N_r, N_g = predictions.shape
+    
+    _, N_r, N_g = predictions.shape
     N = min(N_r, N_g)  # For non-square matrices
     ones = torch.ones(N, device=predictions.device)
 
