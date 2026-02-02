@@ -495,6 +495,7 @@ class ExperimentParser:
             description=data["description"],
             actions=actions,
             timeout=data.get("timeout"),
+            external_input_enabled=data.get("external_input_enabled", False),
         )
 
     def parse_action(self, data: dict | str, index: int = 0) -> ExperimentActionDefinition:

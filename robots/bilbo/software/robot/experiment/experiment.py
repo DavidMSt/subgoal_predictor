@@ -492,7 +492,6 @@ class SetInputAction(ExperimentAction):
         kwargs = cls._common_init_kwargs(definition)
         input_val = definition.parameters.get('input', [0.0, 0.0])
         normalized = definition.parameters.get('normalized', False)
-        print(f"[SetInputAction.from_definition] Creating: id={definition.id}, input={input_val}, normalized={normalized}, delay={definition.delay}")
         return cls(
             **kwargs,
             input=input_val,
@@ -507,21 +506,20 @@ class WaitTimeAction(ExperimentAction):
 
     def execute(self):
         self._on_started()
-        print(f"[WaitTimeAction {self.id}] Waiting for {self.time_ms} ms ({self.time_ms / 1000.0} seconds)")
+        self.logger.debug(f"Waiting for {self.time_ms} ms ({self.time_ms / 1000.0:.2f} s)")
         thread = threading.Thread(target=self._execute_blocking, daemon=True)
         thread.start()
         return False
 
     def _execute_blocking(self):
         precise_sleep(self.time_ms / 1000.0)
-        print(f"[WaitTimeAction {self.id}] Wait finished")
+        self.logger.debug(f"Wait finished")
         self._on_finished()
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> WaitTimeAction:
         kwargs = cls._common_init_kwargs(definition)
         time_ms = definition.parameters.get('time_ms', 0)
-        print(f"[WaitTimeAction.from_definition] Creating WaitTimeAction: id={definition.id}, time_ms={time_ms}, parameters={definition.parameters}")
         return cls(
             **kwargs,
             time_ms=time_ms,
@@ -1199,6 +1197,7 @@ class ExperimentDefinition:
     description: str
     actions: list[ExperimentActionDefinition]
     timeout: float | None = None
+    external_input_enabled: bool = False  # Whether external inputs (joystick, etc.) are enabled during experiment
 
     # ----------------------------------------------------------------------
     @classmethod
@@ -1238,6 +1237,7 @@ class ExperimentDefinition:
             "id": self.id,
             "description": self.description,
             "timeout": self.timeout,
+            "external_input_enabled": self.external_input_enabled,
             "actions": [a.to_dict() for a in self.actions],
         }
 
@@ -1542,7 +1542,30 @@ class Experiment:
             # Beep
             self.experiment_handler.utilities.beep(1000, 500, 1)
             speak(f"Experiment {self.definition.id} started")
-            self.logger.info(f"Started at global tick {self.start_tick}")
+
+            # Log experiment start with full details
+            self.logger.info(f"========== Experiment \"{self.definition.id}\" ==========")
+            self.logger.info(f"Description: \"{self.definition.description}\"")
+            self.logger.info(f"Start tick: {self.start_tick}")
+            if self.timeout is not None:
+                self.logger.info(f"Timeout: {self.timeout:.1f} s")
+
+            # Apply external input setting
+            if self.definition.external_input_enabled:
+                self.experiment_handler.interfaces.enable_external_input()
+                self.logger.info(f"External input: enabled")
+            else:
+                self.experiment_handler.interfaces.disable_external_input()
+                self.logger.info(f"External input: disabled")
+
+            # Log all actions with their main parameters
+            self.logger.info(f"Actions ({len(self.action_containers)}):")
+            for action_id, container in self.action_containers.items():
+                action = container.action
+                params_str = self._get_action_params_string(action)
+                self.logger.info(f"  - \"{action_id}\" ({type(action).__name__}){params_str}")
+
+            self.logger.info(f"=" * (22 + len(self.definition.id) + 2))
 
             self.callbacks.first_step.call()
 
@@ -1569,8 +1592,7 @@ class Experiment:
             # Check if the action is finished
             if not action_container.handled and action_container.finished:
                 # Remove the listeners immediately
-                self.logger.info(
-                    f"[Step {self.tick} (Global: {self.experiment_handler.common.tick})] Action {action_container.id} finished")
+                self.logger.info(f"[Step {self.tick}] Action \"{action_container.id}\" finished")
                 self.events.action_finished.set(data=action_container.action, flags={'id': action_container.id})
                 action_container.end_tick = self.tick
                 for listener in action_container.listeners:
@@ -1592,9 +1614,9 @@ class Experiment:
 
     # ------------------------------------------------------------------------------------------------------------------
     def execute_action(self, action_container: ExperimentActionContainer):
-
+        params_str = self._get_action_params_string(action_container.action)
         self.logger.info(
-            f"[Step {self.tick} (Global: {self.experiment_handler.common.tick})] Executing action {action_container.id} ({type(action_container.action).__name__})")
+            f"[Step {self.tick}] Executing \"{action_container.id}\" ({type(action_container.action).__name__}){params_str}")
         # Attach the action's events:
         action_container.listeners.append(action_container.action.events.error.on(callback=
         Callback(
@@ -1621,8 +1643,7 @@ class Experiment:
         if result:
             action_container.end_tick = self.tick
             action_container.finished = True
-            self.logger.info(
-                f"[Step {self.tick} (Global: {self.experiment_handler.common.tick})] Action {action_container.id} finished")
+            self.logger.info(f"[Step {self.tick}] Action \"{action_container.id}\" finished")
             self.events.action_finished.set(data=action_container.action, flags={'id': action_container.id})
 
             for listener in action_container.listeners:
@@ -1641,11 +1662,42 @@ class Experiment:
     # ------------------------------------------------------------------------------------------------------------------
     def _handle_finished(self):
         self.end_tick = self.experiment_handler.common.tick
-        self.logger.info(
-            f"[Step {self.tick} (Global: {self.experiment_handler.common.tick})] Experiment {self.definition.id} finished at global tick {self.end_tick}.")
+        self.logger.info(f"========== Experiment \"{self.definition.id}\" finished ==========")
+        self.logger.info(f"End tick: {self.end_tick} (duration: {self.tick} steps)")
         # Beep
         thread = threading.Thread(target=self._finish_task, daemon=True)
         thread.start()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _get_action_params_string(self, action: ExperimentAction) -> str:
+        """Get a string of main parameters for an action for logging."""
+        params = []
+        if isinstance(action, SetModeAction):
+            params.append(f"mode={action.mode.name}")
+        elif isinstance(action, SetVelocityAction):
+            params.append(f"forward={action.forward}, turn={action.turn}")
+        elif isinstance(action, WaitTimeAction):
+            params.append(f"time_ms={action.time_ms}")
+        elif isinstance(action, WaitTickAction):
+            params.append(f"ticks={action.ticks}")
+        elif isinstance(action, BeepAction):
+            params.append(f"freq={action.frequency}, time_ms={action.time_ms}")
+        elif isinstance(action, SpeakAction):
+            params.append(f"text=\"{action.text}\"")
+        elif isinstance(action, EnableExternalInputAction):
+            params.append(f"enabled={action.enabled}")
+        elif isinstance(action, SetInputAction):
+            params.append(f"input={action.input}")
+        elif isinstance(action, MoveToAction):
+            params.append(f"x={action.x}, y={action.y}")
+        elif isinstance(action, TurnToAction):
+            params.append(f"heading={action.heading:.2f} rad")
+        elif isinstance(action, SetFeedbackGainAction):
+            params.append(f"K={action.K}")
+
+        if params:
+            return f": {', '.join(params)}"
+        return ""
 
     # ------------------------------------------------------------------------------------------------------------------
     def _finish_task(self):
@@ -1653,6 +1705,10 @@ class Experiment:
         self.finished = True
         speak(f"Experiment {self.definition.id} finished")
         self.experiment_handler.utilities.beep(888, 500, 2)
+
+        # Always reset at end of experiment: re-enable external input
+        self.experiment_handler.interfaces.enable_external_input()
+        self.logger.info(f"Reset: External input re-enabled")
 
         # # Build the experiment data
         samples = self.experiment_handler.common.get_data(start=self.start_tick, end=self.end_tick,

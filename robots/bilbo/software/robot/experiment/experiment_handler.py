@@ -192,16 +192,12 @@ class BILBO_ExperimentHandler:
         if isinstance(experiment, ExperimentDefinition):
             experiment = Experiment(experiment)
 
-        self.logger.info(f"Running experiment {experiment.definition.id} ...")
-        self.logger.info(f"Number of actions: {len(experiment.definition.actions)}")
+        self.logger.info(f"Running experiment \"{experiment.definition.id}\" ...")
 
         if self.active_experiment is not None:
             self.logger.warning(
-                f"Experiment {self.active_experiment.definition.id} already running. Cannot start experiment {experiment.definition.id}.")
+                f"Experiment \"{self.active_experiment.definition.id}\" already running. Cannot start experiment \"{experiment.definition.id}\".")
             return False
-
-        if experiment.definition.description is not None:
-            self.logger.info(f"Experiment description: {experiment.definition.description}")
 
         self.active_experiment = experiment
         self.active_experiment.initialize(self)
@@ -689,11 +685,11 @@ class BILBO_ExperimentHandler:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_experiment_finished(self, data: dict, *args, **kwargs):
-        self.logger.info("Experiment finished.")
+        self.logger.info(f"Experiment \"{data['id']}\" finished.")
 
         experiments_dir = os.path.expanduser("~/robot/experiments")
         # Generate filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         filename = f"{data['id']}_{timestamp}.json"
         filepath = os.path.join(experiments_dir, filename)
 
