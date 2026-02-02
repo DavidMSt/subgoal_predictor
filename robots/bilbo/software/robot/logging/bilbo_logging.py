@@ -17,7 +17,7 @@ from robot.control.bilbo_control import BILBO_Control
 from robot.core import get_main_provider, set_logging_provider, LoggingProvider
 from robot.drive.bilbo_drive import BILBO_Drive
 from robot.estimation.bilbo_estimation import BILBO_Estimation
-from robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
+from robot.experiment.experiment_handler import BILBO_ExperimentHandler
 from robot.logging.bilbo_sample import BILBO_Sample
 from robot.lowlevel.stm32_general import BILBO_CONTROL_DT
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample

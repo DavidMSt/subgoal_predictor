@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 
 from robot.bilbo import BILBO
 from robot.control.definitions import BILBO_Control_Mode
-from robot.experiment.bilbo_experiment import BILBO_Trajectory
+from robot.experiment.definitions import BILBO_TrajectoryData as BILBO_Trajectory
 from sys_id import estimate_system_and_lifted_matrix
 from core.utils.logging_utils import setLoggerLevel, Logger
 

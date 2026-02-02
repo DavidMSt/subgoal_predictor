@@ -4,8 +4,7 @@ import dataclasses
 from robot.control.bilbo_control_definitions import BILBO_Control_Sample
 from robot.estimation.bilbo_estimation import BILBO_Estimation_Sample
 from robot.drive.bilbo_drive import TWIPR_Drive_Sample
-from robot.experiment.bilbo_experiment import BILBO_ExperimentHandler_Sample
-# from robot.experiment.bilbo_experiment import BILBO_ExperimentHandler_Sample
+from robot.experiment.definitions import BILBO_ExperimentHandler_Sample
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample
 from robot.sensors.bilbo_sensors import BILBO_Sensors_Sample
 

@@ -10,7 +10,7 @@ from hardware.control_board import RobotControl_Board
 from hardware.stm32.stm32 import resetSTM32
 from robot.bilbo_common import BILBO_Common
 from robot.core import MainProvider, set_main_provider
-from robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
+from robot.experiment.experiment_handler import BILBO_ExperimentHandler
 from robot.interfaces.bilbo_interfaces import BILBO_Interfaces
 from robot.utilities.bilbo_utilities import BILBO_Utilities
 from core.utils.callbacks import callback_definition, CallbackContainer

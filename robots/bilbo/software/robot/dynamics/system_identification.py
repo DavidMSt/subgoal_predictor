@@ -2,7 +2,7 @@ import numpy as np
 
 from robot.bilbo import BILBO
 from robot.dynamics.tests.sys_id import estimate_system_and_lifted_matrix
-from robot.experiment.bilbo_experiment import BILBO_Trajectory
+from robot.experiment.definitions import BILBO_TrajectoryData as BILBO_Trajectory
 
 
 def run_system_identification(bilbo: BILBO, trials, duration, frequencies, gains, wait_for_resume=True):

@@ -9,6 +9,13 @@ Key classes:
 - ExperimentBuilder: Fluent API for building experiments programmatically
 - BILBO_ExperimentHandler: Run experiments and handle lifecycle events
 
+Action Registry (for parsing and validation):
+- ActionParameter, ActionEntry: Declarative action definitions
+- ActionRegistry: Registry of all available action types
+- ExperimentParser: Parse and validate experiment files/dicts
+- get_registry(): Access the global action registry
+- validate_experiment(): Validate without raising exceptions
+
 Action helper functions (for programmatic experiment creation):
 - beep(), speak(), wait_time(), wait_ticks()
 - set_mode(), set_velocity(), set_input()
@@ -17,7 +24,11 @@ Action helper functions (for programmatic experiment creation):
 - wait_event(), wait_until_tick()
 
 Example usage:
-    # From YAML file
+    # From YAML file with validation
+    from robots.bilbo.robot.experiment import parse_experiment_file
+    exp_dict = parse_experiment_file("my_experiment.yaml")
+
+    # Using ExperimentDefinition
     exp = ExperimentDefinition.from_file("my_experiment.yaml")
     data = experiment_handler.run_experiment(exp, blocking=True)
 
@@ -41,7 +52,38 @@ Example usage:
             set_mode("BALANCING", id="mode_0"),
         ]
     )
+
+    # Introspect available actions
+    from robots.bilbo.robot.experiment import get_registry, get_available_actions
+    for action_info in get_available_actions():
+        print(f"{action_info['type']}: {action_info['description']}")
 """
+
+# Action registry and parser (experiment_actions.py)
+from robots.bilbo.robot.experiment.experiment_actions import (
+    # Parameter and action definitions
+    ActionParameter,
+    ActionEntry,
+    ShorthandRule,
+    ActionRegistry,
+    ExperimentParser,
+
+    # Registry access
+    get_registry,
+    register_action,
+
+    # Convenience functions
+    parse_experiment_file,
+    parse_experiment_dict,
+    validate_experiment,
+    get_available_actions,
+    get_action_info,
+
+    # Converters (for custom actions)
+    parse_time_ms,
+    parse_control_mode,
+    normalize_waypoints,
+)
 
 # Core definitions
 from robots.bilbo.robot.experiment.experiment_definitions import (
@@ -98,6 +140,31 @@ from robots.bilbo.robot.experiment.experiment_definitions import (
     set_tic,
     wait_event,
     wait_until_tick,
+    func,
+    set_feedback_gain,
+    reset_control,
+
+    # Position control helper functions
+    move_to,
+    turn_to,
+    set_waypoints,
+    start_path,
+    load_path,
+    stop_path,
+    wait_position_event,
+
+    # Position control action params
+    MoveToActionParams,
+    TurnToActionParams,
+    SetWaypointsActionParams,
+    StartPathActionParams,
+    LoadPathActionParams,
+    StopPathActionParams,
+    WaitPositionEventActionParams,
+    FuncActionParams,
+    SetFeedbackGainActionParams,
+    ResetControlActionParams,
+    WaypointDef,
 
     # File I/O
     BILBO_InputFileData,
@@ -114,6 +181,23 @@ from robots.bilbo.robot.experiment.bilbo_experiment import (
 )
 
 __all__ = [
+    # Action registry and parser
+    "ActionParameter",
+    "ActionEntry",
+    "ShorthandRule",
+    "ActionRegistry",
+    "ExperimentParser",
+    "get_registry",
+    "register_action",
+    "parse_experiment_file",
+    "parse_experiment_dict",
+    "validate_experiment",
+    "get_available_actions",
+    "get_action_info",
+    "parse_time_ms",
+    "parse_control_mode",
+    "normalize_waypoints",
+
     # Trajectories
     "BILBO_InputTrajectory",
     "BILBO_InputTrajectoryStep",
@@ -167,6 +251,31 @@ __all__ = [
     "set_tic",
     "wait_event",
     "wait_until_tick",
+    "func",
+    "set_feedback_gain",
+    "reset_control",
+
+    # Position control helper functions
+    "move_to",
+    "turn_to",
+    "set_waypoints",
+    "start_path",
+    "load_path",
+    "stop_path",
+    "wait_position_event",
+
+    # Position control action params
+    "MoveToActionParams",
+    "TurnToActionParams",
+    "SetWaypointsActionParams",
+    "StartPathActionParams",
+    "LoadPathActionParams",
+    "StopPathActionParams",
+    "WaitPositionEventActionParams",
+    "FuncActionParams",
+    "SetFeedbackGainActionParams",
+    "ResetControlActionParams",
+    "WaypointDef",
 
     # File I/O
     "BILBO_InputFileData",

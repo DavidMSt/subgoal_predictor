@@ -7,6 +7,11 @@ It is designed to be kept in sync with the robot software implementation at:
 
 The host software uses these definitions to construct and serialize experiments,
 which are then sent to the robot for execution.
+
+For action parsing and validation, see experiment_actions.py which provides:
+- ActionRegistry with all available action types
+- ExperimentParser for file/dict parsing with validation
+- Introspection of available actions, parameters, and shorthands
 """
 from __future__ import annotations
 
@@ -23,199 +28,17 @@ from core.utils.json_utils import writeJSON, readJSON
 from robots.bilbo.robot.bilbo_data import BILBO_DynamicState, BILBO_Sample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_CONTROL_DT, BILBO_Config, BILBO_ControlConfig
 
+# Import parsing utilities from experiment_actions
+from robots.bilbo.robot.experiment.experiment_actions import (
+    parse_time_ms as _parse_time,
+    normalize_waypoints as _normalize_waypoints,
+    get_registry as _get_action_registry,
+)
 
-# ======================================================================================================================
-# TIME PARSING
-# ======================================================================================================================
-
-def _parse_time(val) -> int:
-    """Parse time value to milliseconds.
-
-    Supports:
-    - '2s' or '2.5s' -> seconds to milliseconds
-    - '500ms' -> milliseconds
-    - 2.0 (float) -> interpreted as seconds
-    - 2000 (int) -> interpreted as milliseconds
-    """
-    if isinstance(val, float):
-        # Floats are interpreted as seconds
-        return int(val * 1000)
-    if isinstance(val, int):
-        # Integers are interpreted as milliseconds
-        return val
-    if isinstance(val, str):
-        val = val.strip().lower()
-        if val.endswith("ms"):
-            return int(float(val[:-2]))
-        if val.endswith("s"):
-            return int(float(val[:-1]) * 1000)
-        # Bare string number - try to be smart about it
-        num = float(val)
-        if '.' in val:
-            # Has decimal point, treat as seconds
-            return int(num * 1000)
-        else:
-            # Integer string, treat as milliseconds
-            return int(num)
-    raise ValueError(f"Invalid time format: {val}")
-
-
-# ======================================================================================================================
-# SHORTHAND EXPANSION
-# ======================================================================================================================
 
 def _expand_shorthand(d: dict | str) -> dict:
-    """Expand shorthand action definitions to full format.
-
-    Supports:
-    - "beep" (string) -> type: beep
-    - wait: "2s" or wait: 2000 -> type: wait_time
-    - wait_ticks: 100 -> type: wait_ticks
-    - mode: BALANCING -> type: set_mode
-    - speak: "text" -> type: speak
-    - beep or beep: 1000 -> type: beep
-    - velocity: [0.5, 0.1] -> type: set_velocity
-    - parallel: [...] -> type: parallel
-    """
-    # Handle string shorthand (e.g., "beep" as a bare string)
-    if isinstance(d, str):
-        if d == "beep":
-            return {"type": "beep"}
-        raise ValueError(f"Unknown string shorthand: {d}")
-
-    # Already has 'type' - no expansion needed
-    if "type" in d:
-        return d
-
-    expanded = dict(d)  # Copy to avoid mutation
-
-    # wait: "2s" or wait: 2000 -> type: wait_time
-    if "wait" in expanded:
-        wait_val = expanded.pop("wait")
-        expanded["type"] = "wait_time"
-        expanded["time_ms"] = _parse_time(wait_val)
-        return expanded
-
-    # wait_ticks: 100 -> type: wait_ticks
-    if "wait_ticks" in expanded:
-        expanded["type"] = "wait_ticks"
-        expanded["ticks"] = expanded.pop("wait_ticks")
-        return expanded
-
-    # mode: BALANCING -> type: set_mode
-    if "mode" in expanded:
-        expanded["type"] = "set_mode"
-        return expanded
-
-    # speak: "text" -> type: speak
-    if "speak" in expanded:
-        expanded["type"] = "speak"
-        expanded["text"] = expanded.pop("speak")
-        return expanded
-
-    # beep or beep: 1000 -> type: beep
-    if "beep" in expanded:
-        expanded["type"] = "beep"
-        beep_val = expanded.pop("beep")
-        if beep_val is not None and beep_val is not True:
-            expanded["frequency"] = beep_val
-        return expanded
-
-    # velocity: [0.5, 0.1] -> type: set_velocity
-    if "velocity" in expanded:
-        expanded["type"] = "set_velocity"
-        vel = expanded.pop("velocity")
-        if isinstance(vel, list) and len(vel) >= 2:
-            expanded["forward"] = vel[0]
-            expanded["turn"] = vel[1]
-        return expanded
-
-    # parallel: [...] -> type: parallel
-    if "parallel" in expanded:
-        expanded["type"] = "parallel"
-        expanded["actions"] = expanded.pop("parallel")
-        return expanded
-
-    # move_to: [x, y] or move_to: {x: ..., y: ...} -> type: move_to
-    if "move_to" in expanded:
-        expanded["type"] = "move_to"
-        move_val = expanded.pop("move_to")
-        if isinstance(move_val, list) and len(move_val) >= 2:
-            expanded["x"] = move_val[0]
-            expanded["y"] = move_val[1]
-        elif isinstance(move_val, dict):
-            expanded.update(move_val)
-        return expanded
-
-    # turn_to: angle or turn_to: {heading: ...} -> type: turn_to
-    if "turn_to" in expanded:
-        expanded["type"] = "turn_to"
-        turn_val = expanded.pop("turn_to")
-        if isinstance(turn_val, (int, float)):
-            expanded["heading"] = turn_val
-        elif isinstance(turn_val, dict):
-            expanded.update(turn_val)
-        return expanded
-
-    # waypoints: [...] -> type: set_waypoints
-    if "waypoints" in expanded:
-        expanded["type"] = "set_waypoints"
-        wp_val = expanded.pop("waypoints")
-        expanded["waypoints"] = _normalize_waypoints(wp_val)
-        return expanded
-
-    # path: "file.yaml" or path: {...} -> type: load_path
-    if "path" in expanded:
-        expanded["type"] = "load_path"
-        return expanded
-
-    # stop_path -> type: stop_path
-    if "stop_path" in expanded:
-        expanded["type"] = "stop_path"
-        expanded.pop("stop_path")
-        return expanded
-
-    return expanded
-
-
-def _normalize_waypoints(waypoints: list) -> list[dict]:
-    """Normalize waypoints to list of dicts with x, y, type, weight.
-
-    Supports shorthand formats:
-    - [x, y] -> {"x": x, "y": y}
-    - [x, y, "STOP"] -> {"x": x, "y": y, "type": "STOP"}
-    - [x, y, weight] -> {"x": x, "y": y, "weight": weight}
-    - [x, y, "STOP", weight] -> {"x": x, "y": y, "type": "STOP", "weight": weight}
-    - {"x": x, "y": y, ...} -> as-is
-    """
-    result = []
-    for wp in waypoints:
-        if isinstance(wp, dict):
-            # Already a dict, just ensure defaults
-            normalized = {
-                "x": wp.get("x", 0.0),
-                "y": wp.get("y", 0.0),
-                "type": wp.get("type", "PASS"),
-                "weight": wp.get("weight", 0.75),
-            }
-        elif isinstance(wp, (list, tuple)):
-            if len(wp) < 2:
-                raise ValueError(f"Waypoint must have at least x, y: {wp}")
-            normalized = {"x": wp[0], "y": wp[1], "type": "PASS", "weight": 0.75}
-            if len(wp) >= 3:
-                if isinstance(wp[2], str):
-                    normalized["type"] = wp[2].upper()
-                else:
-                    normalized["weight"] = wp[2]
-            if len(wp) >= 4:
-                if isinstance(wp[2], str):
-                    normalized["weight"] = wp[3]
-                else:
-                    normalized["type"] = wp[3].upper() if isinstance(wp[3], str) else "PASS"
-        else:
-            raise ValueError(f"Invalid waypoint format: {wp}")
-        result.append(normalized)
-    return result
+    """Expand shorthand action definitions to full format using the action registry."""
+    return _get_action_registry().expand_shorthand(d)
 
 
 # ======================================================================================================================

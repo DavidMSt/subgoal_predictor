@@ -15,7 +15,7 @@ from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
 from robot.drive.bilbo_drive import BILBO_Drive
 from robot.estimation.bilbo_estimation import BILBO_Estimation
-from robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
+from robot.experiment.experiment_handler import BILBO_ExperimentHandler
 from robot.logging.bilbo_sample import BILBO_Sample
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample, SAMPLE_BUFFER_LL_SIZE
 from robot.sensors.bilbo_sensors import BILBO_Sensors
