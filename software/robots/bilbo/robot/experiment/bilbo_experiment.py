@@ -61,7 +61,7 @@ from robots.bilbo.robot.experiment.experiment_definitions import (
     set_feedback_gain,
     reset_control,
 )
-from robots.bilbo.robot.experiment.experiment_helpers import generate_random_input_trajectory
+from robots.bilbo.robot.experiment.experiment_helpers import generate_random_input_trajectory, make_report
 
 
 # ======================================================================================================================
@@ -371,6 +371,7 @@ class BILBO_ExperimentHandler:
         else:
             self.logger.important(f"Experiment \"test_trajectory\" succeeded.")
 
+    # ------------------------------------------------------------------------------------------------------------------
     def plot_last_experiment(self):
         """Plot data from the last experiment."""
         if self._last_experiment_data is None:
@@ -482,11 +483,25 @@ class BILBO_ExperimentHandler:
                 experiment_data = json.load(f)
 
             self._last_experiment_data = experiment_data
+
+            # Generate experiment report
+            self._generate_report(experiment_data)
+
             return experiment_data
 
         except Exception as e:
             self.logger.error(f"Failed to download experiment data: {e}")
             return None
+
+    def _generate_report(self, experiment_data: dict) -> None:
+        """Generate an HTML report for the experiment."""
+        try:
+            exp_id = experiment_data.get('id', 'unknown')
+            self.logger.info(f"Generating report for experiment \"{exp_id}\"...")
+            make_report(experiment_data, show=True)
+            self.logger.info(f"Report generated for experiment \"{exp_id}\"")
+        except Exception as e:
+            self.logger.warning(f"Failed to generate experiment report: {e}")
 
     def _trajectory_event_callback(self, message, *args, **kwargs):
         """Handle trajectory events from the robot."""

@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 40px 20px;
+            background: #f5f5f5;
+        }
+
+        .container {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 25px 30px;
+        }
+
+        header {
+            border-bottom: 2px solid #2c3e50;
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #2c3e50;
+            font-size: 1.5em;
+            margin-bottom: 6px;
+        }
+
+        .experiment-id {
+            color: #7f8c8d;
+            font-size: 0.8em;
+            font-family: monospace;
+            background: #ecf0f1;
+            padding: 2px 6px;
+            border-radius: 3px;
+            display: inline-block;
+            margin-bottom: 6px;
+        }
+
+        .description {
+            color: #555;
+            font-size: 0.95em;
+        }
+
+        .meta-info {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+            font-size: 0.8em;
+            color: #7f8c8d;
+        }
+
+        .meta-info span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        section {
+            margin-bottom: 25px;
+        }
+
+        h2 {
+            color: #2c3e50;
+            font-size: 1.1em;
+            margin-bottom: 12px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #eee;
+        }
+
+        /* Action List - Compact */
+        .action-list {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .action-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border-left: 3px solid #bdc3c7;
+            font-size: 0.85em;
+        }
+
+        .action-item:hover {
+            background: #ecf0f1;
+        }
+
+        .action-item.has-phase {
+            border-left-width: 3px;
+        }
+
+        .action-index {
+            font-family: monospace;
+            font-size: 0.75em;
+            color: #95a5a6;
+            width: 24px;
+            flex-shrink: 0;
+        }
+
+        .action-id {
+            font-weight: 600;
+            color: #2c3e50;
+            min-width: 120px;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+
+        .action-type {
+            color: #7f8c8d;
+            min-width: 100px;
+            font-family: monospace;
+            font-size: 0.85em;
+        }
+
+        .action-params {
+            color: #7f8c8d;
+            font-size: 0.85em;
+            flex-grow: 1;
+        }
+
+        .action-timing {
+            font-size: 0.75em;
+            color: #95a5a6;
+            text-align: right;
+            min-width: 120px;
+        }
+
+        .color-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-right: 8px;
+            flex-shrink: 0;
+            background-color: transparent;
+        }
+
+        /* Plots - Compact */
+        .plots-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 10px;
+        }
+
+        .plot-container {
+            background: #f8f9fa;
+            border-radius: 4px;
+            padding: 6px;
+        }
+
+        .plot-container h3 {
+            color: #7f8c8d;
+            font-size: 0.7em;
+            margin-bottom: 4px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .plot-container img {
+            width: 100%;
+            border-radius: 3px;
+        }
+
+        /* Footer */
+        footer {
+            margin-top: 20px;
+            padding-top: 12px;
+            border-top: 1px solid #eee;
+            text-align: center;
+            color: #95a5a6;
+            font-size: 0.75em;
+        }
+
+        /* Phase Legend - Compact */
+        .phase-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 12px;
+            padding: 8px 12px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            align-items: center;
+        }
+
+        .phase-legend strong {
+            font-size: 0.8em;
+            color: #7f8c8d;
+        }
+
+        .phase-legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.75em;
+        }
+
+        .phase-legend-color {
+            width: 14px;
+            height: 8px;
+            border-radius: 2px;
+        }
+
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+            }
+            .container {
+                box-shadow: none;
+            }
+            .plots-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="experiment-id">{{ experiment_id }}</div>
+            <h1>{{ title }}</h1>
+            <p class="description">{{ description }}</p>
+            <div class="meta-info">
+                {% if date %}
+                <span>Date: {{ date }}</span>
+                {% endif %}
+                {% if num_samples %}
+                <span>Samples: {{ num_samples }}</span>
+                {% endif %}
+                {% if duration %}
+                <span>Duration: {{ duration | format_number(2) }}s</span>
+                {% endif %}
+            </div>
+        </header>
+
+        <section>
+            <h2>Actions</h2>
+            <div class="action-list">
+                {% for action in actions %}
+                <div class="action-item{% if action.has_phase %} has-phase{% endif %}"
+                     {% if action.color %}style="border-left-color: {{ action.color }};"{% endif %}>
+                    <div class="color-indicator"{% if action.color %} style="background-color: {{ action.color }};"{% endif %}></div>
+                    <span class="action-index">{{ action.index }}</span>
+                    <span class="action-id">{{ action.id }}</span>
+                    <span class="action-type">{{ action.type }}</span>
+                    <span class="action-params">{{ action.params_str }}</span>
+                    <span class="action-timing">
+                        {% if action.start_time is not none and action.end_time is not none %}
+                        {{ action.start_time | format_number(2) }}s - {{ action.end_time | format_number(2) }}s
+                        {% endif %}
+                    </span>
+                </div>
+                {% endfor %}
+            </div>
+
+            {% if phase_actions %}
+            <div class="phase-legend">
+                <strong>Phase Legend:</strong>
+                {% for action in phase_actions %}
+                <div class="phase-legend-item">
+                    <div class="phase-legend-color" style="background-color: {{ action.color }};"></div>
+                    <span>{{ action.id }}: {{ action.type }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
+
+        <section>
+            <h2>State Plots</h2>
+            <div class="plots-grid">
+                {% for plot in plots %}
+                <div class="plot-container">
+                    <h3>{{ plot.title }}</h3>
+                    {{ plot.image }}
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+
+        {% if control_plots %}
+        <section>
+            <h2>Control Plots</h2>
+            <div class="plots-grid">
+                {% for plot in control_plots %}
+                <div class="plot-container">
+                    <h3>{{ plot.title }}</h3>
+                    {{ plot.image }}
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        <footer>
+            Generated: {{ generated_at | format_date('%Y-%m-%d %H:%M:%S') }}
+        </footer>
+    </div>
+</body>
+</html>

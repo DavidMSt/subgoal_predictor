@@ -1724,13 +1724,25 @@ class Experiment:
             bilbo_config=self.experiment_handler.common.config
         )
         #
+        # Build action data with timing information
+        actions_with_timing = {}
+        for action_id, container in self.action_containers.items():
+            start_tick = container.start_tick or 0
+            end_tick = container.end_tick or 0
+            actions_with_timing[action_id] = ExperimentActionData(
+                start_tick=start_tick,
+                end_tick=end_tick,
+                start_time=start_tick * LOOP_TIME,
+                end_time=end_tick * LOOP_TIME,
+                data=container.action.data
+            )
+
         data = ExperimentData(
             id=self.definition.id,
             meta=meta,
             definition=self.definition,
             samples=[],
-            actions={action_id: container.action.data for
-                     action_id, container in self.action_containers.items()},
+            actions=actions_with_timing,
         )
 
         data_dict = asdict_optimized(data)
