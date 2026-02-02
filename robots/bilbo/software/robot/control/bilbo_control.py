@@ -456,7 +456,8 @@ class BILBO_Control:
             'input': dataclasses.asdict(self.inputs),
             'tic_enabled': self.controller_status.tic_enabled,
             'vic_enabled': self.controller_status.vic_enabled,
-            'input_enabled': self.inputs.enabled
+            'input_enabled': self.inputs.enabled,
+            'position_control': self.position_control.get_sample_dict()
         }
         return sample_dict
 

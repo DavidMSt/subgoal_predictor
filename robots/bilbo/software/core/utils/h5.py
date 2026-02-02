@@ -1,4 +1,5 @@
 import time
+import dataclasses
 
 import h5py
 import numpy as np
@@ -21,13 +22,31 @@ class H5PyDictLogger:
 
     # === INIT =========================================================================================================
     def __init__(self, filename, dataset_name="samples", chunk_size=10000,
-                 type_mapping=None):
+                 type_mapping=None, compound_types: dict[str, tuple[type, np.dtype]] = None):
         """
         Initializes the H5PyDictLogger.
 
         :param filename: HDF5 file name.
         :param dataset_name: Name of the dataset in the file.
         :param type_mapping: Mapping from Python types to NumPy dtypes.
+        :param compound_types: Mapping from flattened field paths to (dataclass_type, numpy_dtype).
+            When a list field matches a registered path, it is stored as a variable-length
+            array of the corresponding compound dtype. The dataclass type is used to
+            convert instances to records; the dtype defines the HDF5 storage format.
+            This also handles empty lists during initialization.
+
+            Example:
+                @dataclasses.dataclass
+                class Waypoint:
+                    x: float
+                    y: float
+                    type: int
+
+                waypoint_dtype = np.dtype([('x', 'f8'), ('y', 'f8'), ('type', 'i4')])
+                logger = H5PyDictLogger(
+                    "log.h5",
+                    compound_types={'position_control.waypoints': (Waypoint, waypoint_dtype)}
+                )
         """
         if type_mapping is None:
             self.type_mapping = {float: np.float64,
@@ -42,6 +61,13 @@ class H5PyDictLogger:
                                  }
         else:
             self.type_mapping = type_mapping
+
+        # compound_types: {field_path: (dataclass_type, numpy_dtype)}
+        self.compound_types = compound_types or {}
+        # Build reverse lookup: dataclass_type -> numpy_dtype (for runtime type checking)
+        self._compound_type_to_dtype = {
+            cls: dtype for cls, dtype in (v for v in self.compound_types.values())
+        }
 
         self.filename = filename
         self.dataset_name = dataset_name
@@ -635,6 +661,7 @@ class H5PyDictLogger:
         Converts a flattened dict into a record tuple that matches self.dtype.
 
         Supports lists of int/float/str for fields whose dtype is a vlen type.
+        Supports lists of dataclass instances for compound vlen types.
         """
         record = []
 
@@ -652,8 +679,13 @@ class H5PyDictLogger:
                 vlen_base = field_dtype.metadata.get("vlen")
 
             if isinstance(value, list) and vlen_base is not None:
-                # Convert Python list to ndarray with the vlen base dtype
-                arr = np.asarray(value, dtype=vlen_base)
+                # Check if it's a compound dtype (has 'names' attribute)
+                if hasattr(vlen_base, 'names') and vlen_base.names is not None:
+                    # Compound vlen: convert dataclass instances to structured array
+                    arr = self._dataclass_list_to_array(value, vlen_base)
+                else:
+                    # Simple vlen: convert Python list to ndarray
+                    arr = np.asarray(value, dtype=vlen_base)
                 record.append(arr)
                 continue
             # ----------------------------------------------------------------------
@@ -671,12 +703,17 @@ class H5PyDictLogger:
 
         return tuple(record)
 
+    def _get_compound_dtype_for_type(self, element_type: type) -> np.dtype | None:
+        """Get the compound dtype for a dataclass type, if registered."""
+        return self._compound_type_to_dtype.get(element_type)
+
     def create_dtype_and_record_from_flat_dict(self, flat_dict):
         """
         Given a flattened dict, infers a NumPy compound dtype using self.type_mapping and
         creates a record tuple.
 
         Supports lists of int/float/str as HDF5 vlen arrays.
+        Supports lists of registered dataclass instances as compound vlen arrays.
         """
         dtype_fields = []
         record_values = []
@@ -684,13 +721,33 @@ class H5PyDictLogger:
         for key, value in flat_dict.items():
             # --- LIST SUPPORT -----------------------------------------------------
             if isinstance(value, list):
+                # Check if this field path is registered as a compound type
+                if key in self.compound_types:
+                    dataclass_type, compound_dtype = self.compound_types[key]
+                    field_dtype = vlen_dtype(compound_dtype)
+                    arr = self._dataclass_list_to_array(value, compound_dtype)
+                    dtype_fields.append((key, field_dtype))
+                    record_values.append(arr)
+                    continue
+
+                # For non-registered lists, we need at least one element to infer type
                 if len(value) == 0:
                     raise ValueError(
                         f"Cannot infer element type for empty list field '{key}'. "
-                        f"Use a non-empty default list."
+                        f"Either register it as a compound_type or use a non-empty default list."
                     )
 
                 element_type = type(value[0])
+
+                # Check if element type is a registered compound type (by type, not path)
+                if element_type in self._compound_type_to_dtype:
+                    compound_dtype = self._compound_type_to_dtype[element_type]
+                    field_dtype = vlen_dtype(compound_dtype)
+                    arr = self._dataclass_list_to_array(value, compound_dtype)
+                    dtype_fields.append((key, field_dtype))
+                    record_values.append(arr)
+                    continue
+
                 # Optionally: sanity check all elements are same type
                 # if not all(isinstance(v, element_type) for v in value):
                 #     raise ValueError(f"Mixed element types in list for field '{key}'.")
@@ -704,7 +761,7 @@ class H5PyDictLogger:
                 else:
                     raise ValueError(
                         f"Unsupported list element type {element_type} in field '{key}'. "
-                        f"Only list[int], list[float], list[str] are supported."
+                        f"Only list[int], list[float], list[str], or registered compound types are supported."
                     )
 
                 field_dtype = vlen_dtype(base_dtype)
@@ -738,6 +795,29 @@ class H5PyDictLogger:
         record = tuple(record_values)
         return compound_dtype, record
 
+    def _dataclass_list_to_array(self, items: list, compound_dtype: np.dtype) -> np.ndarray:
+        """
+        Convert a list of dataclass instances to a numpy structured array.
+
+        Each dataclass field is converted to the corresponding dtype field.
+        IntEnum values are automatically converted to their integer value.
+        """
+        if len(items) == 0:
+            return np.array([], dtype=compound_dtype)
+
+        records = []
+        for item in items:
+            record = []
+            for field_name in compound_dtype.names:
+                val = getattr(item, field_name)
+                # Handle IntEnum: convert to int value
+                if hasattr(val, 'value') and isinstance(val.value, int):
+                    val = val.value
+                record.append(val)
+            records.append(tuple(record))
+
+        return np.array(records, dtype=compound_dtype)
+
     def record_to_dict(self, record_or_array):
         """
         Convert a structured np.void or np.ndarray of records into nested dict(s)
@@ -745,9 +825,18 @@ class H5PyDictLogger:
         """
 
         def convert_value(val):
-            # If it's an ndarray (e.g. vlen strings), convert each element recursively
+            # If it's an ndarray, check if it's a compound array (structured)
             if isinstance(val, np.ndarray):
+                # Check if this is a structured array (compound type)
+                if val.dtype.names is not None:
+                    # Convert each element of the compound array to a dict
+                    return [self._compound_record_to_dict(item) for item in val]
+                # Regular array (e.g. vlen strings/ints/floats)
                 return [convert_value(x) for x in val]
+
+            # Single compound record (np.void with named fields)
+            if isinstance(val, np.void) and val.dtype.names is not None:
+                return self._compound_record_to_dict(val)
 
             # NumPy scalar → Python scalar
             if isinstance(val, np.generic):
@@ -784,6 +873,22 @@ class H5PyDictLogger:
         for rec in record_or_array:
             out.append(build_single(rec))
         return out
+
+    def _compound_record_to_dict(self, record: np.void) -> dict:
+        """
+        Convert a single compound record (np.void with named fields) to a dict.
+        """
+        result = {}
+        for field_name in record.dtype.names:
+            val = record[field_name]
+            # NumPy scalar → Python scalar
+            if isinstance(val, np.generic):
+                val = val.item()
+            # HDF5 string comes out as bytes → decode
+            if isinstance(val, bytes):
+                val = val.decode("utf-8")
+            result[field_name] = val
+        return result
 
 
 # ======================================================================================================================

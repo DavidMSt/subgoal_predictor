@@ -192,7 +192,21 @@ class BILBO_Control_Inputs:
         self.position = BILBO_PositionInput(0, 0)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass
+class BILBO_PositionControl_Sample:
+    """Sample data for position control state"""
+    mode: int = 0
+    mode_name: str = ''
+    path_state: int = 0
+    path_state_name: str = ''
+    waypoint_count: int = 0
+    current_waypoint_index: int = 0
+    is_busy: bool = False
+    data: dict = dataclasses.field(default_factory=dict)
+    waypoints: list = dataclasses.field(default_factory=list)  # List of waypoint dicts
+
+
+@dataclasses.dataclass
 class BILBO_Control_Sample:
     status: BILBO_Control_Status = dataclasses.field(default=BILBO_Control_Status(BILBO_Control_Status.NORMAL))
     mode: BILBO_Control_Mode = dataclasses.field(default=BILBO_Control_Mode(BILBO_Control_Mode.OFF))
@@ -200,6 +214,7 @@ class BILBO_Control_Sample:
     tic_enabled: bool = False
     vic_enabled: bool = False
     input_enabled: bool = False
+    position_control: BILBO_PositionControl_Sample = dataclasses.field(default_factory=BILBO_PositionControl_Sample)
 
 
 class BILBO_Control_Event_Type(enum.IntEnum):

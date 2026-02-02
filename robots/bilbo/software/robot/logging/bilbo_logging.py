@@ -3,6 +3,8 @@ import threading
 import time
 from copy import copy
 
+import numpy as np
+
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.dataclass_utils import asdict_optimized, from_dict_auto
 from core.utils.dict_utils import optimized_deepcopy, copy_dict
@@ -14,6 +16,7 @@ from core.utils.time import TimeoutTimer
 from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
+from robot.control.bilbo_position_control import Waypoint
 from robot.core import get_main_provider, set_logging_provider, LoggingProvider
 from robot.drive.bilbo_drive import BILBO_Drive
 from robot.estimation.bilbo_estimation import BILBO_Estimation
@@ -22,6 +25,14 @@ from robot.logging.bilbo_sample import BILBO_Sample
 from robot.lowlevel.stm32_general import BILBO_CONTROL_DT
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample
 from robot.sensors.bilbo_sensors import BILBO_Sensors
+
+# Compound dtype for Waypoint dataclass (used by H5PyDictLogger)
+WAYPOINT_DTYPE = np.dtype([
+    ('x', np.float64),
+    ('y', np.float64),
+    ('type', np.int32),
+    ('weight', np.float64)
+])
 
 # === GLOBAL SETTINGS ==================================================================================================
 SAMPLE_TIMEOUT_TIME = 0.5
@@ -83,7 +94,12 @@ class BILBO_Logging(LoggingProvider):
         self.tick = 0
 
         # --- H5 LOGGER ---
-        self._h5_logger_sample = H5PyDictLogger(filename='log.h5')
+        self._h5_logger_sample = H5PyDictLogger(
+            filename='log.h5',
+            compound_types={
+                'control.position_control.waypoints': (Waypoint, WAYPOINT_DTYPE)
+            }
+        )
         self._h5_logger_lowlevel = H5PyDictLogger(filename='log_ll.h5')
 
         # --- QUEUES ---

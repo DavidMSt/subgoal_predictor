@@ -1238,7 +1238,8 @@ class BILBO_PositionControl:
             'waypoint_count': len(self._waypoint_queue),
             'current_waypoint_index': self._current_waypoint_index,
             'is_busy': self.is_busy,
-            'data': dataclasses.asdict(self._data)
+            'data': dataclasses.asdict(self._data),
+            'waypoints': list(self._waypoint_queue)  # List of Waypoint dataclass instances
         }
 
     # =========================================================================
