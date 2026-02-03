@@ -133,18 +133,33 @@ def train_epoch(
     total_loss = 0.0
     total_bce = 0.0
     total_match = 0.0
+    n_batches = 0 # for tqdm logging purposes
 
     # convert to list to save chained samples to memory, afterwards shuffle to mix groups (otherwise each group size consecutively) 
     all_batches = list(chain.from_iterable(train_loader_dict.values())) 
     random.shuffle(all_batches)
 
-    for batch_sample in tqdm(all_batches, desc='training process'):
+    # initialize processbar
+    pbar = tqdm(all_batches, desc='training process')
+
+    for batch_sample in pbar:
         opt.zero_grad() # clear gradients from previous step
 
+        # extract cost-sample and assignment label
         cost = batch_sample['cost'].to(device)
         label = batch_sample['label'].to(device)
 
-        pred = model(cost) # forward pass
+        # get number of agents
+        B, N_r, _ = cost.shape
+
+        # select communication range
+        density = random.uniform(*comm_density_range)
+
+        # generate communication edges TODO: why device needed here? 
+        comm_edges = generate_comm_edges(n_robots=N_r, density= density, device = device)
+
+        # forward pass
+        pred = model(cost, edge_indices_rr = comm_edges)
         loss, loss_bce, loss_match = dgnn_ga_loss(predictions=pred, targets=label, alpha=alpha, beta=beta)
 
         loss.backward() # compute the gradients
@@ -154,21 +169,36 @@ def train_epoch(
         total_bce += loss_bce
         total_match += loss_match
 
-        raise AssertionError('connectivity has to still be implemented')
+        n_batches += 1
+
+        # Update every N batches to avoid slowdown
+        if n_batches % 10 == 0:
+            pbar.set_postfix({
+                'loss': f'{total_loss/n_batches:.4f}',
+                'bce': f'{total_bce/n_batches:.4f}',
+                'match': f'{total_match/n_batches:.4f}'
+            })
+
+    return {
+        'loss': (total_loss / n_batches).item(),
+        'bce_loss': (total_bce/ n_batches).item(),
+        'match_loss': (total_match/ n_batches).item()
+    }
+
+    
 
 
-
-        
 
 
 @torch.no_grad()
 def validate_epoch(
     model: torch.nn.Module,
-    loader: DataLoader,
+    eval_loader_dict: dict[int, DataLoader],
     device: torch.device,
     beta: float = 0.8,
     alpha: float = 0.9,
-    comm_density: float = 1.0
+    comm_density_range: tuple[float, float] | None = (0.2, 1.0),
+    class_threshold = 0.5 # as specificed in paper
 ):
     """
     Validate model using Binary F1-score (as in paper) and accuracy.
@@ -186,91 +216,41 @@ def validate_epoch(
     """
     model.eval()
 
-    total_correct = 0
-    total_agents = 0
-    total_loss = 0.0
-    total_bce = 0.0
-    total_match = 0.0
-
     # For F1 score
     true_positives = 0
     false_positives = 0
     false_negatives = 0
 
-    n_batches = 0
+    n_batch = 0
 
-    pbar = tqdm(loader, desc="Validating", leave=False)
+    all_batches = list(chain.from_iterable(eval_loader_dict.values()))
+    random.shuffle(all_batches)
+
+    pbar = tqdm(all_batches, desc= "eval loop")
+
     for batch in pbar:
-        batch = batch.to(device)
+        costs = batch["cost"].to(device)
+        labels = batch["label"].to(device)
 
-        # Get agents/tasks per graph
-        n_a_per_g = torch.bincount(batch['agent'].batch)
-        n_t_per_g = torch.bincount(batch['task'].batch)
+        # let model predict on single batch
+        pred = model(costs)
 
-        # Get positions and labels split by graph
-        agent_pos_list = batch['agent'].x[:, :2].split(n_a_per_g.tolist())
-        task_pos_list = batch['task'].x[:, :2].split(n_t_per_g.tolist())
+        # metrics
+        pred_binary = (pred>0.5)
+        true_positives += (pred_binary & labels.bool()).sum().item()
+        false_positives += (pred_binary & ~labels.bool()).sum().item()
+        false_negatives += (~pred_binary & labels.bool()).sum().item()
+        n_batch +=1
 
-        edges_pg = n_a_per_g * n_t_per_g
-        labels_batch = batch[('agent', 'assigns', 'task')].y.float()
-        labels_pg = torch.split(labels_batch, edges_pg.tolist())
+    precision = true_positives / (true_positives+false_positives + 1e-10)
+    recall = true_positives/ (true_positives+ false_negatives + 1e-10)
+    f1 = 2*(precision*recall)/(precision + recall + 1e-10)
 
-        for i, (agent_pos, task_pos, labels_flat, n_a, n_t) in enumerate(zip(
-            agent_pos_list, task_pos_list, labels_pg, n_a_per_g, n_t_per_g
-        )):
-            # Compute cost matrix
-            cost_matrix = compute_squared_cost_matrix(agent_pos, task_pos)
+    return {'f1': f1, 'precision': precision, 'recall': recall}
 
-            # Generate communication edges with specified density
-            comm_edges = generate_comm_edges(int(n_a), comm_density, device)
 
-            # Forward pass with communication edges
-            pred_matrix = model(cost_matrix, edge_indices_rr=comm_edges)
+        
 
-            # Reshape labels
-            labels_matrix = labels_flat.view(int(n_a), int(n_t))
 
-            # Compute loss
-            loss, l_bce, l_match = dgnn_ga_loss(
-                pred_matrix, labels_matrix, beta=beta, alpha=alpha
-            )
-            total_loss += loss.item()
-            total_bce += l_bce.item()
-            total_match += l_match.item()
-
-            # Top-1 accuracy (each robot's highest prediction matches ground truth)
-            pred_indices = torch.argmax(pred_matrix, dim=1)
-            label_indices = torch.argmax(labels_matrix, dim=1)
-            total_correct += (pred_indices == label_indices).sum().item()
-            total_agents += int(n_a)
-
-            # Binary F1 score components
-            pred_binary = (pred_matrix > 0.5).float()
-            tp = ((pred_binary == 1) & (labels_matrix == 1)).sum().item()
-            fp = ((pred_binary == 1) & (labels_matrix == 0)).sum().item()
-            fn = ((pred_binary == 0) & (labels_matrix == 1)).sum().item()
-
-            true_positives += tp
-            false_positives += fp
-            false_negatives += fn
-
-            n_batches += 1
-
-    # Compute metrics
-    acc1 = total_correct / total_agents if total_agents > 0 else 0.0
-
-    # Binary F1 score
-    precision = true_positives / (true_positives + false_positives + 1e-10)
-    recall = true_positives / (true_positives + false_negatives + 1e-10)
-    f1_score = 2 * precision * recall / (precision + recall + 1e-10)
-
-    return {
-        'acc1': acc1,
-        'f1_score': f1_score,
-        'precision': precision,
-        'recall': recall,
-        'loss': total_loss / n_batches,
-        'bce_loss': total_bce / n_batches,
-        'match_loss': total_match / n_batches
-    }
-
+        
+        

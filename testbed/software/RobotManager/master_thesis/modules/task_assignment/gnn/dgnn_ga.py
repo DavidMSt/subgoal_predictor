@@ -77,7 +77,7 @@ class DGNN_GA(nn.Module):
         # Decoder: F-dimensional embedding -> assignment score
         self.decoder = MLPModule(F, 1, hidden_dim=F)
 
-    def forward(self, c: torch.Tensor, edge_indices_rr: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, c: torch.Tensor, edge_indices_rr: torch.Tensor| None = None) -> torch.Tensor:
         """
         Forward pass.
 
