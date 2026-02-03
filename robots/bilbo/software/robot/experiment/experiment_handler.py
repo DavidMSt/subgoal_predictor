@@ -36,9 +36,9 @@ from robot.experiment.helpers import get_state_trajectory_from_lowlevel_samples
 from robot.interfaces.bilbo_interfaces import BILBO_Interfaces
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
 from robot.lowlevel.stm32_sequencer import bilbo_sequence_description_t, bilbo_sequence_input_t, BILBO_Sequence_LL
+from robot.testbed.bilbo_testbed_manager import BILBO_TestbedManager
 from robot.utilities.bilbo_utilities import BILBO_Utilities
 import robot.lowlevel.stm32_addresses as addresses
-
 
 LOWLEVEL_STATE_SIGNALS = [
     'estimation.state.v',
@@ -112,7 +112,8 @@ class BILBO_ExperimentHandler:
                  communication: BILBO_Communication,
                  interfaces: BILBO_Interfaces,
                  utilities: BILBO_Utilities,
-                 control: BILBO_Control
+                 control: BILBO_Control,
+                 testbed: BILBO_TestbedManager
                  ):
         # Process Inputs
         self.common = common
@@ -120,6 +121,7 @@ class BILBO_ExperimentHandler:
         self.interfaces = interfaces
         self.utilities = utilities
         self.control = control
+        self.testbed = testbed
 
         # Make Logger and Events
         self.logger = Logger('Experiment Handler', "DEBUG")

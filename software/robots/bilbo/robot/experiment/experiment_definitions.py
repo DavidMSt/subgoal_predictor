@@ -620,6 +620,27 @@ class ExperimentActionData:
     data: Any | None = None
 
 
+@dataclasses.dataclass
+class TestbedSize:
+    """Testbed physical dimensions."""
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+
+
+@dataclasses.dataclass
+class TestbedConfig:
+    """Testbed configuration."""
+    size: TestbedSize
+
+
+@dataclasses.dataclass
+class TestbedData:
+    """Testbed data captured during experiment."""
+    config: TestbedConfig | None = None
+
+
 @dataclasses.dataclass(frozen=True)
 class ExperimentMetaData:
     """Metadata about an experiment execution."""
@@ -628,6 +649,7 @@ class ExperimentMetaData:
     date: str
     control_config: BILBO_ControlConfig
     bilbo_config: BILBO_Config
+    testbed: TestbedData
 
 
 @dataclasses.dataclass(frozen=False)

@@ -25,6 +25,7 @@ class BILBO_LL_Sequencer_Event_Type(enum.IntEnum):
     ABORTED = 3
     RECEIVED = 4
 
+
 # ======================================================================================================================
 # EXPERIMENT
 # ======================================================================================================================
@@ -163,9 +164,6 @@ def read_input_file(file) -> BILBO_InputFileData | None:
     except Exception as e:
         print(f"Error reading input file: {e}")
         return None
-
-
-
 
 
 @dataclasses.dataclass(kw_only=True, frozen=True)

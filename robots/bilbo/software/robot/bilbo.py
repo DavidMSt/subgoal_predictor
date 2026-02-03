@@ -12,6 +12,7 @@ from robot.bilbo_common import BILBO_Common
 from robot.core import MainProvider, set_main_provider
 from robot.experiment.experiment_handler import BILBO_ExperimentHandler
 from robot.interfaces.bilbo_interfaces import BILBO_Interfaces
+from robot.testbed.bilbo_testbed_manager import BILBO_TestbedManager
 from robot.utilities.bilbo_utilities import BILBO_Utilities
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.events import Event, event_definition, SubscriberListener
@@ -62,6 +63,7 @@ class BILBO(MainProvider):
     experiment_handler: BILBO_ExperimentHandler
     logging: BILBO_Logging
     utilities: BILBO_Utilities
+    testbed_manager: BILBO_TestbedManager
 
     events: BILBO_Events
 
@@ -121,11 +123,17 @@ class BILBO(MainProvider):
                                            core=self.common)
 
         self.utilities = BILBO_Utilities(core=self.common, communication=self.communication, board=self.board)
+
+        self.testbed_manager = BILBO_TestbedManager(common=self.common, communication=self.communication)
+
         self.experiment_handler = BILBO_ExperimentHandler(common=self.common,
                                                           communication=self.communication,
                                                           interfaces=self.interfaces,
                                                           utilities=self.utilities,
-                                                          control=self.control, )
+                                                          control=self.control,
+                                                          testbed=self.testbed_manager)
+
+
 
         self.logging = BILBO_Logging(common=self.common,
                                      communication=self.communication,

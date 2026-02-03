@@ -435,7 +435,7 @@ class ExperimentParser:
         self.debug = debug
         self.logger = Logger("ExperimentParser", "DEBUG" if debug else "INFO")
 
-    def from_file(self, filepath: str) -> ExperimentDefinition:
+    def from_file(self, filepath: str):
         """Parse an experiment definition from a YAML or JSON file.
 
         Args:
@@ -457,7 +457,7 @@ class ExperimentParser:
 
         return self.from_dict(data)
 
-    def from_dict(self, data: dict) -> ExperimentDefinition:
+    def from_dict(self, data: dict):
         """Parse an experiment definition from a dict.
 
         Args:
@@ -498,7 +498,7 @@ class ExperimentParser:
             external_input_enabled=data.get("external_input_enabled", False),
         )
 
-    def parse_action(self, data: dict | str, index: int = 0) -> ExperimentActionDefinition:
+    def parse_action(self, data: dict | str, index: int = 0):
         """Parse a single action definition.
 
         Args:
@@ -542,7 +542,7 @@ class ExperimentParser:
             parameters=parameters,
         )
 
-    def from_json(self, json_str: str) -> ExperimentDefinition:
+    def from_json(self, json_str: str):
         """Parse an experiment definition from a JSON string."""
         data = json.loads(json_str)
         return self.from_dict(data)

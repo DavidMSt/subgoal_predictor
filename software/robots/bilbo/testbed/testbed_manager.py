@@ -210,7 +210,32 @@ class BILBO_TestbedManager:
         if self.timecode_server is not None:
             self.timecode_server.add_target(robot.device.address)
 
+        # Send testbed config to the robot
+        self._send_testbed_config_to_robot(robot)
+
         self.events.new_robot.set(container, flags={'type': 'robot', 'id': robot.id})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _send_testbed_config_to_robot(self, robot: BILBO):
+        """Send the current testbed configuration to a robot."""
+        if self.testbed_config is None:
+            self.logger.warning(f"No testbed config to send to robot {robot.id}")
+            return
+
+        # Convert host-side format {'x': [min, max], 'y': [min, max]}
+        # to robot-side format {'size': {'x_min': ..., 'x_max': ..., 'y_min': ..., 'y_max': ...}}
+        size = self.testbed_config.size
+        config_dict = {
+            'size': {
+                'x_min': size['x'][0],
+                'x_max': size['x'][1],
+                'y_min': size['y'][0],
+                'y_max': size['y'][1],
+            }
+        }
+
+        robot.device.executeFunction('set_testbed_config', arguments={'config': config_dict})
+        self.logger.info(f"Sent testbed config to robot {robot.id}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_robot_disconnected(self, robot: BILBO):

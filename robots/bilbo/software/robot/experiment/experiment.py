@@ -3,6 +3,7 @@ from __future__ import annotations
 import abc
 import dataclasses
 import json
+import math
 import threading
 import time
 from datetime import datetime
@@ -30,10 +31,10 @@ from robot.experiment.definitions import (
 from robot.logging.bilbo_sample import BILBO_Sample
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL, LOOP_TIME
 from robot.control.bilbo_control import BILBO_ControlConfig
+from robot.testbed.bilbo_testbed_manager import TestbedData
 
 if TYPE_CHECKING:
     from robot.experiment.experiment_handler import BILBO_ExperimentHandler
-
 
 # ======================================================================================================================
 # Import parser utilities (shorthand expansion and waypoint normalization are now in experiment_parser.py)
@@ -211,8 +212,7 @@ class ExperimentAction(abc.ABC):
     # ------------------------------------------------------------------------------------------------------------------
     def _on_started(self):
         self.started = True
-        self.tick_start = self.experiment.tick
-        self.events.started.set(data=self.tick_start)
+        self.events.started.set(data=self.experiment.tick)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_error(self):
@@ -839,10 +839,6 @@ class TurnToAction(ExperimentAction):
 
     def __post_init__(self):
         super().__post_init__()
-        # Convert degrees to radians if heading_deg was provided
-        if hasattr(self, '_heading_deg') and self._heading_deg is not None:
-            import math
-            self.heading = math.radians(self._heading_deg)
 
     def execute(self) -> bool:
         self._on_started()
@@ -1201,7 +1197,7 @@ class ExperimentDefinition:
 
     # ----------------------------------------------------------------------
     @classmethod
-    def from_dict(cls, data: dict, debug: bool = False) -> "ExperimentDefinition":
+    def from_dict(cls, data: dict, debug: bool = False) -> ExperimentDefinition:
         """
         Parse an experiment definition from a dict.
 
@@ -1262,6 +1258,7 @@ class ExperimentMetaData:
     date: str
     control_config: BILBO_ControlConfig
     bilbo_config: BILBO_Config
+    testbed: TestbedData
 
 
 @dataclasses.dataclass(frozen=False)
@@ -1594,7 +1591,6 @@ class Experiment:
                 # Remove the listeners immediately
                 self.logger.info(f"[Step {self.tick}] Action \"{action_container.id}\" finished")
                 self.events.action_finished.set(data=action_container.action, flags={'id': action_container.id})
-                action_container.end_tick = self.tick
                 for listener in action_container.listeners:
                     listener.stop()
                 # Check if there are actions following
@@ -1714,22 +1710,23 @@ class Experiment:
         samples = self.experiment_handler.common.get_data(start=self.start_tick, end=self.end_tick,
                                                           add_intermediate_samples=True)
 
-        ll_samples = self.experiment_handler.common.get_lowlevel_data(start=self.start_tick, end=self.end_tick)
+        # ll_samples = self.experiment_handler.common.get_lowlevel_data(start=self.start_tick, end=self.end_tick)
         #
         meta = ExperimentMetaData(
             description=self.definition.description,
             camera_timestamp=self._camera_timestamp,
             date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             control_config=self.experiment_handler.control.get_control_config(),
-            bilbo_config=self.experiment_handler.common.config
+            bilbo_config=self.experiment_handler.common.config,
+            testbed=self.experiment_handler.testbed.get_data()
         )
         #
         # Build action data with timing information
-        actions_with_timing = {}
+        action_data = {}
         for action_id, container in self.action_containers.items():
             start_tick = container.start_tick or 0
             end_tick = container.end_tick or 0
-            actions_with_timing[action_id] = ExperimentActionData(
+            action_data[action_id] = ExperimentActionData(
                 start_tick=start_tick,
                 end_tick=end_tick,
                 start_time=start_tick * LOOP_TIME,
@@ -1742,7 +1739,7 @@ class Experiment:
             meta=meta,
             definition=self.definition,
             samples=[],
-            actions=actions_with_timing,
+            actions=action_data,
         )
 
         data_dict = asdict_optimized(data)
