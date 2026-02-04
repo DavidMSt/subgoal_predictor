@@ -219,6 +219,69 @@
             border-radius: 2px;
         }
 
+        /* Logs Section */
+        .logs-container {
+            max-height: 400px;
+            overflow-y: auto;
+            background: #1e1e1e;
+            border-radius: 4px;
+            padding: 10px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.75em;
+            line-height: 1.4;
+        }
+
+        .log-entry {
+            display: flex;
+            gap: 8px;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+
+        .log-entry:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .log-tick {
+            color: #6a9955;
+            min-width: 50px;
+            text-align: right;
+        }
+
+        .log-level {
+            min-width: 55px;
+            font-weight: 600;
+        }
+
+        .log-level.debug { color: #808080; }
+        .log-level.info { color: #4fc1ff; }
+        .log-level.warning { color: #dcdcaa; }
+        .log-level.error { color: #f14c4c; }
+        .log-level.critical { color: #ff0000; font-weight: bold; }
+
+        .log-logger {
+            color: #c586c0;
+            min-width: 120px;
+        }
+
+        .log-message {
+            color: #d4d4d4;
+            word-break: break-word;
+        }
+
+        .logs-empty {
+            color: #7f8c8d;
+            font-style: italic;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .logs-count {
+            font-size: 0.8em;
+            color: #7f8c8d;
+            margin-bottom: 8px;
+        }
+
         @media print {
             body {
                 background: white;
@@ -229,6 +292,13 @@
             }
             .plots-grid {
                 grid-template-columns: 1fr;
+            }
+            .logs-container {
+                max-height: none;
+                background: #f8f9fa;
+            }
+            .log-message {
+                color: #333;
             }
         }
     </style>
@@ -297,6 +367,15 @@
             </div>
         </section>
 
+        {% if trajectory_map %}
+        <section>
+            <h2>Trajectory Map</h2>
+            <div class="plot-container" style="max-width: 600px;">
+                {{ trajectory_map }}
+            </div>
+        </section>
+        {% endif %}
+
         {% if control_plots %}
         <section>
             <h2>Control Plots</h2>
@@ -305,6 +384,23 @@
                 <div class="plot-container">
                     <h3>{{ plot.title }}</h3>
                     {{ plot.image }}
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if logs %}
+        <section>
+            <h2>Logs</h2>
+            <div class="logs-count">{{ logs | length }} log entries</div>
+            <div class="logs-container">
+                {% for log in logs %}
+                <div class="log-entry">
+                    <span class="log-tick">{{ log.tick }}</span>
+                    <span class="log-level {{ log.level_name | lower }}">{{ log.level_name }}</span>
+                    <span class="log-logger">{{ log.logger }}</span>
+                    <span class="log-message">{{ log.message }}</span>
                 </div>
                 {% endfor %}
             </div>

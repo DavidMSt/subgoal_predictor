@@ -18,7 +18,7 @@ from core.utils.events import (
     event_definition, EventContainer, Event, EventFlag, pred_flag_equals,
     wait_for_events, OR, TIMEOUT, SubscriberListener
 )
-from core.utils.logging_utils import Logger
+from core.utils.logging_utils import Logger, enable_redirection, disable_redirection
 from core.utils.sound.sound import speak
 from core.utils.time import precise_sleep
 from robot.config import BILBO_Config
@@ -1131,7 +1131,7 @@ class WaitPositionEventAction(ExperimentAction):
             return
 
         target_event = event_map[self.event]
-        result = target_event.wait(timeout=self.event_timeout)
+        result = target_event.wait(timeout=self.event_timeout, stale_event_time=0.5)
         if result is TIMEOUT:
             self.logger.warning(f"WaitPositionEventAction: wait for '{self.event}' timed out")
             self.events.timeout.set()
@@ -1363,6 +1363,10 @@ class Experiment:
         self.experiment_handler = None
         self._camera_timestamp = None
 
+        # Log capture
+        self._logs: list[dict] = []
+        self._log_capture_enabled = False
+
     # === METHODS ======================================================================================================
     def initialize(self,
                    experiment_handler: BILBO_ExperimentHandler):
@@ -1533,6 +1537,9 @@ class Experiment:
         if not self.started:
             self.started = True
 
+            # Start capturing logs
+            self._start_log_capture()
+
             lp = get_logging_provider()
             self.start_tick = lp.get_tick()
 
@@ -1699,6 +1706,10 @@ class Experiment:
     def _finish_task(self):
 
         self.finished = True
+
+        # Stop log capture before final logging
+        self._stop_log_capture()
+
         speak(f"Experiment {self.definition.id} finished")
         self.experiment_handler.utilities.beep(888, 500, 2)
 
@@ -1745,6 +1756,7 @@ class Experiment:
         data_dict = asdict_optimized(data)
         data.samples = samples
         data_dict['samples'] = samples
+        data_dict['logs'] = self._logs
 
         self.events.finished.set(data=data_dict)
 
@@ -1764,6 +1776,32 @@ class Experiment:
     def _on_action_timeout(self, action: ExperimentAction):
         self.logger.warning(f"Action {action.id} timed out")
         self.events.error.set(data=f"Action \"{action.id}\" timed out", flags={'action_id': action.id})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _log_capture_callback(self, log_entry: str, log: str, logger: Logger, level: int):
+        """Callback for capturing logs during the experiment."""
+        self._logs.append({
+            'entry': log_entry.strip(),
+            'message': log,
+            'logger': logger.name,
+            'level': level,
+            'tick': self.tick
+        })
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _start_log_capture(self):
+        """Enable log redirection to capture logs during experiment."""
+        if not self._log_capture_enabled:
+            self._logs = []
+            enable_redirection(self._log_capture_callback, redirect_all=True)
+            self._log_capture_enabled = True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _stop_log_capture(self):
+        """Disable log redirection."""
+        if self._log_capture_enabled:
+            disable_redirection(self._log_capture_callback)
+            self._log_capture_enabled = False
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_sample(self) -> ExperimentSample:

@@ -21,3 +21,5 @@ limbo_marker:
 size:
   x: [ 0, 3 ]
   y: [ 0, 1 ]
+
+floor_roughness: 0.01

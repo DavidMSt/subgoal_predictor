@@ -81,8 +81,6 @@ class OptiTrack:
     _min_dt: float
     _last_emit_t: float
 
-
-
     _last_received_time: float = 0
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -266,6 +264,7 @@ class OptiTrack:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _build_sample(self, data) -> dict[str, RigidBodySample]:
+
         sample: dict[str, RigidBodySample] = {}
 
         rigid_bodies_local = self.rigid_bodies

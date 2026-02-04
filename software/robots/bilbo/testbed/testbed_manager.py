@@ -60,6 +60,7 @@ class BILBO_TestbedConfig:
     size: dict[str, list[float]]
     origin: dict | None = None
     limbo_marker: dict | None = None
+    floor_roughness: float = 0.0
 
 
 class BILBO_TestbedManager:
@@ -231,7 +232,8 @@ class BILBO_TestbedManager:
                 'x_max': size['x'][1],
                 'y_min': size['y'][0],
                 'y_max': size['y'][1],
-            }
+            },
+            'floor_roughness': self.testbed_config.floor_roughness,
         }
 
         robot.device.executeFunction('set_testbed_config', arguments={'config': config_dict})

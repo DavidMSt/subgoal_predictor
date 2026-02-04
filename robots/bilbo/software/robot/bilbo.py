@@ -124,7 +124,8 @@ class BILBO(MainProvider):
 
         self.utilities = BILBO_Utilities(core=self.common, communication=self.communication, board=self.board)
 
-        self.testbed_manager = BILBO_TestbedManager(common=self.common, communication=self.communication)
+        self.testbed_manager = BILBO_TestbedManager(common=self.common, communication=self.communication,
+                                                    control=self.control)
 
         self.experiment_handler = BILBO_ExperimentHandler(common=self.common,
                                                           communication=self.communication,
@@ -132,8 +133,6 @@ class BILBO(MainProvider):
                                                           utilities=self.utilities,
                                                           control=self.control,
                                                           testbed=self.testbed_manager)
-
-
 
         self.logging = BILBO_Logging(common=self.common,
                                      communication=self.communication,

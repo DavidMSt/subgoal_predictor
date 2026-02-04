@@ -123,6 +123,8 @@ void BILBO_PositionControl::clear_waypoints() {
 	_linear_integral = 0.0f;
 	_arrival_timer = 0.0f;
 	_reverse_mode_active = false;
+	_current_speed_limit = 0.0f;
+	_target_speed_limit = 0.0f;
 
 	memset(_segment_lengths, 0, sizeof(_segment_lengths));
 }
@@ -140,12 +142,14 @@ bool BILBO_PositionControl::add_waypoint(const bilbo_waypoint_t& waypoint) {
 
 bool BILBO_PositionControl::add_waypoint_xy(float x, float y,
                                             bilbo_waypoint_type_t type,
-                                            float weight) {
+                                            float weight,
+                                            float speed) {
 	bilbo_waypoint_t wp;
 	wp.x = x;
 	wp.y = y;
 	wp.type = type;
 	wp.weight = _clamp(weight, 0.0f, 1.0f);
+	wp.speed = (speed > 0.0f) ? speed : 0.0f;  // 0 means use path default
 	return add_waypoint(wp);
 }
 
@@ -196,6 +200,12 @@ bool BILBO_PositionControl::start_path(const bilbo_path_start_cmd_t& command,
 	_arrival_timer = 0.0f;
 	_elapsed_time = 0.0f;
 	_reverse_mode_active = false;
+
+	// Initialize speed limits based on first waypoint
+	float path_max_speed = (command.max_speed > 0.0f) ? command.max_speed : config.max_speed;
+	float first_wp_speed = _waypoint_buffer[0].speed;
+	_target_speed_limit = (first_wp_speed > 0.0f) ? first_wp_speed : path_max_speed;
+	_current_speed_limit = _target_speed_limit;  // Start at target (no ramp at path start)
 
 	// Store command
 	_active_path_command = command;
@@ -260,6 +270,8 @@ bool BILBO_PositionControl::reset() {
 	_arrival_timer = 0.0f;
 	_elapsed_time = 0.0f;
 	_reverse_mode_active = false;
+	_current_speed_limit = 0.0f;
+	_target_speed_limit = 0.0f;
 	this->clear_waypoints();
 	this->_set_mode(bilbo_position_control_mode_t::IDLE);
 	return true;
@@ -613,10 +625,44 @@ bilbo_position_control_output_t BILBO_PositionControl::_compute_control(
 	// Velocity command: v = kp_linear * speed_dist
 	// -------------------------------------------------------------------------
 
-	float max_speed = config.max_speed;
+	// Determine path-level max speed
+	float path_max_speed = config.max_speed;
 	if (_active_path_command.max_speed > 0.0f) {
-		max_speed = fminf(max_speed, _active_path_command.max_speed);
+		path_max_speed = fminf(path_max_speed, _active_path_command.max_speed);
 	}
+
+	// Get per-waypoint speed target (0 = use path default)
+	float wp_speed = target_wp.speed;
+	_target_speed_limit = (wp_speed > 0.0f) ? fminf(wp_speed, path_max_speed) : path_max_speed;
+
+	// Smooth transition to target speed over config.speed_transition_time
+	// Rate = (target - current) / transition_time, clamped for stability
+	if (config.speed_transition_time > EPSILON) {
+		float speed_diff = _target_speed_limit - _current_speed_limit;
+		float max_rate = path_max_speed / config.speed_transition_time;  // Max change per second
+		float rate = _clamp(speed_diff / config.speed_transition_time, -max_rate, max_rate);
+		_current_speed_limit += rate * config.Ts;
+		_current_speed_limit = _clamp(_current_speed_limit, 0.0f, path_max_speed);
+	} else {
+		_current_speed_limit = _target_speed_limit;  // Instant transition
+	}
+
+	// Corner angle slowdown: reduce speed based on upcoming corner sharpness
+	// This uses a continuous factor based on angle, so robot naturally slows
+	// when approaching tight corners and speeds up when path straightens
+	float corner_speed_factor = 1.0f;
+	if (_current_segment < _waypoint_count - 1) {
+		float corner_angle = _compute_corner_angle_at(_current_segment);
+		// Factor: 1.0 for straight (angle=0), decreasing for sharper corners
+		// Using cosine for smooth transition: cos(0)=1, cos(PI)=-1
+		// Map to [0.3, 1.0] range: even sharp corners allow some speed
+		float cos_angle = cosf(corner_angle);  // [-1, 1]
+		corner_speed_factor = 0.65f + 0.35f * cos_angle;  // [0.3, 1.0]
+		corner_speed_factor = _clamp(corner_speed_factor, 0.3f, 1.0f);
+	}
+
+	// Effective max speed: minimum of smoothed waypoint limit and corner factor
+	float max_speed = _current_speed_limit * corner_speed_factor;
 
 	// PI control on speed_dist = max(carrot_dist, dist_to_waypoint)
 	float v_p = config.kp_linear * speed_dist;

@@ -105,7 +105,7 @@ def parse_heading(val: Any) -> float:
 
 
 def normalize_waypoints(waypoints: list) -> list[dict]:
-    """Normalize waypoints to list of dicts with x, y, type, weight."""
+    """Normalize waypoints to list of dicts with x, y, type, weight, speed."""
     result = []
     for wp in waypoints:
         if isinstance(wp, dict):
@@ -114,11 +114,12 @@ def normalize_waypoints(waypoints: list) -> list[dict]:
                 "y": wp.get("y", 0.0),
                 "type": wp.get("type", "PASS"),
                 "weight": wp.get("weight", 0.75),
+                "speed": wp.get("speed", 0.0),
             }
         elif isinstance(wp, (list, tuple)):
             if len(wp) < 2:
                 raise ValueError(f"Waypoint must have at least x, y: {wp}")
-            normalized = {"x": wp[0], "y": wp[1], "type": "PASS", "weight": 0.75}
+            normalized = {"x": wp[0], "y": wp[1], "type": "PASS", "weight": 0.75, "speed": 0.0}
             if len(wp) >= 3:
                 if isinstance(wp[2], str):
                     normalized["type"] = wp[2].upper()
@@ -129,6 +130,9 @@ def normalize_waypoints(waypoints: list) -> list[dict]:
                     normalized["weight"] = wp[3]
                 else:
                     normalized["type"] = wp[3].upper() if isinstance(wp[3], str) else "PASS"
+            if len(wp) >= 5:
+                # 5th element is speed
+                normalized["speed"] = float(wp[4])
         else:
             raise ValueError(f"Invalid waypoint format: {wp}")
         result.append(normalized)

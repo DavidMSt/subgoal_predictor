@@ -193,7 +193,8 @@ Common actions have shorthand forms for cleaner YAML files.
     - [1.0, 0.5, "STOP"]                 # [x, y, type]
     - [1.5, 0.0, 0.9]                    # [x, y, weight]
     - [2.0, 0.5, "STOP", 0.8]            # [x, y, type, weight]
-    - {x: 2.5, y: 0.0, type: PASS, weight: 0.75}  # full dict
+    - [2.5, 0.0, "PASS", 0.75, 0.2]      # [x, y, type, weight, speed]
+    - {x: 3.0, y: 0.0, type: PASS, weight: 0.75, speed: 0.3}  # full dict
 
 # Load path from file (shorthand)
 - path: "waypoints.yaml"
@@ -528,10 +529,12 @@ Sets waypoints for path following. Must be in POSITION mode.
       y: 0.0
       type: PASS
       weight: 0.75
+      speed: 0.0            # 0 = use path default
     - x: 1.0
       y: 0.5
       type: STOP
       weight: 0.9
+      speed: 0.2            # slow down to 0.2 m/s for this waypoint
 ```
 
 | Parameter | Type | Default | Description |
@@ -553,12 +556,22 @@ Sets waypoints for path following. Must be in POSITION mode.
 # With type and weight
 - [2.0, 0.5, "STOP", 0.8]
 
+# With type, weight, and speed
+- [2.5, 0.0, "PASS", 0.75, 0.3]  # speed: m/s (0 = use path default)
+
 # Full dict format
 - x: 2.5
   y: 0.0
   type: PASS                # PASS = smooth through, STOP = stop at waypoint
   weight: 0.75              # 1.0 = sharp corner, 0.0 = smooth curve
+  speed: 0.3                # Per-waypoint max speed [m/s] (0 = use path default)
 ```
+
+**Per-waypoint speed:**
+- Each waypoint can specify its own `speed` limit (0 = use path's max_speed)
+- Speed transitions smoothly between waypoints over ~0.5 seconds
+- Corner angle slowdown still applies (takes minimum of waypoint speed and corner-based limit)
+- Useful for slowing down at precise positioning points or speeding up on straight segments
 
 **Shorthand:**
 ```yaml
@@ -566,6 +579,7 @@ Sets waypoints for path following. Must be in POSITION mode.
     - [0.5, 0.0]
     - [1.0, 0.5, "STOP"]
     - [1.5, 0.0, 0.9]
+    - [2.0, 0.0, "PASS", 0.75, 0.2]  # with speed limit
 ```
 
 ---
@@ -627,7 +641,7 @@ Loads waypoints from a path definition (dict or file) and optionally starts foll
 
 **Path file format (YAML):**
 ```yaml
-max_speed: 0.3              # optional [m/s]
+max_speed: 0.3              # optional [m/s] - default speed for all waypoints
 allow_reverse: false        # optional
 timeout: 60.0               # optional [s]
 waypoints:
@@ -637,7 +651,10 @@ waypoints:
     y: 0.5
     type: STOP
     weight: 0.9
+    speed: 0.15             # optional - override speed for this waypoint
 ```
+
+**Per-waypoint speed:** Each waypoint can have its own `speed` limit. Set to 0 (or omit) to use the path's `max_speed`. Speed transitions smoothly between waypoints (~0.5s). Corner slowdown still applies.
 
 **Shorthand:**
 ```yaml
@@ -972,11 +989,11 @@ actions:
   - mode: OFF
 ```
 
-### Example 12: Path with Inline Definition
+### Example 12: Path with Inline Definition and Per-Waypoint Speeds
 
 ```yaml
 id: inline_path
-description: Load path from inline definition
+description: Load path from inline definition with variable speeds
 actions:
   - speak: "Inline path test"
   - mode: POSITION
@@ -986,22 +1003,26 @@ actions:
     start: true
     wait: true
     path:
-      max_speed: 0.3
+      max_speed: 0.3            # default speed for waypoints without explicit speed
       allow_reverse: false
       timeout: 60.0
       waypoints:
         - x: 0.5
           y: 0.0
+          speed: 0.4            # faster on straight segment
         - x: 1.0
           y: 0.5
           type: PASS
           weight: 0.6
+          speed: 0.2            # slow down for corner
         - x: 0.5
           y: 1.0
+                                # no speed = uses path max_speed (0.3)
         - x: 0.0
           y: 0.5
           type: STOP
           weight: 0.9
+          speed: 0.15           # slow approach to final waypoint
 
   - speak: "Finished"
   - mode: OFF
@@ -1068,9 +1089,16 @@ actions:
     - `weight: 0.0` = smooth curve (may cut corners significantly)
     - `weight: 0.75` = balanced default
 
-13. **Path files for reusable routes** - Store frequently used paths in YAML files for easy reuse.
+13. **Per-waypoint speed limits**:
+    - `speed: 0.0` = use path's max_speed (default)
+    - `speed: 0.2` = limit to 0.2 m/s when approaching this waypoint
+    - Speed transitions smoothly between waypoints (~0.5s)
+    - Corner slowdown still applies (takes minimum)
+    - Useful for precision positioning or fast straight segments
 
-14. **Use `wait_position_event` for complex logic** - When you need to react to specific events like `waypoint_completed`.
+14. **Path files for reusable routes** - Store frequently used paths in YAML files for easy reuse.
+
+15. **Use `wait_position_event` for complex logic** - When you need to react to specific events like `waypoint_completed`.
 
 ---
 

@@ -22,13 +22,6 @@ def main():
     bilbo.start()
 
     while True:
-
-        # # generate random color
-        # red = random.randint(0, 255)
-        # green = random.randint(0, 255)
-        # blue = random.randint(0, 255)
-        #
-        # bilbo.board.setRGBLEDExtern([red, green, blue])
         time.sleep(1)
 
 

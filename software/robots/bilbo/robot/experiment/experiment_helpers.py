@@ -234,6 +234,7 @@ def make_report(
 
     from core.utils.report import Report
     from core.utils.plotting.plot import Plot, Axis, AxisConfig
+    from core.utils.plotting.map_plot import MapPlot
     from robots.bilbo.robot.experiment.experiment_definitions import ExperimentData, ExperimentDefinition
     from robots.bilbo.robot.bilbo_data import BILBO_STATE_DATA_DEFINITIONS
 
@@ -252,6 +253,20 @@ def make_report(
     meta = exp_dict.get('meta') or {}
     samples = exp_dict.get('samples') or []
     actions_data = exp_dict.get('actions') or {}
+    logs_raw = exp_dict.get('logs') or []
+
+    # Process logs: add level_name for display
+    LOG_LEVEL_NAMES = {10: 'DEBUG', 20: 'INFO', 30: 'WARNING', 40: 'ERROR', 50: 'CRITICAL'}
+    logs = []
+    for log in logs_raw:
+        level = log.get('level', 20)
+        logs.append({
+            'tick': log.get('tick', 0),
+            'level': level,
+            'level_name': LOG_LEVEL_NAMES.get(level, 'INFO'),
+            'logger': log.get('logger', ''),
+            'message': log.get('message', ''),
+        })
 
     # Get description from definition or meta
     description = definition.get('description', '') if definition else ''
@@ -435,6 +450,47 @@ def make_report(
             'image': p,
         })
 
+    # Create trajectory map plot
+    trajectory_map = None
+    if 'x' in state_data and 'y' in state_data:
+        x_data = state_data['x']
+        y_data = state_data['y']
+
+        # Get testbed size from meta data
+        testbed_data = meta.get('testbed') or {}
+        testbed_config = testbed_data.get('config') or {}
+        testbed_size = testbed_config.get('size') or {}
+
+        x_min = testbed_size.get('x_min', -2.0)
+        x_max = testbed_size.get('x_max', 2.0)
+        y_min = testbed_size.get('y_min', -2.0)
+        y_max = testbed_size.get('y_max', 2.0)
+
+        # Create map plot
+        map_plot = MapPlot(
+            size=((x_min, x_max), (y_min, y_max)),
+            padding=0.15,
+            border_corner_radius=0.05,
+        )
+        map_plot.add_grid(major=1.0, minor=0.25, major_opacity=0.4, minor_opacity=0.8)
+        map_plot.add_coordinate_system(length=0.3)
+
+        # Add trajectory with gradient
+        map_plot.add_trajectory(
+            x_data, y_data,
+            gradient=True,
+            gradient_cmap='viridis',
+            width=2.5,
+            show_start=True,
+            show_end=True,
+            start_color='green',
+            end_color='red',
+        )
+
+        # Render and store
+        map_plot.render()
+        trajectory_map = map_plot
+
     # Create control plots from lowlevel.control
     control_plots = []
 
@@ -594,6 +650,8 @@ def make_report(
         phase_actions=phase_actions,
         plots=plots,
         control_plots=control_plots,
+        trajectory_map=trajectory_map,
+        logs=logs,
     )
 
     # Output

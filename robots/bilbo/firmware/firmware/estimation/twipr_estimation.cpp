@@ -485,6 +485,19 @@ void TWIPR_Estimation::_ekf_predict(float v, float psi_dot, float dt) {
 }
 /* ======================================================= */
 void TWIPR_Estimation::_ekf_update(bilbo_position_state_t measurement) {
+	// SIMPLIFIED VERSION FOR TESTING: Directly set state to measurement
+	// (bypasses EKF fusion, treats measurement as ground truth)
+	this->position_state.x = measurement.x;
+	this->position_state.y = measurement.y;
+	this->position_state.psi = measurement.psi;
+
+	// Reset covariance to small values since we trust the measurement
+	_ekf_P[0][0] = 0.001f;
+	_ekf_P[1][1] = 0.001f;
+	_ekf_P[2][2] = 0.001f;
+
+	/*
+	// ORIGINAL EKF UPDATE - COMMENTED OUT FOR TESTING
 	// Measurement model: z = H * x, where H = I (identity)
 	// So innovation y = z - x (direct state measurement)
 
@@ -601,6 +614,7 @@ void TWIPR_Estimation::_ekf_update(bilbo_position_state_t measurement) {
 	if (_ekf_P[0][0] < min_pos_var) _ekf_P[0][0] = min_pos_var;
 	if (_ekf_P[1][1] < min_pos_var) _ekf_P[1][1] = min_pos_var;
 	if (_ekf_P[2][2] < min_psi_var) _ekf_P[2][2] = min_psi_var;
+	*/
 }
 /* ======================================================= */
 void estimation_task(void *estimation) {

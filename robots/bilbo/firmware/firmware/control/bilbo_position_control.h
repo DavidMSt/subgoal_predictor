@@ -132,12 +132,18 @@ enum class position_control_event_t : uint8_t {
  *               - 0.5: Moderate corner cutting allowed
  *               - 0.0: Maximum corner cutting (smooth wide arc)
  *               Only affects PASS waypoints; STOP waypoints always use weight=1.0
+ * @param speed  Maximum speed for approaching this waypoint [m/s]:
+ *               - 0.0: Use path's max_speed setting (default)
+ *               - >0:  Override with this specific speed limit
+ *               Speed transitions smoothly between waypoints.
+ *               Corner angle slowdown still applies (takes minimum).
  */
 struct bilbo_waypoint_t {
 	float x;                        // [m] world X coordinate
 	float y;                        // [m] world Y coordinate
 	bilbo_waypoint_type_t type;     // waypoint semantics
-	float weight;                  // [0-1] corner sharpness (1=sharp, 0=smooth)
+	float weight;                   // [0-1] corner sharpness (1=sharp, 0=smooth)
+	float speed;                    // [m/s] max speed to this waypoint (0 = use path default)
 };
 
 /**
@@ -217,6 +223,7 @@ struct bilbo_position_control_config_t {
 
 	float max_speed = 0.4f;   // [m/s] Maximum forward velocity
 	float max_turn_rate = 5.0f;     // [rad/s] Maximum yaw rate
+	float speed_transition_time = 0.5f;  // [s] Time to smoothly transition between waypoint speeds
 
 	// -------------------------------------------------------------------------
 	// LOOKAHEAD PARAMETERS
@@ -335,7 +342,7 @@ public:
 	void clear_waypoints();
 	bool add_waypoint(const bilbo_waypoint_t &waypoint);
 	bool add_waypoint_xy(float x, float y, bilbo_waypoint_type_t type =
-			bilbo_waypoint_type_t::PASS, float weight = 0.75f);
+			bilbo_waypoint_type_t::PASS, float weight = 0.75f, float speed = 0.0f);
 	uint16_t get_waypoint_count() const;
 	bilbo_waypoint_t get_current_waypoint() const;
 
@@ -425,6 +432,10 @@ private:
 	float _arrival_timer = 0.0f;
 	float _elapsed_time = 0.0f;
 	bool _reverse_mode_active = false;
+
+	// Speed transition state (for per-waypoint speed limits)
+	float _current_speed_limit = 0.0f;    // [m/s] Current smoothed speed limit
+	float _target_speed_limit = 0.0f;     // [m/s] Target speed for current waypoint
 
 	// =========================================================================
 	// PRIVATE METHODS - PATH GEOMETRY

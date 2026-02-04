@@ -94,6 +94,7 @@ class PositionControl_Config:
     Simplified algorithm:
     - Speed = kp_linear * carrot_distance (simple and robust)
     - Weight + corner angle determines how carrot advances past waypoints
+    - Per-waypoint speed limits with smooth transitions
     - Reverse mode always enabled with hysteresis
     """
     Ts: float = 0.01                        # [s] Update period
@@ -103,6 +104,7 @@ class PositionControl_Config:
     ki_linear: float = 0.0                  # [1/s^2] Integral gain for linear control (usually 0)
     max_speed: float = 0.4                  # [m/s] Maximum forward velocity
     max_turn_rate: float = 5.0              # [rad/s] Maximum yaw rate
+    speed_transition_time: float = 0.5      # [s] Time to smoothly transition between waypoint speeds
     lookahead_base: float = 0.15            # [m] Minimum lookahead distance
     lookahead_gain: float = 0.3             # [s] Lookahead = base + gain * |velocity|
     lookahead_max: float = 0.5              # [m] Maximum lookahead distance

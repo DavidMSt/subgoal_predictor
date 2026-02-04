@@ -299,6 +299,7 @@ class WaypointDef:
     y: float
     type: str = "PASS"  # "PASS" or "STOP"
     weight: float = 0.75  # Corner sharpness [0-1], 1=sharp, 0=smooth
+    speed: float = 0.0  # Max speed [m/s] for this waypoint (0 = use path's max_speed)
 
 
 @dataclasses.dataclass
@@ -660,6 +661,7 @@ class ExperimentData:
     definition: ExperimentDefinition
     samples: list[BILBO_Sample]
     actions: dict[str, ExperimentActionData]
+    logs: list[dict] = dataclasses.field(default_factory=list)
 
 
 # ======================================================================================================================
@@ -1043,8 +1045,9 @@ def set_waypoints(waypoints: list[dict | list | tuple], clear_existing: bool = T
             - [x, y] - simple coordinate pair
             - [x, y, "STOP"] - with type
             - [x, y, weight] - with weight
-            - [x, y, "STOP", weight] - with both
-            - {"x": x, "y": y, "type": "PASS", "weight": 0.75} - full dict
+            - [x, y, "STOP", weight] - with type and weight
+            - [x, y, "STOP", weight, speed] - with type, weight, and speed
+            - {"x": x, "y": y, "type": "PASS", "weight": 0.75, "speed": 0.0} - full dict
         clear_existing: If True, clear existing waypoints first
     """
     return ExperimentActionDefinition(

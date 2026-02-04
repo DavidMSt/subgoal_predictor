@@ -485,6 +485,7 @@ class bilbo_waypoint_t(ctypes.Structure):
         ("y", ctypes.c_float),
         ("type", ctypes.c_uint8),
         ("weight", ctypes.c_float),
+        ("speed", ctypes.c_float),  # [m/s] max speed for this waypoint (0 = use path default)
     ]
 
 
@@ -589,6 +590,7 @@ class bilbo_position_control_config:
     # Speed limits
     max_speed: float = 0.4                  # [m/s] Maximum forward velocity
     max_turn_rate: float = 5.0              # [rad/s] Maximum yaw rate
+    speed_transition_time: float = 0.5      # [s] Time to transition between waypoint speeds
 
     # Lookahead parameters (carrot position)
     lookahead_base: float = 0.15            # [m] Minimum lookahead distance
@@ -613,6 +615,7 @@ class bilbo_position_control_config_t(ctypes.Structure):
         ("ki_linear", ctypes.c_float),
         ("max_speed", ctypes.c_float),
         ("max_turn_rate", ctypes.c_float),
+        ("speed_transition_time", ctypes.c_float),  # [s] Time to transition between waypoint speeds
         ("lookahead_base", ctypes.c_float),
         ("lookahead_gain", ctypes.c_float),
         ("lookahead_max", ctypes.c_float),

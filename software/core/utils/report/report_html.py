@@ -31,9 +31,61 @@ from jinja2 import Environment, FileSystemLoader, BaseLoader, select_autoescape
 from markupsafe import Markup
 
 from core.utils.plotting.plot import Plot
+from core.utils.plotting.map_plot import MapPlot
 
 
 # === HELPERS ==========================================================================================================
+def map_plot_to_base64(
+        map_plot_obj: MapPlot,
+        format: str = 'png',
+        dpi: int = 150,
+        transparent: bool = False,
+) -> str:
+    """Convert a MapPlot object to a base64-encoded image string."""
+    if map_plot_obj._fig is None:
+        map_plot_obj.render()
+
+    buf = io.BytesIO()
+    map_plot_obj._fig.savefig(
+        buf,
+        format=format,
+        dpi=dpi,
+        bbox_inches='tight',
+        pad_inches=0.05,
+        facecolor=map_plot_obj._fig.get_facecolor(),
+        transparent=transparent,
+    )
+    buf.seek(0)
+    b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+    buf.close()
+    return b64
+
+
+def map_plot_to_img_tag(
+        map_plot_obj: MapPlot,
+        width: str | None = None,
+        height: str | None = None,
+        style: str | None = None,
+        css_class: str | None = None,
+        dpi: int = 150,
+        transparent: bool = False,
+) -> str:
+    """Convert a MapPlot object to an HTML <img> tag with embedded base64 data."""
+    b64 = map_plot_to_base64(map_plot_obj, dpi=dpi, transparent=transparent)
+
+    attrs = [f'src="data:image/png;base64,{b64}"']
+    if width:
+        attrs.append(f'width="{width}"')
+    if height:
+        attrs.append(f'height="{height}"')
+    if style:
+        attrs.append(f'style="{style}"')
+    if css_class:
+        attrs.append(f'class="{css_class}"')
+
+    return f'<img {" ".join(attrs)} />'
+
+
 def plot_to_base64(
         plot_obj: Plot,
         format: str = 'png',
@@ -249,6 +301,8 @@ class Report:
         """Recursively process any value, handling nested structures."""
         if isinstance(value, Plot):
             return Markup(plot_to_img_tag(value, width=self.plot_width, dpi=self.plot_dpi))
+        elif isinstance(value, MapPlot):
+            return Markup(map_plot_to_img_tag(value, width=self.plot_width, dpi=self.plot_dpi))
         elif isinstance(value, dict):
             return {k: self._process_any(v) for k, v in value.items()}
         elif isinstance(value, list):

@@ -12,3 +12,5 @@ origin:
 size:
   x: [ 0, 3 ]
   y: [ 0, 3 ]
+
+floor_roughness: 0.85

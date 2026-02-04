@@ -77,11 +77,23 @@ class PathState(enum.IntEnum):
 
 @dataclasses.dataclass
 class Waypoint:
-    """A single waypoint in the path"""
+    """A single waypoint in the path
+
+    Attributes:
+        x: World X coordinate [m]
+        y: World Y coordinate [m]
+        type: PASS (smooth transition) or STOP (must stop at waypoint)
+        weight: Corner sharpness [0-1], 1=sharp corner, 0=smooth cut
+        speed: Maximum speed when approaching this waypoint [m/s].
+               0 means use the path's default max_speed setting.
+               Speed transitions smoothly between waypoints (~0.5s).
+               Corner angle slowdown still applies (takes minimum).
+    """
     x: float                                    # [m] world X coordinate
     y: float                                    # [m] world Y coordinate
     type: WaypointType = WaypointType.PASS      # arrival behavior
     weight: float = 0.75                        # [0-1] corner sharpness (1=sharp, 0=smooth)
+    speed: float = 0.0                          # [m/s] max speed (0 = use path default)
 
     def to_ctypes(self) -> bilbo_waypoint_t:
         """Convert to ctypes struct for serial transmission"""
@@ -89,7 +101,8 @@ class Waypoint:
             x=self.x,
             y=self.y,
             type=self.type.value,
-            weight=self.weight
+            weight=self.weight,
+            speed=self.speed
         )
 
 
@@ -103,6 +116,7 @@ def position_control_config_to_ctypes(config: PositionControl_Config) -> bilbo_p
         ki_linear=config.ki_linear,
         max_speed=config.max_speed,
         max_turn_rate=config.max_turn_rate,
+        speed_transition_time=config.speed_transition_time,
         lookahead_base=config.lookahead_base,
         lookahead_gain=config.lookahead_gain,
         lookahead_max=config.lookahead_max,
@@ -413,9 +427,18 @@ class BILBO_PositionControl:
 
     def add_waypoint_xy(self, x: float, y: float,
                         type: WaypointType = WaypointType.PASS,
-                        weight: float = 0.75) -> bool:
-        """Convenience method to add waypoint by coordinates"""
-        return self.add_waypoint(Waypoint(x=x, y=y, type=type, weight=weight))
+                        weight: float = 0.75,
+                        speed: float = 0.0) -> bool:
+        """Convenience method to add waypoint by coordinates
+
+        Args:
+            x: World X coordinate [m]
+            y: World Y coordinate [m]
+            type: PASS (smooth transition) or STOP (must stop)
+            weight: Corner sharpness [0-1], 1=sharp, 0=smooth
+            speed: Max speed for this waypoint [m/s], 0=use path default
+        """
+        return self.add_waypoint(Waypoint(x=x, y=y, type=type, weight=weight, speed=speed))
 
     def add_waypoints(self, waypoints: list[Waypoint]) -> bool:
         """Add multiple waypoints to the queue"""
@@ -443,7 +466,8 @@ class BILBO_PositionControl:
             x=wp_data.x,
             y=wp_data.y,
             type=WaypointType(wp_data.type),
-            weight=wp_data.weight
+            weight=wp_data.weight,
+            speed=wp_data.speed
         )
 
     # =========================================================================
@@ -578,9 +602,16 @@ class BILBO_PositionControl:
                 "timeout": 30.0,         # optional, seconds (0 = no timeout)
                 "waypoints": [
                     {"x": 1.0, "y": 0.0},
-                    {"x": 1.5, "y": -0.3, "type": "STOP", "weight": 0.9}
+                    {"x": 1.5, "y": -0.3, "type": "STOP", "weight": 0.9, "speed": 0.2}
                 ]
             }
+
+        Waypoint fields:
+            - x, y: Required, position in world coordinates [m]
+            - type: Optional, "PASS" (default) or "STOP"
+            - weight: Optional [0-1], corner sharpness (default 0.75)
+            - speed: Optional [m/s], max speed for this waypoint (0 = use path default)
+                     Speed transitions smoothly between waypoints over ~0.5s
 
         Args:
             path_data: Dictionary containing waypoints and optional settings
@@ -627,6 +658,7 @@ class BILBO_PositionControl:
 
                 # Optional fields with defaults
                 weight = float(wp_data.get('weight', 0.75))
+                speed = float(wp_data.get('speed', 0.0))
 
                 # Parse type (string or int)
                 type_value = wp_data.get('type', 'PASS')
@@ -642,7 +674,7 @@ class BILBO_PositionControl:
                 else:
                     wp_type = WaypointType(int(type_value))
 
-                waypoints.append(Waypoint(x=x, y=y, type=wp_type, weight=weight))
+                waypoints.append(Waypoint(x=x, y=y, type=wp_type, weight=weight, speed=speed))
 
             except (ValueError, KeyError) as e:
                 self.logger.error(f"Failed to parse waypoint {i}: {e}")
@@ -673,7 +705,7 @@ class BILBO_PositionControl:
 
         # Send path_loaded event with full path data
         self._send_wifi_event('path_loaded', {
-            'waypoints': [{'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight}
+            'waypoints': [{'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight, 'speed': wp.speed}
                          for wp in waypoints],
             'settings': self._current_path_settings
         })
@@ -709,6 +741,7 @@ class BILBO_PositionControl:
                 y: -0.3
                 type: STOP          # optional, default: PASS
                 weight: 0.9         # optional, default: 0.75
+                speed: 0.2          # optional, m/s (0 = use path default)
 
         JSON format (for generated paths):
             {
@@ -717,9 +750,12 @@ class BILBO_PositionControl:
                 "timeout": 30.0,
                 "waypoints": [
                     {"x": 1.0, "y": 0.0},
-                    {"x": 1.5, "y": -0.3, "type": "STOP", "weight": 0.9}
+                    {"x": 1.5, "y": -0.3, "type": "STOP", "weight": 0.9, "speed": 0.2}
                 ]
             }
+
+        Speed transitions smoothly between waypoints over ~0.5s.
+        Corner angle slowdown still applies (takes minimum of waypoint speed and corner limit).
 
         Args:
             filepath: Path to .json or .yaml/.yml file
@@ -956,7 +992,7 @@ class BILBO_PositionControl:
                 self.callbacks.path_started.call()
                 # Send path data with event for visualization
                 self._send_wifi_event('path_started', {
-                    'waypoints': [{'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight}
+                    'waypoints': [{'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight, 'speed': wp.speed}
                                  for wp in self._waypoint_queue],
                     'settings': self._current_path_settings
                 })
@@ -1019,7 +1055,7 @@ class BILBO_PositionControl:
                 wp_data = None
                 if idx < len(self._waypoint_queue):
                     wp = self._waypoint_queue[idx]
-                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name}
+                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight, 'speed': wp.speed}
                     self.logger.info(f"Passed waypoint {idx}: ({wp.x:.2f}, {wp.y:.2f}) [{wp.type.name}]")
                 else:
                     self.logger.info(f"Passed waypoint {idx}")
@@ -1032,7 +1068,7 @@ class BILBO_PositionControl:
                 wp_data = None
                 if idx < len(self._waypoint_queue):
                     wp = self._waypoint_queue[idx]
-                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name}
+                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight, 'speed': wp.speed}
                     self.logger.info(f"Reached waypoint {idx}: ({wp.x:.2f}, {wp.y:.2f}) [{wp.type.name}]")
                 else:
                     self.logger.info(f"Reached waypoint {idx}")
@@ -1046,11 +1082,11 @@ class BILBO_PositionControl:
                 next_wp_data = None
                 if self._waypoint_queue:
                     wp = self._waypoint_queue[0]
-                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name}
+                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight, 'speed': wp.speed}
                     next_wp_info = ""
                     if len(self._waypoint_queue) > 1:
                         next_wp = self._waypoint_queue[1]
-                        next_wp_data = {'x': next_wp.x, 'y': next_wp.y, 'type': next_wp.type.value, 'type_name': next_wp.type.name}
+                        next_wp_data = {'x': next_wp.x, 'y': next_wp.y, 'type': next_wp.type.value, 'type_name': next_wp.type.name, 'weight': next_wp.weight, 'speed': next_wp.speed}
                         next_wp_info = f" -> Next: ({next_wp.x:.2f}, {next_wp.y:.2f})"
                     self.logger.info(f"Completed waypoint {idx}: ({wp.x:.2f}, {wp.y:.2f}) [{wp.type.name}]{next_wp_info}")
                     self._waypoint_queue.pop(0)
@@ -1278,9 +1314,10 @@ class BILBO_PositionControl:
             arguments=[
                 'x', 'y',
                 CommandArgument(name='type', type=int, optional=True, default=0),
-                CommandArgument(name='weight', type=float, optional=True, default=0.75)
+                CommandArgument(name='weight', type=float, optional=True, default=0.75),
+                CommandArgument(name='speed', type=float, optional=True, default=0.0)
             ],
-            description='Add a waypoint (type: 0=PASS, 1=STOP)'
+            description='Add a waypoint (type: 0=PASS, 1=STOP, speed: 0=use path default)'
         )
 
         self.communication.wifi.newCommand(
@@ -1388,10 +1425,10 @@ class BILBO_PositionControl:
             self.logger.error(f"Failed to parse config: {e}")
             return False
 
-    def _wifi_add_waypoint(self, x: float, y: float, type: int = 0, weight: float = 0.75) -> bool:
+    def _wifi_add_waypoint(self, x: float, y: float, type: int = 0, weight: float = 0.75, speed: float = 0.0) -> bool:
         """Add waypoint from WiFi command"""
         wp_type = WaypointType(type) if type in [0, 1] else WaypointType.PASS
-        return self.add_waypoint(Waypoint(x=x, y=y, type=wp_type, weight=weight))
+        return self.add_waypoint(Waypoint(x=x, y=y, type=wp_type, weight=weight, speed=speed))
 
     def _wifi_set_waypoints(self, waypoints: list[dict]) -> bool:
         """Set multiple waypoints from WiFi (clears existing first)"""
@@ -1403,14 +1440,15 @@ class BILBO_PositionControl:
             y = wp_dict.get('y', 0.0)
             wp_type = WaypointType(wp_dict.get('type', 0))
             weight = wp_dict.get('weight', 0.75)
-            if not self.add_waypoint(Waypoint(x=x, y=y, type=wp_type, weight=weight)):
+            speed = wp_dict.get('speed', 0.0)
+            if not self.add_waypoint(Waypoint(x=x, y=y, type=wp_type, weight=weight, speed=speed)):
                 return False
         return True
 
     def _wifi_get_waypoints(self) -> list[dict]:
         """Get waypoints as list of dicts for WiFi"""
         return [
-            {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'weight': wp.weight}
+            {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'weight': wp.weight, 'speed': wp.speed}
             for wp in self._waypoint_queue
         ]
 
