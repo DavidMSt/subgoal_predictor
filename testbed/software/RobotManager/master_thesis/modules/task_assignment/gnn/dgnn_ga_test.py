@@ -58,3 +58,8 @@ if __name__ == "__main__":
     for epoch in range(1):
         train_metrics = train_epoch(model=model, train_loader_dict=train_loader_dict, opt = optimizer, device=device, alpha=alpha, beta = beta)
         val_metrics = validate_epoch(model= model, eval_loader_dict = val_loader_dict, device=device, beta =beta, alpha = alpha)
+
+        print(f"Epoch {epoch+1}: train_loss={train_metrics['loss']:.4f}, val_f1={val_metrics['f1']:.4f}")
+
+        writer.add_scalar('Loss/train', train_metrics['loss'], epoch)
+        writer.add_scalar('F1/val', val_metrics['f1'], epoch)
