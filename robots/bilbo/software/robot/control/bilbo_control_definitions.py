@@ -112,6 +112,7 @@ class PositionControl_Config:
     arrival_dwell_time: float = 0.5         # [s] Hold time at STOP waypoint
     reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
     reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
+    corner_slowdown_distance: float = 0.5   # [m] Distance from corner to start slowing down
 
 
 @dataclasses.dataclass

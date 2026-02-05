@@ -19,6 +19,7 @@ from core.utils.time import precise_sleep
 
 class H5PyDictLogger:
     batch_size = 100
+    flush_interval = 100  # Flush every N samples instead of every sample
 
     # === INIT =========================================================================================================
     def __init__(self, filename, dataset_name="samples", chunk_size=10000,
@@ -136,7 +137,9 @@ class H5PyDictLogger:
             self.dataset.resize((new_size,))
             self.dataset[self.current_size] = sample
             self.current_size = new_size
-            self.file.flush()  # Ensure data is written to disk.
+            # Flush periodically instead of every sample
+            if self.current_size % self.flush_interval == 0:
+                self.file.flush()
 
     # ------------------------------------------------------------------------------------------------------------------
     def append_multiple_samples(self, samples: list):
@@ -168,8 +171,11 @@ class H5PyDictLogger:
             if self.dataset is not None:
                 self.dataset.resize((new_size,))
                 self.dataset[self.current_size:new_size] = records_array
+                old_size = self.current_size
                 self.current_size = new_size
-                self.file.flush()  # Ensure data is written to disk.
+                # Flush periodically instead of every batch
+                if (old_size // self.flush_interval) != (new_size // self.flush_interval):
+                    self.file.flush()
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_samples(self, index, signals=None, to_dict: bool = False):
@@ -311,6 +317,8 @@ class H5PyDictLogger:
                     with self.lock:
                         batch_data = self.dataset[batch_indices]
                     batches.append(batch_data)
+                    # Give other threads time to run between batches
+                    time.sleep(0.01)
                 if len(batches) == 1:
                     return batches[0]
                 return np.concatenate(batches)
@@ -324,7 +332,8 @@ class H5PyDictLogger:
                         batch_data = self.dataset[batch_indices]
                     # Outside the lock: heavy Python conversion
                     batch_dicts = self.record_to_dict(batch_data)
-                    time.sleep(0.003)
+                    # Give other threads time to run between batches
+                    time.sleep(0.01)
                     # record_to_dict on an array returns a list
                     all_dicts.extend(batch_dicts)
                 return all_dicts
@@ -396,6 +405,8 @@ class H5PyDictLogger:
                     else:
                         batch_data = self.dataset[batch_indices][field_list]
                 _accumulate_from_batch(batch_data, result)
+                # Give other threads time to run between batches
+                time.sleep(0.003)
             return result
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -650,6 +661,7 @@ class H5PyDictLogger:
         """
         with self.lock:
             if self.file:
+                self.file.flush()  # Ensure any pending data is written
                 self.file.close()
                 self.file = None
                 self.dataset = None

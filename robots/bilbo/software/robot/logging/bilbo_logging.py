@@ -1,7 +1,9 @@
 import queue
 import threading
 import time
+from concurrent.futures import ProcessPoolExecutor, Future
 from copy import copy
+from typing import Callable
 
 import numpy as np
 
@@ -36,6 +38,150 @@ WAYPOINT_DTYPE = np.dtype([
 
 # === GLOBAL SETTINGS ==================================================================================================
 SAMPLE_TIMEOUT_TIME = 0.5
+
+
+# === MULTIPROCESSING WORKER ===========================================================================================
+def _get_data_worker(hl_filename: str,
+                     ll_filename: str,
+                     sample_indexes,
+                     signals: list[str] | None,
+                     add_intermediate_samples: bool,
+                     ll_start: int | None,
+                     ll_end: int | None,
+                     control_dt: float) -> dict | list | None:
+    """
+    Worker function that runs in a separate process to read data from H5 files.
+    This avoids GIL contention with the main control loop.
+    """
+    import h5py
+    from core.utils.h5 import H5PyDictLogger
+    from robot.control.bilbo_position_control import Waypoint
+
+    # Create fresh H5 loggers in this process
+    hl_logger = H5PyDictLogger(
+        filename=hl_filename,
+        compound_types={
+            'control.position_control.waypoints': (Waypoint, WAYPOINT_DTYPE)
+        }
+    )
+    ll_logger = H5PyDictLogger(filename=ll_filename)
+
+    try:
+        # Initialize and open for reading
+        hl_file = h5py.File(hl_filename, 'r', locking=False)
+        ll_file = h5py.File(ll_filename, 'r', locking=False)
+
+        hl_logger.file = hl_file
+        hl_logger.dataset = hl_file['samples']
+        hl_logger.current_size = hl_logger.dataset.shape[0]
+        hl_logger.dtype = hl_logger.dataset.dtype
+        hl_logger._field_paths = {name: name.split('.') for name in hl_logger.dtype.names}
+
+        ll_logger.file = ll_file
+        ll_logger.dataset = ll_file['samples']
+        ll_logger.current_size = ll_logger.dataset.shape[0]
+        ll_logger.dtype = ll_logger.dataset.dtype
+        ll_logger._field_paths = {name: name.split('.') for name in ll_logger.dtype.names}
+
+        # Clamp indices to what's actually available in the file
+        hl_size = hl_logger.current_size
+        ll_size = ll_logger.current_size
+
+        if hl_size == 0:
+            return [] if add_intermediate_samples else None
+
+        # Adjust sample_indexes to be within bounds
+        if isinstance(sample_indexes, int):
+            if sample_indexes >= hl_size:
+                return None
+            clamped_hl_indexes = sample_indexes
+        elif isinstance(sample_indexes, slice):
+            start = sample_indexes.start or 0
+            stop = sample_indexes.stop if sample_indexes.stop is not None else hl_size
+            stop = min(stop, hl_size)  # Clamp to available data
+            if start >= stop:
+                return [] if add_intermediate_samples else None
+            clamped_hl_indexes = slice(start, stop)
+        else:
+            clamped_hl_indexes = sample_indexes
+
+        # Read high-level data
+        data = hl_logger.get_samples(
+            index=clamped_hl_indexes,
+            signals=signals,
+            to_dict=True
+        )
+
+        if data is None:
+            return None
+
+        if add_intermediate_samples and ll_start is not None and ll_end is not None:
+            # Clamp low-level indices to available data
+            clamped_ll_start = ll_start
+            clamped_ll_end = min(ll_end, ll_size)
+
+            if clamped_ll_start >= clamped_ll_end:
+                # No LL data available, return HL data without expansion
+                return data if isinstance(data, list) else [data]
+
+            ll_sample_indexes = slice(clamped_ll_start, clamped_ll_end)
+            ll_data = ll_logger.get_samples(
+                index=ll_sample_indexes,
+                signals=None,
+                to_dict=True
+            )
+
+            if ll_data is None:
+                return data if isinstance(data, list) else [data]
+
+            # Normalize shapes
+            if isinstance(data, dict):
+                hl_samples = [data]
+            else:
+                hl_samples = list(data)
+
+            if isinstance(ll_data, dict):
+                ll_samples = [ll_data]
+            else:
+                ll_samples = list(ll_data)
+
+            # Expand each high-level sample into 10 samples with LL data
+            expanded_samples = []
+            expected_ll_per_hl = 10
+            total_hl = len(hl_samples)
+            total_ll = len(ll_samples)
+
+            for i, hl_sample in enumerate(hl_samples):
+                base_tick = hl_sample.get('tick', i * 10)
+                base_time = hl_sample.get('time')
+                base_ll_index = i * expected_ll_per_hl
+
+                for j in range(expected_ll_per_hl):
+                    ll_index = base_ll_index + j
+                    if ll_index >= total_ll:
+                        break
+
+                    ll_sample = ll_samples[ll_index]
+
+                    # Shallow copy of the high-level sample
+                    new_sample = dict(hl_sample)
+                    new_sample['tick'] = base_tick + j
+                    new_sample['lowlevel'] = ll_sample
+                    if base_time is not None:
+                        new_sample['time'] = base_time + j * control_dt
+
+                    expanded_samples.append(new_sample)
+
+            data = expanded_samples
+
+        return data
+
+    finally:
+        # Clean up
+        if hl_logger.file:
+            hl_logger.file.close()
+        if ll_logger.file:
+            ll_logger.file.close()
 
 
 # === Callbacks ========================================================================================================
@@ -114,6 +260,9 @@ class BILBO_Logging(LoggingProvider):
 
         self._update_lock = threading.Lock()
 
+        # --- PROCESS POOL FOR NON-BLOCKING DATA RETRIEVAL ---
+        self._process_pool = ProcessPoolExecutor(max_workers=1)
+
         set_logging_provider(self)
         # --- EXIT HANDLING ---
         register_exit_callback(self.close)
@@ -128,7 +277,25 @@ class BILBO_Logging(LoggingProvider):
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
-        ...
+        # Shutdown process pool
+        if hasattr(self, '_process_pool') and self._process_pool:
+            self._process_pool.shutdown(wait=False)
+
+        # Close H5 loggers
+        if hasattr(self, '_h5_logger_sample') and self._h5_logger_sample:
+            self._h5_logger_sample.close()
+        if hasattr(self, '_h5_logger_lowlevel') and self._h5_logger_lowlevel:
+            self._h5_logger_lowlevel.close()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def flush(self):
+        """Force flush all H5 data to disk. Call before reading data to ensure all samples are available."""
+        if hasattr(self, '_h5_logger_sample') and self._h5_logger_sample.file:
+            with self._h5_logger_sample.lock:
+                self._h5_logger_sample.file.flush()
+        if hasattr(self, '_h5_logger_lowlevel') and self._h5_logger_lowlevel.file:
+            with self._h5_logger_lowlevel.lock:
+                self._h5_logger_lowlevel.file.flush()
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_tick(self) -> int:
@@ -155,23 +322,27 @@ class BILBO_Logging(LoggingProvider):
                     batch = self._samples_queue.get_nowait()
                     sample_batch += 1
                     if sample_batch > 1:
-                        self.logger.warning(f"Working on sample batch {sample_batch}")
-                        sample_dict['tick'] = self.tick
+                        if sample_batch >= 3:
+                            self.logger.warning(f"Working on sample batch {sample_batch}")
+                        else:
+                            self.logger.debug(f"Working on sample batch {sample_batch}")
                 except queue.Empty:
                     break
 
-                # Check the tick on the first sample
+                # Get the tick from the low-level sample (authoritative source)
                 ll_tick = batch[0]['tick']
 
-                # if 290 <= self.tick <= 320:
-                #     self.logger.debug(f"Working on LL tick {ll_tick}. Global tick: {self.tick}")
-
+                # Check for tick mismatch (indicates buffering/lag)
                 if ll_tick != self.tick:
-                    self.logger.error(
-                        "Sample index mismatch: HL tick=%d, LL tick=%d,"
-                        "batch_len=%d, queue_size_after_get=%d",
-                        self.tick, ll_tick, len(batch), self._samples_queue.qsize()
+                    self.logger.warning(
+                        f"Sample tick sync: adjusting HL tick from {self.tick} to {ll_tick} "
+                        f"(batch {sample_batch}, queue_size={self._samples_queue.qsize()})"
                     )
+                    # Sync self.tick to the LL tick to stay in sync
+                    self.tick = ll_tick
+
+                # Always use ll_tick for the sample (it's the authoritative source)
+                sample_dict['tick'] = ll_tick
 
                 # Append the sample to the lowlevel logger
                 self._h5_logger_lowlevel.append_multiple_samples(batch)
@@ -193,15 +364,109 @@ class BILBO_Logging(LoggingProvider):
                 # if 290 <= self.tick <= 320:
                 #     self.logger.debug(f"Finished global tick: {self.tick}")
 
+
     # ------------------------------------------------------------------------------------------------------------------
     def get_data(self,
                  index: int | None = None,
                  start: int | None = None,
                  end: int | None = None,
                  signals: list[str] | None = None,
-                 add_intermediate_samples: bool = False) -> dict | None:
-
+                 add_intermediate_samples: bool = False,
+                 callback: Callable[[dict | list | None], None] | None = None) -> dict | list | None | Future:
         """
+        Retrieves logged data using a separate process to avoid blocking the control loop.
+
+        Args:
+            index: Single tick index to retrieve (must be multiple of 10)
+            start: Start tick (must be multiple of 10)
+            end: End tick (must be multiple of 10)
+            signals: List of flattened dict keys to return, e.g. ['estimation.state', 'sensors.imu.gyr']
+            add_intermediate_samples: If True, expand HL samples with LL data (10x more samples)
+            callback: If provided, runs async and calls callback(data) when done. Returns Future.
+                      If None, blocks until data is ready and returns the data directly.
+
+        Returns:
+            If callback is None: The data (dict, list, or None)
+            If callback is provided: A Future object that can be used to check completion
+        """
+        # Validation
+        if index is not None and (start is not None or end is not None):
+            self.logger.warning("Both index and start/end are provided. Please choose either")
+            return None
+
+        if add_intermediate_samples and signals is not None:
+            self.logger.warning("Both add_intermediate_samples and signals are provided. Please choose either")
+            return None
+
+        if start is not None and start % 10 != 0:
+            self.logger.warning(f"Start index {start} is not a multiple of 10")
+            return None
+
+        if end is not None and end % 10 != 0:
+            self.logger.warning(f"End index {end} is not a multiple of 10")
+            return None
+
+        # Compute parameters for worker
+        if index is not None:
+            sample_indexes = int(index / 10)
+            ll_start = index if add_intermediate_samples else None
+            ll_end = (index + 10) if add_intermediate_samples else None
+        else:
+            if start is None:
+                start = 0
+            if end is None:
+                end = self.tick - 1
+            sample_indexes = slice(int(start / 10), int(end / 10))
+            ll_start = start if add_intermediate_samples else None
+            ll_end = end if add_intermediate_samples else None
+
+        # Get file paths
+        hl_filename = self._h5_logger_sample.filename
+        ll_filename = self._h5_logger_lowlevel.filename
+
+        # Submit to process pool
+        future = self._process_pool.submit(
+            _get_data_worker,
+            hl_filename,
+            ll_filename,
+            sample_indexes,
+            signals,
+            add_intermediate_samples,
+            ll_start,
+            ll_end,
+            BILBO_CONTROL_DT
+        )
+
+        if callback is not None:
+            # Async mode: add callback and return future
+            def _on_done(f):
+                try:
+                    result = f.result()
+                    callback(result)
+                except Exception as e:
+                    self.logger.error(f"get_data worker failed: {e}")
+                    callback(None)
+
+            future.add_done_callback(_on_done)
+            return future
+        else:
+            # Sync mode: wait for result
+            try:
+                return future.result()
+            except Exception as e:
+                self.logger.error(f"get_data worker failed: {e}")
+                return None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_data_old(self,
+                     index: int | None = None,
+                     start: int | None = None,
+                     end: int | None = None,
+                     signals: list[str] | None = None,
+                     add_intermediate_samples: bool = False) -> dict | None:
+        """
+        Original get_data implementation (blocks the calling thread and may cause GIL contention).
+
         Args:
             index:
             start:
@@ -247,6 +512,9 @@ class BILBO_Logging(LoggingProvider):
             to_dict=True
         )
 
+        # Give other threads time to run after H5 read
+        time.sleep(0.005)
+
         if data is None:
             return None
 
@@ -271,6 +539,9 @@ class BILBO_Logging(LoggingProvider):
                 end=ll_end,
                 signals=None  # we need the full low-level sample
             )
+
+            # Give other threads time to run after H5 read
+            time.sleep(0.005)
 
             if ll_data is None:
                 return None
@@ -326,6 +597,10 @@ class BILBO_Logging(LoggingProvider):
                     new_sample['time'] = base_time + j * BILBO_CONTROL_DT
 
                     expanded_samples.append(new_sample)
+                    time.sleep(0.001)
+
+                # Give other threads time to run after each high-level sample expansion (every 10 ll samples)
+                time.sleep(0.01)
 
             data = expanded_samples
 
@@ -365,6 +640,9 @@ class BILBO_Logging(LoggingProvider):
             signals=signals,
             to_dict=True
         )
+
+        # Give other threads time to run after H5 read
+        time.sleep(0.005)
 
         return data
 

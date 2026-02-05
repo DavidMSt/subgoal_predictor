@@ -1646,7 +1646,9 @@ class RobotUI:
             """Clear all position control visualization objects"""
             for obj in self._additional_map_objects:
                 try:
-                    self.map_widget.map.removeObject(obj)
+                    # Only try to remove if the object still exists in the map
+                    if obj.id in self.map_widget.map.objects:
+                        self.map_widget.map.removeObject(obj)
                 except Exception:
                     pass
             self._additional_map_objects = []
@@ -1654,7 +1656,10 @@ class RobotUI:
             self._path_line_objects = []
 
         def _on_position_mode_changed(*args, **kwargs):
-            _clear_position_objects()
+            # Only clear if there are objects to clear (avoids duplicate warnings
+            # when path_finished already cleared them before mode_changed fires)
+            if self._additional_map_objects:
+                _clear_position_objects()
 
         self.robot.position_control.events.mode_changed.on(_on_position_mode_changed)
 

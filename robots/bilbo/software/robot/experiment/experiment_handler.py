@@ -179,6 +179,21 @@ class BILBO_ExperimentHandler:
             execute_in_thread=True,
         )
 
+        self.communication.wifi.newCommand(
+            identifier='stop_experiment',
+            function=self.stop_current_experiment,
+            arguments=[
+                CommandArgument(
+                    name='reason',
+                    type=str,
+                    optional=True,
+                    default='Host stop request',
+                    description="Reason for stopping the experiment"
+                )
+            ],
+            description="Stop the currently running experiment"
+        )
+
     # === METHODS ======================================================================================================
     def init(self):
         ...
@@ -260,8 +275,30 @@ class BILBO_ExperimentHandler:
         return data
 
     # ------------------------------------------------------------------------------------------------------------------
-    def stop_current_experiment(self):
-        raise NotImplementedError("stop_current_experiment not implemented yet")
+    def stop_current_experiment(self, reason: str = "External stop request") -> bool:
+        """Stop the currently running experiment.
+
+        Args:
+            reason: Reason for stopping the experiment
+
+        Returns:
+            True if an experiment was stopped, False if no experiment was running
+        """
+        if self.active_experiment is None:
+            self.logger.info("No experiment running to stop")
+            return False
+
+        experiment_id = self.active_experiment.definition.id
+        self.logger.warning(f"Stopping experiment {experiment_id}: {reason}")
+
+        # Abort the experiment
+        self.active_experiment.abort(reason=reason)
+
+        # Clear the active experiment reference
+        self.active_experiment = None
+        self.status = BILBO_ExperimentHandler_Status.IDLE
+
+        return True
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_trajectory(self, trajectory: BILBO_InputTrajectory) -> BILBO_TrajectoryExperimentData | None:

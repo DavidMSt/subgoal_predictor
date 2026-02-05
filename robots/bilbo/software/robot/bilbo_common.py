@@ -141,6 +141,13 @@ class BILBO_Common:
         return get_logging_provider().get_lowlevel_data(index, start, end, signals)
 
     # ------------------------------------------------------------------------------------------------------------------
+    def flush_logs(self):
+        """Force flush all H5 log data to disk. Call before reading data to ensure all samples are available."""
+        logging_provider = get_logging_provider()
+        if hasattr(logging_provider, 'flush'):
+            logging_provider.flush()
+
+    # ------------------------------------------------------------------------------------------------------------------
     def getConnectionStatus(self, as_dict: bool = False):
         return {
             'strength': self.connection_strength,

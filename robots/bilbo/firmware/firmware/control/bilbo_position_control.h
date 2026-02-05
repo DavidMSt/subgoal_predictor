@@ -221,7 +221,7 @@ struct bilbo_position_control_config_t {
 	// SPEED LIMITS
 	// -------------------------------------------------------------------------
 
-	float max_speed = 0.4f;   // [m/s] Maximum forward velocity
+	float max_speed = 0.5f;   // [m/s] Maximum forward velocity
 	float max_turn_rate = 5.0f;     // [rad/s] Maximum yaw rate
 	float speed_transition_time = 0.5f;  // [s] Time to smoothly transition between waypoint speeds
 
@@ -246,6 +246,12 @@ struct bilbo_position_control_config_t {
 
 	float reverse_enter_angle = 2.1f;  // [rad] ~120 deg - enter reverse mode
 	float reverse_exit_angle = 1.05f;  // [rad] ~60 deg - exit reverse mode
+
+	// -------------------------------------------------------------------------
+	// CORNER HANDLING
+	// -------------------------------------------------------------------------
+
+	float corner_slowdown_distance = 0.5f;  // [m] Distance from corner to start slowing down
 };
 
 /**
@@ -436,6 +442,9 @@ private:
 	// Speed transition state (for per-waypoint speed limits)
 	float _current_speed_limit = 0.0f;    // [m/s] Current smoothed speed limit
 	float _target_speed_limit = 0.0f;     // [m/s] Target speed for current waypoint
+
+	// STOP waypoint event tracking (to send WAYPOINT_REACHED only once)
+	bool _waypoint_reached_sent = false;  // True if WAYPOINT_REACHED already sent for current waypoint
 
 	// =========================================================================
 	// PRIVATE METHODS - PATH GEOMETRY

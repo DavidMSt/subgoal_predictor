@@ -124,6 +124,7 @@ def position_control_config_to_ctypes(config: PositionControl_Config) -> bilbo_p
         arrival_dwell_time=config.arrival_dwell_time,
         reverse_enter_angle=config.reverse_enter_angle,
         reverse_exit_angle=config.reverse_exit_angle,
+        corner_slowdown_distance=config.corner_slowdown_distance,
     )
 
 

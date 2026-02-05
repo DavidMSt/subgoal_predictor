@@ -217,10 +217,26 @@ class BILBO_ExperimentHandler:
 
         return True
 
-    def stop_experiment(self):
-        """Stop the currently running experiment."""
-        # TODO: Implement experiment stopping
-        self.logger.warning("stop_experiment not yet implemented")
+    def stop_experiment(self, reason: str = "Host stop request") -> bool:
+        """Stop the currently running experiment on the robot.
+
+        Args:
+            reason: Reason for stopping the experiment
+
+        Returns:
+            True if stop command was sent successfully
+        """
+        self.logger.info(f"Stopping experiment: {reason}")
+        result = self.device.executeFunction(
+            function_name='stop_experiment',
+            arguments={'reason': reason},
+            return_type=bool,
+        )
+        if result:
+            self.logger.info("Experiment stop command sent successfully")
+        else:
+            self.logger.warning("Failed to stop experiment (may not be running)")
+        return result
 
     def run_experiment_from_file(
         self,

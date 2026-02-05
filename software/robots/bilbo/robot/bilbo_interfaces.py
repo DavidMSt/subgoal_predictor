@@ -69,7 +69,8 @@ class BILBO_Interfaces:
                                                     control=self.control,
                                                     position_control=self.position_control,
                                                     experiments=self.experiments,
-                                                    utilities=self.utilities)
+                                                    utilities=self.utilities,
+                                                    interfaces=self)
 
         self.joystick = None
         self.app_joystick_widgets = None
@@ -175,6 +176,30 @@ class BILBO_Interfaces:
         self.joystick_enabled = False
 
     # ------------------------------------------------------------------------------------------------------------------
+    def enable_external_input(self):
+        """Enable external input on the robot (joystick/wifi commands)"""
+        self.core.device.executeFunction(
+            function_name='set_external_input_enabled',
+            arguments={'enabled': True}
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def disable_external_input(self):
+        """Disable external input on the robot (joystick/wifi commands)"""
+        self.core.device.executeFunction(
+            function_name='set_external_input_enabled',
+            arguments={'enabled': False}
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_external_input_enabled(self, enabled: bool):
+        """Enable or disable external input on the robot"""
+        self.core.device.executeFunction(
+            function_name='set_external_input_enabled',
+            arguments={'enabled': enabled}
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
     def removeJoystick(self):
         if self.joystick is None:
             return
@@ -270,12 +295,13 @@ class BILBO_Interfaces:
 class BILBO_CLI_CommandSet(CommandSet):
 
     def __init__(self, core: BILBO_Core, control: BILBO_Control, position_control: BILBO_PositionControl,
-                 experiments: BILBO_ExperimentHandler, utilities: BILBO_Utilities):
+                 experiments: BILBO_ExperimentHandler, utilities: BILBO_Utilities, interfaces: 'BILBO_Interfaces'):
         self.core = core
         self.control = control
         self.position_control = position_control
         self.experiments = experiments
         self.utilities = utilities
+        self.interfaces = interfaces
 
         beep_command = Command(name='beep',
                                function=self.core.beep,
@@ -371,6 +397,18 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                          default=10,
                                                          description='Number of iterations to test')
                                      ])
+
+        external_input_command = Command(
+            name='extInput',
+            function=self._set_external_input,
+            allow_positionals=True,
+            description='Enable or disable external input (joystick/wifi) on the robot',
+            arguments=[
+                CommandArgument(name='enabled',
+                                short_name='e',
+                                type=int,
+                                description='1 to enable, 0 to disable external input')
+            ])
 
         # --- CONTROL ----
 
@@ -498,12 +536,26 @@ class BILBO_CLI_CommandSet(CommandSet):
         plot_last_experiment_command = Command(name='plot',
                                                function=self.experiments.plot_last_experiment)
 
+        stop_experiment_command = Command(
+            name='stop',
+            function=self.experiments.stop_experiment,
+            description='Stop the currently running experiment on the robot',
+            arguments=[
+                CommandArgument(name='reason',
+                               short_name='r',
+                               type=str,
+                               optional=True,
+                               default='CLI stop request',
+                               description='Reason for stopping the experiment')
+            ])
+
         experiment_command_set = CommandSet(name='experiment',
                                             commands=[test_trajectory_command,
                                                       plot_last_experiment_command,
                                                       test_trajectory_experiment_command,
                                                       dilc_example_command,
-                                                      test_experiment_command])
+                                                      test_experiment_command,
+                                                      stop_experiment_command])
 
         navigation_command_set = CommandSet(name='nav')
 
@@ -528,9 +580,9 @@ class BILBO_CLI_CommandSet(CommandSet):
                 CommandArgument(name='x', type=float, description='X coordinate [m]'),
                 CommandArgument(name='y', type=float, description='Y coordinate [m]'),
                 CommandArgument(name='max_speed', short_name='s', type=float, optional=True, default=0.0,
-                               description='Max speed [m/s] (0=default)'),
+                                description='Max speed [m/s] (0=default)'),
                 CommandArgument(name='timeout', short_name='t', type=float, optional=True, default=0.0,
-                               description='Timeout [s] (0=none)'),
+                                description='Timeout [s] (0=none)'),
             ]
         )
 
@@ -542,9 +594,9 @@ class BILBO_CLI_CommandSet(CommandSet):
             arguments=[
                 CommandArgument(name='heading', short_name='h', type=float, description='Heading [rad]'),
                 CommandArgument(name='max_angular_speed', short_name='s', type=float, optional=True, default=0.0,
-                               description='Max angular speed [rad/s] (0=default)'),
+                                description='Max angular speed [rad/s] (0=default)'),
                 CommandArgument(name='timeout', short_name='t', type=float, optional=True, default=0.0,
-                               description='Timeout [s] (0=none)'),
+                                description='Timeout [s] (0=none)'),
             ]
         )
 
@@ -565,9 +617,9 @@ class BILBO_CLI_CommandSet(CommandSet):
                 CommandArgument(name='x', type=float, description='X coordinate [m]'),
                 CommandArgument(name='y', type=float, description='Y coordinate [m]'),
                 CommandArgument(name='type', short_name='T', type=int, optional=True, default=0,
-                               description='Type: 0=PASS, 1=STOP'),
+                                description='Type: 0=PASS, 1=STOP'),
                 CommandArgument(name='weight', short_name='w', type=float, optional=True, default=0.75,
-                               description='Corner sharpness [0-1]'),
+                                description='Corner sharpness [0-1]'),
             ]
         )
 
@@ -585,11 +637,11 @@ class BILBO_CLI_CommandSet(CommandSet):
             description='Start following waypoint path',
             arguments=[
                 CommandArgument(name='allow_reverse', short_name='r', type=bool, optional=True, default=False,
-                               description='Allow reverse driving'),
+                                description='Allow reverse driving'),
                 CommandArgument(name='timeout', short_name='t', type=float, optional=True, default=0.0,
-                               description='Timeout [s] (0=none)'),
+                                description='Timeout [s] (0=none)'),
                 CommandArgument(name='max_speed', short_name='s', type=float, optional=True, default=0.0,
-                               description='Max speed [m/s] (0=default)'),
+                                description='Max speed [m/s] (0=default)'),
             ]
         )
 
@@ -637,9 +689,9 @@ class BILBO_CLI_CommandSet(CommandSet):
             allow_positionals=True,
             arguments=[
                 CommandArgument(name='file', short_name='f', type=str,
-                               description='Path to .yaml/.yml/.json file'),
+                                description='Path to .yaml/.yml/.json file'),
                 CommandArgument(name='start', short_name='s', type=bool, optional=True, default=False,
-                               description='Start path immediately after loading'),
+                                description='Start path immediately after loading'),
             ]
         )
 
@@ -664,7 +716,8 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                            velocity_command,
                                                            stop_command,
                                                            stable_command,
-                                                           test_communication],
+                                                           test_communication,
+                                                           external_input_command],
 
                          children=[control_command_set, experiment_command_set, navigation_command_set])
 
@@ -769,6 +822,11 @@ class BILBO_CLI_CommandSet(CommandSet):
             self.core.logger.info(f"    Heading error: {data.get('heading_error', 0):.3f} rad")
             self.core.logger.info(f"    Speed limit: {data.get('speed_limit', 0):.3f} m/s")
             self.core.logger.info(f"    Elapsed time: {data.get('elapsed_time', 0):.2f} s")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_external_input(self, enabled: int):
+        """Set external input enabled state (helper for CLI int->bool conversion)"""
+        self.interfaces.set_external_input_enabled(bool(enabled))
 
     # ------------------------------------------------------------------------------------------------------------------
     def _load_path_from_file(self, file: str, start: bool = False):

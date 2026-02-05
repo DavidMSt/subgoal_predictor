@@ -22,7 +22,7 @@ def main():
     bilbo.start()
 
     while True:
-        time.sleep(1)
+        time.sleep(100)
 
 
 if __name__ == '__main__':

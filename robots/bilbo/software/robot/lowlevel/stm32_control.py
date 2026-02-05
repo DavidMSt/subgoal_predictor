@@ -604,6 +604,7 @@ class bilbo_position_control_config:
     # Reverse mode (always enabled)
     reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
     reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
+    corner_slowdown_distance: float = 0.5
 
 
 class bilbo_position_control_config_t(ctypes.Structure):
@@ -623,6 +624,7 @@ class bilbo_position_control_config_t(ctypes.Structure):
         ("arrival_dwell_time", ctypes.c_float),
         ("reverse_enter_angle", ctypes.c_float),
         ("reverse_exit_angle", ctypes.c_float),
+        ("corner_slowdown_distance", ctypes.c_float),  # [m] Distance from corner to start slowing
     ]
 
 

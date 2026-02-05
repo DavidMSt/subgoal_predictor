@@ -125,6 +125,7 @@ void BILBO_PositionControl::clear_waypoints() {
 	_reverse_mode_active = false;
 	_current_speed_limit = 0.0f;
 	_target_speed_limit = 0.0f;
+	_waypoint_reached_sent = false;
 
 	memset(_segment_lengths, 0, sizeof(_segment_lengths));
 }
@@ -200,6 +201,7 @@ bool BILBO_PositionControl::start_path(const bilbo_path_start_cmd_t& command,
 	_arrival_timer = 0.0f;
 	_elapsed_time = 0.0f;
 	_reverse_mode_active = false;
+	_waypoint_reached_sent = false;
 
 	// Initialize speed limits based on first waypoint
 	float path_max_speed = (command.max_speed > 0.0f) ? command.max_speed : config.max_speed;
@@ -498,15 +500,18 @@ void BILBO_PositionControl::_advance_carrot(
 		} else {
 			// PASS waypoint: weight + corner angle determines advancement
 
-			// Compute corner angle
-			float corner_angle = _compute_corner_angle_at(_current_segment);
-
-			// Effective weight: weight is modulated by corner sharpness
-			// - Straight path (angle=0): effective_weight = 0 (free advancement)
-			// - Sharp corner (angle=PI): effective_weight = full weight
-			// Using sqrt for less aggressive modulation - allows user weight to have
-			// more effect even on moderate corners (e.g., 30° corner: sqrt(0.1)=0.32 vs 0.1)
-			float angle_factor = sqrtf(corner_angle / M_PI);  // [0, 1], sqrt for gentler modulation
+			// Compute corner angle (skip for segment 0 - the "incoming" direction
+			// from arbitrary start position is not part of the designed path)
+			float angle_factor = 0.0f;
+			if (_current_segment > 0) {
+				float corner_angle = _compute_corner_angle_at(_current_segment);
+				// Effective weight: weight is modulated by corner sharpness
+				// - Straight path (angle=0): effective_weight = 0 (free advancement)
+				// - Sharp corner (angle=PI): effective_weight = full weight
+				// Using sqrt for less aggressive modulation - allows user weight to have
+				// more effect even on moderate corners (e.g., 30° corner: sqrt(0.1)=0.32 vs 0.1)
+				angle_factor = sqrtf(corner_angle / M_PI);  // [0, 1], sqrt for gentler modulation
+			}
 			float effective_weight = wp.weight * angle_factor;
 
 			// Distance robot needs to be from waypoint before carrot can advance
@@ -648,17 +653,28 @@ bilbo_position_control_output_t BILBO_PositionControl::_compute_control(
 	}
 
 	// Corner angle slowdown: reduce speed based on upcoming corner sharpness
-	// This uses a continuous factor based on angle, so robot naturally slows
-	// when approaching tight corners and speeds up when path straightens
+	// Only applies when approaching the corner, not the entire segment.
+	//
+	// NOTE: Skip segment 0 because the "incoming" direction (from arbitrary start
+	// position to first waypoint) is not part of the designed path.
 	float corner_speed_factor = 1.0f;
-	if (_current_segment < _waypoint_count - 1) {
+	if (_current_segment > 0 && _current_segment < _waypoint_count - 1) {
 		float corner_angle = _compute_corner_angle_at(_current_segment);
 		// Factor: 1.0 for straight (angle=0), decreasing for sharper corners
 		// Using cosine for smooth transition: cos(0)=1, cos(PI)=-1
 		// Map to [0.3, 1.0] range: even sharp corners allow some speed
 		float cos_angle = cosf(corner_angle);  // [-1, 1]
-		corner_speed_factor = 0.65f + 0.35f * cos_angle;  // [0.3, 1.0]
-		corner_speed_factor = _clamp(corner_speed_factor, 0.3f, 1.0f);
+		float full_corner_factor = 0.65f + 0.35f * cos_angle;  // [0.3, 1.0]
+		full_corner_factor = _clamp(full_corner_factor, 0.3f, 1.0f);
+
+		// Fade in slowdown as we approach the corner
+		// - Far from corner: no slowdown (factor = 1.0)
+		// - At corner: full slowdown based on angle
+		float fade = _clamp(1.0f - dist_to_waypoint / config.corner_slowdown_distance, 0.0f, 1.0f);
+		// fade = 0 when far, 1 when close
+
+		// Interpolate between 1.0 (no slowdown) and full_corner_factor
+		corner_speed_factor = 1.0f - fade * (1.0f - full_corner_factor);
 	}
 
 	// Effective max speed: minimum of smoothed waypoint limit and corner factor
@@ -760,7 +776,11 @@ void BILBO_PositionControl::_check_intermediate_stop(
 	float dist = _distance(robot_state.x, robot_state.y, wp.x, wp.y);
 
 	if (dist < config.arrival_tolerance) {
-		_on_waypoint_reached(_current_segment);
+		// Only send WAYPOINT_REACHED event once when first entering tolerance
+		if (!_waypoint_reached_sent) {
+			_on_waypoint_reached(_current_segment);
+			_waypoint_reached_sent = true;
+		}
 
 		_arrival_timer += config.Ts;
 		if (_arrival_timer >= config.arrival_dwell_time) {
@@ -769,9 +789,11 @@ void BILBO_PositionControl::_check_intermediate_stop(
 			_carrot_t = 0.0f;
 			_arrival_timer = 0.0f;
 			_angular_integral = 0.0f;
+			_waypoint_reached_sent = false;  // Reset for next STOP waypoint
 		}
 	} else {
 		_arrival_timer = 0.0f;
+		_waypoint_reached_sent = false;  // Reset if robot leaves tolerance zone
 	}
 }
 

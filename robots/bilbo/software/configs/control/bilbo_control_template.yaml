@@ -115,3 +115,4 @@ position_control:
   arrival_dwell_time: 0.0
   reverse_enter_angle: 0.0
   reverse_exit_angle: 0.0
+  corner_slowdown_distance: 0.0

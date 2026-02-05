@@ -465,22 +465,23 @@ class BILBO_Control:
             self.logger.warning(f"Roughness value must be between 0 and 1, got {roughness}. No adjustment done")
             return
 
-        self.logger.warning(f"Adjusting for floor roughness={roughness:.2f}. Currently disabled")
-        return
-
         # === Tuning constants (adjust these based on testing) ===
         # Velocity control feedforward - Coulomb friction compensation
         # Kc adds a constant pitch command in the direction of motion to overcome friction
-        ROUGHNESS_KC_MAX = 0.015  # Max Kc value at roughness=1.0 (tune based on carpet)
+        ROUGHNESS_KC_MAX = 0.02  # Max Kc value at roughness=1.0 (tune based on carpet)
 
-        # Velocity control PID scaling
+        # Forward velocity control PID scaling
         # Higher gains help overcome friction-induced lag
-        ROUGHNESS_KP_SCALE = 1.5   # At roughness=1.0, Kp multiplied by this factor
-        ROUGHNESS_KI_SCALE = 1.3   # At roughness=1.0, Ki multiplied by this factor
+        ROUGHNESS_V_KP_SCALE = 1.75   # At roughness=1.0, Kp multiplied by this factor
+        ROUGHNESS_V_KI_SCALE = 1.3    # At roughness=1.0, Ki multiplied by this factor
+
+        # Turn velocity control PID scaling (independent, lower scaling to avoid oscillations)
+        ROUGHNESS_PSIDOT_KP_SCALE = 1.25  # At roughness=1.0, Kp multiplied by this factor
+        ROUGHNESS_PSIDOT_KI_SCALE = 1.15  # At roughness=1.0, Ki multiplied by this factor
 
         # Position control scaling
         # Higher linear gains command more velocity for same position error
-        ROUGHNESS_POS_KP_SCALE = 1.3  # At roughness=1.0, kp_linear multiplied by this
+        ROUGHNESS_POS_KP_SCALE = 1.5  # At roughness=1.0, kp_linear multiplied by this
         ROUGHNESS_POS_KI_SCALE = 2.0  # At roughness=1.0, ki_linear multiplied by this
 
         # === Store baseline config if not already stored ===
@@ -493,20 +494,26 @@ class BILBO_Control:
         baseline_pos = self._baseline_position_config
 
         # === Calculate adjustment factors (linear interpolation) ===
-        kp_factor = 1.0 + roughness * (ROUGHNESS_KP_SCALE - 1.0)
-        ki_factor = 1.0 + roughness * (ROUGHNESS_KI_SCALE - 1.0)
+        # Forward velocity factors
+        v_kp_factor = 1.0 + roughness * (ROUGHNESS_V_KP_SCALE - 1.0)
+        v_ki_factor = 1.0 + roughness * (ROUGHNESS_V_KI_SCALE - 1.0)
+        # Turn velocity factors (independent, lower scaling)
+        psidot_kp_factor = 1.0 + roughness * (ROUGHNESS_PSIDOT_KP_SCALE - 1.0)
+        psidot_ki_factor = 1.0 + roughness * (ROUGHNESS_PSIDOT_KI_SCALE - 1.0)
+        # Position control factors
         pos_kp_factor = 1.0 + roughness * (ROUGHNESS_POS_KP_SCALE - 1.0)
         pos_ki_factor = 1.0 + roughness * (ROUGHNESS_POS_KI_SCALE - 1.0)
         kc_value = roughness * ROUGHNESS_KC_MAX
 
         self.logger.info(f"Adjusting for floor roughness={roughness:.2f}: "
-                        f"Kp×{kp_factor:.2f}, Ki×{ki_factor:.2f}, Kc={kc_value:.4f}, "
+                        f"v_Kp×{v_kp_factor:.2f}, v_Ki×{v_ki_factor:.2f}, Kc={kc_value:.4f}, "
+                        f"psidot_Kp×{psidot_kp_factor:.2f}, psidot_Ki×{psidot_ki_factor:.2f}, "
                         f"pos_kp×{pos_kp_factor:.2f}, pos_ki×{pos_ki_factor:.2f}")
 
         # === Adjust forward velocity control ===
         adjusted_v_pid = PID_Config(
-            Kp=baseline_vel.v.pid.Kp * kp_factor,
-            Ki=baseline_vel.v.pid.Ki * ki_factor,
+            Kp=baseline_vel.v.pid.Kp * v_kp_factor,
+            Ki=baseline_vel.v.pid.Ki * v_ki_factor,
             Kd=baseline_vel.v.pid.Kd,
             Ts=baseline_vel.v.pid.Ts,
             enable_i_limit=baseline_vel.v.pid.enable_i_limit,
@@ -545,10 +552,10 @@ class BILBO_Control:
             output_slew_rate=baseline_vel.v.feedforward.output_slew_rate,
         )
 
-        # === Adjust turn velocity control (same PID scaling, no Kc needed for turning) ===
+        # === Adjust turn velocity control (independent PID scaling, no Kc needed for turning) ===
         adjusted_psidot_pid = PID_Config(
-            Kp=baseline_vel.psidot.pid.Kp * kp_factor,
-            Ki=baseline_vel.psidot.pid.Ki * ki_factor,
+            Kp=baseline_vel.psidot.pid.Kp * psidot_kp_factor,
+            Ki=baseline_vel.psidot.pid.Ki * psidot_ki_factor,
             Kd=baseline_vel.psidot.pid.Kd,
             Ts=baseline_vel.psidot.pid.Ts,
             enable_i_limit=baseline_vel.psidot.pid.enable_i_limit,

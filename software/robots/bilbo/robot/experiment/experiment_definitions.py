@@ -646,7 +646,7 @@ class TestbedData:
 class ExperimentMetaData:
     """Metadata about an experiment execution."""
     description: str
-    camera_timestamp: float
+    camera_timestamp: float | None
     date: str
     control_config: BILBO_ControlConfig
     bilbo_config: BILBO_Config

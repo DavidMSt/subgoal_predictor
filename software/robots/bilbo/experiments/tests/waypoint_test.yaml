@@ -11,29 +11,55 @@ actions:
   - type: wait_time
     time_ms: 500
 
-  # Set waypoints
   - id: set_waypoints
     type: set_waypoints
     waypoints:
-      - x: 1.75
+      # Outer loop (exact bounds)
+      - x: 2.5
         y: 0.5
-        type: PASS
-        weight: 0.99
-      - x: 1.25
-        y: 2.0
-        type: PASS
-        speed: 0.75
-      - x: 0.75
-        y: 2.0
-        type: PASS
-        weight: 0.99
+        type: STOP
+        weight: 1.0
+      - x: 2.5
+        y: 2.5
+        type: STOP
+        weight: 1.0
+      - x: 0.5
+        y: 2.5
+        type: STOP
+        weight: 1.0
       - x: 0.5
         y: 0.5
         type: STOP
+        weight: 1.0
+
+      # Spiral inward
+      - x: 2.0
+        y: 0.5
+        type: STOP
+        weight: 0.99
+      - x: 2.0
+        y: 2.0
+        type: STOP
+        weight: 0.99
+      - x: 1.0
+        y: 2.0
+        type: STOP
+        weight: 0.99
+      - x: 1.0
+        y: 1.0
+        type: STOP
+        weight: 0.99
+
+      # Final convergence
+      - x: 1.5
+        y: 1.5
+        type: STOP
+        weight: 1.0
 
   # Start path following
   - id: start_path
     type: start_path
+    max_speed: 0.5
 
 #  # Wait for path completion
 #  - id: wait_path_complete

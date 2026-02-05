@@ -1612,8 +1612,41 @@ class Experiment:
         self.tick += 1
 
     # ------------------------------------------------------------------------------------------------------------------
-    def abort(self):
-        raise NotImplementedError("Abort not implemented yet")
+    def abort(self, reason: str = "External abort request"):
+        """Abort the experiment immediately.
+
+        This will:
+        1. Stop all running actions
+        2. Re-enable external input
+        3. Set control mode to BALANCING (safe state)
+        4. Fire the error event
+        """
+        if self.finished:
+            self.logger.warning(f"Experiment {self.definition.id} already finished, cannot abort")
+            return
+
+        self.logger.warning(f"Aborting experiment {self.definition.id}: {reason}")
+
+        # Mark as finished to stop the step loop
+        self.finished = True
+        self.end_tick = get_logging_provider().get_tick()
+
+        # Stop log capture
+        self._stop_log_capture()
+
+        # Re-enable external input
+        self.experiment_handler.interfaces.enable_external_input()
+        self.logger.info("Reset: External input re-enabled")
+
+        # Set control mode to BALANCING (safe state)
+        try:
+            self.experiment_handler.control.set_mode(BILBO_Control_Mode.BALANCING)
+            self.logger.info("Reset: Control mode set to BALANCING")
+        except Exception as e:
+            self.logger.error(f"Failed to set control mode: {e}")
+
+        # Fire the error event with abort reason
+        self.events.error.set(data={'reason': reason, 'aborted': True})
 
     # ------------------------------------------------------------------------------------------------------------------
     def execute_action(self, action_container: ExperimentActionContainer):
@@ -1717,9 +1750,34 @@ class Experiment:
         self.experiment_handler.interfaces.enable_external_input()
         self.logger.info(f"Reset: External input re-enabled")
 
-        # # Build the experiment data
-        samples = self.experiment_handler.common.get_data(start=self.start_tick, end=self.end_tick,
-                                                          add_intermediate_samples=True)
+        # Flush H5 logs to disk before reading to ensure all samples are available
+        self.experiment_handler.common.flush_logs()
+        time.sleep(0.1)  # Small wait for filesystem sync
+
+        # # Build the experiment data - read samples in batches to avoid blocking other threads
+        BATCH_SIZE = 1000  # Number of ticks per batch (must be multiple of 10)
+        samples = []
+
+        # self.end_tick = self.start_tick + 1000
+
+        current_start = self.start_tick
+        while current_start < self.end_tick:
+            current_end = min(current_start + BATCH_SIZE, self.end_tick)
+
+            batch_samples = self.experiment_handler.common.get_data(
+                start=current_start,
+                end=current_end,
+                add_intermediate_samples=True
+            )
+
+            if batch_samples:
+                samples.extend(batch_samples)
+
+            current_start = current_end
+
+            # Yield to other threads between batches
+            time.sleep(0.01)
+
 
         # ll_samples = self.experiment_handler.common.get_lowlevel_data(start=self.start_tick, end=self.end_tick)
         #
@@ -1744,6 +1802,7 @@ class Experiment:
                 end_time=end_tick * LOOP_TIME,
                 data=container.action.data
             )
+            time.sleep(0.01)
 
         data = ExperimentData(
             id=self.definition.id,
@@ -1754,7 +1813,7 @@ class Experiment:
         )
 
         data_dict = asdict_optimized(data)
-        data.samples = samples
+        # data.samples = samples
         data_dict['samples'] = samples
         data_dict['logs'] = self._logs
 
@@ -1793,7 +1852,7 @@ class Experiment:
         """Enable log redirection to capture logs during experiment."""
         if not self._log_capture_enabled:
             self._logs = []
-            enable_redirection(self._log_capture_callback, redirect_all=True)
+            enable_redirection(self._log_capture_callback, redirect_all=False)
             self._log_capture_enabled = True
 
     # ------------------------------------------------------------------------------------------------------------------

@@ -8,13 +8,19 @@ import numpy as np
 from scipy.fft import rfftfreq, rfft
 from scipy.signal import find_peaks
 
-from core.utils.data import generate_time_vector, generate_random_input
+from core.utils.data import generate_time_vector, generate_random_input, generate_time_vector_by_length
+from core.utils.dataclass_utils import from_dict_auto
+from core.utils.files import file_exists, get_absolute_path
+from core.utils.json_utils import readJSON
+from core.utils.plotting.map_plot import MapPlot
+from core.utils.plotting.plot import quick_plot
 from robots.bilbo.robot.bilbo_definitions import BILBO_CONTROL_DT, MAX_STEPS_TRAJECTORY
 from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory, BILBO_InputFileData, \
     BILBO_InputTrajectoryStep
+from robots.bilbo.robot.experiment.experiment_definitions import ExperimentData
 
 if TYPE_CHECKING:
-    from robots.bilbo.robot.experiment.experiment_definitions import ExperimentData
+    # from robots.bilbo.robot.experiment.experiment_definitions import ExperimentData
     from core.utils.report import Report
 
 
@@ -188,7 +194,7 @@ PHASE_COLORS = [
 
 
 def make_report(
-        experiment: str | dict | 'ExperimentData',
+        experiment: str | dict | ExperimentData,
         output: str | None = None,
         format: str = 'html',
         states: list[str] | None = None,
@@ -669,6 +675,19 @@ def make_report(
     return report
 
 
+
+def read_experiment_data(file: str) -> ExperimentData:
+    if not file_exists(file):
+        raise FileNotFoundError(f"Experiment data file not found: {file}")
+
+    data_dict = readJSON(file)
+
+    data = from_dict_auto(ExperimentData, data_dict)
+
+    return data
+
+
+
 def _format_action_params(action_type: str, params: dict) -> str:
     """Format action parameters for display."""
     if not params:
@@ -728,3 +747,62 @@ def _format_action_params(action_type: str, params: dict) -> str:
             else:
                 parts.append(f"{k}={v}")
         return ", ".join(parts[:3])  # Limit to 3 params
+
+
+
+if __name__ == '__main__':
+    data = read_experiment_data(
+        get_absolute_path('./examples/waypoint_test_2026-02-04_19-05-08.json')
+    )
+
+    x = [sample.estimation.state.x for sample in data.samples]
+    y = [sample.estimation.state.y for sample in data.samples]
+    x_ll = [sample.lowlevel.estimation.state.x for sample in data.samples]
+    y_ll = [sample.lowlevel.estimation.state.y for sample in data.samples]
+    time_vector = generate_time_vector_by_length(num_samples=len(x), dt=0.01)
+
+    quick_plot(time_vector, x)  # in 10 Hz steps
+    quick_plot(time_vector, x_ll)  # in 100 Hz steps
+
+    # quick map plot
+
+    map_plot = MapPlot(size=((0,3), (0,3)))
+    map_plot.add_grid()
+    map_plot.add_coordinate_system(length=0.3)
+
+    map_plot.add_trajectory(x, y,
+                            width=2,
+                            show_start=True,
+                            show_end=True,
+                            gradient=True,
+                            gradient_cmap='viridis',
+                            )
+
+    # Extract waypoints from position control samples (avoid duplicates)
+    seen_waypoints = set()
+    wp_index = 1
+    for sample in data.samples:
+        waypoints = sample.control.position_control.waypoints
+        for wp in waypoints:
+            if isinstance(wp, dict):
+                wx = wp.get('x', 0.0)
+                wy = wp.get('y', 0.0)
+                key = (round(wx, 6), round(wy, 6))
+                if key not in seen_waypoints:
+                    seen_waypoints.add(key)
+                    label_pos = 'bottom' if wy < 1.5 else 'top'
+                    map_plot.add_point(
+                        position=(wx, wy),
+                        color='#e74c3c',
+                        size=0.08,
+                        marker='o',
+                        border=True,
+                        border_color='black',
+                        border_width=1.5,
+                        label=f'WP{wp_index}',
+                        label_position=label_pos,
+                        label_fontsize=10,
+                    )
+                    wp_index += 1
+
+    map_plot.show_pdf()

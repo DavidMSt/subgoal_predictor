@@ -130,6 +130,13 @@ class BILBO_Interfaces:
             description='Set the input source'
         )
 
+        self.communication.wifi.newCommand(
+            identifier='set_external_input_enabled',
+            function=self.set_external_input_enabled,
+            arguments=[CommandArgument(name='enabled', type=bool)],
+            description='Enable or disable external input (joystick/wifi)'
+        )
+
         self._input_thread = None  # type: ignore
         self._exit_input_task = False
 
@@ -305,3 +312,11 @@ class BILBO_Interfaces:
     def set_input_source(self, source: str):
         self.input_source = InputSource[source]
         self.logger.info(f'Set input source to {source}')
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_external_input_enabled(self, enabled: bool):
+        if enabled:
+            self.enable_external_input()
+        else:
+            self.disable_external_input()
+        self.logger.info(f'External input {"enabled" if enabled else "disabled"}')
