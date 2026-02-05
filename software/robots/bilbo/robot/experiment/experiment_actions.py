@@ -821,6 +821,17 @@ def _register_builtin_actions():
     ))
 
     register_action(ActionEntry(
+        type_name="group",
+        parameters=[
+            ActionParameter("sub_actions", list, default=[], aliases=["actions"]),
+        ],
+        shorthands=[
+            ShorthandRule("group", value_key="actions"),
+        ],
+        description="Execute multiple actions sequentially as a named group"
+    ))
+
+    register_action(ActionEntry(
         type_name="func",
         parameters=[
             ActionParameter("function", str, default=""),

@@ -562,7 +562,7 @@ def _register_builtin_actions():
         BeepAction, SetModeAction, SetTICAction, SpeakAction, SetMarkerAction,
         EnableExternalInputAction, SetVelocityAction, ResetAction, RunTrajectoryAction,
         SetInputAction, WaitTimeAction, WaitTickAction, WaitUntilTickAction,
-        WaitEventAction, ParallelAction, FuncAction, SetFeedbackGainAction,
+        WaitEventAction, ParallelAction, GroupAction, FuncAction, SetFeedbackGainAction,
         ResetControlAction, MoveToAction, TurnToAction, SetWaypointsAction,
         StartPathAction, LoadPathAction, StopPathAction, WaitPositionEventAction
     )
@@ -736,6 +736,18 @@ def _register_builtin_actions():
             ShorthandRule("parallel", value_key="actions"),
         ],
         description="Execute multiple actions in parallel"
+    ))
+
+    register_action(ActionEntry(
+        type_name="group",
+        action_class=GroupAction,
+        parameters=[
+            ActionParameter("sub_actions", list, default=[], aliases=["actions"]),
+        ],
+        shorthands=[
+            ShorthandRule("group", value_key="actions"),
+        ],
+        description="Execute multiple actions sequentially as a named group"
     ))
 
     register_action(ActionEntry(

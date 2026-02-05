@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import abc
 import dataclasses
+import enum
 import json
 import math
 import threading
@@ -46,6 +47,28 @@ from robot.experiment.experiment_parser import (
     normalize_waypoints as _normalize_waypoints,
     get_registry as _get_action_registry,
 )
+
+
+# ======================================================================================================================
+# Status Enums
+# ======================================================================================================================
+
+class ExperimentStatus(enum.StrEnum):
+    """Status of an experiment after completion."""
+    FINISHED = 'finished'       # Completed successfully
+    ERROR = 'error'             # Aborted due to action error
+    TIMEOUT = 'timeout'         # Aborted due to experiment timeout
+    ABORTED = 'aborted'         # Aborted by external request
+
+
+class ExperimentActionStatus(enum.StrEnum):
+    """Status of an individual action."""
+    PENDING = 'pending'         # Not yet started
+    RUNNING = 'running'         # Currently executing
+    FINISHED = 'finished'       # Completed successfully
+    ERROR = 'error'             # Failed with error
+    TIMEOUT = 'timeout'         # Timed out
+    SKIPPED = 'skipped'         # Skipped due to experiment abort
 
 
 # ======================================================================================================================
@@ -203,6 +226,28 @@ class ExperimentAction(abc.ABC):
             "time": definition.time,
             "timeout": definition.timeout,
         }
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_parameters(self) -> dict[str, Any]:
+        """Extract action-specific parameters (excluding base class fields).
+
+        Returns a dict of parameter names to values for this action's configuration.
+        Subclasses can override this to customize parameter extraction.
+        """
+        # Base class fields to exclude
+        base_fields = {'id', 'tick', 'after', 'time', 'timeout', 'data', 'experiment'}
+
+        params = {}
+        for field in dataclasses.fields(self):
+            # Skip base class fields and private fields
+            if field.name in base_fields or field.name.startswith('_'):
+                continue
+            value = getattr(self, field.name)
+            # Convert enums to their value for JSON serialization
+            if isinstance(value, enum.Enum):
+                value = value.value
+            params[field.name] = value
+        return params
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_finished(self):
@@ -689,6 +734,94 @@ class ParallelAction(ExperimentAction):
 
 # ----------------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass(kw_only=True)
+class GroupAction(ExperimentAction):
+    """Executes multiple actions sequentially, finishing when all complete.
+
+    Groups allow you to organize related actions together and track their
+    collective start and end times. This is useful for later extracting
+    data samples for a specific phase of an experiment.
+
+    Example YAML:
+        - type: group
+          id: velocity_test
+          actions:
+            - set_mode: "VELOCITY"
+            - type: set_velocity
+              forward: 0.5
+            - wait: 3s
+    """
+    sub_actions: list[ExperimentAction] = dataclasses.field(default_factory=list)
+    _current_index: int = 0
+
+    def __post_init__(self):
+        super().__post_init__()
+        self._current_index = 0
+
+    def initialize(self, experiment: Experiment):
+        super().initialize(experiment)
+        for sub_action in self.sub_actions:
+            sub_action.initialize(experiment)
+
+    def execute(self) -> bool:
+        self._on_started()
+        self._current_index = 0
+
+        if len(self.sub_actions) == 0:
+            self._on_finished()
+            return True
+
+        # Start the first sub-action
+        self._execute_current()
+        return False  # Async - wait for all sub-actions to complete sequentially
+
+    def _execute_current(self):
+        """Execute the current sub-action and register callback for when it finishes."""
+        if self._current_index >= len(self.sub_actions):
+            self._on_finished()
+            return
+
+        current_action = self.sub_actions[self._current_index]
+        current_action.callbacks.finished.register(self._sub_action_finished)
+        current_action.execute()
+        # The callback fires when the action calls _on_finished(), whether sync or async
+
+    def _sub_action_finished(self):
+        """Called when a sub-action finishes. Start the next one or finish the group."""
+        self._current_index += 1
+        if self._current_index >= len(self.sub_actions):
+            self._on_finished()
+        else:
+            self._execute_current()
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "GroupAction":
+        kwargs = cls._common_init_kwargs(definition)
+
+        sub_action_defs = definition.parameters.get("actions", [])
+        sub_actions: list[ExperimentAction] = []
+
+        registry = _get_action_registry()
+
+        for i, sub_def in enumerate(sub_action_defs):
+            # Expand shorthand and parse using the registry
+            expanded = registry.expand_shorthand(sub_def)
+            sub_action_def = ExperimentActionDefinition.from_dict(expanded, index=i)
+            sub_action_def.id = f"{definition.id}_sub_{i}"
+
+            # Create the action instance using the registry
+            if registry.has_type(sub_action_def.type):
+                sub_actions.append(registry.create_action(sub_action_def))
+            elif sub_action_def.type in EXPERIMENT_ACTION_TYPE_MAPPING:
+                action_cls = EXPERIMENT_ACTION_TYPE_MAPPING[sub_action_def.type]
+                sub_actions.append(action_cls.from_definition(sub_action_def))
+            else:
+                raise ValueError(f"Unknown action type in group: {sub_action_def.type}")
+
+        return cls(**kwargs, sub_actions=sub_actions)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass(kw_only=True)
 class FuncAction(ExperimentAction):
     """Execute a function on the robot by path, e.g. '.control.set_mode'."""
     function: str
@@ -806,15 +939,31 @@ class MoveToAction(ExperimentAction):
 
     def _wait_for_completion(self):
         position_control = self.experiment.experiment_handler.control.position_control
-        # Wait for either completion or timeout event
-        result = wait_for_events(
+        # Wait for completion, timeout, or mode change
+        data, trace = wait_for_events(
             OR(position_control.events.move_to_point_completed,
-               position_control.events.move_to_point_timeout),
+               position_control.events.move_to_point_timeout,
+               position_control.events.mode_changed),
             timeout=self.timeout if self.timeout > 0 else None
         )
-        if result is TIMEOUT:
-            self.logger.warning(f"MoveToAction: wait timed out")
-        self._on_finished()
+
+        # Check which event caused the wait to end
+        if trace is TIMEOUT:
+            self.logger.warning("MoveToAction: wait timed out (no event received)")
+            self._on_error()
+        elif trace.caused_by(position_control.events.move_to_point_completed):
+            self.logger.info("MoveToAction: move completed successfully")
+            self._on_finished()
+        elif trace.caused_by(position_control.events.move_to_point_timeout):
+            self.logger.warning("MoveToAction: move timed out")
+            self._on_error()
+        elif trace.caused_by(position_control.events.mode_changed):
+            self.logger.warning("MoveToAction: move interrupted by mode change")
+            self._on_error()
+        else:
+            # Unknown event - treat as error
+            self.logger.warning("MoveToAction: unknown event triggered wait end")
+            self._on_error()
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "MoveToAction":
@@ -863,14 +1012,30 @@ class TurnToAction(ExperimentAction):
 
     def _wait_for_completion(self):
         position_control = self.experiment.experiment_handler.control.position_control
-        result = wait_for_events(
+        data, trace = wait_for_events(
             OR(position_control.events.turn_to_heading_completed,
-               position_control.events.turn_to_heading_timeout),
+               position_control.events.turn_to_heading_timeout,
+               position_control.events.mode_changed),
             timeout=self.timeout if self.timeout > 0 else None
         )
-        if result is TIMEOUT:
-            self.logger.warning(f"TurnToAction: wait timed out")
-        self._on_finished()
+
+        # Check which event caused the wait to end
+        if trace is TIMEOUT:
+            self.logger.warning("TurnToAction: wait timed out (no event received)")
+            self._on_error()
+        elif trace.caused_by(position_control.events.turn_to_heading_completed):
+            self.logger.info("TurnToAction: turn completed successfully")
+            self._on_finished()
+        elif trace.caused_by(position_control.events.turn_to_heading_timeout):
+            self.logger.warning("TurnToAction: turn timed out")
+            self._on_error()
+        elif trace.caused_by(position_control.events.mode_changed):
+            self.logger.warning("TurnToAction: turn interrupted by mode change")
+            self._on_error()
+        else:
+            # Unknown event - treat as error
+            self.logger.warning("TurnToAction: unknown event triggered wait end")
+            self._on_error()
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "TurnToAction":
@@ -949,6 +1114,21 @@ class StartPathAction(ExperimentAction):
     def execute(self) -> bool:
         self._on_started()
         position_control = self.experiment.experiment_handler.control.position_control
+
+        # Store waypoints before starting the path
+        self.data = {
+            'waypoints': [
+                {
+                    'x': wp.x,
+                    'y': wp.y,
+                    'type': wp.type.name,
+                    'weight': wp.weight,
+                    'speed': wp.speed
+                }
+                for wp in position_control.waypoints
+            ]
+        }
+
         result = position_control.start_path(
             allow_reverse=self.allow_reverse,
             timeout=self.timeout,
@@ -969,15 +1149,34 @@ class StartPathAction(ExperimentAction):
 
     def _wait_for_completion(self):
         position_control = self.experiment.experiment_handler.control.position_control
-        result = wait_for_events(
+        data, trace = wait_for_events(
             OR(position_control.events.path_finished,
                position_control.events.path_timeout,
-               position_control.events.path_aborted),
+               position_control.events.path_aborted,
+               position_control.events.mode_changed),
             timeout=self.timeout if self.timeout > 0 else None
         )
-        if result is TIMEOUT:
-            self.logger.warning(f"StartPathAction: wait timed out")
-        self._on_finished()
+
+        # Check which event caused the wait to end
+        if trace is TIMEOUT:
+            self.logger.warning("StartPathAction: wait timed out (no event received)")
+            self._on_error()
+        elif trace.caused_by(position_control.events.path_finished):
+            self.logger.info("StartPathAction: path finished successfully")
+            self._on_finished()
+        elif trace.caused_by(position_control.events.path_timeout):
+            self.logger.warning("StartPathAction: path timed out")
+            self._on_error()
+        elif trace.caused_by(position_control.events.path_aborted):
+            self.logger.warning("StartPathAction: path aborted")
+            self._on_error()
+        elif trace.caused_by(position_control.events.mode_changed):
+            self.logger.warning("StartPathAction: path interrupted by mode change")
+            self._on_error()
+        else:
+            # Unknown event - treat as error
+            self.logger.warning("StartPathAction: unknown event triggered wait end")
+            self._on_error()
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "StartPathAction":
@@ -1036,6 +1235,20 @@ class LoadPathAction(ExperimentAction):
             self._on_error()
             return True
 
+        # Store waypoints after loading the path
+        self.data = {
+            'waypoints': [
+                {
+                    'x': wp.x,
+                    'y': wp.y,
+                    'type': wp.type.name,
+                    'weight': wp.weight,
+                    'speed': wp.speed
+                }
+                for wp in position_control.waypoints
+            ]
+        }
+
         if self.start and self.wait:
             thread = threading.Thread(target=self._wait_for_completion, daemon=True)
             thread.start()
@@ -1047,15 +1260,34 @@ class LoadPathAction(ExperimentAction):
     def _wait_for_completion(self):
         position_control = self.experiment.experiment_handler.control.position_control
         effective_timeout = self.path_timeout if self.path_timeout and self.path_timeout > 0 else None
-        result = wait_for_events(
+        data, trace = wait_for_events(
             OR(position_control.events.path_finished,
                position_control.events.path_timeout,
-               position_control.events.path_aborted),
+               position_control.events.path_aborted,
+               position_control.events.mode_changed),
             timeout=effective_timeout
         )
-        if result is TIMEOUT:
-            self.logger.warning(f"LoadPathAction: wait timed out")
-        self._on_finished()
+
+        # Check which event caused the wait to end
+        if trace is TIMEOUT:
+            self.logger.warning("LoadPathAction: wait timed out (no event received)")
+            self._on_error()
+        elif trace.caused_by(position_control.events.path_finished):
+            self.logger.info("LoadPathAction: path finished successfully")
+            self._on_finished()
+        elif trace.caused_by(position_control.events.path_timeout):
+            self.logger.warning("LoadPathAction: path timed out")
+            self._on_error()
+        elif trace.caused_by(position_control.events.path_aborted):
+            self.logger.warning("LoadPathAction: path aborted")
+            self._on_error()
+        elif trace.caused_by(position_control.events.mode_changed):
+            self.logger.warning("LoadPathAction: path interrupted by mode change")
+            self._on_error()
+        else:
+            # Unknown event - treat as error
+            self.logger.warning("LoadPathAction: unknown event triggered wait end")
+            self._on_error()
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "LoadPathAction":
@@ -1123,6 +1355,7 @@ class WaitPositionEventAction(ExperimentAction):
             'waypoint_completed': position_control.events.waypoint_completed,
             'waypoint_reached': position_control.events.waypoint_reached,
             'waypoint_passed': position_control.events.waypoint_passed,
+            'mode_changed': position_control.events.mode_changed,
         }
 
         if self.event not in event_map:
@@ -1169,6 +1402,7 @@ EXPERIMENT_ACTION_TYPE_MAPPING = {
     "enable_external_input": EnableExternalInputAction,
     "reset": ResetAction,
     "parallel": ParallelAction,
+    "group": GroupAction,
     "func": FuncAction,
     "set_feedback_gain": SetFeedbackGainAction,
     "reset_control": ResetControlAction,
@@ -1248,7 +1482,10 @@ class ExperimentActionData:
     end_tick: int = 0
     start_time: float = 0.0
     end_time: float = 0.0
-    data: Any | None = None
+    status: ExperimentActionStatus = ExperimentActionStatus.PENDING
+    error_message: str | None = None
+    parameters: dict[str, Any] | None = None  # Action input parameters (velocity, waypoints, etc.)
+    data: Any | None = None  # Action output data (results, collected info)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1264,10 +1501,13 @@ class ExperimentMetaData:
 @dataclasses.dataclass(frozen=False)
 class ExperimentData:
     id: str
+    status: ExperimentStatus
     meta: ExperimentMetaData
     definition: ExperimentDefinition
     samples: list[BILBO_Sample]
     actions: dict[str, ExperimentActionData]
+    error_action_id: str | None = None  # ID of action that caused error (if status is ERROR)
+    error_message: str | None = None    # Human-readable error description
 
 
 # ======================================================================================================================
@@ -1302,6 +1542,8 @@ class ExperimentActionContainer:
     started: bool = False
     finished: bool = False
     handled: bool = False
+    status: ExperimentActionStatus = ExperimentActionStatus.PENDING
+    error_message: str | None = None
 
     def __post_init__(self):
         self.action.callbacks.finished.register(self._on_finished)
@@ -1309,6 +1551,19 @@ class ExperimentActionContainer:
     def _on_finished(self):
         self.finished = True
         self.end_tick = self.action.experiment.tick
+        if self.status == ExperimentActionStatus.RUNNING:
+            self.status = ExperimentActionStatus.FINISHED
+
+    def _on_error(self, message: str | None = None):
+        self.finished = True
+        self.end_tick = self.action.experiment.tick
+        self.status = ExperimentActionStatus.ERROR
+        self.error_message = message
+
+    def _on_timeout(self):
+        self.finished = True
+        self.end_tick = self.action.experiment.tick
+        self.status = ExperimentActionStatus.TIMEOUT
 
 
 # ======================================================================================================================
@@ -1362,6 +1617,11 @@ class Experiment:
         self._timeout_ticks = None
         self.experiment_handler = None
         self._camera_timestamp = None
+
+        # Status tracking
+        self._status: ExperimentStatus = ExperimentStatus.FINISHED  # Default to finished (set on completion)
+        self._error_action_id: str | None = None
+        self._error_message: str | None = None
 
         # Log capture
         self._logs: list[dict] = []
@@ -1574,7 +1834,8 @@ class Experiment:
             self.callbacks.first_step.call()
 
         if self._timeout_ticks is not None and self.tick >= self._timeout_ticks:
-            self.events.timeout.set(data=self)
+            self._abort_with_data(ExperimentStatus.TIMEOUT, None, "Experiment timeout reached")
+            return
 
         # Iterate over a copy to avoid "dictionary changed size during iteration" errors
         for action_container in list(self.action_containers.values()):
@@ -1613,26 +1874,47 @@ class Experiment:
 
     # ------------------------------------------------------------------------------------------------------------------
     def abort(self, reason: str = "External abort request"):
-        """Abort the experiment immediately.
+        """Abort the experiment immediately (external abort request).
 
         This will:
         1. Stop all running actions
         2. Re-enable external input
         3. Set control mode to BALANCING (safe state)
-        4. Fire the error event
+        4. Collect and emit experiment data with ABORTED status
+        """
+        self._abort_with_data(ExperimentStatus.ABORTED, None, reason)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _abort_with_data(self, status: ExperimentStatus, error_action_id: str | None, reason: str):
+        """Internal method to abort experiment and collect data.
+
+        Args:
+            status: The experiment status (ERROR, TIMEOUT, ABORTED)
+            error_action_id: ID of the action that caused the abort (if applicable)
+            reason: Human-readable reason for the abort
         """
         if self.finished:
             self.logger.warning(f"Experiment {self.definition.id} already finished, cannot abort")
             return
 
-        self.logger.warning(f"Aborting experiment {self.definition.id}: {reason}")
+        self.logger.warning(f"Aborting experiment {self.definition.id} ({status.value}): {reason}")
+
+        # Set experiment status info
+        self._status = status
+        self._error_action_id = error_action_id
+        self._error_message = reason
 
         # Mark as finished to stop the step loop
         self.finished = True
         self.end_tick = get_logging_provider().get_tick()
 
-        # Stop log capture
-        self._stop_log_capture()
+        # Mark any running actions as skipped
+        for container in self.action_containers.values():
+            if container.status == ExperimentActionStatus.RUNNING and container.id != error_action_id:
+                container.status = ExperimentActionStatus.SKIPPED
+                container.end_tick = self.tick
+            elif container.status == ExperimentActionStatus.PENDING:
+                container.status = ExperimentActionStatus.SKIPPED
 
         # Re-enable external input
         self.experiment_handler.interfaces.enable_external_input()
@@ -1645,8 +1927,9 @@ class Experiment:
         except Exception as e:
             self.logger.error(f"Failed to set control mode: {e}")
 
-        # Fire the error event with abort reason
-        self.events.error.set(data={'reason': reason, 'aborted': True})
+        # Collect and emit data (in background thread to not block)
+        thread = threading.Thread(target=self._collect_and_emit_data, daemon=True)
+        thread.start()
 
     # ------------------------------------------------------------------------------------------------------------------
     def execute_action(self, action_container: ExperimentActionContainer):
@@ -1672,6 +1955,7 @@ class Experiment:
         )
         ))
 
+        action_container.status = ExperimentActionStatus.RUNNING
         result = action_container.action.execute()
         action_container.started = True
         action_container.start_tick = self.tick
@@ -1679,6 +1963,7 @@ class Experiment:
         if result:
             action_container.end_tick = self.tick
             action_container.finished = True
+            action_container.status = ExperimentActionStatus.FINISHED
             self.logger.info(f"[Step {self.tick}] Action \"{action_container.id}\" finished")
             self.events.action_finished.set(data=action_container.action, flags={'id': action_container.id})
 
@@ -1697,11 +1982,13 @@ class Experiment:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handle_finished(self):
+        """Handle successful experiment completion."""
         self.end_tick = self.experiment_handler.common.tick
+        self._status = ExperimentStatus.FINISHED
         self.logger.info(f"========== Experiment \"{self.definition.id}\" finished ==========")
         self.logger.info(f"End tick: {self.end_tick} (duration: {self.tick} steps)")
-        # Beep
-        thread = threading.Thread(target=self._finish_task, daemon=True)
+        # Collect data in background thread
+        thread = threading.Thread(target=self._collect_and_emit_data, daemon=True)
         thread.start()
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -1736,15 +2023,23 @@ class Experiment:
         return ""
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _finish_task(self):
+    def _collect_and_emit_data(self):
+        """Collect experiment data and emit the appropriate event (finished or error).
 
+        This method handles both successful completion and error/abort cases.
+        """
         self.finished = True
 
         # Stop log capture before final logging
         self._stop_log_capture()
 
-        speak(f"Experiment {self.definition.id} finished")
-        self.experiment_handler.utilities.beep(888, 500, 2)
+        # Provide audio feedback based on status
+        if self._status == ExperimentStatus.FINISHED:
+            speak(f"Experiment {self.definition.id} finished")
+            self.experiment_handler.utilities.beep(888, 500, 2)
+        else:
+            speak(f"Experiment {self.definition.id} {self._status.value}")
+            self.experiment_handler.utilities.beep(440, 300, 3)  # Lower tone for error/abort
 
         # Always reset at end of experiment: re-enable external input
         self.experiment_handler.interfaces.enable_external_input()
@@ -1754,11 +2049,9 @@ class Experiment:
         self.experiment_handler.common.flush_logs()
         time.sleep(0.1)  # Small wait for filesystem sync
 
-        # # Build the experiment data - read samples in batches to avoid blocking other threads
+        # Build the experiment data - read samples in batches to avoid blocking other threads
         BATCH_SIZE = 1000  # Number of ticks per batch (must be multiple of 10)
         samples = []
-
-        # self.end_tick = self.start_tick + 1000
 
         current_start = self.start_tick
         while current_start < self.end_tick:
@@ -1778,9 +2071,6 @@ class Experiment:
             # Yield to other threads between batches
             time.sleep(0.01)
 
-
-        # ll_samples = self.experiment_handler.common.get_lowlevel_data(start=self.start_tick, end=self.end_tick)
-        #
         meta = ExperimentMetaData(
             description=self.definition.description,
             camera_timestamp=self._camera_timestamp,
@@ -1789,8 +2079,8 @@ class Experiment:
             bilbo_config=self.experiment_handler.common.config,
             testbed=self.experiment_handler.testbed.get_data()
         )
-        #
-        # Build action data with timing information
+
+        # Build action data with timing, status, and parameters
         action_data = {}
         for action_id, container in self.action_containers.items():
             start_tick = container.start_tick or 0
@@ -1800,24 +2090,37 @@ class Experiment:
                 end_tick=end_tick,
                 start_time=start_tick * LOOP_TIME,
                 end_time=end_tick * LOOP_TIME,
+                status=container.status,
+                error_message=container.error_message,
+                parameters=container.action.get_parameters(),
                 data=container.action.data
             )
             time.sleep(0.01)
 
         data = ExperimentData(
             id=self.definition.id,
+            status=self._status,
             meta=meta,
             definition=self.definition,
             samples=[],
             actions=action_data,
+            error_action_id=self._error_action_id,
+            error_message=self._error_message,
         )
 
         data_dict = asdict_optimized(data)
-        # data.samples = samples
         data_dict['samples'] = samples
         data_dict['logs'] = self._logs
 
-        self.events.finished.set(data=data_dict)
+        # Emit the appropriate event based on status
+        if self._status == ExperimentStatus.FINISHED:
+            self.events.finished.set(data=data_dict)
+        else:
+            # For error/timeout/aborted, emit both error event (for backward compat) and finished
+            self.events.error.set(
+                data=data_dict,
+                flags={'action_id': self._error_action_id or ''}
+            )
 
     # ------------------------------------------------------------------------------------------------------------------
     def _get_action_by_id(self, action_id: str) -> ExperimentAction | None:
@@ -1828,13 +2131,39 @@ class Experiment:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_action_error(self, action: ExperimentAction):
+        """Handle action error: update container status and abort experiment with data collection."""
         self.logger.error(f"Action {action.id} failed")
-        self.events.error.set(data=f"Action \"{action.id}\" failed", flags={'action_id': action.id})
+
+        # Update the action container status
+        if action.id in self.action_containers:
+            container = self.action_containers[action.id]
+            container._on_error(f"Action failed")
+
+        # Set experiment error info
+        self._status = ExperimentStatus.ERROR
+        self._error_action_id = action.id
+        self._error_message = f"Action \"{action.id}\" failed"
+
+        # Abort experiment (this will collect and emit data)
+        self._abort_with_data(ExperimentStatus.ERROR, action.id, f"Action \"{action.id}\" failed")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_action_timeout(self, action: ExperimentAction):
+        """Handle action timeout: update container status and abort experiment with data collection."""
         self.logger.warning(f"Action {action.id} timed out")
-        self.events.error.set(data=f"Action \"{action.id}\" timed out", flags={'action_id': action.id})
+
+        # Update the action container status
+        if action.id in self.action_containers:
+            container = self.action_containers[action.id]
+            container._on_timeout()
+
+        # Set experiment error info
+        self._status = ExperimentStatus.ERROR
+        self._error_action_id = action.id
+        self._error_message = f"Action \"{action.id}\" timed out"
+
+        # Abort experiment (this will collect and emit data)
+        self._abort_with_data(ExperimentStatus.ERROR, action.id, f"Action \"{action.id}\" timed out")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _log_capture_callback(self, log_entry: str, log: str, logger: Logger, level: int):

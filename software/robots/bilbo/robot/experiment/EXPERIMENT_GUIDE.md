@@ -186,6 +186,21 @@ Common actions have shorthand forms for cleaner YAML files.
 # Parent action finishes when ALL sub-actions complete
 ```
 
+### Group Execution
+
+```yaml
+# Run multiple actions sequentially as a named group
+- type: group
+  id: my_phase
+  actions:
+    - set_mode: "VELOCITY"
+    - velocity: [0.3, 0.0]
+    - wait: 2s
+
+# Sub-actions run one after another
+# Group tracks start_tick and end_tick for data extraction
+```
+
 ### Position Control
 
 ```yaml
@@ -465,6 +480,50 @@ Sub-actions support all shorthand syntax. The parallel action completes when ALL
 
 ---
 
+### `group` - Sequential Action Group
+
+Executes multiple actions sequentially as a named group. Groups are useful for organizing related actions together and tracking their collective start and end times, which makes it easy to extract data samples for specific phases of an experiment.
+
+```yaml
+- type: group
+  id: velocity_test
+  actions:
+    - set_mode: "VELOCITY"
+    - type: set_velocity
+      forward: 0.5
+    - wait: 3s
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `actions` | list | [] | List of actions to run sequentially |
+
+**Key differences from `parallel`:**
+- `parallel`: All sub-actions start simultaneously, finishes when ALL complete
+- `group`: Sub-actions run one after another (sequentially), finishes when the last one completes
+
+**Accessing group timing data:**
+After an experiment completes, you can access group timing from `ExperimentData.actions`:
+
+```python
+data = robot.experiment.run_experiment(exp, blocking=True)
+velocity_group = data.actions['velocity_test']
+print(f"Start tick: {velocity_group.start_tick}")
+print(f"End tick: {velocity_group.end_tick}")
+print(f"Start time: {velocity_group.start_time}")  # seconds
+print(f"End time: {velocity_group.end_time}")      # seconds
+```
+
+**Shorthand:**
+```yaml
+- group:
+    - set_mode: "VELOCITY"
+    - velocity: [0.3, 0.0]
+    - wait: 2s
+```
+
+---
+
 ## Position Control Actions
 
 Position control actions require the robot to be in `POSITION` mode. These actions interface with the position control subsystem to move the robot to specific locations or follow paths.
@@ -692,6 +751,91 @@ Waits for a specific position control event.
 - `move_to_point_completed`, `move_to_point_timeout`
 - `turn_to_heading_completed`, `turn_to_heading_timeout`
 - `waypoint_completed`, `waypoint_reached`, `waypoint_passed`
+- `mode_changed` - Position control mode changed (e.g., interrupted by external control)
+
+---
+
+## Position Control Error Handling
+
+Position control actions (`move_to`, `turn_to`, `start_path`, `load_path`) automatically detect and report failures:
+
+**Detected failure conditions:**
+- **Timeout**: The command took too long to complete
+- **Abort**: The path/command was explicitly aborted
+- **Mode change**: The control mode changed during execution (e.g., robot fell, external control took over)
+
+When any of these conditions occur, the action reports an error which triggers the experiment's error handling. This ensures you always get experiment data even when position control fails unexpectedly.
+
+---
+
+## Experiment Status and Error Handling
+
+Experiments track their completion status, which is included in the experiment data. This allows you to analyze data even when an experiment fails or is aborted.
+
+### Experiment Status Values
+
+| Status | Description |
+|--------|-------------|
+| `finished` | Experiment completed successfully |
+| `error` | Experiment aborted due to an action error |
+| `timeout` | Experiment aborted due to timeout |
+| `aborted` | Experiment aborted by external request |
+
+### Action Status Values
+
+Each action also tracks its individual status:
+
+| Status | Description |
+|--------|-------------|
+| `pending` | Action has not started yet |
+| `running` | Action is currently executing |
+| `finished` | Action completed successfully |
+| `error` | Action failed with an error |
+| `timeout` | Action timed out |
+| `skipped` | Action was skipped due to experiment abort |
+
+### Action Data Structure
+
+Each action in `data.actions` contains detailed information:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `start_tick` | int | Tick when action started |
+| `end_tick` | int | Tick when action ended |
+| `start_time` | float | Start time in seconds |
+| `end_time` | float | End time in seconds |
+| `status` | string | Action status (see above) |
+| `error_message` | string | Error description (if failed) |
+| `parameters` | dict | **Input parameters** configured for this action |
+| `data` | dict | **Output data** produced by the action |
+
+**`parameters`** contains the action's input configuration. Examples:
+- `set_velocity`: `{'forward': 0.5, 'turn': 0.1, 'normalized': False}`
+- `move_to`: `{'x': 1.0, 'y': 0.5, 'max_speed': 0.3, 'timeout': 30.0, 'wait': True}`
+
+**`data`** contains output/results from the action. Most actions leave this `None`, but path actions store the actual waypoints used:
+- `start_path` / `load_path`: `{'waypoints': [{'x': 0.5, 'y': 0.0, 'type': 'PASS', 'weight': 0.75, 'speed': 0.0}, ...]}`
+
+### Handling Experiment Results
+
+```python
+# Run experiment (data is returned even if experiment fails)
+data = robot.experiment.run_experiment(exp, blocking=True)
+
+if data is None:
+    print("Failed to start experiment")
+elif data.status == 'finished':
+    print(f"Experiment completed successfully with {len(data.samples)} samples")
+else:
+    print(f"Experiment {data.status}: {data.error_message}")
+    if data.error_action_id:
+        print(f"  Failed action: {data.error_action_id}")
+        failed_action = data.actions[data.error_action_id]
+        print(f"  Action status: {failed_action.status}")
+
+    # Data is still available for analysis
+    print(f"  Collected {len(data.samples)} samples before failure")
+```
 
 ---
 
@@ -764,7 +908,7 @@ For more control, use the helper functions directly:
 from robots.bilbo.robot.experiment import (
     ExperimentDefinition,
     beep, set_mode, speak, wait_time, wait_ticks,
-    set_velocity, run_trajectory, parallel
+    set_velocity, run_trajectory, parallel, group
 )
 
 exp = ExperimentDefinition(
@@ -1023,6 +1167,43 @@ exp = (ExperimentBuilder("nav_demo", "Navigation demonstration", timeout=120.0)
        .build())
 ```
 
+**Using Groups for Data Extraction:**
+
+```python
+from robots.bilbo.robot.experiment import ExperimentBuilder, wait_time, set_velocity
+
+exp = (ExperimentBuilder("grouped_test", "Test with groups", timeout=60.0)
+       .set_mode("BALANCING")
+       .wait(time_s=2.0)
+
+       # Group 1: Forward motion test
+       .group(
+           set_velocity(forward=0.3, turn=0.0),
+           wait_time(time_s=3.0),
+           set_velocity(forward=0.0, turn=0.0),
+           id="forward_test"
+       )
+
+       .wait(time_s=1.0)
+
+       # Group 2: Turn test
+       .group(
+           set_velocity(forward=0.0, turn=0.5),
+           wait_time(time_s=2.0),
+           set_velocity(forward=0.0, turn=0.0),
+           id="turn_test"
+       )
+
+       .set_mode("OFF")
+       .build())
+
+# After running, extract group data
+data = robot.experiment.run_experiment(exp, blocking=True)
+forward_group = data.actions['forward_test']
+turn_group = data.actions['turn_test']
+print(f"Forward test duration: {forward_group.end_time - forward_group.start_time:.2f}s")
+```
+
 ### Example 8: Load Path from File (YAML)
 
 ```yaml
@@ -1046,6 +1227,72 @@ actions:
   - mode: OFF
 ```
 
+### Example 9: Using Groups for Data Extraction (YAML)
+
+Groups allow you to organize experiment phases and easily extract the corresponding data later.
+
+```yaml
+id: grouped_experiment
+description: Experiment with named groups for easy data extraction
+timeout: 60.0
+actions:
+  - mode: BALANCING
+  - wait: 2s
+
+  # Group 1: Forward velocity test
+  - type: group
+    id: forward_test
+    actions:
+      - mode: VELOCITY
+      - velocity: [0.3, 0.0]
+      - wait: 3s
+      - velocity: [0.0, 0.0]
+
+  - wait: 1s
+
+  # Group 2: Turn test
+  - type: group
+    id: turn_test
+    actions:
+      - velocity: [0.0, 0.5]
+      - wait: 2s
+      - velocity: [0.0, 0.0]
+
+  - wait: 1s
+
+  # Group 3: Combined motion
+  - type: group
+    id: combined_test
+    actions:
+      - velocity: [0.2, 0.3]
+      - wait: 3s
+      - velocity: [0.0, 0.0]
+
+  - mode: OFF
+```
+
+**Extracting group data in Python:**
+
+```python
+# Run the experiment
+data = robot.experiment.run_experiment(exp, blocking=True)
+
+# Extract samples for each group
+forward_group = data.actions['forward_test']
+turn_group = data.actions['turn_test']
+combined_group = data.actions['combined_test']
+
+# Get samples within each group's time range
+forward_samples = [s for s in data.samples
+                   if forward_group.start_tick <= s.tick <= forward_group.end_tick]
+turn_samples = [s for s in data.samples
+                if turn_group.start_tick <= s.tick <= turn_group.end_tick]
+
+print(f"Forward test: {len(forward_samples)} samples, "
+      f"{forward_group.end_time - forward_group.start_time:.2f}s duration")
+print(f"Turn test: {len(turn_samples)} samples")
+```
+
 ---
 
 ## Tips and Best Practices
@@ -1064,28 +1311,30 @@ actions:
 
 7. **Explicit IDs for dependencies** - When using `after`, give actions explicit IDs for clarity.
 
-8. **Use ExperimentBuilder for Python** - It provides better IDE support and prevents common errors.
+8. **Use groups for data extraction** - Wrap related actions in a `group` with a meaningful ID to easily extract the corresponding samples during post-processing.
+
+9. **Use ExperimentBuilder for Python** - It provides better IDE support and prevents common errors.
 
 ### Position Control Tips
 
-9. **Set mode to POSITION first** - Position control actions require `mode: POSITION` before they can execute.
+10. **Set mode to POSITION first** - Position control actions require `mode: POSITION` before they can execute.
 
-10. **Use `wait: true` (default)** - Most position commands should wait for completion to ensure proper sequencing.
+11. **Use `wait: true` (default)** - Most position commands should wait for completion to ensure proper sequencing.
 
-11. **Set appropriate timeouts** - Position commands can take varying amounts of time; set timeouts to handle stuck situations.
+12. **Set appropriate timeouts** - Position commands can take varying amounts of time; set timeouts to handle stuck situations.
 
-12. **Waypoint types matter**:
+13. **Waypoint types matter**:
     - Use `PASS` for smooth path following (robot curves through waypoints)
     - Use `STOP` when the robot must come to a full stop at a waypoint
 
-13. **Waypoint weights control cornering**:
+14. **Waypoint weights control cornering**:
     - `weight: 1.0` = sharp corner (follows waypoint closely)
     - `weight: 0.0` = smooth curve (may cut corners significantly)
     - `weight: 0.75` = balanced default
 
-14. **Path files for reusable routes** - Store frequently used paths in YAML files for easy reuse.
+15. **Path files for reusable routes** - Store frequently used paths in YAML files for easy reuse.
 
-15. **Use `wait_position_event` for complex logic** - When you need to react to specific events like `waypoint_completed`.
+16. **Use `wait_position_event` for complex logic** - When you need to react to specific events like `waypoint_completed`.
 
 ---
 

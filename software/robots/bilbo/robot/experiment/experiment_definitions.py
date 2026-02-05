@@ -16,6 +16,7 @@ For action parsing and validation, see experiment_actions.py which provides:
 from __future__ import annotations
 
 import dataclasses
+import enum
 import json
 from typing import Any, Union, Literal
 
@@ -27,6 +28,28 @@ from core.utils.files import file_exists
 from core.utils.json_utils import writeJSON, readJSON
 from robots.bilbo.robot.bilbo_data import BILBO_DynamicState, BILBO_Sample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_CONTROL_DT, BILBO_Config, BILBO_ControlConfig
+
+
+# ======================================================================================================================
+# STATUS ENUMS
+# ======================================================================================================================
+
+class ExperimentStatus(enum.StrEnum):
+    """Status of an experiment after completion."""
+    FINISHED = 'finished'       # Completed successfully
+    ERROR = 'error'             # Aborted due to action error
+    TIMEOUT = 'timeout'         # Aborted due to experiment timeout
+    ABORTED = 'aborted'         # Aborted by external request
+
+
+class ExperimentActionStatus(enum.StrEnum):
+    """Status of an individual action."""
+    PENDING = 'pending'         # Not yet started
+    RUNNING = 'running'         # Currently executing
+    FINISHED = 'finished'       # Completed successfully
+    ERROR = 'error'             # Failed with error
+    TIMEOUT = 'timeout'         # Timed out
+    SKIPPED = 'skipped'         # Skipped due to experiment abort
 
 # Import parsing utilities from experiment_actions
 from robots.bilbo.robot.experiment.experiment_actions import (
@@ -128,7 +151,7 @@ class BILBO_OutputTrajectory:
 ActionType = Literal[
     "beep", "set_mode", "set_tic", "speak", "set_marker", "run_trajectory",
     "wait_time", "wait_ticks", "wait_until_tick", "wait_event", "set_input",
-    "set_velocity", "enable_external_input", "reset", "parallel",
+    "set_velocity", "enable_external_input", "reset", "parallel", "group",
     "func", "set_feedback_gain", "reset_control",
     # Position control actions
     "move_to", "turn_to", "set_waypoints", "start_path", "load_path", "stop_path",
@@ -138,7 +161,7 @@ ActionType = Literal[
 ALLOWED_ACTIONS: list[str] = [
     "beep", "set_mode", "set_tic", "speak", "set_marker", "run_trajectory",
     "wait_time", "wait_ticks", "wait_until_tick", "wait_event", "set_input",
-    "set_velocity", "enable_external_input", "reset", "parallel",
+    "set_velocity", "enable_external_input", "reset", "parallel", "group",
     "func", "set_feedback_gain", "reset_control",
     # Position control actions
     "move_to", "turn_to", "set_waypoints", "start_path", "load_path", "stop_path",
@@ -245,6 +268,12 @@ class ResetActionParams:
 @dataclasses.dataclass
 class ParallelActionParams:
     """Parameters for parallel action."""
+    actions: list[dict] = dataclasses.field(default_factory=list)
+
+
+@dataclasses.dataclass
+class GroupActionParams:
+    """Parameters for group action (sequential execution with tracking)."""
     actions: list[dict] = dataclasses.field(default_factory=list)
 
 
@@ -360,6 +389,7 @@ ACTION_PARAMS_MAPPING: dict[str, type] = {
     "run_trajectory": RunTrajectoryActionParams,
     "reset": ResetActionParams,
     "parallel": ParallelActionParams,
+    "group": GroupActionParams,
     "func": FuncActionParams,
     "set_feedback_gain": SetFeedbackGainActionParams,
     "reset_control": ResetControlActionParams,
@@ -618,7 +648,18 @@ class ExperimentActionData:
     end_tick: int = 0
     start_time: float = 0.0
     end_time: float = 0.0
-    data: Any | None = None
+    status: ExperimentActionStatus | str = ExperimentActionStatus.PENDING
+    error_message: str | None = None
+    parameters: dict[str, Any] | None = None  # Action input parameters
+    data: Any | None = None  # Action output data
+
+    def __post_init__(self):
+        # Convert string status to enum if needed
+        if isinstance(self.status, str):
+            try:
+                self.status = ExperimentActionStatus(self.status)
+            except ValueError:
+                pass  # Keep as string if not a valid enum value
 
 
 @dataclasses.dataclass
@@ -657,11 +698,22 @@ class ExperimentMetaData:
 class ExperimentData:
     """Complete experiment data including samples and action data."""
     id: str
-    meta: ExperimentMetaData
-    definition: ExperimentDefinition
-    samples: list[BILBO_Sample]
-    actions: dict[str, ExperimentActionData]
+    status: ExperimentStatus | str = ExperimentStatus.FINISHED
+    meta: ExperimentMetaData = None
+    definition: ExperimentDefinition = None
+    samples: list[BILBO_Sample] = dataclasses.field(default_factory=list)
+    actions: dict[str, ExperimentActionData] = dataclasses.field(default_factory=dict)
+    error_action_id: str | None = None  # ID of action that caused error (if status is ERROR)
+    error_message: str | None = None    # Human-readable error description
     logs: list[dict] = dataclasses.field(default_factory=list)
+
+    def __post_init__(self):
+        # Convert string status to enum if needed
+        if isinstance(self.status, str):
+            try:
+                self.status = ExperimentStatus(self.status)
+            except ValueError:
+                pass  # Keep as string if not a valid enum value
 
 
 # ======================================================================================================================
@@ -879,6 +931,33 @@ def parallel(actions: list[ExperimentActionDefinition | dict], **scheduling) -> 
     return ExperimentActionDefinition(
         id=scheduling.get("id", "parallel"),
         type="parallel",
+        tick=scheduling.get("tick"),
+        after=scheduling.get("after"),
+        time=scheduling.get("time"),
+        delay=scheduling.get("delay"),
+        timeout=scheduling.get("timeout"),
+        parameters={"actions": action_dicts}
+    )
+
+
+def group(actions: list[ExperimentActionDefinition | dict], **scheduling) -> ExperimentActionDefinition:
+    """Create a group action that runs multiple actions sequentially.
+
+    Groups are useful for organizing related actions together and tracking
+    their collective start and end times for later data extraction.
+
+    Args:
+        actions: List of actions to execute sequentially within the group
+    """
+    action_dicts = []
+    for a in actions:
+        if isinstance(a, ExperimentActionDefinition):
+            action_dicts.append(a.to_dict())
+        else:
+            action_dicts.append(a)
+    return ExperimentActionDefinition(
+        id=scheduling.get("id", "group"),
+        type="group",
         tick=scheduling.get("tick"),
         after=scheduling.get("after"),
         time=scheduling.get("time"),
@@ -1241,6 +1320,11 @@ class ExperimentBuilder:
 
     def parallel(self, *actions: ExperimentActionDefinition | dict) -> "ExperimentBuilder":
         return self.add(parallel(list(actions), id=self._next_id("parallel")))
+
+    def group(self, *actions: ExperimentActionDefinition | dict, id: str = None) -> "ExperimentBuilder":
+        """Add a group of actions that execute sequentially with timing tracking."""
+        group_id = id if id else self._next_id("group")
+        return self.add(group(list(actions), id=group_id))
 
     def func(self, function: str, args: list = None, kwargs: dict = None) -> "ExperimentBuilder":
         return self.add(func(function, args, kwargs, id=self._next_id("func")))

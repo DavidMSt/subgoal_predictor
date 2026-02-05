@@ -30,7 +30,8 @@ from robot.experiment.definitions import (
     BILBO_LL_Sequencer_Event_Type, BILBO_ExperimentHandler_Sample
 )
 from robot.experiment.experiment import (
-    Experiment, ExperimentDefinition, ExperimentData
+    Experiment, ExperimentDefinition, ExperimentData,
+    ExperimentStatus, ExperimentActionStatus
 )
 from robot.experiment.helpers import get_state_trajectory_from_lowlevel_samples
 from robot.interfaces.bilbo_interfaces import BILBO_Interfaces
@@ -757,33 +758,82 @@ class BILBO_ExperimentHandler:
         self.active_experiment = None
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_experiment_error(self, *args, **kwargs):
-        self.logger.error("Experiment error.")
+    def _on_experiment_error(self, data: dict | str | None = None, *args, **kwargs):
+        """Handle experiment error/abort. Now receives full experiment data."""
+        experiment_id = self.active_experiment.definition.id if self.active_experiment else "unknown"
 
-        self.events.experiment_error.set(flags={'experiment_id': self.active_experiment.definition.id})
+        # Check if we received full experiment data (new behavior) or just a message (old behavior)
+        if isinstance(data, dict) and 'samples' in data:
+            # New behavior: we received full experiment data
+            self.logger.error(f"Experiment \"{data['id']}\" {data.get('status', 'error')}: {data.get('error_message', 'Unknown error')}")
 
-        self.communication.wifi.sendEvent(
-            event='experiment',
-            data={
-                'event': 'error',
-                'experiment_id': self.active_experiment.definition.id,
-            }
-        )
+            experiments_dir = os.path.expanduser("~/robot/experiments")
+            # Generate filename with timestamp and status
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            status = data.get('status', 'error')
+            filename = f"{data['id']}_{timestamp}_{status}.json"
+            filepath = os.path.join(experiments_dir, filename)
+
+            # Write data to JSON file
+            with open(filepath, 'w') as f:
+                json.dump(data, f, indent=2)
+
+            self.logger.debug(f"Wrote experiment data to {filepath}")
+
+            # Set the error event with data
+            self.events.experiment_error.set(
+                data=data,
+                flags={'experiment_id': data['id']}
+            )
+
+            # Send data via Wi-Fi (same as finished, but with error event type)
+            self.communication.wifi.sendEvent(
+                event='experiment',
+                data={
+                    'event': status,
+                    'experiment_id': data['id'],
+                    'data': filepath,
+                    'error_action_id': data.get('error_action_id'),
+                    'error_message': data.get('error_message'),
+                }
+            )
+        else:
+            # Old behavior: just a message (backward compatibility)
+            self.logger.error(f"Experiment error: {data}")
+            self.events.experiment_error.set(flags={'experiment_id': experiment_id})
+
+            self.communication.wifi.sendEvent(
+                event='experiment',
+                data={
+                    'event': 'error',
+                    'experiment_id': experiment_id,
+                    'error_message': str(data) if data else None,
+                }
+            )
 
         self.status = BILBO_ExperimentHandler_Status.IDLE
         self.active_experiment = None
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_experiment_timeout(self, *args, **kwargs):
+    def _on_experiment_timeout(self, data: dict | None = None, *args, **kwargs):
+        """Handle experiment timeout. May receive full experiment data."""
+        experiment_id = self.active_experiment.definition.id if self.active_experiment else "unknown"
+
+        # Check if we received full experiment data
+        if isinstance(data, dict) and 'samples' in data:
+            # Delegate to error handler which now handles all non-success cases
+            self._on_experiment_error(data, *args, **kwargs)
+            return
+
         self.logger.warning("Experiment timed out.")
 
-        self.events.experiment_timeout.set(flags={'experiment_id': self.active_experiment.definition.id})
+        self.events.experiment_timeout.set(flags={'experiment_id': experiment_id})
 
         self.communication.wifi.sendEvent(
             event='experiment',
             data={
                 'event': 'timeout',
-                'experiment_id': self.active_experiment.definition.id,
+                'experiment_id': experiment_id,
             }
         )
 
