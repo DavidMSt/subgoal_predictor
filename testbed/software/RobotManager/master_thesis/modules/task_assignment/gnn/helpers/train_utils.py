@@ -37,10 +37,10 @@ class AssignmentDataset(Dataset):
         }
 
 
-def load_datasets(
+def load_dataset_dict(
     data_dir: str = 'master_thesis/modules/task_assignment/gnn/datasets',
     team_sizes: list[int] | None = None,
-) -> dict[str, AssignmentDataset]:
+) -> dict[int, AssignmentDataset]:
     """Load and combine multiple team size datasets.
 
     Args:
@@ -65,6 +65,8 @@ def load_datasets(
         if os.path.exists(path):
             datasets_dict[n] = AssignmentDataset(path)
             print(f"Loaded {path}: {len(datasets_dict[n])} samples")
+
+    assert len(datasets_dict) != 0, f'length of extracted dataset is {len(datasets_dict)}'
 
     return datasets_dict
 
@@ -108,7 +110,9 @@ def train_epoch(
     device: torch.device,
     beta: float = 0.8,
     alpha: float = 0.9,
-    comm_density_range: tuple[float, float] = (0.2, 1.0)
+    comm_density_range: tuple[float, float] = (0.2, 1.0),
+    epoch: int = 0,
+    total_epochs: int = 1,
 ):
     """
     Train for one epoch using DGNN-GA loss (BCE + matching).
@@ -135,12 +139,14 @@ def train_epoch(
     total_match = 0.0
     n_batches = 0 # for tqdm logging purposes
 
-    # convert to list to save chained samples to memory, afterwards shuffle to mix groups (otherwise each group size consecutively) 
+    # convert to list to save chained samples to memory 
     all_batches = list(chain.from_iterable(train_loader_dict.values())) 
+
+    # afterwards shuffle to mix groups (otherwise each group size consecutively)
     random.shuffle(all_batches)
 
     # initialize processbar
-    pbar = tqdm(all_batches, desc='training process')
+    pbar = tqdm(all_batches, desc=f'Training', leave=False)
 
     for batch_sample in pbar:
         opt.zero_grad() # clear gradients from previous step
@@ -155,7 +161,7 @@ def train_epoch(
         # select communication range
         density = random.uniform(*comm_density_range)
 
-        # generate communication edges TODO: why device needed here? 
+        # generate communication edges
         comm_edges = generate_comm_edges(n_robots=N_r, density= density, device = device)
 
         # forward pass
@@ -165,9 +171,10 @@ def train_epoch(
         loss.backward() # compute the gradients
         opt.step() # udpate the models' parameters
 
-        total_loss += loss
-        total_bce += loss_bce
-        total_match += loss_match
+        # accumulate total losses, convert back to python float since no gradient computation needed anymore
+        total_loss += loss.item()
+        total_bce += loss_bce.item()
+        total_match += loss_match.item()
 
         n_batches += 1
 
@@ -179,21 +186,21 @@ def train_epoch(
                 'match': f'{total_match/n_batches:.4f}'
             })
 
+    # check if training loop was at least for one batch
+    assert (n_batches > 0), f'No. of batches used during training is {n_batches}' 
+
+    # return relevant metrics, e.g. for tensorboard
     return {
-        'loss': (total_loss / n_batches).item(),
-        'bce_loss': (total_bce/ n_batches).item(),
-        'match_loss': (total_match/ n_batches).item()
+        'loss': (total_loss / n_batches),
+        'bce_loss': (total_bce/ n_batches),
+        'match_loss': (total_match/ n_batches)
     }
 
     
-
-
-
-
 @torch.no_grad()
 def validate_epoch(
     model: torch.nn.Module,
-    eval_loader_dict: dict[int, DataLoader],
+    val_loader_dict: dict[int, DataLoader],
     device: torch.device,
     beta: float = 0.8,
     alpha: float = 0.9,
@@ -223,10 +230,10 @@ def validate_epoch(
 
     n_batch = 0
 
-    all_batches = list(chain.from_iterable(eval_loader_dict.values()))
+    all_batches = list(chain.from_iterable(val_loader_dict.values()))
     random.shuffle(all_batches)
 
-    pbar = tqdm(all_batches, desc= "eval loop")
+    pbar = tqdm(all_batches, desc="Validating", leave=False)
 
     for batch in pbar:
         costs = batch["cost"].to(device)
@@ -248,9 +255,3 @@ def validate_epoch(
 
     return {'f1': f1, 'precision': precision, 'recall': recall}
 
-
-        
-
-
-        
-        
