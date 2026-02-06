@@ -8,76 +8,32 @@ IEEE Robotics and Automation Letters, 2024
 import torch
 import torch.nn.functional as F
 
+def balanced_bce_loss(predictions: torch.Tensor, targets: torch.Tensor, alpha: float)-> torch.Tensor:
+    eps = 1e-10 # for numerical stability
 
-def balanced_bce_loss(predictions: torch.Tensor, targets: torch.Tensor, alpha: float = 0.9) -> torch.Tensor:
-    """
-    Balanced Binary Cross-Entropy loss (Eq. 13 in paper).
+    # flatten for consistency with paper, does not change results
+    preds_flat = predictions.flatten()
+    targets_flat = targets.flatten()
 
-    L_c = -α * y* * log(ŷ) - (1 - α) * (1 - y*) * log(1 - ŷ)
-
-    Args:
-        predictions: Predicted assignment scores (after sigmoid), shape (N_r, N_g) or flattened
-        targets: Ground truth assignments (0 or 1), same shape as predictions
-        alpha: Weight for positive class (default 0.9 to handle imbalance)
-
-    Returns:
-        Scalar loss
-    """
-    # Flatten if needed
-    pred_flat = predictions.flatten()
-    target_flat = targets.flatten()
-
-    # Clamp for numerical stability
-    pred_flat = torch.clamp(pred_flat, min=1e-7, max=1 - 1e-7)
-
-    # Balanced BCE
-    pos_loss = -alpha * target_flat * torch.log(pred_flat)
-    neg_loss = -(1 - alpha) * (1 - target_flat) * torch.log(1 - pred_flat)
-
-    return (pos_loss + neg_loss).mean()
+    L_bce = (- alpha * targets_flat * torch.log(preds_flat+ eps) - (1-alpha) * (1 - targets_flat) * torch.log(1- preds_flat + eps)).mean()
+    return L_bce
 
 
-def matching_loss(predictions: torch.Tensor) -> torch.Tensor:
-    """
-    One-to-one matching loss (Eq. 14 in paper).
+def matching_loss(predictions: torch.Tensor)->torch.Tensor:
 
-    Encourages the predicted assignment matrix to satisfy:
-    - Each row sums to 1 (each robot assigned to exactly one goal)
-    - Each column sums to 1 (each goal assigned to exactly one robot)
-    - Each row/column has one dominant entry
+    n_batches, n_agent, _ = predictions.shape
+    device = predictions.device
 
-    Args:
-        predictions: Predicted assignment matrix, shape (N_r, N_g)
+    # sum over each element 
+    row_sum_loss = (torch.ones(size= (n_batches, n_agent), device = device) - torch.sum(predictions, dim= -1)).norm(p =2, dim = -1).mean(dim= 0) 
+    column_sum_loss = (torch.ones(size = (n_batches, n_agent), device = device) - torch.sum(predictions, dim = -2)).norm(p=2, dim = -1).mean(dim=0)
 
-    Returns:
-        Scalar loss
-    """
-    
-    _, N_r, N_g = predictions.shape
-    N = min(N_r, N_g)  # For non-square matrices
-    ones = torch.ones(N, device=predictions.device)
+    row_norm_loss = (torch.ones(size=(n_batches, n_agent), device = device) - torch.norm(predictions, p = 2, dim = -1)).norm(p = 2, dim = -1).mean(dim = 0)
+    column_norm_loss = (torch.ones(size=(n_batches, n_agent), device=device) - torch.norm(predictions, p = 2, dim = -2)).norm(p = 2, dim = -1).mean(dim = 0)
 
-    # Row and column sums
-    row_sums = predictions.sum(dim=1)[:N]  # Sum over goals for each robot
-    col_sums = predictions.sum(dim=0)[:N]  # Sum over robots for each goal
+    L_m = 1/2 * (row_sum_loss + column_sum_loss) + 1/2 * (row_norm_loss + column_norm_loss)
 
-    # Row and column norms (L2 norm of each row/column)
-    row_norms = predictions.norm(dim=1)[:N]
-    col_norms = predictions.norm(dim=0)[:N]
-
-    # First term: sums should equal 1
-    sum_loss = 0.5 * (
-        torch.norm(ones - row_sums) +
-        torch.norm(ones - col_sums)
-    )
-
-    # Second term: norms should equal 1 (encourages one-hot structure)
-    norm_loss = 0.5 * (
-        torch.norm(ones - row_norms) +
-        torch.norm(ones - col_norms)
-    )
-
-    return sum_loss + norm_loss
+    return L_m
 
 
 def dgnn_ga_loss(
@@ -106,3 +62,20 @@ def dgnn_ga_loss(
     total = beta * l_bce + (1 - beta) * l_match
 
     return total, l_bce, l_match
+
+if __name__ == "__main__":
+    from master_thesis.modules.task_assignment.gnn.dgnn_ga import DGNN_GA
+
+    device = torch.device('cpu')
+
+    # individual sample
+    sample_labels = torch.eye(n = 5)
+    other_sample = torch.roll(sample_labels, shifts= 1, dims=1)
+
+    # batch of samples (in this case batch_size = 2)
+    batch_labels = torch.stack(tensors = (sample_labels, other_sample))
+
+    bce_loss = balanced_bce_loss(predictions=batch_labels, targets = batch_labels, alpha = 0.9)
+
+    m_loss = matching_loss(predictions = batch_labels)
+    print(matching_loss)

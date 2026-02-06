@@ -1,8 +1,8 @@
 from master_thesis.modules.task_assignment.gnn.dgnn_ga import DGNN_GA
-# from torch_geometric.loader import DataLoader
 from torch.utils.data import random_split, DataLoader
 from master_thesis.modules.task_assignment.gnn.helpers.train_utils import train_epoch, validate_epoch, AssignmentDataset, load_dataset_dict
 import random
+import os
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -13,6 +13,19 @@ class TrainingCheckpoint(TypedDict):
     epoch: int
     model_state_dict: dict
     optimizer_state_dict: dict
+    best_f1: float
+
+
+def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, epoch: int, best_f1: float, path: str):
+    """Save a training checkpoint to disk."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    checkpoint = TrainingCheckpoint(
+        epoch=epoch,
+        model_state_dict=model.state_dict(),
+        optimizer_state_dict=optimizer.state_dict(),
+        best_f1=best_f1
+    )
+    torch.save(checkpoint, path)
 
 def create_train_val_loader_dicts(datasets_dict: dict[int, AssignmentDataset], seed: int| None = 42, batch_size: int = 32, train_val_ratio: float = 0.8) -> tuple[dict, dict]:
     
@@ -64,27 +77,45 @@ def setup_training(cfg: TrainConfig)-> tuple[dict, dict, torch.nn.Module, torch.
 
     # model setup
     model = DGNN_GA(F = cfg.hidden_dim, T = cfg.comm_rounds)
+    model.to(device = cfg.device)
     model.train(True)
     optimizer = torch.optim.Adam(params=model.parameters(), lr = cfg.lr)
     
     return train_loader_dict, val_loader_dict, model, optimizer
 
 
-def train_gnn(cfg: TrainConfig)-> TrainingCheckpoint:
+def train_gnn(
+    cfg: TrainConfig,
+    checkpoint_dir: str = 'master_thesis/modules/task_assignment/gnn/checkpoints',
+    save_every: int = 10
+) -> float:
 
     train_loader_dict, val_loader_dict, model, optimizer = setup_training(cfg)
 
-    # select device: cpu/ gpu
     device = torch.device(cfg.device)
-
-    # Tensorboard logging
     writer = SummaryWriter()
-
     epoch_pbar = tqdm(range(cfg.epochs), desc='Epochs')
 
+    best_f1 = 0.0
+
     for epoch in epoch_pbar:
-        train_metrics = train_epoch(model=model, train_loader_dict=train_loader_dict, opt = optimizer, device=device, alpha=cfg.alpha, beta = cfg.beta, epoch=epoch, total_epochs=cfg.epochs)
-        val_metrics = validate_epoch(model= model, val_loader_dict = val_loader_dict, device=device, beta =cfg.beta, alpha =cfg.alpha)
+        train_metrics = train_epoch(
+            model=model,
+            train_loader_dict=train_loader_dict,
+            opt=optimizer,
+            device=device,
+            alpha=cfg.alpha,
+            beta=cfg.beta,
+            epoch=epoch,
+            total_epochs=cfg.epochs
+        )
+        val_metrics = validate_epoch(
+            model=model,
+            val_loader_dict=val_loader_dict,
+            device=device,
+            beta=cfg.beta,
+            alpha=cfg.alpha
+        )
 
         epoch_pbar.set_postfix({
             'loss': f"{train_metrics['loss']:.4f}",
@@ -94,37 +125,51 @@ def train_gnn(cfg: TrainConfig)-> TrainingCheckpoint:
         writer.add_scalar('Loss/train', train_metrics['loss'], epoch)
         writer.add_scalar('F1/val', val_metrics['f1'], epoch)
 
-    checkpoint = TrainingCheckpoint(
-        epoch = cfg.epochs,
-        model_state_dict = model.state_dict(),
-        optimizer_state_dict = optimizer.state_dict())
+        # Save best model
+        if val_metrics['f1'] > best_f1:
+            best_f1 = val_metrics['f1']
+            save_checkpoint(model, optimizer, epoch, best_f1, f'{checkpoint_dir}/best_model.pt')
+
+        # Periodic checkpoint
+        if (epoch + 1) % save_every == 0:
+            save_checkpoint(model, optimizer, epoch, best_f1, f'{checkpoint_dir}/epoch_{epoch+1}.pt')
+
+    # Save final model
+    save_checkpoint(model, optimizer, cfg.epochs - 1, best_f1, f'{checkpoint_dir}/final_model.pt')
+
+    writer.close()
+    return best_f1
 
 
-    return checkpoint
+def load_model_from_checkpoint(checkpoint_path: str, cfg: TrainConfig) -> DGNN_GA:
+    """Load a trained model from checkpoint."""
+    model = DGNN_GA(F=cfg.hidden_dim, T=cfg.comm_rounds)
+    checkpoint = torch.load(checkpoint_path, weights_only=True)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    return model
+
 
 if __name__ == "__main__":
-    # create a sample batch we want to carry out predictions on for comparing models
-    sample_loader = DataLoader(load_dataset_dict()[5], shuffle=True, batch_size=32)
+    cfg = TrainConfig()
+    checkpoint_dir = 'master_thesis/modules/task_assignment/gnn/checkpoints'
+
+    # Train model
+    best_f1 = train_gnn(cfg=cfg, checkpoint_dir=checkpoint_dir, save_every=10)
+    print(f"Training complete. Best F1: {best_f1:.4f}")
+
+    # Load best model and test predictions
+    model = load_model_from_checkpoint(f'{checkpoint_dir}/best_model.pt', cfg)
+    model.eval()
+
+    # Get a sample batch for testing
+    sample_loader = DataLoader(load_dataset_dict()[5], shuffle=True, batch_size=8)
     sample_batch = next(iter(sample_loader))
 
-    # pretrain and save a model
-    cfg = TrainConfig()
-    cfg.epochs = 5
-    training_data = train_gnn(cfg = cfg)
+    with torch.no_grad():
+        predictions = model(sample_batch['cost'])
 
-    checkpoint_path = 'master_thesis/modules/task_assignment/gnn/checkpoints/test.pt'
-    torch.save(training_data, f = checkpoint_path)
+    print(f"Predictions shape: {predictions.shape}")
+    print(f"Predictions range: [{predictions.min():.3f}, {predictions.max():.3f}]")
 
-    # create new model, make predicitons, load trained model weights and compare predictions with both
-    new_model = DGNN_GA(cfg.hidden_dim, cfg.comm_rounds)
-    optimizer = torch.optim.Adam(new_model.parameters(), lr=cfg.lr)
-
-    prediction_untrained = new_model(sample_batch)
-    
-    checkpoint = torch.load(checkpoint_path)
-    new_model.load_state_dict(checkpoint.model_state_dict)
-    optimizer.load_state_dict(checkpoint.optimizer_state_dict)
-    
-    prediction_trained = new_model(sample_batch)
 
     

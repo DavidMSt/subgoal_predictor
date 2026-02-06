@@ -24,6 +24,7 @@ class TrainConfig:
     # Infrastructure
     seed: int = 42
     device: str = 'cpu'
+    # device: str = 'mps'
     checkpoint_dir: str = 'master_thesis/modules/task_assignment/gnn/checkpoints'
     log_dir: str = 'runs/dgnn_ga'
 
