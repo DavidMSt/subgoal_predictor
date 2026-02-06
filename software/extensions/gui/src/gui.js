@@ -1,6 +1,7 @@
 import {CLI_Terminal} from './lib/cli_terminal/cli_terminal.js';
 import {ButtonWidget} from './lib/objects/js/buttons.js';
 import {ContextMenuItem} from './lib/objects/contextmenu.js'
+import {openFilePicker} from './lib/file_picker.js';
 
 import './lib/styles/popup.css'
 import './lib/styles/objects.css';
@@ -3141,6 +3142,100 @@ export class GUI {
             // 4) when the fade-out transition ends, remove from DOM
             overlay.addEventListener('transitionend', () => overlay.remove(), {once: true});
         }, 2000);
+    }
+
+    // =================================================================================================================
+    /**
+     * Opens a file picker dialog and sends the selected file back to Python.
+     * This method is called from Python via gui.function('openFilePicker', {...})
+     *
+     * @param {Object} options - Options for the file picker
+     * @param {string} options.request_id - Unique ID to match request with response
+     * @param {string} options.accept - File type filter (e.g., '.yaml,.yml')
+     * @param {string} options.title - Title for the dialog (informational only)
+     */
+    async openFilePicker(options = {}) {
+        const requestId = options.request_id;
+
+        try {
+            const fileData = await openFilePicker({
+                accept: options.accept || '',
+                multiple: false,
+                maxSize: options.max_size || 0
+            });
+
+            // Send response back to Python
+            this.websocket.send({
+                type: 'event',
+                id: this.id,
+                data: {
+                    event: 'file_picker_response',
+                    request_id: requestId,
+                    success: fileData !== null,
+                    file: fileData
+                }
+            });
+        } catch (error) {
+            console.error('File picker error:', error);
+            this.websocket.send({
+                type: 'event',
+                id: this.id,
+                data: {
+                    event: 'file_picker_response',
+                    request_id: requestId,
+                    success: false,
+                    error: error.message
+                }
+            });
+        }
+    }
+
+    // =================================================================================================================
+    /**
+     * Triggers a file download on the client.
+     * Called from Python via gui.function('downloadFile', {...})
+     *
+     * @param {Object} options - Options for the download
+     * @param {string} options.filename - Name for the downloaded file
+     * @param {string} options.content - Base64-encoded file content
+     * @param {string} options.mimeType - MIME type of the file
+     */
+    downloadFile(options = {}) {
+        try {
+            const { filename, content, mimeType } = options;
+
+            if (!filename || !content) {
+                console.error('downloadFile: missing filename or content');
+                return;
+            }
+
+            // Decode base64 content
+            const byteCharacters = atob(content);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: mimeType || 'application/octet-stream' });
+
+            // Create download link and trigger click
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+
+            // Cleanup
+            setTimeout(() => {
+                document.body.removeChild(link);
+                URL.revokeObjectURL(url);
+            }, 100);
+
+            console.log(`Download triggered: ${filename}`);
+        } catch (error) {
+            console.error('downloadFile error:', error);
+        }
     }
 
     // =================================================================================================================

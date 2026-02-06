@@ -221,7 +221,7 @@ class OptiTrack:
         """
         # Wait until we have descriptions
         while self.running and not self.description_received:
-            time.sleep(0.001)
+            time.sleep(0.1)
 
         while self.running:
             frame = None
@@ -257,7 +257,6 @@ class OptiTrack:
                     callback(sample)
                 except Exception as e:
                     self.logger.error(f"Error in user sample callback: {e}")
-
             self.events.sample.set(data=sample)
 
             self._last_emit_t = now

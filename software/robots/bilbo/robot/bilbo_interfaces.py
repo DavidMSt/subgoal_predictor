@@ -507,18 +507,35 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                               default=0.1),
                                           ])
 
-        test_experiment_command = Command(name='exp',
-                                          function=self.experiments.run_experiment_from_file,
-                                          allow_positionals=True,
-                                          execute_in_thread=True,
-                                          arguments=[
-                                              CommandArgument(name='file',
-                                                              short_name='f',
-                                                              type=str,
-                                                              description='File to run the experiment from',
-                                                              optional=False, )
+        # Host-only experiment command: uses native file picker, saves to local directory
+        test_experiment_command = Command(
+            name='exp',
+            function=self.experiments.run_experiment_from_file,
+            description='Run experiment from file (HOST-ONLY). Opens native file picker if no file specified.',
+            allow_positionals=True,
+            execute_in_thread=True,
+            arguments=[
+                CommandArgument(name='file',
+                                short_name='f',
+                                type=str,
+                                description='Path to experiment file (YAML/JSON). Opens native picker if not specified.',
+                                optional=True,
+                                default=None),
+                CommandArgument(name='output',
+                                short_name='o',
+                                type=str,
+                                description='Output directory for experiment data. Defaults to file\'s directory.',
+                                optional=True,
+                                default=None)
+            ])
 
-                                          ])
+        # Client experiment command: uses browser file picker, downloads result
+        client_experiment_command = Command(
+            name='exp-client',
+            function=self.experiments.run_experiment_from_client,
+            description='Run experiment from browser (CLIENT mode). Opens browser file picker, downloads result.',
+            execute_in_thread=True,
+            arguments=[])
 
         test_trajectory_experiment_command = Command(name='tte',
                                                      function=self.experiments.test_trajectory_experiment,
@@ -555,6 +572,7 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                       test_trajectory_experiment_command,
                                                       dilc_example_command,
                                                       test_experiment_command,
+                                                      client_experiment_command,
                                                       stop_experiment_command])
 
         navigation_command_set = CommandSet(name='nav')

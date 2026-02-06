@@ -243,10 +243,10 @@ class BILBO(MainProvider):
         self.loop_time = time.perf_counter() - time_loop_start
         # print(f"Loop time {self.loop_time:.4f} s, Update time {self.update_time:.4f} s, Tick {self.tick}")
 
-        if self.loop_time > 0.18:
+        if self.loop_time > 0.4:
             self.logger.warning(f"Loop took {self.loop_time * 1000:.2f} ms")
 
-        if self.update_time > 0.2 and self._startup_phase == False:
+        if self.update_time > 0.4 and self._startup_phase == False:
             self.logger.warning(f"Update took {self.update_time * 1000:.2f} ms")
 
         self.common.end_of_step()

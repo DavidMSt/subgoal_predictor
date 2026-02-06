@@ -17,9 +17,9 @@ from extensions.cli.cli import CommandSet, CLI, Command, CommandArgument
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.plot.realtime.rt_plot import RT_Plot_Widget, ServerMode, UpdateMode, TimeSeries
-from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
-from extensions.simulation.src.objects.base_environment import BaseEnvironment
-from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Control_Mode, DEFAULT_BILBO_MODEL, \
+from simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
+from simulation.src.objects.base_environment import BaseEnvironment
+from simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Control_Mode, DEFAULT_BILBO_MODEL, \
     BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES, BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS, BILBO_3D_Input, \
     BILBO_3D_State
 from extensions.joystick.joystick_manager import JoystickManager, Joystick
@@ -304,16 +304,16 @@ class ProjectBILBO(BILBO_DynamicAgent):
 
         # PID for v
         u_v = (
-            self.velocity_controller_config.k_p_v * e_v +
-            self.velocity_controller_config.k_i_v * self._v_integral +
-            self.velocity_controller_config.k_d_v * e_v_dot
+                self.velocity_controller_config.k_p_v * e_v +
+                self.velocity_controller_config.k_i_v * self._v_integral +
+                self.velocity_controller_config.k_d_v * e_v_dot
         )
 
         # PID for psi_dot
         u_psi = (
-            self.velocity_controller_config.k_p_psi_dot * e_psi_dot +
-            self.velocity_controller_config.k_i_psi_dot * self._psi_dot_integral +
-            self.velocity_controller_config.k_d_psi_dot * e_psi_dot_dot
+                self.velocity_controller_config.k_p_psi_dot * e_psi_dot +
+                self.velocity_controller_config.k_i_psi_dot * self._psi_dot_integral +
+                self.velocity_controller_config.k_d_psi_dot * e_psi_dot_dot
         )
 
         # Debug: show something meaningful (e.g. psi_dot control output)
@@ -454,6 +454,7 @@ class BILBO_InteractiveExample:
         self.joystick_manager.init()
         self._buildGUI()
         self._buildBabylon()
+        self.babylon_widget.set_babylon(self.babylon_visualization)
         self.babylon_visualization.init()
         self.env.init()
         self.env.initialize()
@@ -580,7 +581,6 @@ class BILBO_InteractiveExample:
             width=2,
         )
 
-
         timeseries_v.set_value(0.0)
         timeseries_v_cmd.set_value(0.0)
         plot.plot.add_timeseries(timeseries_v)
@@ -663,7 +663,7 @@ class BILBO_InteractiveExample:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _buildBabylon(self):
-        floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
+        floor = SimpleFloor('floor', size_y=[-50, 50], size_x=[-50, 50], texture='floor_bright.png')
         self.babylon_visualization.addObject(floor)
 
         wall1 = WallFancy('wall1', length=3, texture='wood4.png', include_end_caps=True)

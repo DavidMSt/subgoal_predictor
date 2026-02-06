@@ -2,7 +2,7 @@ import queue
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, Future
-from copy import copy
+from copy import copy, deepcopy
 from typing import Callable
 
 import numpy as np
@@ -342,7 +342,9 @@ class BILBO_Logging(LoggingProvider):
                     self.tick = ll_tick
 
                 # Always use ll_tick for the sample (it's the authoritative source)
+                # Update both top-level and general.tick to keep sample consistent
                 sample_dict['tick'] = ll_tick
+                sample_dict['general']['tick'] = ll_tick
 
                 # Append the sample to the lowlevel logger
                 self._h5_logger_lowlevel.append_multiple_samples(batch)
@@ -654,7 +656,9 @@ class BILBO_Logging(LoggingProvider):
         # if 290 <= self.tick <= 320:
         #     self.logger.debug(f"Received samples. Tick: {samples[0]['tick']} - {samples[-1]['tick']}")
 
-        self._samples_queue.put(copy(samples))
+        # Use deepcopy to ensure each batch in the queue has independent dict objects
+        # (shallow copy would share the inner dicts, causing tick sync issues if reused)
+        self._samples_queue.put(deepcopy(samples))
 
     # ------------------------------------------------------------------------------------------------------------------
     def _initialize_caches(self) -> None:

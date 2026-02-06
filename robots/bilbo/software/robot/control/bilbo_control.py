@@ -6,7 +6,7 @@ import numpy as np
 from core.communication.wifi.data_link import CommandArgument
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.dataclass_utils import from_dict_auto
-from core.utils.events import event_definition, EventFlag, Event
+from core.utils.events import event_definition, EventFlag, Event, pred_flag_equals, TIMEOUT
 from core.utils.exit import exit_program
 from core.utils.logging_utils import Logger
 from core.utils.time import setTimeout
@@ -57,6 +57,7 @@ class BILBO_Control_Events:
     tic_change: Event
     movement_element_finished: Event = Event(flags=EventFlag('id', int))
     movement_element_timeout: Event = Event(flags=EventFlag('id', int))
+    lowlevel_mode_change: Event = Event(flags=EventFlag('mode', BILBO_Control_Mode))
 
 
 # TODO: this needs to be initially set somehow
@@ -121,7 +122,7 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
         self.logger.info("Starting control")
-        self.set_mode(BILBO_Control_Mode.OFF)
+        self.set_mode(BILBO_Control_Mode.OFF, wait_for_change=False)
         self.status = BILBO_Control_Status.NORMAL
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -155,7 +156,7 @@ class BILBO_Control:
         self.callbacks.update.call()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def set_mode(self, mode: BILBO_Control_Mode | int):
+    def set_mode(self, mode: BILBO_Control_Mode | int, *, wait_for_change: bool = True):
         if isinstance(mode, int):
             mode_int = mode
             try:
@@ -224,6 +225,16 @@ class BILBO_Control:
         )
         # Reset the external inputs
         self.inputs.reset()
+
+        # Wait for the low-level mode change event
+        if wait_for_change:
+            result, _ = self.events.lowlevel_mode_change.wait(timeout=0.2,
+                                                              stale_event_time=0.1,
+                                                              predicate=pred_flag_equals('mode', mode))
+
+            if result is TIMEOUT:
+                self.logger.warning(f"Failed to set control mode to \"{mode.name}\". Low-level mode change event timed out")
+                return
 
         self.callbacks.mode_change.call(mode, forced_change=False)
         self.events.mode_change.set(mode)
@@ -472,8 +483,8 @@ class BILBO_Control:
 
         # Forward velocity control PID scaling
         # Higher gains help overcome friction-induced lag
-        ROUGHNESS_V_KP_SCALE = 1.75   # At roughness=1.0, Kp multiplied by this factor
-        ROUGHNESS_V_KI_SCALE = 1.3    # At roughness=1.0, Ki multiplied by this factor
+        ROUGHNESS_V_KP_SCALE = 1.75  # At roughness=1.0, Kp multiplied by this factor
+        ROUGHNESS_V_KI_SCALE = 1.3  # At roughness=1.0, Ki multiplied by this factor
 
         # Turn velocity control PID scaling (independent, lower scaling to avoid oscillations)
         ROUGHNESS_PSIDOT_KP_SCALE = 1.25  # At roughness=1.0, Kp multiplied by this factor
@@ -506,9 +517,9 @@ class BILBO_Control:
         kc_value = roughness * ROUGHNESS_KC_MAX
 
         self.logger.info(f"Adjusting for floor roughness={roughness:.2f}: "
-                        f"v_Kp×{v_kp_factor:.2f}, v_Ki×{v_ki_factor:.2f}, Kc={kc_value:.4f}, "
-                        f"psidot_Kp×{psidot_kp_factor:.2f}, psidot_Ki×{psidot_ki_factor:.2f}, "
-                        f"pos_kp×{pos_kp_factor:.2f}, pos_ki×{pos_ki_factor:.2f}")
+                         f"v_Kp×{v_kp_factor:.2f}, v_Ki×{v_ki_factor:.2f}, Kc={kc_value:.4f}, "
+                         f"psidot_Kp×{psidot_kp_factor:.2f}, psidot_Ki×{psidot_ki_factor:.2f}, "
+                         f"pos_kp×{pos_kp_factor:.2f}, pos_ki×{pos_ki_factor:.2f}")
 
         # === Adjust forward velocity control ===
         adjusted_v_pid = PID_Config(
@@ -713,10 +724,12 @@ class BILBO_Control:
             case BILBO_Control_Mode.OFF:
                 if self.mode != mode_ll:
                     self.logger.info("LL Mode changed to OFF! Change control mode to OFF now")
-                    self.set_mode(BILBO_Control_Mode.OFF)
+                    self.set_mode(BILBO_Control_Mode.OFF, wait_for_change=False)
             case _:
                 if mode_ll != self.mode:
                     self.logger.warning(f"LL Mode \"{mode_ll}\" is not the same as the current mode: \"{self.mode}\"")
+
+        self.events.lowlevel_mode_change.set(mode_ll, flags={'mode': mode_ll})
 
     # ------------------------------------------------------------------------------------------------------------------
     def _lowlevel_vic_change_event(self, data: dict, *args, **kwargs):
@@ -1136,7 +1149,7 @@ class BILBO_Control:
     def _lowlevel_control_event_callback(self, message: BILBO_Control_Event_Message):
         event = BILBO_Control_Event_Type(message.data['event'])
 
-        self.logger.debug(f"Received control event: {event}. Data: {message.data}")
+        self.logger.debug(f"Received control event: {event}")
 
         match event:
             case BILBO_Control_Event_Type.ERROR:

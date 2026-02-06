@@ -20,7 +20,7 @@ from robots.bilbo.gui.bilbo_application_gui import BILBO_Application_GUI
 from robots.bilbo.settings import AUTOSTART_ROBOTS, AUTOSTOP_ROBOTS
 from robots.bilbo.testbed.tracker.bilbo_tracker import BILBO_Tracker
 # from extensions.cli.archive.cli_gui import CLI_GUI_Server
-from extensions.cli.cli import CommandSet, CLI
+from extensions.cli.cli import CommandSet, CLI, Command
 from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
 from robots.bilbo.manager.bilbo_manager import BILBO_Manager
 from core.utils.exit import register_exit_callback, exit_program
@@ -168,6 +168,47 @@ class BILBO_Application:
         self.cli.root.addChild(self.manager.robot_manager.cli)
         self.cli.root.addChild(self.manager.joystick_control.cli_command_set)
 
+        # Add file picker test command
+        file_picker_command = Command(
+            name='test_file_picker',
+            function=self._test_file_picker,
+            description='Test the file picker functionality - opens a file dialog on the connected client',
+            execute_in_thread=True,
+        )
+        self.cli.root.addCommand(file_picker_command)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _test_file_picker(self):
+        """Test function for the file picker - opens a file dialog and prints info about the selected file."""
+        self.logger.info("Opening file picker on connected client...")
+
+        file_path = self.gui.gui.open_file_picker(
+            accept='.yaml,.yml,.json,.txt',
+            timeout=60.0
+        )
+
+        if file_path:
+            import os
+            file_size = os.path.getsize(file_path)
+            file_name = os.path.basename(file_path)
+            self.logger.info(f"File selected successfully!")
+            self.logger.info(f"  Name: {file_name}")
+            self.logger.info(f"  Path: {file_path}")
+            self.logger.info(f"  Size: {file_size} bytes")
+
+            # Read and show first few lines if it's a text file
+            try:
+                with open(file_path, 'r') as f:
+                    content_preview = f.read(500)
+                    lines = content_preview.split('\n')[:10]
+                    self.logger.info(f"  Content preview (first 10 lines):")
+                    for line in lines:
+                        self.logger.info(f"    {line}")
+            except Exception as e:
+                self.logger.info(f"  Could not read file content: {e}")
+        else:
+            self.logger.info("File selection was cancelled or timed out")
+
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
         self.logger.info('Starting Bilbo application')
@@ -186,6 +227,8 @@ class BILBO_Application:
 
     # ==================================================================================================================
     def _newRobot_callback(self, bilbo: BILBO_TestbedAgent, *args, **kwargs):
+        # Set GUI reference on experiment handler for file picker functionality
+        bilbo.robot.experiment_handler.set_gui(self.gui.gui)
 
         # Wait until the first sample is received
         if not bilbo.robot.core.initialized:

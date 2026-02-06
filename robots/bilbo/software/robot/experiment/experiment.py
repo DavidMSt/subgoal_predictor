@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
 import yaml
+import numpy as np
 
 from core.utils.files import file_exists
 from core.utils.callbacks import Callback, CallbackContainer, callback_definition
@@ -47,6 +48,42 @@ from robot.experiment.experiment_parser import (
     normalize_waypoints as _normalize_waypoints,
     get_registry as _get_action_registry,
 )
+
+
+# ======================================================================================================================
+# Helper Functions
+# ======================================================================================================================
+
+def _get_mode_name_from_trace(trace, control, control_mode_event=None) -> str:
+    """Extract the BILBO control mode name from an event trace.
+
+    When listening to both control.events.mode_change and position_control.events.mode_changed,
+    the control mode event contains BILBO_Control_Mode (OFF, BALANCING, VELOCITY, POSITION),
+    while position_control's mode_changed contains PositionControlMode (IDLE, FOLLOW_PATH, etc.).
+    This helper tries to extract the meaningful BILBO control mode.
+
+    Args:
+        trace: The SubscriberMatch from wait_for_events
+        control: The BILBO_Control instance for fallback
+        control_mode_event: Optional - the control.events.mode_change event to check first
+
+    Returns:
+        The mode name as a string (e.g., "BALANCING", "OFF")
+    """
+    # If we have the control mode event, check if the trace was caused by it
+    if control_mode_event is not None and trace is not None:
+        if trace.caused_by(control_mode_event):
+            # Extract mode from control's mode_change event flags
+            if hasattr(trace, 'flags') and trace.flags:
+                if isinstance(trace.flags, dict):
+                    mode_from_event = trace.flags.get('mode')
+                    if mode_from_event is not None:
+                        return mode_from_event.name if hasattr(mode_from_event, 'name') else str(mode_from_event)
+
+    # Fallback to control.mode (current state)
+    if control and control.mode is not None:
+        return control.mode.name
+    return "UNKNOWN"
 
 
 # ======================================================================================================================
@@ -89,12 +126,17 @@ class ExperimentActionDefinition:
 
     timeout: float | None = None  # per-action timeout (seconds, optional)
 
+    label: str | None = None  # human-readable label for display in reports
+
     # action-specific stuff (parameters for the concrete action class)
     parameters: dict[str, Any] = dataclasses.field(default_factory=dict)
 
+    # sub-actions for group/parallel actions (maps action ID to definition)
+    sub_actions: dict[str, 'ExperimentActionDefinition'] | None = None
+
     # ------------------------------------------------------------------
     @classmethod
-    def from_dict(cls, d: dict, index: int = 0) -> "ExperimentActionDefinition":
+    def from_dict(cls, d: dict, index: int = 0, parent_id: str | None = None) -> "ExperimentActionDefinition":
         """
         Parse an action definition from a dict.
 
@@ -102,6 +144,7 @@ class ExperimentActionDefinition:
             d: Dict containing action definition. Must have 'type' field.
                'id' is optional - auto-generated as 'action_{index}' if missing.
             index: Index for auto-generating ID when not provided.
+            parent_id: Parent action ID for generating sub-action IDs.
 
         Returns:
             ExperimentActionDefinition instance.
@@ -113,32 +156,55 @@ class ExperimentActionDefinition:
             raise ValueError(f"Action at index {index} missing required field 'type': {d}")
 
         # id is optional - auto-generate if missing
-        action_id = d.get("id", f"action_{index}")
+        if parent_id:
+            action_id = d.get("id", f"{parent_id}_sub_{index}")
+        else:
+            action_id = d.get("id", f"action_{index}")
+
+        action_type = d["type"]
 
         # Reserved fields that should not go into parameters
-        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "parameters"}
+        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "label", "parameters", "actions"}
 
         # If 'parameters' is explicitly provided, use it; otherwise collect non-reserved fields
         if "parameters" in d:
-            parameters = d["parameters"]
+            parameters = dict(d["parameters"])  # Make a copy
         else:
             parameters = {
                 k: v for k, v in d.items()
                 if k not in reserved_fields
             }
 
+        # Parse sub-actions for group/parallel types
+        sub_actions: dict[str, ExperimentActionDefinition] | None = None
+        if action_type in ("group", "parallel"):
+            # Get actions list from parameters or top-level 'actions' field
+            actions_list = parameters.pop("actions", None) or d.get("actions", [])
+            if actions_list:
+                # Get registry for shorthand expansion
+                registry = _get_action_registry()
+                sub_actions = {}
+                for i, sub_def in enumerate(actions_list):
+                    # Expand shorthand and recursively parse sub-action
+                    expanded_sub = registry.expand_shorthand(sub_def)
+                    sub_action = cls.from_dict(expanded_sub, index=i, parent_id=action_id)
+                    sub_actions[sub_action.id] = sub_action
+
         return cls(
             id=action_id,
-            type=d["type"],
+            type=action_type,
             tick=d.get("tick"),
             after=d.get("after"),
             time=d.get("time"),
             delay=d.get("delay"),
             timeout=d.get("timeout"),
+            label=d.get("label"),
             parameters=parameters,
+            sub_actions=sub_actions,
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
         dict_out: dict[str, Any] = {
             "id": self.id,
             "type": self.type,
@@ -153,8 +219,13 @@ class ExperimentActionDefinition:
             dict_out["delay"] = self.delay
         if self.timeout is not None:
             dict_out["timeout"] = self.timeout
+        if self.label is not None:
+            dict_out["label"] = self.label
         if self.parameters:
             dict_out["parameters"] = self.parameters
+        if self.sub_actions:
+            # Serialize sub-actions as a list (preserving order by ID)
+            dict_out["actions"] = [sub.to_dict() for sub in self.sub_actions.values()]
         return dict_out
 
 
@@ -184,10 +255,18 @@ class ExperimentAction(abc.ABC):
     after: str | None = None  # Name of the action that must finish before this one starts
     time: float | None = None
     timeout: float | None = None
+    label: str | None = None  # Human-readable label for display
 
     data: dict | Any | None = None  # Data collected by the action
 
     experiment: Experiment | None = None
+
+    # Runtime state (for tracking sub-action execution in groups)
+    started: bool = False
+    _start_tick: int | None = None
+    _end_tick: int | None = None
+    _status: ExperimentActionStatus = ExperimentActionStatus.PENDING
+    _error_message: str | None = None
 
     # ------------------------------------------------------------------------------------------------------------------
     def __post_init__(self):
@@ -199,6 +278,11 @@ class ExperimentAction(abc.ABC):
     def initialize(self, experiment: Experiment):
         self.experiment = experiment
         self.data = None
+        self.started = False
+        self._start_tick = None
+        self._end_tick = None
+        self._status = ExperimentActionStatus.PENDING
+        self._error_message = None
 
     # ------------------------------------------------------------------------------------------------------------------
     @abc.abstractmethod
@@ -225,6 +309,7 @@ class ExperimentAction(abc.ABC):
             "after": definition.after,
             "time": definition.time,
             "timeout": definition.timeout,
+            "label": definition.label,
         }
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -235,7 +320,7 @@ class ExperimentAction(abc.ABC):
         Subclasses can override this to customize parameter extraction.
         """
         # Base class fields to exclude
-        base_fields = {'id', 'tick', 'after', 'time', 'timeout', 'data', 'experiment'}
+        base_fields = {'id', 'tick', 'after', 'time', 'timeout', 'label', 'data', 'experiment'}
 
         params = {}
         for field in dataclasses.fields(self):
@@ -251,21 +336,79 @@ class ExperimentAction(abc.ABC):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_finished(self):
+        if self.experiment:
+            self._end_tick = self.experiment.tick
+        if self._status == ExperimentActionStatus.RUNNING:
+            self._status = ExperimentActionStatus.FINISHED
         self.callbacks.finished.call()
         self.events.finished.set(data=self.data)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_started(self):
         self.started = True
-        self.events.started.set(data=self.experiment.tick)
+        self._status = ExperimentActionStatus.RUNNING
+        if self.experiment:
+            self._start_tick = self.experiment.tick
+        self.events.started.set(data=self.experiment.tick if self.experiment else 0)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_error(self):
-        self.events.error.set(data=None)
+    def _on_error(self, message: str | None = None):
+        """Signal that this action has failed.
+
+        Args:
+            message: Optional detailed error message explaining what went wrong.
+                     Should be human-readable and include relevant context.
+        """
+        if self.experiment:
+            self._end_tick = self.experiment.tick
+        self._status = ExperimentActionStatus.ERROR
+        self._error_message = message
+        self.events.error.set(data={'message': message})
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_timeout(self):
-        self.events.timeout.set(data=None)
+    def _on_timeout(self, message: str | None = None):
+        """Signal that this action has timed out.
+
+        Args:
+            message: Optional detailed timeout message with context.
+        """
+        if self.experiment:
+            self._end_tick = self.experiment.tick
+        self._status = ExperimentActionStatus.TIMEOUT
+        self._error_message = message
+        self.events.timeout.set(data={'message': message})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_action_type_name(self) -> str:
+        """Get the action type string (e.g., 'set_velocity', 'wait_time')."""
+        # Derive from class name: SetVelocityAction -> set_velocity
+        class_name = self.__class__.__name__
+        if class_name.endswith('Action'):
+            class_name = class_name[:-6]  # Remove 'Action' suffix
+        # Convert CamelCase to snake_case
+        import re
+        name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', class_name)
+        name = re.sub('([a-z0-9])([A-Z])', r'\1_\2', name).lower()
+        return name
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_action_data(self) -> 'ExperimentActionData':
+        """Get the execution data for this action (timing, status, parameters)."""
+        start_tick = self._start_tick or 0
+        end_tick = self._end_tick or 0
+        return ExperimentActionData(
+            start_tick=start_tick,
+            end_tick=end_tick,
+            start_time=start_tick * LOOP_TIME,
+            end_time=end_tick * LOOP_TIME,
+            status=self._status,
+            error_message=self._error_message,
+            action_type=self.get_action_type_name(),
+            label=self.label,
+            parameters=self.get_parameters(),
+            data=self.data,
+            sub_actions=None,
+        )
 
 
 # ======================================================================================================================
@@ -315,10 +458,14 @@ class SetModeAction(ExperimentAction):
             mode_upper = mode.upper()
             if mode_upper == 'OFF':
                 mode_enum = BILBO_Control_Mode.OFF
+            elif mode_upper == 'DIRECT':
+                mode_enum = BILBO_Control_Mode.DIRECT
             elif mode_upper == 'BALANCING':
                 mode_enum = BILBO_Control_Mode.BALANCING
             elif mode_upper == 'VELOCITY':
                 mode_enum = BILBO_Control_Mode.VELOCITY
+            elif mode_upper == 'POSITION':
+                mode_enum = BILBO_Control_Mode.POSITION
             else:
                 raise ValueError(f"Invalid mode: {mode}")
         elif isinstance(mode, int):
@@ -496,7 +643,8 @@ class RunTrajectoryAction(ExperimentAction):
     def _execute_blocking(self):
         result = self.experiment.experiment_handler.run_trajectory(self.input_trajectory)
         if result is None:
-            self._on_error()
+            traj_id = getattr(self.input_trajectory, 'id', 'unknown')
+            self._on_error(f"Trajectory '{traj_id}' execution failed - check trajectory handler for details")
         else:
             self.data = result
             self._on_finished()
@@ -696,6 +844,10 @@ class ParallelAction(ExperimentAction):
 
         for sub_action in self.sub_actions:
             sub_action.callbacks.finished.register(self._sub_action_finished)
+            sub_action.events.error.on(
+                callback=lambda data=None, _action=sub_action, **kw: self._sub_action_error(_action, data),
+                once=True
+            )
             sub_action.execute()
 
         return False  # Async - wait for all sub-actions
@@ -705,29 +857,57 @@ class ParallelAction(ExperimentAction):
         if self._pending_count <= 0:
             self._on_finished()
 
+    def _sub_action_error(self, action: 'ExperimentAction', data: dict | None = None):
+        """Called when a sub-action errors. Propagate error to the parallel group."""
+        message = data.get('message', '') if isinstance(data, dict) else ''
+        self._on_error(f"Sub-action \"{action.id}\" failed: {message}" if message else f"Sub-action \"{action.id}\" failed")
+
+    def get_parameters(self) -> dict[str, Any]:
+        """Override to serialize sub_actions without circular experiment reference."""
+        return {
+            'actions_count': len(self.sub_actions),
+        }
+
+    def get_action_data(self) -> 'ExperimentActionData':
+        """Get execution data including sub-action data."""
+        start_tick = self._start_tick or 0
+        end_tick = self._end_tick or 0
+
+        # Collect sub-action data
+        sub_actions_data = {}
+        for sub_action in self.sub_actions:
+            sub_actions_data[sub_action.id] = sub_action.get_action_data()
+
+        return ExperimentActionData(
+            start_tick=start_tick,
+            end_tick=end_tick,
+            start_time=start_tick * LOOP_TIME,
+            end_time=end_tick * LOOP_TIME,
+            status=self._status,
+            error_message=self._error_message,
+            action_type=self.get_action_type_name(),
+            label=self.label,
+            parameters=self.get_parameters(),
+            data=self.data,
+            sub_actions=sub_actions_data,
+        )
+
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "ParallelAction":
         kwargs = cls._common_init_kwargs(definition)
-
-        sub_action_defs = definition.parameters.get("actions", [])
         sub_actions: list[ExperimentAction] = []
-
         registry = _get_action_registry()
 
-        for i, sub_def in enumerate(sub_action_defs):
-            # Expand shorthand and parse using the registry
-            expanded = registry.expand_shorthand(sub_def)
-            sub_action_def = ExperimentActionDefinition.from_dict(expanded, index=i)
-            sub_action_def.id = f"{definition.id}_sub_{i}"
-
-            # Create the action instance using the registry
-            if registry.has_type(sub_action_def.type):
-                sub_actions.append(registry.create_action(sub_action_def))
-            elif sub_action_def.type in EXPERIMENT_ACTION_TYPE_MAPPING:
-                action_cls = EXPERIMENT_ACTION_TYPE_MAPPING[sub_action_def.type]
-                sub_actions.append(action_cls.from_definition(sub_action_def))
-            else:
-                raise ValueError(f"Unknown action type in parallel group: {sub_action_def.type}")
+        if definition.sub_actions:
+            # Use pre-parsed sub-action definitions
+            for sub_action_def in definition.sub_actions.values():
+                if registry.has_type(sub_action_def.type):
+                    sub_actions.append(registry.create_action(sub_action_def))
+                elif sub_action_def.type in EXPERIMENT_ACTION_TYPE_MAPPING:
+                    action_cls = EXPERIMENT_ACTION_TYPE_MAPPING[sub_action_def.type]
+                    sub_actions.append(action_cls.from_definition(sub_action_def))
+                else:
+                    raise ValueError(f"Unknown action type in parallel group: {sub_action_def.type}")
 
         return cls(**kwargs, sub_actions=sub_actions)
 
@@ -782,6 +962,10 @@ class GroupAction(ExperimentAction):
 
         current_action = self.sub_actions[self._current_index]
         current_action.callbacks.finished.register(self._sub_action_finished)
+        current_action.events.error.on(
+            callback=lambda data=None, **kw: self._sub_action_error(current_action, data),
+            once=True
+        )
         current_action.execute()
         # The callback fires when the action calls _on_finished(), whether sync or async
 
@@ -793,29 +977,57 @@ class GroupAction(ExperimentAction):
         else:
             self._execute_current()
 
+    def _sub_action_error(self, action: 'ExperimentAction', data: dict | None = None):
+        """Called when a sub-action errors. Propagate error to the group."""
+        message = data.get('message', '') if isinstance(data, dict) else ''
+        self._on_error(f"Sub-action \"{action.id}\" failed: {message}" if message else f"Sub-action \"{action.id}\" failed")
+
+    def get_parameters(self) -> dict[str, Any]:
+        """Override to serialize sub_actions without circular experiment reference."""
+        return {
+            'actions_count': len(self.sub_actions),
+        }
+
+    def get_action_data(self) -> 'ExperimentActionData':
+        """Get execution data including sub-action data."""
+        start_tick = self._start_tick or 0
+        end_tick = self._end_tick or 0
+
+        # Collect sub-action data
+        sub_actions_data = {}
+        for sub_action in self.sub_actions:
+            sub_actions_data[sub_action.id] = sub_action.get_action_data()
+
+        return ExperimentActionData(
+            start_tick=start_tick,
+            end_tick=end_tick,
+            start_time=start_tick * LOOP_TIME,
+            end_time=end_tick * LOOP_TIME,
+            status=self._status,
+            error_message=self._error_message,
+            action_type=self.get_action_type_name(),
+            label=self.label,
+            parameters=self.get_parameters(),
+            data=self.data,
+            sub_actions=sub_actions_data,
+        )
+
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "GroupAction":
         kwargs = cls._common_init_kwargs(definition)
-
-        sub_action_defs = definition.parameters.get("actions", [])
         sub_actions: list[ExperimentAction] = []
-
         registry = _get_action_registry()
 
-        for i, sub_def in enumerate(sub_action_defs):
-            # Expand shorthand and parse using the registry
-            expanded = registry.expand_shorthand(sub_def)
-            sub_action_def = ExperimentActionDefinition.from_dict(expanded, index=i)
-            sub_action_def.id = f"{definition.id}_sub_{i}"
-
-            # Create the action instance using the registry
-            if registry.has_type(sub_action_def.type):
-                sub_actions.append(registry.create_action(sub_action_def))
-            elif sub_action_def.type in EXPERIMENT_ACTION_TYPE_MAPPING:
-                action_cls = EXPERIMENT_ACTION_TYPE_MAPPING[sub_action_def.type]
-                sub_actions.append(action_cls.from_definition(sub_action_def))
-            else:
-                raise ValueError(f"Unknown action type in group: {sub_action_def.type}")
+        if definition.sub_actions:
+            # Use pre-parsed sub-action definitions
+            for sub_action_def in definition.sub_actions.values():
+                if registry.has_type(sub_action_def.type):
+                    sub_actions.append(registry.create_action(sub_action_def))
+                elif sub_action_def.type in EXPERIMENT_ACTION_TYPE_MAPPING:
+                    action_cls = EXPERIMENT_ACTION_TYPE_MAPPING[sub_action_def.type]
+                    sub_actions.append(action_cls.from_definition(sub_action_def))
+                else:
+                    raise ValueError(f"Unknown action type in group: {sub_action_def.type}")
 
         return cls(**kwargs, sub_actions=sub_actions)
 
@@ -837,7 +1049,7 @@ class FuncAction(ExperimentAction):
             self.data = result
         except Exception as e:
             self.logger.error(f"Failed to execute function '{self.function}': {e}")
-            self._on_error()
+            self._on_error(f"Function '{self.function}' raised exception: {e}")
             return True
         self._on_finished()
         return True
@@ -864,7 +1076,7 @@ class SetFeedbackGainAction(ExperimentAction):
         result = self.experiment.experiment_handler.control.set_statefeedback_gain(self.K)
         if not result:
             self.logger.error(f"Failed to set state feedback gain to {self.K}")
-            self._on_error()
+            self._on_error(f"Failed to set state feedback gain K={self.K}")
             return True
         self._on_finished()
         return True
@@ -891,7 +1103,7 @@ class ResetControlAction(ExperimentAction):
         result = self.experiment.experiment_handler.control.load_and_set_default_config()
         if result is None:
             self.logger.error("Failed to reset control config")
-            self._on_error()
+            self._on_error("Failed to reload control configuration from file")
             return True
         self._on_finished()
         return True
@@ -925,7 +1137,7 @@ class MoveToAction(ExperimentAction):
         )
         if not result:
             self.logger.error(f"Failed to start move_to ({self.x}, {self.y})")
-            self._on_error()
+            self._on_error(f"Failed to start move to ({self.x:.2f}, {self.y:.2f}) - position control rejected command")
             return True
 
         if self.wait:
@@ -939,41 +1151,56 @@ class MoveToAction(ExperimentAction):
 
     def _wait_for_completion(self):
         position_control = self.experiment.experiment_handler.control.position_control
-        # Wait for completion, timeout, or mode change
-        data, trace = wait_for_events(
-            OR(position_control.events.move_to_point_completed,
-               position_control.events.move_to_point_timeout,
-               position_control.events.mode_changed),
-            timeout=self.timeout if self.timeout > 0 else None
-        )
+        control = self.experiment.experiment_handler.control
 
-        # Check which event caused the wait to end
-        if trace is TIMEOUT:
-            self.logger.warning("MoveToAction: wait timed out (no event received)")
-            self._on_error()
-        elif trace.caused_by(position_control.events.move_to_point_completed):
-            self.logger.info("MoveToAction: move completed successfully")
-            self._on_finished()
-        elif trace.caused_by(position_control.events.move_to_point_timeout):
-            self.logger.warning("MoveToAction: move timed out")
-            self._on_error()
-        elif trace.caused_by(position_control.events.mode_changed):
-            self.logger.warning("MoveToAction: move interrupted by mode change")
-            self._on_error()
-        else:
-            # Unknown event - treat as error
-            self.logger.warning("MoveToAction: unknown event triggered wait end")
-            self._on_error()
+        while True:
+            # Wait for completion, timeout, or mode change away from POSITION
+            data, trace = wait_for_events(
+                OR(position_control.events.move_to_point_completed,
+                   position_control.events.move_to_point_timeout,
+                   control.events.mode_change),
+                timeout=self.timeout if self.timeout > 0 else None
+            )
+
+            target_str = f"({self.x:.2f}, {self.y:.2f})"
+
+            # Check which event caused the wait to end
+            if trace is TIMEOUT:
+                timeout_str = f"{self.timeout:.1f}s" if self.timeout > 0 else "unlimited"
+                self.logger.warning("MoveToAction: wait timed out (no event received)")
+                self._on_error(f"Move to {target_str} timed out after {timeout_str} - no completion event")
+                return
+            elif trace.caused_by(position_control.events.move_to_point_completed):
+                self.logger.info("MoveToAction: move completed successfully")
+                self._on_finished()
+                return
+            elif trace.caused_by(position_control.events.move_to_point_timeout):
+                self.logger.warning("MoveToAction: move timed out")
+                self._on_error(f"Move to {target_str} timed out (position control timeout)")
+                return
+            elif trace.caused_by(control.events.mode_change):
+                # Only treat as interruption if mode changed away from POSITION
+                mode_name = _get_mode_name_from_trace(trace, control, control.events.mode_change)
+                if mode_name == 'POSITION':
+                    continue  # Still in POSITION mode, keep waiting
+                self.logger.warning(f"MoveToAction: move interrupted by control mode change to {mode_name}")
+                self._on_error(f"Move to {target_str} interrupted by control mode change to {mode_name}")
+                return
+            else:
+                self.logger.warning("MoveToAction: unknown event triggered wait end")
+                self._on_error(f"Move to {target_str} ended unexpectedly (unknown event)")
+                return
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "MoveToAction":
         kwargs = cls._common_init_kwargs(definition)
+        # timeout in parameters is the position control command timeout, override base timeout
+        kwargs['timeout'] = definition.parameters.get('timeout', 0.0)
         return cls(
             **kwargs,
             x=definition.parameters.get('x', 0.0),
             y=definition.parameters.get('y', 0.0),
             max_speed=definition.parameters.get('max_speed', 0.0),
-            timeout=definition.parameters.get('timeout', 0.0),
             wait=definition.parameters.get('wait', True),
         )
 
@@ -998,8 +1225,10 @@ class TurnToAction(ExperimentAction):
             timeout=self.timeout
         )
         if not result:
-            self.logger.error(f"Failed to start turn_to ({self.heading} rad)")
-            self._on_error()
+            import math
+            heading_deg = math.degrees(self.heading)
+            self.logger.error(f"Failed to start turn_to ({self.heading:.2f} rad / {heading_deg:.1f}°)")
+            self._on_error(f"Failed to start turn to heading {heading_deg:.1f}° - position control rejected command")
             return True
 
         if self.wait:
@@ -1011,31 +1240,46 @@ class TurnToAction(ExperimentAction):
             return True
 
     def _wait_for_completion(self):
+        import math
         position_control = self.experiment.experiment_handler.control.position_control
-        data, trace = wait_for_events(
-            OR(position_control.events.turn_to_heading_completed,
-               position_control.events.turn_to_heading_timeout,
-               position_control.events.mode_changed),
-            timeout=self.timeout if self.timeout > 0 else None
-        )
+        control = self.experiment.experiment_handler.control
 
-        # Check which event caused the wait to end
-        if trace is TIMEOUT:
-            self.logger.warning("TurnToAction: wait timed out (no event received)")
-            self._on_error()
-        elif trace.caused_by(position_control.events.turn_to_heading_completed):
-            self.logger.info("TurnToAction: turn completed successfully")
-            self._on_finished()
-        elif trace.caused_by(position_control.events.turn_to_heading_timeout):
-            self.logger.warning("TurnToAction: turn timed out")
-            self._on_error()
-        elif trace.caused_by(position_control.events.mode_changed):
-            self.logger.warning("TurnToAction: turn interrupted by mode change")
-            self._on_error()
-        else:
-            # Unknown event - treat as error
-            self.logger.warning("TurnToAction: unknown event triggered wait end")
-            self._on_error()
+        heading_deg = math.degrees(self.heading)
+
+        while True:
+            data, trace = wait_for_events(
+                OR(position_control.events.turn_to_heading_completed,
+                   position_control.events.turn_to_heading_timeout,
+                   control.events.mode_change),
+                timeout=self.timeout if self.timeout > 0 else None
+            )
+
+            # Check which event caused the wait to end
+            if trace is TIMEOUT:
+                timeout_str = f"{self.timeout:.1f}s" if self.timeout > 0 else "unlimited"
+                self.logger.warning("TurnToAction: wait timed out (no event received)")
+                self._on_error(f"Turn to {heading_deg:.1f}° timed out after {timeout_str} - no completion event")
+                return
+            elif trace.caused_by(position_control.events.turn_to_heading_completed):
+                self.logger.info("TurnToAction: turn completed successfully")
+                self._on_finished()
+                return
+            elif trace.caused_by(position_control.events.turn_to_heading_timeout):
+                self.logger.warning("TurnToAction: turn timed out")
+                self._on_error(f"Turn to {heading_deg:.1f}° timed out (position control timeout)")
+                return
+            elif trace.caused_by(control.events.mode_change):
+                # Only treat as interruption if mode changed away from POSITION
+                mode_name = _get_mode_name_from_trace(trace, control, control.events.mode_change)
+                if mode_name == 'POSITION':
+                    continue  # Still in POSITION mode, keep waiting
+                self.logger.warning(f"TurnToAction: turn interrupted by control mode change to {mode_name}")
+                self._on_error(f"Turn to {heading_deg:.1f}° interrupted by control mode change to {mode_name}")
+                return
+            else:
+                self.logger.warning("TurnToAction: unknown event triggered wait end")
+                self._on_error(f"Turn to {heading_deg:.1f}° ended unexpectedly (unknown event)")
+                return
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "TurnToAction":
@@ -1045,11 +1289,12 @@ class TurnToAction(ExperimentAction):
         heading_deg = definition.parameters.get('heading_deg')
         if heading_deg is not None:
             heading = math.radians(heading_deg)
+        # timeout in parameters is the turn command timeout, override base timeout
+        kwargs['timeout'] = definition.parameters.get('timeout', 0.0)
         return cls(
             **kwargs,
             heading=heading,
             max_angular_speed=definition.parameters.get('max_angular_speed', 0.0),
-            timeout=definition.parameters.get('timeout', 0.0),
             wait=definition.parameters.get('wait', True),
         )
 
@@ -1067,12 +1312,12 @@ class SetWaypointsAction(ExperimentAction):
         if self.clear_existing:
             if not position_control.clear_waypoints():
                 self.logger.error("Failed to clear existing waypoints")
-                self._on_error()
+                self._on_error("Failed to clear existing waypoints before adding new ones")
                 return True
 
         # Normalize and add waypoints
         from robot.control.bilbo_position_control import Waypoint, WaypointType
-        for wp_dict in self.waypoints:
+        for i, wp_dict in enumerate(self.waypoints):
             wp_type_str = wp_dict.get('type', 'PASS')
             wp_type = WaypointType.STOP if str(wp_type_str).upper() == 'STOP' else WaypointType.PASS
             wp = Waypoint(
@@ -1083,7 +1328,7 @@ class SetWaypointsAction(ExperimentAction):
             )
             if not position_control.add_waypoint(wp):
                 self.logger.error(f"Failed to add waypoint ({wp.x}, {wp.y})")
-                self._on_error()
+                self._on_error(f"Failed to add waypoint {i+1}/{len(self.waypoints)} at ({wp.x:.2f}, {wp.y:.2f})")
                 return True
 
         self.logger.info(f"Set {len(self.waypoints)} waypoints")
@@ -1136,7 +1381,7 @@ class StartPathAction(ExperimentAction):
         )
         if not result:
             self.logger.error("Failed to start path")
-            self._on_error()
+            self._on_error("Failed to start path - position control rejected the command")
             return True
 
         if self.wait:
@@ -1149,42 +1394,57 @@ class StartPathAction(ExperimentAction):
 
     def _wait_for_completion(self):
         position_control = self.experiment.experiment_handler.control.position_control
-        data, trace = wait_for_events(
-            OR(position_control.events.path_finished,
-               position_control.events.path_timeout,
-               position_control.events.path_aborted,
-               position_control.events.mode_changed),
-            timeout=self.timeout if self.timeout > 0 else None
-        )
+        control = self.experiment.experiment_handler.control
 
-        # Check which event caused the wait to end
-        if trace is TIMEOUT:
-            self.logger.warning("StartPathAction: wait timed out (no event received)")
-            self._on_error()
-        elif trace.caused_by(position_control.events.path_finished):
-            self.logger.info("StartPathAction: path finished successfully")
-            self._on_finished()
-        elif trace.caused_by(position_control.events.path_timeout):
-            self.logger.warning("StartPathAction: path timed out")
-            self._on_error()
-        elif trace.caused_by(position_control.events.path_aborted):
-            self.logger.warning("StartPathAction: path aborted")
-            self._on_error()
-        elif trace.caused_by(position_control.events.mode_changed):
-            self.logger.warning("StartPathAction: path interrupted by mode change")
-            self._on_error()
-        else:
-            # Unknown event - treat as error
-            self.logger.warning("StartPathAction: unknown event triggered wait end")
-            self._on_error()
+        while True:
+            data, trace = wait_for_events(
+                OR(position_control.events.path_finished,
+                   position_control.events.path_timeout,
+                   position_control.events.path_aborted,
+                   control.events.mode_change),
+                timeout=self.timeout if self.timeout > 0 else None
+            )
+
+            # Check which event caused the wait to end
+            if trace is TIMEOUT:
+                timeout_str = f"{self.timeout:.1f}s" if self.timeout > 0 else "unlimited"
+                self.logger.warning("StartPathAction: wait timed out (no event received)")
+                self._on_error(f"Path wait timed out after {timeout_str} - no completion event received")
+                return
+            elif trace.caused_by(position_control.events.path_finished):
+                self.logger.info("StartPathAction: path finished successfully")
+                self._on_finished()
+                return
+            elif trace.caused_by(position_control.events.path_timeout):
+                self.logger.warning("StartPathAction: path timed out")
+                self._on_error(f"Path following timed out (position control timeout)")
+                return
+            elif trace.caused_by(position_control.events.path_aborted):
+                self.logger.warning("StartPathAction: path aborted")
+                self._on_error("Path was aborted externally")
+                return
+            elif trace.caused_by(control.events.mode_change):
+                # Only treat as interruption if mode changed away from POSITION
+                mode_name = _get_mode_name_from_trace(trace, control, control.events.mode_change)
+                if mode_name == 'POSITION':
+                    continue  # Still in POSITION mode, keep waiting
+                self.logger.warning(f"StartPathAction: path interrupted by control mode change to {mode_name}")
+                self._on_error(f"Path interrupted by control mode change to {mode_name}")
+                return
+            else:
+                self.logger.warning("StartPathAction: unknown event triggered wait end")
+                self._on_error("Path following ended unexpectedly (unknown event)")
+                return
+
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "StartPathAction":
         kwargs = cls._common_init_kwargs(definition)
+        # timeout in parameters is the path execution timeout, override base timeout
+        kwargs['timeout'] = definition.parameters.get('timeout', 0.0)
         return cls(
             **kwargs,
             allow_reverse=definition.parameters.get('allow_reverse', False),
-            timeout=definition.parameters.get('timeout', 0.0),
             max_speed=definition.parameters.get('max_speed', 0.0),
             wait=definition.parameters.get('wait', True),
         )
@@ -1207,10 +1467,11 @@ class LoadPathAction(ExperimentAction):
 
         if self.path is None:
             self.logger.error("LoadPathAction: no path specified")
-            self._on_error()
+            self._on_error("No path specified for LoadPathAction")
             return True
 
         # Load path from file or dict
+        path_desc = self.path if isinstance(self.path, str) else f"path with {len(self.path.get('waypoints', []))} waypoints"
         if isinstance(self.path, str):
             result = position_control.load_path_from_file(
                 filepath=self.path,
@@ -1232,7 +1493,7 @@ class LoadPathAction(ExperimentAction):
 
         if not result:
             self.logger.error("Failed to load path")
-            self._on_error()
+            self._on_error(f"Failed to load {path_desc} - position control rejected the path")
             return True
 
         # Store waypoints after loading the path
@@ -1259,35 +1520,45 @@ class LoadPathAction(ExperimentAction):
 
     def _wait_for_completion(self):
         position_control = self.experiment.experiment_handler.control.position_control
+        control = self.experiment.experiment_handler.control
         effective_timeout = self.path_timeout if self.path_timeout and self.path_timeout > 0 else None
         data, trace = wait_for_events(
             OR(position_control.events.path_finished,
                position_control.events.path_timeout,
                position_control.events.path_aborted,
-               position_control.events.mode_changed),
+               control.events.mode_change,  # BILBO control mode change (BALANCING, OFF, etc.)
+               position_control.events.mode_changed),  # Position control internal mode change
             timeout=effective_timeout
         )
 
         # Check which event caused the wait to end
         if trace is TIMEOUT:
+            timeout_str = f"{effective_timeout:.1f}s" if effective_timeout else "unlimited"
             self.logger.warning("LoadPathAction: wait timed out (no event received)")
-            self._on_error()
+            self._on_error(f"Path wait timed out after {timeout_str} - no completion event")
         elif trace.caused_by(position_control.events.path_finished):
             self.logger.info("LoadPathAction: path finished successfully")
             self._on_finished()
         elif trace.caused_by(position_control.events.path_timeout):
             self.logger.warning("LoadPathAction: path timed out")
-            self._on_error()
+            self._on_error("Path following timed out (position control timeout)")
         elif trace.caused_by(position_control.events.path_aborted):
             self.logger.warning("LoadPathAction: path aborted")
-            self._on_error()
+            self._on_error("Path was aborted externally")
+        elif trace.caused_by(control.events.mode_change):
+            # Control mode changed (e.g., POSITION -> BALANCING or OFF)
+            mode_name = _get_mode_name_from_trace(trace, control, control.events.mode_change)
+            self.logger.warning(f"LoadPathAction: path interrupted by control mode change to {mode_name}")
+            self._on_error(f"Path interrupted by control mode change to {mode_name}")
         elif trace.caused_by(position_control.events.mode_changed):
-            self.logger.warning("LoadPathAction: path interrupted by mode change")
-            self._on_error()
+            # Position control internal mode changed (could be due to control mode change)
+            mode_name = _get_mode_name_from_trace(trace, control, control.events.mode_change)
+            self.logger.warning(f"LoadPathAction: path interrupted by mode change to {mode_name}")
+            self._on_error(f"Path interrupted by control mode change to {mode_name}")
         else:
             # Unknown event - treat as error
             self.logger.warning("LoadPathAction: unknown event triggered wait end")
-            self._on_error()
+            self._on_error("Path following ended unexpectedly (unknown event)")
 
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "LoadPathAction":
@@ -1360,7 +1631,7 @@ class WaitPositionEventAction(ExperimentAction):
 
         if self.event not in event_map:
             self.logger.error(f"Unknown position event: {self.event}. Valid events: {list(event_map.keys())}")
-            self._on_error()
+            self._on_error(f"Unknown position event '{self.event}'. Valid events: {', '.join(event_map.keys())}")
             return
 
         target_event = event_map[self.event]
@@ -1484,8 +1755,11 @@ class ExperimentActionData:
     end_time: float = 0.0
     status: ExperimentActionStatus = ExperimentActionStatus.PENDING
     error_message: str | None = None
+    action_type: str | None = None  # Action type (e.g., 'set_velocity', 'wait_time')
+    label: str | None = None  # Human-readable label for display
     parameters: dict[str, Any] | None = None  # Action input parameters (velocity, waypoints, etc.)
     data: Any | None = None  # Action output data (results, collected info)
+    sub_actions: dict[str, 'ExperimentActionData'] | None = None  # For group/parallel actions
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1508,6 +1782,24 @@ class ExperimentData:
     actions: dict[str, ExperimentActionData]
     error_action_id: str | None = None  # ID of action that caused error (if status is ERROR)
     error_message: str | None = None    # Human-readable error description
+
+    @property
+    def time_vector(self) -> np.ndarray:
+        """Get the time vector for this experiment's samples.
+
+        Returns a numpy array of time values in seconds, starting from 0,
+        with one entry per sample at the control loop rate (LOOP_TIME = 0.01s = 100Hz).
+
+        Example:
+            t = experiment_data.time_vector
+            plt.plot(t, theta)
+        """
+        return np.arange(len(self.samples)) * LOOP_TIME
+
+    @property
+    def duration(self) -> float:
+        """Get the total duration of the experiment in seconds."""
+        return len(self.samples) * LOOP_TIME
 
 
 # ======================================================================================================================
@@ -1922,8 +2214,8 @@ class Experiment:
 
         # Set control mode to BALANCING (safe state)
         try:
-            self.experiment_handler.control.set_mode(BILBO_Control_Mode.BALANCING)
-            self.logger.info("Reset: Control mode set to BALANCING")
+            self.experiment_handler.control.set_mode(BILBO_Control_Mode.OFF)
+            self.logger.info("Reset: Control mode set to OFF")
         except Exception as e:
             self.logger.error(f"Failed to set control mode: {e}")
 
@@ -1936,23 +2228,18 @@ class Experiment:
         params_str = self._get_action_params_string(action_container.action)
         self.logger.info(
             f"[Step {self.tick}] Executing \"{action_container.id}\" ({type(action_container.action).__name__}){params_str}")
-        # Attach the action's events:
-        action_container.listeners.append(action_container.action.events.error.on(callback=
-        Callback(
-            self._on_action_error,
-            discard_inputs=True,
-            inputs={
-                'action': action_container.action
-            }
-        ),
-            once=True))
 
-        action_container.listeners.append(action_container.action.events.timeout.on(callback=
-        Callback(
-            self._on_action_timeout,
-            discard_inputs=True,
-            inputs={'action': action_container.action}
-        )
+        # Capture action for use in lambda closures
+        action = action_container.action
+
+        # Attach the action's events using lambdas to properly pass event data
+        action_container.listeners.append(action_container.action.events.error.on(
+            callback=lambda data=None, **kw: self._on_action_error(action, data),
+            once=True
+        ))
+
+        action_container.listeners.append(action_container.action.events.timeout.on(
+            callback=lambda data=None, **kw: self._on_action_timeout(action, data)
         ))
 
         action_container.status = ExperimentActionStatus.RUNNING
@@ -2080,9 +2367,13 @@ class Experiment:
             testbed=self.experiment_handler.testbed.get_data()
         )
 
-        # Build action data with timing, status, and parameters
+        # Build action data with timing, status, parameters, and sub-actions
         action_data = {}
         for action_id, container in self.action_containers.items():
+            # Get action data from the action itself (includes sub-actions for groups)
+            action_execution_data = container.action.get_action_data()
+
+            # Use container's timing/status as it's more accurate (outer tracking)
             start_tick = container.start_tick or 0
             end_tick = container.end_tick or 0
             action_data[action_id] = ExperimentActionData(
@@ -2092,8 +2383,10 @@ class Experiment:
                 end_time=end_tick * LOOP_TIME,
                 status=container.status,
                 error_message=container.error_message,
-                parameters=container.action.get_parameters(),
-                data=container.action.data
+                action_type=action_execution_data.action_type,
+                parameters=action_execution_data.parameters,
+                data=action_execution_data.data,
+                sub_actions=action_execution_data.sub_actions,  # Include sub-actions from groups
             )
             time.sleep(0.01)
 
@@ -2130,27 +2423,61 @@ class Experiment:
         return None
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_action_error(self, action: ExperimentAction):
-        """Handle action error: update container status and abort experiment with data collection."""
-        self.logger.error(f"Action {action.id} failed")
+    def _on_action_error(self, action: ExperimentAction, data: dict | None = None, **kwargs):
+        """Handle action error: update container status and abort experiment with data collection.
+
+        Args:
+            action: The action that failed
+            data: Event data containing optional 'message' key with error details
+        """
+        # Extract error message from event data
+        detail_message = None
+        if data and isinstance(data, dict):
+            detail_message = data.get('message')
+
+        # Build the full error message
+        if detail_message:
+            error_message = f"Action \"{action.id}\" failed: {detail_message}"
+            container_message = detail_message
+        else:
+            error_message = f"Action \"{action.id}\" failed"
+            container_message = "Action failed"
+
+        self.logger.error(f"Action {action.id} failed" + (f": {detail_message}" if detail_message else ""))
 
         # Update the action container status
         if action.id in self.action_containers:
             container = self.action_containers[action.id]
-            container._on_error(f"Action failed")
+            container._on_error(container_message)
 
         # Set experiment error info
         self._status = ExperimentStatus.ERROR
         self._error_action_id = action.id
-        self._error_message = f"Action \"{action.id}\" failed"
+        self._error_message = error_message
 
         # Abort experiment (this will collect and emit data)
-        self._abort_with_data(ExperimentStatus.ERROR, action.id, f"Action \"{action.id}\" failed")
+        self._abort_with_data(ExperimentStatus.ERROR, action.id, error_message)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_action_timeout(self, action: ExperimentAction):
-        """Handle action timeout: update container status and abort experiment with data collection."""
-        self.logger.warning(f"Action {action.id} timed out")
+    def _on_action_timeout(self, action: ExperimentAction, data: dict | None = None, **kwargs):
+        """Handle action timeout: update container status and abort experiment with data collection.
+
+        Args:
+            action: The action that timed out
+            data: Event data containing optional 'message' key with timeout details
+        """
+        # Extract timeout message from event data
+        detail_message = None
+        if data and isinstance(data, dict):
+            detail_message = data.get('message')
+
+        # Build the full error message
+        if detail_message:
+            error_message = f"Action \"{action.id}\" timed out: {detail_message}"
+        else:
+            error_message = f"Action \"{action.id}\" timed out"
+
+        self.logger.warning(f"Action {action.id} timed out" + (f": {detail_message}" if detail_message else ""))
 
         # Update the action container status
         if action.id in self.action_containers:
@@ -2160,10 +2487,10 @@ class Experiment:
         # Set experiment error info
         self._status = ExperimentStatus.ERROR
         self._error_action_id = action.id
-        self._error_message = f"Action \"{action.id}\" timed out"
+        self._error_message = error_message
 
         # Abort experiment (this will collect and emit data)
-        self._abort_with_data(ExperimentStatus.ERROR, action.id, f"Action \"{action.id}\" timed out")
+        self._abort_with_data(ExperimentStatus.ERROR, action.id, error_message)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _log_capture_callback(self, log_entry: str, log: str, logger: Logger, level: int):

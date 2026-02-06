@@ -70,6 +70,64 @@
             gap: 4px;
         }
 
+        /* Status Badge */
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-badge.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-badge.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-badge.warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-badge.unknown {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+
+        .error-box {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 4px;
+            padding: 12px 16px;
+            margin-top: 12px;
+        }
+
+        .error-box-title {
+            color: #721c24;
+            font-weight: 600;
+            font-size: 0.9em;
+            margin-bottom: 6px;
+        }
+
+        .error-box-message {
+            color: #721c24;
+            font-size: 0.85em;
+        }
+
+        .error-box-action {
+            color: #856404;
+            font-size: 0.8em;
+            margin-top: 6px;
+            font-family: monospace;
+        }
+
         section {
             margin-bottom: 25px;
         }
@@ -118,22 +176,36 @@
         .action-id {
             font-weight: 600;
             color: #2c3e50;
-            min-width: 120px;
+            min-width: 180px;
+            max-width: 220px;
             font-family: monospace;
             font-size: 0.9em;
+            margin-right: 12px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .action-type {
             color: #7f8c8d;
-            min-width: 100px;
+            min-width: 110px;
             font-family: monospace;
             font-size: 0.85em;
+            margin-right: 12px;
+        }
+
+        .action-label {
+            color: #2980b9;
+            font-style: italic;
+            font-size: 0.85em;
+            margin-right: 12px;
         }
 
         .action-params {
-            color: #7f8c8d;
+            color: #555;
             font-size: 0.85em;
             flex-grow: 1;
+            margin-right: 8px;
         }
 
         .action-timing {
@@ -141,6 +213,124 @@
             color: #95a5a6;
             text-align: right;
             min-width: 120px;
+        }
+
+        .action-status {
+            font-size: 0.7em;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-left: 8px;
+            font-weight: 500;
+        }
+
+        .action-status.completed {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .action-status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .action-status.pending {
+            background: #e2e3e5;
+            color: #6c757d;
+        }
+
+        .action-item.error-action {
+            background: #fff5f5;
+            border-left-color: #e74c3c !important;
+        }
+
+        .action-item.nested {
+            margin-left: 28px;
+            background: #f8fafc;
+            border-left-color: #bdc3c7;
+            border-left-style: dashed;
+        }
+
+        .action-item.nested .action-index {
+            color: #b0b8c0;
+            font-size: 0.7em;
+        }
+
+        .action-item.nested .action-id {
+            color: #5a6c7d;
+            font-weight: 500;
+        }
+
+        .action-item.nested .action-timing {
+            color: #b0b8c0;
+            font-style: italic;
+        }
+
+        .action-item.group-parent {
+            background: #e8f4f8;
+            font-weight: 500;
+            border-left-width: 4px;
+        }
+
+        .action-waypoints {
+            margin-left: 28px;
+            margin-top: 2px;
+            margin-bottom: 2px;
+            padding: 6px 10px;
+            background: #f0f4f8;
+            border-left: 2px solid #95a5a6;
+            border-radius: 0 4px 4px 0;
+            font-size: 0.8em;
+            font-family: monospace;
+            display: grid;
+            grid-template-columns: auto auto auto auto;
+            column-gap: 16px;
+            row-gap: 2px;
+            width: fit-content;
+        }
+
+        .action-waypoints .wp-header {
+            font-weight: 600;
+            color: #7f8c8d;
+            padding-bottom: 2px;
+            border-bottom: 1px solid #dce1e5;
+        }
+
+        .action-waypoints .wp-index {
+            color: #95a5a6;
+        }
+
+        .action-waypoints .wp-coord {
+            color: #2c3e50;
+        }
+
+        .action-waypoints .wp-type {
+            font-weight: 500;
+        }
+
+        .action-waypoints .wp-type.stop {
+            color: #e74c3c;
+        }
+
+        .action-waypoints .wp-type.pass {
+            color: #27ae60;
+        }
+
+        .action-waypoints .wp-weight {
+            color: #7f8c8d;
+        }
+
+        .action-error-msg {
+            font-size: 0.75em;
+            color: #721c24;
+            margin-left: 24px;
+            padding: 4px 8px;
+            background: #f8d7da;
+            border-radius: 3px;
+            margin-top: 4px;
+        }
+
+        .action-error-msg.nested {
+            margin-left: 48px;
         }
 
         .color-indicator {
@@ -282,6 +472,58 @@
             margin-bottom: 8px;
         }
 
+        /* YAML Code Block */
+        .yaml-container {
+            background: #1e1e1e;
+            border-radius: 4px;
+            padding: 16px;
+            overflow-x: auto;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', monospace;
+            font-size: 0.8em;
+            line-height: 1.5;
+        }
+
+        .yaml-container pre {
+            margin: 0;
+            white-space: pre;
+            color: #d4d4d4;
+        }
+
+        /* YAML Syntax Highlighting */
+        .yaml-key { color: #9cdcfe; }
+        .yaml-string { color: #ce9178; }
+        .yaml-number { color: #b5cea8; }
+        .yaml-boolean { color: #569cd6; }
+        .yaml-null { color: #569cd6; }
+        .yaml-comment { color: #6a9955; font-style: italic; }
+        .yaml-list-marker { color: #d4d4d4; }
+
+        .yaml-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .yaml-header .copy-btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .yaml-header .copy-btn:hover {
+            background: #2980b9;
+        }
+
+        .yaml-header .copy-btn:active {
+            background: #1f6da3;
+        }
+
         @media print {
             body {
                 background: white;
@@ -310,6 +552,9 @@
             <h1>{{ title }}</h1>
             <p class="description">{{ description }}</p>
             <div class="meta-info">
+                {% if status %}
+                <span class="status-badge {{ status.status_class }}">{{ status.status_label }}</span>
+                {% endif %}
                 {% if date %}
                 <span>Date: {{ date }}</span>
                 {% endif %}
@@ -320,25 +565,77 @@
                 <span>Duration: {{ duration | format_number(2) }}s</span>
                 {% endif %}
             </div>
+            {% if status and status.is_error %}
+            <div class="error-box">
+                <div class="error-box-title">Experiment Failed</div>
+                {% if status.error_message %}
+                <div class="error-box-message">{{ status.error_message }}</div>
+                {% endif %}
+                {% if status.error_action_id %}
+                <div class="error-box-action">Failed at action: {{ status.error_action_id }}</div>
+                {% endif %}
+            </div>
+            {% elif status and status.is_timeout %}
+            <div class="error-box" style="background: #fff3cd; border-color: #ffc107;">
+                <div class="error-box-title" style="color: #856404;">Experiment Timed Out</div>
+                {% if status.error_message %}
+                <div class="error-box-message" style="color: #856404;">{{ status.error_message }}</div>
+                {% endif %}
+            </div>
+            {% elif status and status.is_aborted %}
+            <div class="error-box" style="background: #fff3cd; border-color: #ffc107;">
+                <div class="error-box-title" style="color: #856404;">Experiment Aborted</div>
+                {% if status.error_message %}
+                <div class="error-box-message" style="color: #856404;">{{ status.error_message }}</div>
+                {% endif %}
+            </div>
+            {% endif %}
         </header>
 
         <section>
             <h2>Actions</h2>
             <div class="action-list">
                 {% for action in actions %}
-                <div class="action-item{% if action.has_phase %} has-phase{% endif %}"
+                <div class="action-item{% if action.has_phase %} has-phase{% endif %}{% if action.is_error_action %} error-action{% endif %}{% if action.is_nested %} nested{% endif %}{% if action.is_group %} group-parent{% endif %}"
                      {% if action.color %}style="border-left-color: {{ action.color }};"{% endif %}>
                     <div class="color-indicator"{% if action.color %} style="background-color: {{ action.color }};"{% endif %}></div>
                     <span class="action-index">{{ action.index }}</span>
                     <span class="action-id">{{ action.id }}</span>
                     <span class="action-type">{{ action.type }}</span>
+                    {% if action.label %}<span class="action-label">"{{ action.label }}"</span>{% endif %}
                     <span class="action-params">{{ action.params_str }}</span>
                     <span class="action-timing">
                         {% if action.start_time is not none and action.end_time is not none %}
                         {{ action.start_time | format_number(2) }}s - {{ action.end_time | format_number(2) }}s
+                        {% elif action.is_nested %}
+                        (no timing data)
                         {% endif %}
                     </span>
+                    {% if action.is_error %}
+                    <span class="action-status error">ERROR</span>
+                    {% elif action.is_success %}
+                    <span class="action-status completed">OK</span>
+                    {% elif action.is_pending and not action.is_nested %}
+                    <span class="action-status pending">PENDING</span>
+                    {% endif %}
                 </div>
+                {% if action.is_error and action.error_message %}
+                <div class="action-error-msg{% if action.is_nested %} nested{% endif %}">{{ action.error_message }}</div>
+                {% endif %}
+                {% if action.waypoints %}
+                <div class="action-waypoints{% if action.is_nested %} nested{% endif %}">
+                    <span class="wp-header">#</span>
+                    <span class="wp-header">Position</span>
+                    <span class="wp-header">Type</span>
+                    <span class="wp-header">Weight</span>
+                    {% for wp in action.waypoints %}
+                    <span class="wp-index">{{ loop.index }}</span>
+                    <span class="wp-coord">({{ wp.x | format_number(2) }}, {{ wp.y | format_number(2) }})</span>
+                    <span class="wp-type {% if wp.type == 'STOP' %}stop{% else %}pass{% endif %}">{{ wp.type }}</span>
+                    <span class="wp-weight">{{ wp.weight }}</span>
+                    {% endfor %}
+                </div>
+                {% endif %}
                 {% endfor %}
             </div>
 
@@ -348,7 +645,7 @@
                 {% for action in phase_actions %}
                 <div class="phase-legend-item">
                     <div class="phase-legend-color" style="background-color: {{ action.color }};"></div>
-                    <span>{{ action.id }}: {{ action.type }}</span>
+                    <span>{{ action.label }}</span>
                 </div>
                 {% endfor %}
             </div>
@@ -405,6 +702,37 @@
                 {% endfor %}
             </div>
         </section>
+        {% endif %}
+
+        {% if experiment_yaml %}
+        <section>
+            <h2>Experiment Definition (YAML)</h2>
+            <p style="font-size: 0.85em; color: #7f8c8d; margin-bottom: 12px;">
+                Save this YAML file to re-run the same experiment.
+            </p>
+            <div class="yaml-header">
+                <span style="font-size: 0.8em; color: #7f8c8d;">{{ experiment_id }}.yaml</span>
+                <button class="copy-btn" onclick="copyYaml()">Copy to Clipboard</button>
+            </div>
+            <div class="yaml-container">
+                <pre id="yaml-content">{{ experiment_yaml_highlighted | safe }}</pre>
+            </div>
+            <textarea id="yaml-raw" style="position: absolute; left: -9999px;">{{ experiment_yaml_raw }}</textarea>
+        </section>
+        <script>
+            function copyYaml() {
+                const yamlRaw = document.getElementById('yaml-raw');
+                yamlRaw.style.position = 'static';
+                yamlRaw.select();
+                document.execCommand('copy');
+                yamlRaw.style.position = 'absolute';
+                yamlRaw.style.left = '-9999px';
+                const btn = document.querySelector('.copy-btn');
+                const originalText = btn.textContent;
+                btn.textContent = 'Copied!';
+                setTimeout(() => { btn.textContent = originalText; }, 2000);
+            }
+        </script>
         {% endif %}
 
         <footer>

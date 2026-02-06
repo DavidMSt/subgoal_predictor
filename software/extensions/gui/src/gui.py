@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import base64
 import copy
 import dataclasses
+import os
+import tempfile
 import threading
 import time
 import uuid
@@ -11,7 +14,7 @@ from dataclasses import is_dataclass
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.colors import rgb_to_hex
 from core.utils.dict import update_dict
-from core.utils.events import Event, EventFlag, pred_flag_equals
+from core.utils.events import Event, EventFlag, pred_flag_equals, TIMEOUT
 from core.utils.exit import register_exit_callback
 from core.utils.files import get_absolute_path
 from core.utils.js.vite import run_vite_app
@@ -1105,6 +1108,9 @@ class GUI:
 
         self.popups = {}
 
+        # Event for file picker responses (request-response pattern)
+        self.file_picker_event = Event(flags=EventFlag('request_id', str))
+
         self.application_group = Widget_Group('apps',
                                               rows=3,
                                               columns=3,
@@ -1669,6 +1675,13 @@ class GUI:
 
             case 'emergency_stop':
                 self.callbacks.emergency_stop.call()
+
+            case 'file_picker_response':
+                # Handle file picker response from frontend
+                request_id = data.get('request_id')
+                if request_id:
+                    self.file_picker_event.set(data=data, flags={'request_id': request_id})
+
             case _:
                 self.logger.warning(f"Unhandled GUI event: {data.get('event')} in message {message}")
 
@@ -1745,3 +1758,166 @@ class GUI:
         )
 
         self.send(message, client=client)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def open_file_picker(self,
+                         accept: str = '.yaml,.yml,.json',
+                         timeout: float = 60.0,
+                         max_size: int = 0,
+                         save_dir: str | None = None,
+                         client=None) -> str | None:
+        """
+        Opens a file picker dialog on the connected frontend client and waits for the user to select a file.
+        The selected file is uploaded and saved to a temporary directory on the host.
+
+        Args:
+            accept: File type filter (e.g., '.yaml,.yml,.json')
+            timeout: Maximum time to wait for user to select a file (seconds)
+            max_size: Maximum file size in bytes (0 = no limit)
+            save_dir: Directory to save the uploaded file. If None, uses a temp directory.
+            client: Specific client to send the request to. If None, broadcasts to all.
+
+        Returns:
+            Path to the saved file on the host, or None if cancelled/timeout/error
+        """
+        # Generate unique request ID
+        request_id = str(uuid.uuid4())
+
+        # Send function call to frontend to open file picker
+        self.function(
+            function_name='openFilePicker',
+            args={
+                'request_id': request_id,
+                'accept': accept,
+                'max_size': max_size,
+                'title': 'Select File'
+            },
+            spread_args=False,
+            client=client
+        )
+
+        # Wait for response
+        data, trace = self.file_picker_event.wait(
+            predicate=pred_flag_equals('request_id', request_id),
+            timeout=timeout
+        )
+
+        if data is TIMEOUT:
+            self.logger.warning("File picker timed out")
+            return None
+
+        if not data:
+            self.logger.warning("File picker timed out or no response received")
+            return None
+
+        # Get the response data
+        response = self.file_picker_event.get_data()
+
+        if not response.get('success'):
+            error = response.get('error', 'User cancelled or unknown error')
+            self.logger.debug(f"File picker cancelled or failed: {error}")
+            return None
+
+        file_data = response.get('file')
+        if not file_data:
+            self.logger.warning("File picker response missing file data")
+            return None
+
+        # Decode and save the file
+        try:
+            file_name = file_data.get('name', 'uploaded_file')
+            file_content_b64 = file_data.get('content', '')
+
+            # Decode base64 content
+            file_content = base64.b64decode(file_content_b64)
+
+            # Determine save directory
+            if save_dir is None:
+                save_dir = tempfile.gettempdir()
+
+            # Ensure the save directory exists
+            os.makedirs(save_dir, exist_ok=True)
+
+            # Create full path
+            file_path = os.path.join(save_dir, file_name)
+
+            # Write the file
+            with open(file_path, 'wb') as f:
+                f.write(file_content)
+
+            self.logger.info(f"File saved: {file_path}")
+            return file_path
+
+        except Exception as e:
+            self.logger.error(f"Failed to save uploaded file: {e}")
+            return None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def send_file_for_download(
+            self,
+            file_path: str,
+            filename: str | None = None,
+            client=None
+    ) -> bool:
+        """
+        Sends a file to the connected client(s) for download.
+        The browser will automatically prompt the user to save the file.
+
+        Args:
+            file_path: Path to the file on the host to send
+            filename: Optional filename for download (defaults to original filename)
+            client: Specific client to send to, or None for all connected clients
+
+        Returns:
+            True if file was sent successfully, False otherwise
+        """
+        try:
+            import os
+
+            if not os.path.exists(file_path):
+                self.logger.error(f"File not found: {file_path}")
+                return False
+
+            # Read and encode file
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+
+            file_content_b64 = base64.b64encode(file_content).decode('utf-8')
+
+            # Determine filename
+            if filename is None:
+                filename = os.path.basename(file_path)
+
+            # Determine MIME type based on extension
+            ext = os.path.splitext(filename)[1].lower()
+            mime_types = {
+                '.json': 'application/json',
+                '.yaml': 'application/x-yaml',
+                '.yml': 'application/x-yaml',
+                '.txt': 'text/plain',
+                '.csv': 'text/csv',
+                '.pdf': 'application/pdf',
+                '.html': 'text/html',
+                '.h5': 'application/x-hdf5',
+                '.hdf5': 'application/x-hdf5',
+            }
+            mime_type = mime_types.get(ext, 'application/octet-stream')
+
+            # Send to client via function call
+            self.function(
+                function_name='downloadFile',
+                args={
+                    'filename': filename,
+                    'content': file_content_b64,
+                    'mimeType': mime_type
+                },
+                spread_args=False,
+                client=client
+            )
+
+            self.logger.info(f"Sent file for download: {filename}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to send file for download: {e}")
+            return False

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import re
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -15,9 +14,10 @@ from core.utils.json_utils import readJSON
 from core.utils.plotting.map_plot import MapPlot
 from core.utils.plotting.plot import quick_plot
 from robots.bilbo.robot.bilbo_definitions import BILBO_CONTROL_DT, MAX_STEPS_TRAJECTORY
-from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory, BILBO_InputFileData, \
-    BILBO_InputTrajectoryStep
-from robots.bilbo.robot.experiment.experiment_definitions import ExperimentData
+from robots.bilbo.robot.experiment.experiment_definitions import (
+    BILBO_InputTrajectory, BILBO_InputFileData, BILBO_InputTrajectoryStep,
+    ExperimentData, ExperimentActionData, ExperimentActionStatus,
+)
 
 if TYPE_CHECKING:
     # from robots.bilbo.robot.experiment.experiment_definitions import ExperimentData
@@ -58,7 +58,8 @@ def trajectory_inputs_to_list(trajectory_inputs: list[BILBO_InputTrajectoryStep]
     return out
 
 
-def trajectory_inputs_to_vector(trajectory_inputs: list[BILBO_InputTrajectoryStep], single_input: bool = False) -> np.ndarray:
+def trajectory_inputs_to_vector(trajectory_inputs: list[BILBO_InputTrajectoryStep],
+                                single_input: bool = False) -> np.ndarray:
     return np.array(trajectory_inputs_to_list(trajectory_inputs, single_input=single_input))
 
 
@@ -261,6 +262,32 @@ def make_report(
     actions_data = exp_dict.get('actions') or {}
     logs_raw = exp_dict.get('logs') or []
 
+    # Extract experiment status information
+    exp_status = exp_dict.get('status', 'finished')
+    error_action_id = exp_dict.get('error_action_id')
+    error_message = exp_dict.get('error_message')
+
+    # Determine if experiment was successful
+    is_success = exp_status in ('finished', 'FINISHED')
+    is_error = exp_status in ('error', 'ERROR')
+    is_timeout = exp_status in ('timeout', 'TIMEOUT')
+    is_aborted = exp_status in ('aborted', 'ABORTED')
+
+    # Create status display info
+    status_info = {
+        'status': exp_status,
+        'is_success': is_success,
+        'is_error': is_error,
+        'is_timeout': is_timeout,
+        'is_aborted': is_aborted,
+        'error_action_id': error_action_id,
+        'error_message': error_message,
+        'status_label': 'Success' if is_success else exp_status.upper() if isinstance(exp_status, str) else str(
+            exp_status),
+        'status_class': 'success' if is_success else 'error' if is_error else 'warning' if (
+                    is_timeout or is_aborted) else 'unknown',
+    }
+
     # Process logs: add level_name for display
     LOG_LEVEL_NAMES = {10: 'DEBUG', 20: 'INFO', 30: 'WARNING', 40: 'ERROR', 50: 'CRITICAL'}
     logs = []
@@ -310,56 +337,200 @@ def make_report(
     phase_actions = []
     color_index = 0
 
-    # Helper to check if action ID is generic (auto-generated like "action_0", "action_1", etc.)
-    def is_generic_id(action_id: str) -> bool:
-        return bool(re.match(r'^action_\d+$', action_id))
-
-    for i, action_def in enumerate(action_defs):
+    # First pass: identify group IDs to detect nested actions
+    group_ids = set()
+    for action_def in action_defs:
         if action_def is None:
             continue
-        action_id = action_def.get('id', f'action_{i}')
-        action_type = action_def.get('type', 'unknown')
-        params = action_def.get('parameters') or {}
+        if action_def.get('type') == 'group':
+            group_ids.add(action_def.get('id', ''))
 
-        # Get timing from actions_data
-        action_timing = actions_data.get(action_id) or {}
+    # Helper to check if an action is a sub-action of a group
+    def is_sub_action(action_id: str) -> bool:
+        for group_id in group_ids:
+            if action_id.startswith(f"{group_id}_sub_"):
+                return True
+        return False
+
+    # Helper to add action info (used recursively for groups)
+    def process_action(action_def, index, is_nested=False, parent_sub_actions_data=None):
+        nonlocal color_index
+        if action_def is None:
+            return
+
+        action_id = action_def.get('id', f'action_{index}')
+        action_type = action_def.get('type', 'unknown')
+
+        # Extract parameters - handle both formats:
+        # 1. Full format: {'type': 'set_velocity', 'parameters': {'forward': 0.5}}
+        # 2. Shorthand format: {'type': 'set_velocity', 'forward': 0.5}
+        reserved_fields = {'id', 'type', 'tick', 'after', 'time', 'delay', 'timeout', 'label', 'parameters', 'actions'}
+        if 'parameters' in action_def:
+            params = action_def['parameters']
+        else:
+            # Collect all non-reserved fields as parameters (shorthand format)
+            params = {k: v for k, v in action_def.items() if k not in reserved_fields}
+
+        # Get timing and status from actions_data or parent's sub_actions
+        if parent_sub_actions_data and action_id in parent_sub_actions_data:
+            # Sub-action data is in parent's sub_actions field
+            action_timing = parent_sub_actions_data.get(action_id) or {}
+        else:
+            # Top-level action data
+            action_timing = actions_data.get(action_id) or {}
+
         start_time = action_timing.get('start_time')
         end_time = action_timing.get('end_time')
         start_tick = action_timing.get('start_tick') or 0
         end_tick = action_timing.get('end_tick') or 0
 
+        # Get sub-actions data for group/parallel actions (for passing to nested processing)
+        sub_actions_data = action_timing.get('sub_actions') or {}
+
+        # Use parameters from action data if available (more accurate than definition)
+        if action_timing.get('parameters'):
+            params = action_timing.get('parameters')
+
+        # Get action status and label
+        action_status = action_timing.get('status', 'pending')
+        action_error_message = action_timing.get('error_message')
+        action_label = action_timing.get('label') or action_def.get('label')  # Prefer runtime data, fallback to definition
+        is_action_error = action_status in ('error', 'ERROR')
+        is_action_success = action_status in ('completed', 'COMPLETED', 'finished', 'FINISHED')
+        is_action_pending = action_status in ('pending', 'PENDING')
+
+        # Check if this is the error action
+        is_error_action_flag = (error_action_id == action_id)
+
         # Check if action spans multiple ticks (has duration)
         has_phase = (end_tick - start_tick) > 1 if start_tick is not None and end_tick is not None else False
 
-        # Exclude wait_time actions with generic IDs from being shown as phases
-        is_generic_wait = (action_type == 'wait_time' and is_generic_id(action_id))
-
-        # Assign color for multi-tick actions (except generic waits)
+        # Assign color for labeled actions with duration
         color = None
-        if has_phase and not is_generic_wait:
+        if has_phase and action_label:
             color = PHASE_COLORS[color_index % len(PHASE_COLORS)]
             color_index += 1
             phase_actions.append({
                 'id': action_id,
+                'label': action_label,
                 'type': action_type,
                 'color': color,
                 'start_time': start_time,
                 'end_time': end_time,
             })
 
-        # Format parameters for display
-        params_str = _format_action_params(action_type, params)
+        # Format parameters for display (exclude nested actions from params string for groups)
+        params_for_display = {k: v for k, v in params.items() if k not in ('actions', 'actions_count')}
+        params_str = _format_action_params(action_type, params_for_display)
+        if action_type in ('group', 'parallel'):
+            # Count sub-actions from data if available, otherwise from definition
+            # Check both top-level 'actions' (new format) and params (old format)
+            def_actions = action_def.get('actions', []) or params.get('actions', [])
+            num_sub_actions = len(sub_actions_data) if sub_actions_data else params.get('actions_count', len(def_actions))
+            params_str = f"{num_sub_actions} actions"
+
+        # Extract waypoints for set_waypoints actions
+        waypoints = None
+        if action_type == 'set_waypoints':
+            raw_waypoints = params.get('waypoints', [])
+            waypoints = []
+            for wp in raw_waypoints:
+                if isinstance(wp, dict):
+                    waypoints.append({
+                        'x': wp.get('x', 0),
+                        'y': wp.get('y', 0),
+                        'type': wp.get('type', 'PASS'),
+                        'weight': wp.get('weight', 0.75),
+                    })
+                elif isinstance(wp, (list, tuple)) and len(wp) >= 2:
+                    wp_type = wp[2] if len(wp) > 2 and isinstance(wp[2], str) else 'PASS'
+                    wp_weight = wp[3] if len(wp) > 3 else (wp[2] if len(wp) > 2 and not isinstance(wp[2], str) else 0.75)
+                    waypoints.append({
+                        'x': wp[0],
+                        'y': wp[1],
+                        'type': wp_type,
+                        'weight': wp_weight,
+                    })
 
         actions_info.append({
-            'index': i,
+            'index': index,
             'id': action_id,
             'type': action_type,
+            'label': action_label,
             'params_str': params_str,
             'start_time': start_time,
             'end_time': end_time,
             'has_phase': has_phase,
             'color': color,
+            'status': action_status,
+            'is_error': is_action_error,
+            'is_success': is_action_success,
+            'is_pending': is_action_pending,
+            'is_error_action': is_error_action_flag,
+            'error_message': action_error_message,
+            'is_nested': is_nested,
+            'is_group': action_type in ('group', 'parallel'),
+            'waypoints': waypoints,
         })
+
+        # If this is a group/parallel action, process its sub-actions
+        if action_type in ('group', 'parallel') and sub_actions_data:
+            # Process sub-actions using the data from parent's sub_actions field
+            for sub_idx, (sub_action_id, sub_action_data) in enumerate(sub_actions_data.items()):
+                sub_params = sub_action_data.get('parameters') or {}
+
+                # Get action type from data (preferred) or infer from parameters
+                sub_action_type = sub_action_data.get('action_type')
+                if not sub_action_type:
+                    sub_action_type = _infer_type_from_params(sub_params)
+
+                # Create a synthetic action def for processing
+                sub_action_def = {
+                    'id': sub_action_id,
+                    'type': sub_action_type,
+                    'label': sub_action_data.get('label'),
+                    'parameters': sub_params,
+                }
+                process_action(sub_action_def, f"{index}.{sub_idx}", is_nested=True, parent_sub_actions_data=sub_actions_data)
+        elif action_type in ('group', 'parallel'):
+            # Fallback: use definition-based sub-actions (when no runtime data available)
+            # Look for 'actions' at top level (new format) or in params (old format)
+            sub_actions_defs = action_def.get('actions', []) or params.get('actions', [])
+            for sub_idx, sub_action in enumerate(sub_actions_defs):
+                sub_action_id = sub_action.get('id', f"{action_id}_sub_{sub_idx}")
+                sub_action_with_id = dict(sub_action)
+                sub_action_with_id['id'] = sub_action_id
+                process_action(sub_action_with_id, f"{index}.{sub_idx}", is_nested=True, parent_sub_actions_data=None)
+
+    def _infer_type_from_params(params: dict) -> str:
+        """Try to infer action type from parameters."""
+        # Check for common parameter patterns
+        if 'mode' in params:
+            return 'set_mode'
+        if 'forward' in params or 'turn' in params:
+            return 'set_velocity'
+        if 'time_ms' in params:
+            return 'wait_time'
+        if 'ticks' in params:
+            return 'wait_ticks'
+        if 'frequency' in params:
+            return 'beep'
+        if 'text' in params:
+            return 'speak'
+        if 'x' in params and 'y' in params:
+            return 'move_to'
+        if 'heading' in params or 'heading_deg' in params:
+            return 'turn_to'
+        if 'input' in params:
+            return 'set_input'
+        if 'waypoints' in params:
+            return 'set_waypoints'
+        if 'K' in params:
+            return 'set_feedback_gain'
+        return 'unknown'
+
+    for i, action_def in enumerate(action_defs):
+        process_action(action_def, i, is_nested=False, parent_sub_actions_data=None)
 
     # Phase bar height as fraction of plot (used for ylim adjustment)
     PHASE_BAR_HEIGHT = 0.07
@@ -393,7 +564,7 @@ def make_report(
             for phase in phase_actions:
                 if phase['start_time'] is not None and phase['end_time'] is not None:
                     axis.add_phase(
-                        phase['id'],
+                        phase['label'],
                         start=phase['start_time'],
                         end=phase['end_time'],
                         color=phase['color'],
@@ -411,7 +582,7 @@ def make_report(
             for phase in phase_actions:
                 if phase['start_time'] is not None and phase['end_time'] is not None:
                     axis.add_background_phase(
-                        phase_id=phase['id'],
+                        phase_id=phase['label'],
                         start=phase['start_time'],
                         end=phase['end_time'],
                         color=phase['color'],
@@ -641,6 +812,21 @@ def make_report(
             ),
         })
 
+    # Generate YAML representation of the experiment definition
+    experiment_yaml_raw = ''
+    experiment_yaml_highlighted = ''
+    if definition:
+        try:
+            # Create a clean experiment definition dict for YAML export
+            # This uses the original definition from the experiment data
+            exp_def = ExperimentDefinition.from_dict(definition)
+            experiment_yaml_raw = exp_def.to_yaml()
+            experiment_yaml_highlighted = _highlight_yaml(experiment_yaml_raw)
+        except Exception as e:
+            # If YAML generation fails, just skip it
+            experiment_yaml_raw = f"# Error generating YAML: {e}"
+            experiment_yaml_highlighted = f'<span class="yaml-comment"># Error generating YAML: {e}</span>'
+
     # Load template and render
     template_path = Path(__file__).parent / "experiment_report_template.html"
     report = Report(template_path, plot_dpi=120, plot_width="100%")
@@ -652,12 +838,16 @@ def make_report(
         date=meta.get('date', ''),
         num_samples=len(samples),
         duration=duration,
+        status=status_info,
         actions=actions_info,
         phase_actions=phase_actions,
         plots=plots,
         control_plots=control_plots,
         trajectory_map=trajectory_map,
         logs=logs,
+        experiment_yaml=bool(experiment_yaml_raw),
+        experiment_yaml_raw=experiment_yaml_raw,
+        experiment_yaml_highlighted=experiment_yaml_highlighted,
     )
 
     # Output
@@ -675,7 +865,6 @@ def make_report(
     return report
 
 
-
 def read_experiment_data(file: str) -> ExperimentData:
     if not file_exists(file):
         raise FileNotFoundError(f"Experiment data file not found: {file}")
@@ -686,6 +875,505 @@ def read_experiment_data(file: str) -> ExperimentData:
 
     return data
 
+
+# === EXPERIMENT DATA EXTRACTION =======================================================================================
+
+@dataclasses.dataclass
+class ActionSamplesResult:
+    """Result of extracting samples for an action."""
+    action_id: str
+    action_data: ExperimentActionData
+    samples: list
+    start_tick: int
+    end_tick: int
+    start_time: float
+    end_time: float
+    duration: float
+
+
+@dataclasses.dataclass
+class GroupSamplesResult:
+    """Result of extracting samples for a group action."""
+    group_id: str
+    group_data: ExperimentActionData
+    samples: list
+    start_tick: int
+    end_tick: int
+    start_time: float
+    end_time: float
+    duration: float
+    sub_actions: dict[str, ActionSamplesResult]  # Sub-action ID -> ActionSamplesResult
+
+
+@dataclasses.dataclass
+class ExperimentSummary:
+    """Summary of an experiment."""
+    id: str
+    status: str
+    description: str
+    duration: float
+    num_samples: int
+    num_actions: int
+    num_completed_actions: int
+    num_failed_actions: int
+    num_skipped_actions: int
+    error_action_id: str | None
+    error_message: str | None
+
+
+def get_action_data(data: ExperimentData, action_id: str) -> ExperimentActionData | None:
+    """Get the ExperimentActionData for a specific action.
+
+    Args:
+        data: The experiment data
+        action_id: The action ID to look up
+
+    Returns:
+        ExperimentActionData or None if not found
+    """
+    return data.actions.get(action_id)
+
+
+def get_action_samples(data: ExperimentData, action_id: str) -> ActionSamplesResult | None:
+    """Get samples and data for a specific action by ID.
+
+    Args:
+        data: The experiment data
+        action_id: The action ID to extract samples for
+
+    Returns:
+        ActionSamplesResult containing the action data and filtered samples,
+        or None if the action is not found
+
+    Example:
+        result = get_action_samples(experiment_data, 'forward_velocity')
+        print(f"Action ran for {result.duration:.2f}s with {len(result.samples)} samples")
+        for sample in result.samples:
+            print(f"  tick={sample.tick}, v={sample.estimation.state.v}")
+    """
+    action_data = data.actions.get(action_id)
+    if action_data is None:
+        return None
+
+    start_tick = action_data.start_tick
+    end_tick = action_data.end_tick
+
+    # Filter samples within the action's tick range
+    samples = [s for s in data.samples if start_tick <= s.tick <= end_tick]
+
+    return ActionSamplesResult(
+        action_id=action_id,
+        action_data=action_data,
+        samples=samples,
+        start_tick=start_tick,
+        end_tick=end_tick,
+        start_time=action_data.start_time,
+        end_time=action_data.end_time,
+        duration=action_data.end_time - action_data.start_time,
+    )
+
+
+def get_group_samples(data: ExperimentData, group_id: str) -> GroupSamplesResult | None:
+    """Get samples and data for a group action, including sub-action data.
+
+    This function extracts the samples for a group action and also provides
+    data for each sub-action within the group.
+
+    Args:
+        data: The experiment data
+        group_id: The group action ID
+
+    Returns:
+        GroupSamplesResult containing the group data, samples, and sub-action data,
+        or None if the group is not found
+
+    Example:
+        result = get_group_samples(experiment_data, 'velocity_test')
+        print(f"Group ran for {result.duration:.2f}s")
+        for sub_id, sub_result in result.sub_actions.items():
+            print(f"  {sub_id}: {sub_result.duration:.2f}s, {len(sub_result.samples)} samples")
+    """
+    group_data = data.actions.get(group_id)
+    if group_data is None:
+        return None
+
+    start_tick = group_data.start_tick
+    end_tick = group_data.end_tick
+
+    # Filter samples within the group's tick range
+    samples = [s for s in data.samples if start_tick <= s.tick <= end_tick]
+
+    # Find sub-actions (they have IDs like "{group_id}_sub_0", "{group_id}_sub_1", etc.)
+    sub_actions = {}
+    sub_action_prefix = f"{group_id}_sub_"
+
+    for action_id, action_data in data.actions.items():
+        if action_id.startswith(sub_action_prefix):
+            sub_start = action_data.start_tick
+            sub_end = action_data.end_tick
+            sub_samples = [s for s in data.samples if sub_start <= s.tick <= sub_end]
+
+            sub_actions[action_id] = ActionSamplesResult(
+                action_id=action_id,
+                action_data=action_data,
+                samples=sub_samples,
+                start_tick=sub_start,
+                end_tick=sub_end,
+                start_time=action_data.start_time,
+                end_time=action_data.end_time,
+                duration=action_data.end_time - action_data.start_time,
+            )
+
+    return GroupSamplesResult(
+        group_id=group_id,
+        group_data=group_data,
+        samples=samples,
+        start_tick=start_tick,
+        end_tick=end_tick,
+        start_time=group_data.start_time,
+        end_time=group_data.end_time,
+        duration=group_data.end_time - group_data.start_time,
+        sub_actions=sub_actions,
+    )
+
+
+def get_samples_by_tick_range(data: ExperimentData, start_tick: int, end_tick: int) -> list:
+    """Get samples within a specific tick range.
+
+    Args:
+        data: The experiment data
+        start_tick: Start tick (inclusive)
+        end_tick: End tick (inclusive)
+
+    Returns:
+        List of samples within the tick range
+    """
+    return [s for s in data.samples if start_tick <= s.tick <= end_tick]
+
+
+def get_samples_by_time_range(data: ExperimentData, start_time: float, end_time: float,
+                              dt: float = 0.01) -> list:
+    """Get samples within a specific time range.
+
+    Args:
+        data: The experiment data
+        start_time: Start time in seconds (inclusive)
+        end_time: End time in seconds (inclusive)
+        dt: Sample period in seconds (default 0.01 = 100Hz)
+
+    Returns:
+        List of samples within the time range
+    """
+    start_tick = int(start_time / dt)
+    end_tick = int(end_time / dt)
+    return get_samples_by_tick_range(data, start_tick, end_tick)
+
+
+def extract_state_vector(samples: list, state_name: str, source: str = 'lowlevel') -> np.ndarray:
+    """Extract a state variable as a numpy array from samples.
+
+    Args:
+        samples: List of BILBO_Sample objects or dicts
+        state_name: Name of the state variable (e.g., 'theta', 'v', 'x', 'y', 'psi')
+        source: Data source - 'lowlevel' (100Hz, default) or 'estimation' (10Hz)
+
+    Returns:
+        Numpy array of the state values
+
+    Example:
+        result = get_action_samples(data, 'forward_velocity')
+        theta = extract_state_vector(result.samples, 'theta')
+        velocity = extract_state_vector(result.samples, 'v')
+    """
+    values = []
+    for s in samples:
+        if isinstance(s, dict):
+            if source == 'lowlevel':
+                ll = s.get('lowlevel') or {}
+                ll_est = ll.get('estimation') or {}
+                ll_state = ll_est.get('state') or {}
+                values.append(ll_state.get(state_name, 0.0) or 0.0)
+            else:
+                est = s.get('estimation') or {}
+                state = est.get('state') or {}
+                values.append(state.get(state_name, 0.0) or 0.0)
+        else:
+            # Assume it's a BILBO_Sample dataclass
+            if source == 'lowlevel':
+                values.append(getattr(s.lowlevel.estimation.state, state_name, 0.0) or 0.0)
+            else:
+                values.append(getattr(s.estimation.state, state_name, 0.0) or 0.0)
+    return np.array(values)
+
+
+def extract_control_vector(samples: list, path: list[str]) -> np.ndarray:
+    """Extract a control variable as a numpy array from samples.
+
+    Args:
+        samples: List of BILBO_Sample objects or dicts
+        path: Path to the control variable, e.g., ['velocity_command', 'v']
+
+    Returns:
+        Numpy array of the control values
+
+    Example:
+        velocity_cmd = extract_control_vector(samples, ['velocity_command', 'v'])
+        torque_left = extract_control_vector(samples, ['output', 'u_left'])
+    """
+    values = []
+    for s in samples:
+        if isinstance(s, dict):
+            ll = s.get('lowlevel') or {}
+            ctrl = ll.get('control') or {}
+            val = ctrl
+            for key in path:
+                val = (val.get(key) if isinstance(val, dict) else None) or {}
+            values.append(val if isinstance(val, (int, float)) else 0.0)
+        else:
+            # Assume it's a BILBO_Sample dataclass
+            val = s.lowlevel.control
+            for key in path:
+                val = getattr(val, key, None)
+                if val is None:
+                    val = 0.0
+                    break
+            values.append(val if isinstance(val, (int, float)) else 0.0)
+    return np.array(values)
+
+
+def get_time_vector(samples: list, dt: float = 0.01) -> np.ndarray:
+    """Generate a time vector for a list of samples.
+
+    Args:
+        samples: List of samples
+        dt: Sample period in seconds (default 0.01 = 100Hz)
+
+    Returns:
+        Numpy array of time values starting from 0
+    """
+    return np.arange(len(samples)) * dt
+
+
+def get_experiment_summary(data: ExperimentData) -> ExperimentSummary:
+    """Get a summary of the experiment.
+
+    Args:
+        data: The experiment data
+
+    Returns:
+        ExperimentSummary with key statistics
+
+    Example:
+        summary = get_experiment_summary(experiment_data)
+        print(f"Experiment {summary.id}: {summary.status}")
+        print(f"  Duration: {summary.duration:.2f}s, {summary.num_samples} samples")
+        print(f"  Actions: {summary.num_completed_actions}/{summary.num_actions} completed")
+    """
+    num_completed = 0
+    num_failed = 0
+    num_skipped = 0
+
+    for action_data in data.actions.values():
+        status = action_data.status
+        if isinstance(status, str):
+            status_str = status
+        else:
+            status_str = status.value if hasattr(status, 'value') else str(status)
+
+        if status_str == 'finished':
+            num_completed += 1
+        elif status_str in ('error', 'timeout'):
+            num_failed += 1
+        elif status_str == 'skipped':
+            num_skipped += 1
+
+    # Calculate duration from samples
+    duration = len(data.samples) * 0.01 if data.samples else 0.0
+
+    # Get description
+    description = ''
+    if data.definition:
+        description = data.definition.description
+    elif data.meta:
+        description = data.meta.description
+
+    # Get status as string
+    status_str = data.status.value if hasattr(data.status, 'value') else str(data.status)
+
+    return ExperimentSummary(
+        id=data.id,
+        status=status_str,
+        description=description,
+        duration=duration,
+        num_samples=len(data.samples),
+        num_actions=len(data.actions),
+        num_completed_actions=num_completed,
+        num_failed_actions=num_failed,
+        num_skipped_actions=num_skipped,
+        error_action_id=data.error_action_id,
+        error_message=data.error_message,
+    )
+
+
+def get_failed_actions(data: ExperimentData) -> list[tuple[str, ExperimentActionData]]:
+    """Get a list of actions that failed (error or timeout).
+
+    Args:
+        data: The experiment data
+
+    Returns:
+        List of tuples (action_id, action_data) for failed actions
+
+    Example:
+        failed = get_failed_actions(experiment_data)
+        for action_id, action_data in failed:
+            print(f"Action {action_id} failed: {action_data.error_message}")
+    """
+    failed = []
+    for action_id, action_data in data.actions.items():
+        status = action_data.status
+        if isinstance(status, str):
+            status_str = status
+        else:
+            status_str = status.value if hasattr(status, 'value') else str(status)
+
+        if status_str in ('error', 'timeout'):
+            failed.append((action_id, action_data))
+    return failed
+
+
+def get_action_duration(data: ExperimentData, action_id: str) -> float | None:
+    """Get the duration of an action in seconds.
+
+    Args:
+        data: The experiment data
+        action_id: The action ID
+
+    Returns:
+        Duration in seconds, or None if action not found
+    """
+    action_data = data.actions.get(action_id)
+    if action_data is None:
+        return None
+    return action_data.end_time - action_data.start_time
+
+
+def get_actions_by_type(data: ExperimentData, action_type: str) -> list[tuple[str, ExperimentActionData]]:
+    """Get all actions of a specific type.
+
+    Args:
+        data: The experiment data
+        action_type: The action type (e.g., 'set_velocity', 'group', 'wait_time')
+
+    Returns:
+        List of tuples (action_id, action_data) for matching actions
+
+    Example:
+        velocity_actions = get_actions_by_type(data, 'set_velocity')
+        for action_id, action_data in velocity_actions:
+            print(f"{action_id}: forward={action_data.parameters.get('forward')}")
+    """
+    if data.definition is None:
+        return []
+
+    results = []
+    for action_def in data.definition.actions:
+        if action_def.type == action_type:
+            action_data = data.actions.get(action_def.id)
+            if action_data:
+                results.append((action_def.id, action_data))
+    return results
+
+
+def get_groups(data: ExperimentData) -> list[tuple[str, ExperimentActionData]]:
+    """Get all group actions in the experiment.
+
+    Args:
+        data: The experiment data
+
+    Returns:
+        List of tuples (group_id, group_data) for all groups
+
+    Example:
+        groups = get_groups(experiment_data)
+        for group_id, group_data in groups:
+            result = get_group_samples(experiment_data, group_id)
+            print(f"Group {group_id}: {result.duration:.2f}s")
+    """
+    return get_actions_by_type(data, 'group')
+
+
+def _highlight_yaml(yaml_str: str) -> str:
+    """Apply HTML syntax highlighting to YAML string."""
+    import html
+    lines = yaml_str.split('\n')
+    highlighted_lines = []
+
+    for line in lines:
+        # Escape HTML entities first
+        escaped = html.escape(line)
+
+        # Check if it's a comment
+        stripped = escaped.strip()
+        if stripped.startswith('#'):
+            highlighted_lines.append(f'<span class="yaml-comment">{escaped}</span>')
+            continue
+
+        # Check for key: value pattern
+        if ':' in escaped:
+            colon_idx = escaped.index(':')
+            # Check if there's content after the colon
+            key_part = escaped[:colon_idx]
+            rest = escaped[colon_idx:]
+
+            # Highlight the key
+            highlighted = f'<span class="yaml-key">{key_part}</span>'
+
+            # Check what comes after the colon
+            value_part = rest[1:].strip() if len(rest) > 1 else ''
+
+            if value_part:
+                # It's a key: value on same line
+                if value_part.startswith("'") or value_part.startswith('"'):
+                    # String value
+                    highlighted += f':<span class="yaml-string"> {value_part}</span>'
+                elif value_part in ('true', 'false', 'True', 'False'):
+                    # Boolean
+                    highlighted += f':<span class="yaml-boolean"> {value_part}</span>'
+                elif value_part in ('null', 'None', '~'):
+                    # Null
+                    highlighted += f':<span class="yaml-null"> {value_part}</span>'
+                elif value_part.replace('.', '').replace('-', '').replace('e', '').replace('E', '').isdigit():
+                    # Number (including floats and scientific notation)
+                    highlighted += f':<span class="yaml-number"> {value_part}</span>'
+                else:
+                    # Unquoted string or other
+                    highlighted += f':<span class="yaml-string"> {value_part}</span>'
+            else:
+                # Just key: with nothing after (nested object or list follows)
+                highlighted += ':'
+
+            highlighted_lines.append(highlighted)
+        elif stripped.startswith('-'):
+            # List item
+            indent = len(escaped) - len(escaped.lstrip())
+            marker_idx = escaped.index('-')
+            indent_part = escaped[:marker_idx]
+            rest = escaped[marker_idx + 1:].strip()
+
+            highlighted = f'{indent_part}<span class="yaml-list-marker">-</span>'
+            if rest:
+                # Check if it's a key: value after the list marker
+                if ':' in rest:
+                    highlighted += ' ' + _highlight_yaml(rest).strip()
+                else:
+                    highlighted += f'<span class="yaml-string"> {rest}</span>'
+            highlighted_lines.append(highlighted)
+        else:
+            # Plain text (likely a string value continuation)
+            highlighted_lines.append(f'<span class="yaml-string">{escaped}</span>' if escaped.strip() else escaped)
+
+    return '\n'.join(highlighted_lines)
 
 
 def _format_action_params(action_type: str, params: dict) -> str:
@@ -702,7 +1390,7 @@ def _format_action_params(action_type: str, params: dict) -> str:
         return f"v={fwd}, turn={turn}"
     elif action_type == 'wait_time':
         ms = params.get('time_ms', 0)
-        return f"{ms/1000:.2f}s"
+        return f"{ms / 1000:.2f}s"
     elif action_type == 'wait_ticks':
         return f"{params.get('ticks', 0)} ticks"
     elif action_type == 'beep':
@@ -722,6 +1410,18 @@ def _format_action_params(action_type: str, params: dict) -> str:
         if 'heading_deg' in params:
             return f"{params['heading_deg']:.1f} deg"
         return f"{params.get('heading', 0):.2f} rad"
+    elif action_type == 'set_waypoints':
+        waypoints = params.get('waypoints', [])
+        return f"{len(waypoints)} waypoints"
+    elif action_type == 'start_path':
+        parts = []
+        if params.get('max_speed', 0) > 0:
+            parts.append(f"speed={params['max_speed']}")
+        if params.get('timeout', 0) > 0:
+            parts.append(f"timeout={params['timeout']}s")
+        if params.get('allow_reverse'):
+            parts.append("reverse=yes")
+        return ", ".join(parts) if parts else ""
     elif action_type == 'run_trajectory':
         traj = params.get('input_trajectory', {})
         if isinstance(traj, dict):
@@ -749,60 +1449,62 @@ def _format_action_params(action_type: str, params: dict) -> str:
         return ", ".join(parts[:3])  # Limit to 3 params
 
 
-
 if __name__ == '__main__':
     data = read_experiment_data(
-        get_absolute_path('./examples/waypoint_test_2026-02-04_19-05-08.json')
+        '/Users/lehmann/Desktop/velocity_group_test_2026-02-05_20-06-22.json'
     )
 
-    x = [sample.estimation.state.x for sample in data.samples]
-    y = [sample.estimation.state.y for sample in data.samples]
-    x_ll = [sample.lowlevel.estimation.state.x for sample in data.samples]
-    y_ll = [sample.lowlevel.estimation.state.y for sample in data.samples]
-    time_vector = generate_time_vector_by_length(num_samples=len(x), dt=0.01)
+    make_report(data)
 
-    quick_plot(time_vector, x)  # in 10 Hz steps
-    quick_plot(time_vector, x_ll)  # in 100 Hz steps
 
-    # quick map plot
-
-    map_plot = MapPlot(size=((0,3), (0,3)))
-    map_plot.add_grid()
-    map_plot.add_coordinate_system(length=0.3)
-
-    map_plot.add_trajectory(x, y,
-                            width=2,
-                            show_start=True,
-                            show_end=True,
-                            gradient=True,
-                            gradient_cmap='viridis',
-                            )
-
-    # Extract waypoints from position control samples (avoid duplicates)
-    seen_waypoints = set()
-    wp_index = 1
-    for sample in data.samples:
-        waypoints = sample.control.position_control.waypoints
-        for wp in waypoints:
-            if isinstance(wp, dict):
-                wx = wp.get('x', 0.0)
-                wy = wp.get('y', 0.0)
-                key = (round(wx, 6), round(wy, 6))
-                if key not in seen_waypoints:
-                    seen_waypoints.add(key)
-                    label_pos = 'bottom' if wy < 1.5 else 'top'
-                    map_plot.add_point(
-                        position=(wx, wy),
-                        color='#e74c3c',
-                        size=0.08,
-                        marker='o',
-                        border=True,
-                        border_color='black',
-                        border_width=1.5,
-                        label=f'WP{wp_index}',
-                        label_position=label_pos,
-                        label_fontsize=10,
-                    )
-                    wp_index += 1
-
-    map_plot.show_pdf()
+    # x = [sample.estimation.state.x for sample in data.samples]
+    # y = [sample.estimation.state.y for sample in data.samples]
+    # x_ll = [sample.lowlevel.estimation.state.x for sample in data.samples]
+    # y_ll = [sample.lowlevel.estimation.state.y for sample in data.samples]
+    # time_vector = generate_time_vector_by_length(num_samples=len(x), dt=0.01)
+    #
+    # quick_plot(time_vector, x)  # in 10 Hz steps
+    # quick_plot(time_vector, x_ll)  # in 100 Hz steps
+    #
+    # # quick map plot
+    #
+    # map_plot = MapPlot(size=((0,3), (0,3)))
+    # map_plot.add_grid()
+    # map_plot.add_coordinate_system(length=0.3)
+    #
+    # map_plot.add_trajectory(x, y,
+    #                         width=2,
+    #                         show_start=True,
+    #                         show_end=True,
+    #                         gradient=True,
+    #                         gradient_cmap='viridis',
+    #                         )
+    #
+    # # Extract waypoints from position control samples (avoid duplicates)
+    # seen_waypoints = set()
+    # wp_index = 1
+    # for sample in data.samples:
+    #     waypoints = sample.control.position_control.waypoints
+    #     for wp in waypoints:
+    #         if isinstance(wp, dict):
+    #             wx = wp.get('x', 0.0)
+    #             wy = wp.get('y', 0.0)
+    #             key = (round(wx, 6), round(wy, 6))
+    #             if key not in seen_waypoints:
+    #                 seen_waypoints.add(key)
+    #                 label_pos = 'bottom' if wy < 1.5 else 'top'
+    #                 map_plot.add_point(
+    #                     position=(wx, wy),
+    #                     color='#e74c3c',
+    #                     size=0.08,
+    #                     marker='o',
+    #                     border=True,
+    #                     border_color='black',
+    #                     border_width=1.5,
+    #                     label=f'WP{wp_index}',
+    #                     label_position=label_pos,
+    #                     label_fontsize=10,
+    #                 )
+    #                 wp_index += 1
+    #
+    # map_plot.show_pdf()

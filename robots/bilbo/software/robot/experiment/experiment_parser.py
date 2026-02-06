@@ -306,6 +306,10 @@ class ActionEntry:
         Returns:
             An instance of the action class
         """
+        # Use from_definition if available (handles special cases like nested actions in groups)
+        if hasattr(self.action_class, 'from_definition'):
+            return self.action_class.from_definition(definition)
+
         # Parse parameters
         parsed_params = self.parse_parameters(definition.parameters)
 
@@ -502,12 +506,13 @@ class ExperimentParser:
             external_input_enabled=data.get("external_input_enabled", False),
         )
 
-    def parse_action(self, data: dict | str, index: int = 0):
+    def parse_action(self, data: dict | str, index: int = 0, parent_id: str | None = None):
         """Parse a single action definition.
 
         Args:
             data: Raw action data (dict or string shorthand)
             index: Action index for auto-generating IDs
+            parent_id: Parent action ID for sub-action ID generation
 
         Returns:
             Parsed ExperimentActionDefinition
@@ -520,31 +525,9 @@ class ExperimentParser:
         if "type" not in expanded:
             raise ValueError(f"Action at index {index} missing required field 'type': {expanded}")
 
-        # Extract scheduling and reserved fields
-        action_id = expanded.get("id", f"action_{index}")
-        action_type = expanded["type"]
-
-        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "parameters"}
-
-        # Collect parameters
-        if "parameters" in expanded:
-            parameters = expanded["parameters"]
-        else:
-            parameters = {
-                k: v for k, v in expanded.items()
-                if k not in reserved_fields
-            }
-
-        return ExperimentActionDefinition(
-            id=action_id,
-            type=action_type,
-            tick=expanded.get("tick"),
-            after=expanded.get("after"),
-            time=expanded.get("time"),
-            delay=expanded.get("delay"),
-            timeout=expanded.get("timeout"),
-            parameters=parameters,
-        )
+        # Use ExperimentActionDefinition.from_dict() for consistent parsing
+        # This handles sub_actions for group/parallel types
+        return ExperimentActionDefinition.from_dict(expanded, index=index, parent_id=parent_id)
 
     def from_json(self, json_str: str):
         """Parse an experiment definition from a JSON string."""

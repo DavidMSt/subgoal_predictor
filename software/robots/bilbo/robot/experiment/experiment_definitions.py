@@ -423,6 +423,15 @@ class ExperimentActionDefinition:
         - type: set_mode
           mode: BALANCING
           after: action_0
+          label: "Start balancing"
+
+        - type: group
+          id: my_group
+          label: "Velocity test sequence"
+          actions:
+            - set_mode: VELOCITY
+            - set_velocity: [0.5, 0]
+            - wait: 2s
     """
     id: str
     type: str
@@ -436,15 +445,20 @@ class ExperimentActionDefinition:
 
     timeout: float | None = None  # Per-action timeout (seconds, optional)
 
+    label: str | None = None  # Human-readable label for display in reports
+
     # Action-specific parameters
     parameters: dict[str, Any] = dataclasses.field(default_factory=dict)
+
+    # Sub-actions for group/parallel actions (maps action ID to definition)
+    sub_actions: dict[str, 'ExperimentActionDefinition'] | None = None
 
     def __post_init__(self):
         if self.type not in ALLOWED_ACTIONS:
             raise ValueError(f"Action type '{self.type}' not allowed. Allowed actions: {ALLOWED_ACTIONS}")
 
     @classmethod
-    def from_dict(cls, d: dict, index: int = 0) -> "ExperimentActionDefinition":
+    def from_dict(cls, d: dict, index: int = 0, parent_id: str | None = None) -> "ExperimentActionDefinition":
         """
         Parse an action definition from a dict.
 
@@ -452,6 +466,7 @@ class ExperimentActionDefinition:
             d: Dict containing action definition. Must have 'type' field.
                'id' is optional - auto-generated as 'action_{index}' if missing.
             index: Index for auto-generating ID when not provided.
+            parent_id: Parent action ID for generating sub-action IDs.
 
         Returns:
             ExperimentActionDefinition instance.
@@ -463,29 +478,50 @@ class ExperimentActionDefinition:
             raise ValueError(f"Action at index {index} missing required field 'type': {d}")
 
         # id is optional - auto-generate if missing
-        action_id = d.get("id", f"action_{index}")
+        if parent_id:
+            action_id = d.get("id", f"{parent_id}_sub_{index}")
+        else:
+            action_id = d.get("id", f"action_{index}")
+
+        action_type = d["type"]
 
         # Reserved fields that should not go into parameters
-        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "parameters"}
+        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "label", "parameters", "actions"}
 
         # If 'parameters' is explicitly provided, use it; otherwise collect non-reserved fields
         if "parameters" in d:
-            parameters = d["parameters"]
+            parameters = dict(d["parameters"])  # Make a copy
         else:
             parameters = {
                 k: v for k, v in d.items()
                 if k not in reserved_fields
             }
 
+        # Parse sub-actions for group/parallel types
+        sub_actions: dict[str, ExperimentActionDefinition] | None = None
+        if action_type in ("group", "parallel"):
+            # Get actions list from parameters or top-level 'actions' field
+            actions_list = parameters.pop("actions", None) or d.get("actions", [])
+            if actions_list:
+                sub_actions = {}
+                for i, sub_def in enumerate(actions_list):
+                    # Expand shorthand for sub-actions
+                    expanded_sub = _expand_shorthand(sub_def)
+                    # Recursively parse sub-action
+                    sub_action = cls.from_dict(expanded_sub, index=i, parent_id=action_id)
+                    sub_actions[sub_action.id] = sub_action
+
         return cls(
             id=action_id,
-            type=d["type"],
+            type=action_type,
             tick=d.get("tick"),
             after=d.get("after"),
             time=d.get("time"),
             delay=d.get("delay"),
             timeout=d.get("timeout"),
+            label=d.get("label"),
             parameters=parameters,
+            sub_actions=sub_actions,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -504,8 +540,13 @@ class ExperimentActionDefinition:
             dict_out["delay"] = self.delay
         if self.timeout is not None:
             dict_out["timeout"] = self.timeout
+        if self.label is not None:
+            dict_out["label"] = self.label
         if self.parameters:
             dict_out["parameters"] = self.parameters
+        if self.sub_actions:
+            # Serialize sub-actions as a list (preserving order by ID)
+            dict_out["actions"] = [sub.to_dict() for sub in self.sub_actions.values()]
         return dict_out
 
     def get_typed_params(self) -> Any:
@@ -650,8 +691,11 @@ class ExperimentActionData:
     end_time: float = 0.0
     status: ExperimentActionStatus | str = ExperimentActionStatus.PENDING
     error_message: str | None = None
+    action_type: str | None = None  # Action type (e.g., 'set_velocity', 'wait_time')
+    label: str | None = None  # Human-readable label for display in reports
     parameters: dict[str, Any] | None = None  # Action input parameters
     data: Any | None = None  # Action output data
+    sub_actions: dict[str, ExperimentActionData] | None = None  # For group/parallel actions
 
     def __post_init__(self):
         # Convert string status to enum if needed
@@ -714,6 +758,24 @@ class ExperimentData:
                 self.status = ExperimentStatus(self.status)
             except ValueError:
                 pass  # Keep as string if not a valid enum value
+
+    @property
+    def time_vector(self) -> np.ndarray:
+        """Get the time vector for this experiment's samples.
+
+        Returns a numpy array of time values in seconds, starting from 0,
+        with one entry per sample at the control loop rate (BILBO_CONTROL_DT = 0.01s = 100Hz).
+
+        Example:
+            t = experiment_data.time_vector
+            plt.plot(t, theta)
+        """
+        return np.arange(len(self.samples)) * BILBO_CONTROL_DT
+
+    @property
+    def duration(self) -> float:
+        """Get the total duration of the experiment in seconds."""
+        return len(self.samples) * BILBO_CONTROL_DT
 
 
 # ======================================================================================================================
@@ -922,21 +984,27 @@ def reset(**scheduling) -> ExperimentActionDefinition:
 
 def parallel(actions: list[ExperimentActionDefinition | dict], **scheduling) -> ExperimentActionDefinition:
     """Create a parallel action that runs multiple actions simultaneously."""
-    action_dicts = []
-    for a in actions:
+    parent_id = scheduling.get("id", "parallel")
+    sub_actions_dict: dict[str, ExperimentActionDefinition] = {}
+    for i, a in enumerate(actions):
         if isinstance(a, ExperimentActionDefinition):
-            action_dicts.append(a.to_dict())
+            sub_action = a
         else:
-            action_dicts.append(a)
+            # Parse dict to ExperimentActionDefinition
+            expanded = _expand_shorthand(a)
+            sub_action = ExperimentActionDefinition.from_dict(expanded, index=i, parent_id=parent_id)
+        sub_actions_dict[sub_action.id] = sub_action
     return ExperimentActionDefinition(
-        id=scheduling.get("id", "parallel"),
+        id=parent_id,
         type="parallel",
         tick=scheduling.get("tick"),
         after=scheduling.get("after"),
         time=scheduling.get("time"),
         delay=scheduling.get("delay"),
         timeout=scheduling.get("timeout"),
-        parameters={"actions": action_dicts}
+        label=scheduling.get("label"),
+        parameters={},
+        sub_actions=sub_actions_dict if sub_actions_dict else None,
     )
 
 
@@ -949,21 +1017,27 @@ def group(actions: list[ExperimentActionDefinition | dict], **scheduling) -> Exp
     Args:
         actions: List of actions to execute sequentially within the group
     """
-    action_dicts = []
-    for a in actions:
+    parent_id = scheduling.get("id", "group")
+    sub_actions_dict: dict[str, ExperimentActionDefinition] = {}
+    for i, a in enumerate(actions):
         if isinstance(a, ExperimentActionDefinition):
-            action_dicts.append(a.to_dict())
+            sub_action = a
         else:
-            action_dicts.append(a)
+            # Parse dict to ExperimentActionDefinition
+            expanded = _expand_shorthand(a)
+            sub_action = ExperimentActionDefinition.from_dict(expanded, index=i, parent_id=parent_id)
+        sub_actions_dict[sub_action.id] = sub_action
     return ExperimentActionDefinition(
-        id=scheduling.get("id", "group"),
+        id=parent_id,
         type="group",
         tick=scheduling.get("tick"),
         after=scheduling.get("after"),
         time=scheduling.get("time"),
         delay=scheduling.get("delay"),
         timeout=scheduling.get("timeout"),
-        parameters={"actions": action_dicts}
+        label=scheduling.get("label"),
+        parameters={},
+        sub_actions=sub_actions_dict if sub_actions_dict else None,
     )
 
 

@@ -27,6 +27,7 @@ from typing import Any, Callable
 from datetime import datetime
 import weasyprint
 
+import matplotlib.pyplot as plt
 from jinja2 import Environment, FileSystemLoader, BaseLoader, select_autoescape
 from markupsafe import Markup
 
@@ -40,6 +41,7 @@ def map_plot_to_base64(
         format: str = 'png',
         dpi: int = 150,
         transparent: bool = False,
+        close_figure: bool = True,
 ) -> str:
     """Convert a MapPlot object to a base64-encoded image string."""
     if map_plot_obj._fig is None:
@@ -58,6 +60,11 @@ def map_plot_to_base64(
     buf.seek(0)
     b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     buf.close()
+
+    # Close the figure to free memory
+    if close_figure:
+        map_plot_obj.close()
+
     return b64
 
 
@@ -91,6 +98,7 @@ def plot_to_base64(
         format: str = 'png',
         dpi: int = 150,
         transparent: bool = False,
+        close_figure: bool = True,
 ) -> str:
     """Convert a Plot object to a base64-encoded image string."""
     buf = io.BytesIO()
@@ -106,6 +114,11 @@ def plot_to_base64(
     buf.seek(0)
     b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
     buf.close()
+
+    # Close the figure to free memory
+    if close_figure:
+        plot_obj.close()
+
     return b64
 
 

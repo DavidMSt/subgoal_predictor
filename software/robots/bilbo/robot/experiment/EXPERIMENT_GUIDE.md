@@ -33,6 +33,17 @@ actions:
 
 **Optional fields:**
 - `timeout` - Maximum experiment duration in seconds
+- `external_input_enabled` - If true, external inputs (joystick, etc.) remain active during the experiment. Default: false (inputs are disabled during experiments)
+
+```yaml
+id: my_experiment
+description: A brief description of what this experiment does
+timeout: 30.0
+external_input_enabled: false  # Allow joystick/external control during experiment (default: false)
+actions:
+  - # action 1
+  - # action 2
+```
 
 ---
 
@@ -98,6 +109,29 @@ actions:
     after: my_custom_id
 ```
 
+### Action Labels
+
+Any action (including groups) can have an optional `label` field. Labels serve two purposes:
+1. They provide a human-readable name that appears in the experiment report action list and phase legend.
+2. Actions with a `label` that span multiple ticks (i.e., have duration) are highlighted as colored phase bars on all plots in the experiment report.
+
+```yaml
+actions:
+  - type: group
+    id: velocity_phase
+    label: "Velocity Test"    # Shown as colored phase bar in report
+    actions:
+      - mode: VELOCITY
+      - velocity: [0.3, 0.0]
+      - wait: 3s
+```
+
+Notes:
+- `label` is optional on any action type
+- Most useful on `group` actions to mark distinct experiment phases
+- Only actions with both a `label` AND duration (spanning multiple ticks) get phase highlighting in report plots
+- Actions without labels are not shown as phase bars
+
 ---
 
 ## Shorthand Syntax
@@ -117,7 +151,13 @@ Common actions have shorthand forms for cleaner YAML files.
   mode: BALANCING
 ```
 
-**Available modes:** `OFF`, `BALANCING`, `VELOCITY`
+**Available modes:** `OFF`, `DIRECT`, `BALANCING`, `VELOCITY`, `POSITION`
+
+- `OFF` - Motors disabled
+- `DIRECT` - Raw torque passthrough
+- `BALANCING` - State feedback (pitch/roll stabilization)
+- `VELOCITY` - Forward velocity + yaw rate commands
+- `POSITION` - XY position + heading (requires OptiTrack)
 
 ### Wait/Delay
 
@@ -238,12 +278,12 @@ Sets the robot's control mode.
 
 ```yaml
 - type: set_mode
-  mode: BALANCING  # OFF, BALANCING, or VELOCITY
+  mode: BALANCING  # OFF, DIRECT, BALANCING, VELOCITY, or POSITION
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `mode` | string | `"OFF"` | Control mode: `OFF`, `BALANCING`, `VELOCITY` |
+| `mode` | string | `"OFF"` | Control mode: `OFF`, `DIRECT`, `BALANCING`, `VELOCITY`, `POSITION` |
 
 ---
 
@@ -426,6 +466,33 @@ Enables or disables external input (joystick, etc.).
 
 ---
 
+### `set_feedback_gain` - Set Feedback Gain
+
+Sets the state feedback gain matrix K for balancing control.
+
+```yaml
+- type: set_feedback_gain
+  K: [0.25, 0.2, 0.03, 0.015, 0.0, 0.0]
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `K` | list[float] | [] | Feedback gain vector |
+
+---
+
+### `reset_control` - Reset Control State
+
+Resets the control system state (integrators, filters, etc.).
+
+```yaml
+- type: reset_control
+```
+
+No parameters.
+
+---
+
 ### `run_trajectory` - Execute Trajectory
 
 Runs a predefined input trajectory.
@@ -487,6 +554,7 @@ Executes multiple actions sequentially as a named group. Groups are useful for o
 ```yaml
 - type: group
   id: velocity_test
+  label: "Velocity Test"
   actions:
     - set_mode: "VELOCITY"
     - type: set_velocity
@@ -497,6 +565,9 @@ Executes multiple actions sequentially as a named group. Groups are useful for o
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `actions` | list | [] | List of actions to run sequentially |
+| `label` | string | None | Human-readable label for report phase highlighting |
+
+Groups with a `label` are highlighted as colored phase bars in experiment reports, making it easy to visually correlate data with experiment phases.
 
 **Key differences from `parallel`:**
 - `parallel`: All sub-actions start simultaneously, finishes when ALL complete
@@ -806,6 +877,7 @@ Each action in `data.actions` contains detailed information:
 | `end_time` | float | End time in seconds |
 | `status` | string | Action status (see above) |
 | `error_message` | string | Error description (if failed) |
+| `label` | string | Human-readable label (if set) |
 | `parameters` | dict | **Input parameters** configured for this action |
 | `data` | dict | **Output data** produced by the action |
 
@@ -1291,6 +1363,28 @@ turn_samples = [s for s in data.samples
 print(f"Forward test: {len(forward_samples)} samples, "
       f"{forward_group.end_time - forward_group.start_time:.2f}s duration")
 print(f"Turn test: {len(turn_samples)} samples")
+```
+
+---
+
+## Experiment Reports
+
+After an experiment completes, the system can generate an HTML report with:
+- **Summary**: Experiment ID, status, duration, sample count
+- **Action list**: All actions with their status, timing, and parameters. `set_waypoints` actions show an expanded waypoint table.
+- **Phase bars**: Actions with a `label` field are shown as colored bars on all plots, making it easy to correlate data with experiment phases.
+- **Phase legend**: Maps colors to labels
+- **State plots**: Time-series plots of robot state (position, velocity, pitch, etc.) with phase bars overlaid
+
+To get colored phase bars on your plots, add `label` to your group or long-running actions:
+
+```yaml
+- type: group
+  id: forward_drive
+  label: "Forward Drive"
+  actions:
+    - velocity: [0.5, 0.0]
+    - wait: 3s
 ```
 
 ---

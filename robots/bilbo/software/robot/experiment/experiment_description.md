@@ -10,6 +10,7 @@ An experiment definition has the following structure:
 id: my_experiment
 description: A brief description of what this experiment does
 timeout: 30.0  # Optional: experiment timeout in seconds
+external_input_enabled: false  # Optional: keep external inputs active during experiment
 actions:
   - # action 1
   - # action 2
@@ -23,6 +24,7 @@ actions:
 
 **Optional fields:**
 - `timeout` - Maximum experiment duration in seconds
+- `external_input_enabled` - If true, external inputs (joystick, etc.) remain active during the experiment. Default: false.
 
 ---
 
@@ -88,6 +90,26 @@ actions:
     after: my_custom_id
 ```
 
+### Action Labels
+
+Actions can have an optional `label` for display in experiment reports:
+
+```yaml
+actions:
+  - type: group
+    id: velocity_phase
+    label: "Velocity Test"
+    actions:
+      - mode: VELOCITY
+      - velocity: [0.3, 0.0]
+      - wait: 3s
+```
+
+- `label` is optional on any action
+- Labels cause the action to appear as a colored phase bar overlaid on all plots in the experiment report
+- Most useful on `group` actions to visually mark experiment phases in reports
+- Only actions with a `label` AND that span multiple ticks get phase highlighting
+
 ---
 
 ## Shorthand Syntax
@@ -107,7 +129,12 @@ Common actions have shorthand forms for cleaner YAML files.
   mode: BALANCING
 ```
 
-**Available modes:** `OFF`, `BALANCING`, `VELOCITY`
+**Available modes:**
+- `OFF` - Motors disabled
+- `DIRECT` - Raw torque passthrough
+- `BALANCING` - State feedback (pitch/roll stabilization)
+- `VELOCITY` - Forward velocity + yaw rate commands
+- `POSITION` - XY position + heading (requires OptiTrack)
 
 ### Wait/Delay
 
@@ -182,6 +209,7 @@ Common actions have shorthand forms for cleaner YAML files.
 # Run multiple actions sequentially as a named group
 - type: group
   id: my_phase
+  label: "My Phase"
   actions:
     - set_mode: "VELOCITY"
     - velocity: [0.3, 0.0]
@@ -229,12 +257,19 @@ Sets the robot's control mode.
 
 ```yaml
 - type: set_mode
-  mode: BALANCING  # OFF, BALANCING, or VELOCITY
+  mode: BALANCING  # OFF, DIRECT, BALANCING, VELOCITY, or POSITION
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `mode` | string | `"OFF"` | Control mode: `OFF`, `BALANCING`, `VELOCITY` |
+| `mode` | string | `"OFF"` | Control mode: `OFF`, `DIRECT`, `BALANCING`, `VELOCITY`, `POSITION` |
+
+**Available modes:**
+- `OFF` - Motors disabled
+- `DIRECT` - Raw torque passthrough
+- `BALANCING` - State feedback (pitch/roll stabilization)
+- `VELOCITY` - Forward velocity + yaw rate commands
+- `POSITION` - XY position + heading (requires OptiTrack)
 
 ---
 
@@ -417,6 +452,33 @@ Enables or disables external input (joystick, etc.).
 
 ---
 
+### `set_feedback_gain` - Set Feedback Gain
+
+Sets the state feedback gain matrix K for balancing control.
+
+```yaml
+- type: set_feedback_gain
+  K: [0.25, 0.2, 0.03, 0.015, 0.0, 0.0]
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `K` | list[float] | [] | Feedback gain vector |
+
+---
+
+### `reset_control` - Reset Control State
+
+Resets the control system state (integrators, filters, etc.).
+
+```yaml
+- type: reset_control
+```
+
+No parameters.
+
+---
+
 ### `run_trajectory` - Execute Trajectory
 
 Runs a predefined input trajectory.
@@ -477,6 +539,7 @@ Executes multiple actions sequentially as a named group. Groups are useful for o
 ```yaml
 - type: group
   id: velocity_test
+  label: "Velocity Test"
   actions:
     - set_mode: "VELOCITY"
     - type: set_velocity
@@ -487,6 +550,8 @@ Executes multiple actions sequentially as a named group. Groups are useful for o
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `actions` | list | [] | List of actions to run sequentially |
+
+Groups with a `label` are highlighted as colored phase bars in experiment reports.
 
 **Key differences from `parallel`:**
 - `parallel`: All sub-actions start simultaneously, finishes when ALL complete
@@ -1257,6 +1322,7 @@ Each action in `data.actions` contains detailed information:
 | `end_time` | float | End time in seconds |
 | `status` | string | Action status (see above) |
 | `error_message` | string | Error description (if failed) |
+| `label` | string | Human-readable label (if set) |
 | `parameters` | dict | **Input parameters** configured for this action |
 | `data` | dict | **Output data** produced by the action |
 
@@ -1342,6 +1408,27 @@ If the path action fails, the experiment data will still contain:
 
 ---
 
+## Experiment Reports
+
+After an experiment completes, the host generates an HTML report containing:
+- **Summary**: Experiment ID, status, duration, sample count
+- **Action list**: All actions with status, timing, and parameters. `set_waypoints` actions show an expanded waypoint table.
+- **Phase bars**: Actions with a `label` field appear as colored bars on all plots, making it easy to see which data corresponds to which experiment phase.
+- **State plots**: Time-series of robot state (position, velocity, pitch, etc.)
+
+To get phase bars on your report plots, add `label` to your groups:
+
+```yaml
+- type: group
+  id: forward_drive
+  label: "Forward Drive"
+  actions:
+    - velocity: [0.5, 0.0]
+    - wait: 3s
+```
+
+---
+
 ## Tips and Best Practices
 
 1. **Use shorthand for readability** - The shorthand syntax makes experiments much easier to read and write.
@@ -1362,31 +1449,31 @@ If the path action fails, the experiment data will still contain:
 
 ### Position Control Tips
 
-8. **Set mode to POSITION first** - Position control actions require `mode: POSITION` before they can execute.
+9. **Set mode to POSITION first** - Position control actions require `mode: POSITION` before they can execute.
 
-9. **Use `wait: true` (default)** - Most position commands should wait for completion to ensure proper sequencing.
+10. **Use `wait: true` (default)** - Most position commands should wait for completion to ensure proper sequencing.
 
-10. **Set appropriate timeouts** - Position commands can take varying amounts of time; set timeouts to handle stuck situations.
+11. **Set appropriate timeouts** - Position commands can take varying amounts of time; set timeouts to handle stuck situations.
 
-11. **Waypoint types matter**:
+12. **Waypoint types matter**:
     - Use `PASS` for smooth path following (robot curves through waypoints)
     - Use `STOP` when the robot must come to a full stop at a waypoint
 
-12. **Waypoint weights control cornering**:
+13. **Waypoint weights control cornering**:
     - `weight: 1.0` = sharp corner (follows waypoint closely)
     - `weight: 0.0` = smooth curve (may cut corners significantly)
     - `weight: 0.75` = balanced default
 
-13. **Per-waypoint speed limits**:
+14. **Per-waypoint speed limits**:
     - `speed: 0.0` = use path's max_speed (default)
     - `speed: 0.2` = limit to 0.2 m/s when approaching this waypoint
     - Speed transitions smoothly between waypoints (~0.5s)
     - Corner slowdown still applies (takes minimum)
     - Useful for precision positioning or fast straight segments
 
-14. **Path files for reusable routes** - Store frequently used paths in YAML files for easy reuse.
+15. **Path files for reusable routes** - Store frequently used paths in YAML files for easy reuse.
 
-15. **Use `wait_position_event` for complex logic** - When you need to react to specific events like `waypoint_completed`.
+16. **Use `wait_position_event` for complex logic** - When you need to react to specific events like `waypoint_completed`.
 
 ---
 

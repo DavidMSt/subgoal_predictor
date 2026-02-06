@@ -139,6 +139,7 @@ class BILBO_ExperimentHandler:
 
     _loadedTrajectory: BILBO_InputTrajectory | None = None
     _last_experiment_data: ExperimentData | dict | None = None
+    _gui: Any = None  # Optional GUI reference for file picker functionality
 
     # === INIT =========================================================================================================
     def __init__(self, core: BILBO_Core, control: BILBO_Control):
@@ -161,6 +162,15 @@ class BILBO_ExperimentHandler:
             self._experiment_event_callback,
             predicate=pred_flag_equals('event', 'experiment')
         )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_gui(self, gui) -> None:
+        """Set the GUI reference for file picker functionality.
+
+        Args:
+            gui: GUI instance with open_file_picker method
+        """
+        self._gui = gui
 
     # === PUBLIC METHODS ===============================================================================================
     def run_experiment(
@@ -240,21 +250,49 @@ class BILBO_ExperimentHandler:
 
     def run_experiment_from_file(
         self,
-        file: str,
+        file: str | None = None,
+        output: str | None = None,
         blocking: bool = True
     ) -> ExperimentData | dict | None:
-        """Load and run an experiment from a YAML or JSON file.
+        """Load and run an experiment from a local file (HOST-ONLY mode).
+
+        This method is for running experiments directly on the host machine.
+        If no file is specified, opens a native file picker on the host.
 
         Args:
-            file: Path to experiment file (YAML or JSON)
+            file: Path to experiment file (YAML or JSON), or None to use native file picker
+            output: Output directory for experiment data. If None, uses the file's directory.
             blocking: If True, wait for completion
 
         Returns:
             Experiment data on success, None on failure
         """
+        import os
+
+        # If no file provided, use native file picker (works on all platforms from any thread)
+        if not file:
+            self.logger.info("No file specified, opening native file picker...")
+            try:
+                from core.utils.filepicker import pick_file
+                file = pick_file(
+                    title='Select Experiment File',
+                    allowed_extensions=['yaml', 'yml', 'json']
+                )
+            except Exception as e:
+                self.logger.error(f"File picker failed: {e}. Use -f <path> to specify a file.")
+                return None
+
+            if not file:
+                self.logger.info("File selection cancelled. Use -f <path> to specify a file.")
+                return None
+
+            self.logger.info(f"Selected file: {file}")
+
+        # Ensure file has proper extension
         if not file.endswith((".yaml", ".yml", ".json")):
             file += ".yaml"
 
+        # Check if file exists
         if not file_exists(file):
             # Check if the file is in the experiments folder
             file_in_experiments_folder = f"{EXPERIMENT_DIR}/{file}"
@@ -265,8 +303,128 @@ class BILBO_ExperimentHandler:
 
             file = file_in_experiments_folder
 
-        definition = ExperimentDefinition.from_file(file)
-        return self.run_experiment(definition, blocking=blocking)
+        # Determine output directory
+        if output is None:
+            # Use the experiment file's directory as output
+            output = os.path.dirname(os.path.abspath(file))
+            self.logger.info(f"Output directory: {output}")
+
+        # Validate the experiment file before running
+        definition = self._validate_and_load_experiment(file)
+        if definition is None:
+            return None
+
+        return self.run_experiment(definition, experiment_file_folder=output, blocking=blocking)
+
+    def run_experiment_from_client(
+        self,
+        blocking: bool = True
+    ) -> ExperimentData | dict | None:
+        """Load and run an experiment from a remote client (CLIENT mode).
+
+        This method opens a file picker in the browser, uploads the file to a temp directory,
+        runs the experiment, and sends the result back to the client for download.
+
+        Args:
+            blocking: If True, wait for completion
+
+        Returns:
+            Experiment data on success, None on failure
+        """
+        if self._gui is None:
+            self.logger.error("No GUI available for client file picker")
+            return None
+
+        self.logger.info("Opening browser file picker for client...")
+        file = self._gui.open_file_picker(
+            accept='.yaml,.yml,.json',
+            timeout=120.0,
+            max_size=1024 * 1024  # 1 MB max
+        )
+
+        if not file:
+            self.logger.info("File selection cancelled")
+            return None
+
+        self.logger.info(f"Client uploaded file: {file}")
+
+        # Use temp directory for output (we'll send it back to client)
+        output = tempfile.gettempdir()
+
+        # Validate the experiment file before running
+        definition = self._validate_and_load_experiment(file)
+        if definition is None:
+            return None
+
+        # Run the experiment
+        result = self.run_experiment(definition, experiment_file_folder=output, blocking=blocking)
+
+        # If successful and we have data, send the result file to the client for download
+        if result is not None and isinstance(result, dict):
+            self._send_result_to_client(result, definition.id)
+
+        return result
+
+    def _send_result_to_client(self, experiment_data: dict, experiment_id: str) -> None:
+        """Send experiment result file to the client for download."""
+        import os
+
+        if self._gui is None:
+            return
+
+        try:
+            # Create a temp file with the experiment data
+            filename = f"experiment_{experiment_id}.json"
+            temp_path = os.path.join(tempfile.gettempdir(), filename)
+
+            with open(temp_path, 'w') as f:
+                json.dump(experiment_data, f, indent=2)
+
+            # Send to client for download
+            self._gui.send_file_for_download(temp_path, filename)
+            self.logger.info(f"Sent experiment result to client: {filename}")
+
+            # Clean up temp file
+            os.remove(temp_path)
+
+        except Exception as e:
+            self.logger.error(f"Failed to send result to client: {e}")
+
+    def _validate_and_load_experiment(self, file: str) -> ExperimentDefinition | None:
+        """Validate and load an experiment definition from file.
+
+        Args:
+            file: Path to experiment file
+
+        Returns:
+            ExperimentDefinition on success, None on validation failure
+        """
+        try:
+            definition = ExperimentDefinition.from_file(file)
+        except FileNotFoundError as e:
+            self.logger.error(f"Experiment file not found: {e}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Failed to parse experiment file: {e}")
+            return None
+
+        # Validate required fields
+        if not definition.id:
+            self.logger.error("Experiment validation failed: missing 'id' field")
+            return None
+
+        if not definition.actions or len(definition.actions) == 0:
+            self.logger.error("Experiment validation failed: no actions defined")
+            return None
+
+        # Log experiment info
+        self.logger.info(f"Loaded experiment: {definition.id}")
+        self.logger.info(f"  Description: {definition.description}")
+        self.logger.info(f"  Actions: {len(definition.actions)}")
+        if definition.timeout:
+            self.logger.info(f"  Timeout: {definition.timeout}s")
+
+        return definition
 
     def run_trajectory(self, trajectory: BILBO_InputTrajectory) -> BILBO_TrajectoryData | None:
         """Run a trajectory on the robot (blocking).
@@ -468,12 +626,14 @@ class BILBO_ExperimentHandler:
         if result.caused_by(self._events_internal.experiment_timeout):
             self.logger.error("Experiment timed out (robot-side timeout)")
             self.events.experiment_timeout.set(flags={'experiment_id': experiment_definition.id})
-            return None
+            # Still download data and generate report for timed out experiments
+            return self._download_experiment_data(data, experiment_file_folder)
 
         if result.caused_by(self._events_internal.experiment_error):
             self.logger.error("Experiment failed")
             self.events.experiment_error.set(flags={'experiment_id': experiment_definition.id})
-            return None
+            # Still download data and generate report for failed experiments
+            return self._download_experiment_data(data, experiment_file_folder)
 
         self.logger.info(f"Experiment \"{experiment_definition.id}\" finished successfully")
 
@@ -485,23 +645,31 @@ class BILBO_ExperimentHandler:
         file_path: str,
         experiment_file_folder: str | None
     ) -> dict | None:
-        """Download experiment data from the robot."""
+        """Download experiment data from the robot.
+
+        Args:
+            file_path: Path to the experiment data file on the robot
+            experiment_file_folder: Directory to save the downloaded file.
+                                   If None, uses a temp directory.
+        """
         if experiment_file_folder is None:
-            # Use desktop as default location
-            download_dir = '/Users/lehmann/Desktop/'
+            # Use temp directory as fallback (no magic paths)
+            download_dir = tempfile.gettempdir()
+            self.logger.warning(f"No output directory specified, using temp: {download_dir}")
         else:
             download_dir = experiment_file_folder
 
         try:
             filename = self.core.file_handler.download_file(file_path, download_dir)
+            self.logger.info(f"Experiment data saved to: {filename}")
 
             with open(filename, 'r') as f:
                 experiment_data = json.load(f)
 
             self._last_experiment_data = experiment_data
 
-            # Generate experiment report
-            self._generate_report(experiment_data)
+            # Generate experiment report with same naming scheme as data file
+            self._generate_report(experiment_data, data_file_path=filename)
 
             return experiment_data
 
@@ -509,13 +677,44 @@ class BILBO_ExperimentHandler:
             self.logger.error(f"Failed to download experiment data: {e}")
             return None
 
-    def _generate_report(self, experiment_data: dict) -> None:
-        """Generate an HTML report for the experiment."""
+    def _generate_report(
+        self,
+        experiment_data: dict,
+        data_file_path: str | None = None,
+        open_report: bool = True
+    ) -> None:
+        """Generate an HTML report for the experiment.
+
+        Args:
+            experiment_data: The experiment data dictionary
+            data_file_path: Path to the data file. If provided, the report will be saved
+                           in the same directory with the same base name but .html extension.
+            open_report: If True, opens the saved report in the default browser.
+        """
+        import os
+        import webbrowser
+
         try:
             exp_id = experiment_data.get('id', 'unknown')
             self.logger.info(f"Generating report for experiment \"{exp_id}\"...")
-            make_report(experiment_data, show=True)
-            self.logger.info(f"Report generated for experiment \"{exp_id}\"")
+
+            # Determine output path based on data file path
+            output_path = None
+            if data_file_path:
+                # Use same directory and base name, but with _report.html extension
+                base_path = os.path.splitext(data_file_path)[0]
+                output_path = f"{base_path}_report.html"
+
+            # Generate and save report (show=False since we handle opening separately)
+            make_report(experiment_data, output=output_path, show=(output_path is None))
+
+            if output_path:
+                self.logger.info(f"Report saved to: {output_path}")
+                # Open in browser if requested
+                if open_report:
+                    webbrowser.open(f"file://{os.path.abspath(output_path)}")
+            else:
+                self.logger.info(f"Report generated for experiment \"{exp_id}\"")
         except Exception as e:
             self.logger.warning(f"Failed to generate experiment report: {e}")
 
@@ -570,14 +769,14 @@ class BILBO_ExperimentHandler:
 
         match event:
             case 'started':
-                self.logger.debug(f"Experiment \"{experiment_id}\" started")
+                self.logger.debug(f"Event: Experiment \"{experiment_id}\" started")
                 self._events_internal.experiment_started.set(
                     flags={'experiment_id': experiment_id},
                     data=data
                 )
 
             case 'finished':
-                self.logger.debug(f"Experiment \"{experiment_id}\" finished")
+                self.logger.debug(f"Event: Experiment \"{experiment_id}\" finished")
                 self.status = BILBO_ExperimentHandler_Status.IDLE
                 self._events_internal.experiment_finished.set(
                     flags={'experiment_id': experiment_id},
@@ -589,7 +788,7 @@ class BILBO_ExperimentHandler:
                 )
 
             case 'error':
-                self.logger.warning(f"Experiment \"{experiment_id}\" failed")
+                self.logger.warning(f"Event: Experiment \"{experiment_id}\" failed")
                 self.status = BILBO_ExperimentHandler_Status.IDLE
                 self._events_internal.experiment_error.set(
                     flags={'experiment_id': experiment_id},
@@ -601,7 +800,7 @@ class BILBO_ExperimentHandler:
                 )
 
             case 'timeout':
-                self.logger.warning(f"Experiment \"{experiment_id}\" timed out")
+                self.logger.warning(f"Event: Experiment \"{experiment_id}\" timed out")
                 self.status = BILBO_ExperimentHandler_Status.IDLE
                 self._events_internal.experiment_timeout.set(
                     flags={'experiment_id': experiment_id},

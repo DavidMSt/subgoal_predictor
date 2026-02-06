@@ -1,5 +1,5 @@
 
-from extensions.simulation.src import core as core
+from simulation.src import core as core
 
 
 class BaseEnvironment(core.environment.Environment):

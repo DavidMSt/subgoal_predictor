@@ -221,7 +221,7 @@ class BILBO_OptiTrackListener:
         self.tracked_object: TrackedBILBO | None = None
 
         self.optitrack.callbacks.description_received.register(self._description_received_callback)
-        self.optitrack.events.sample.on(self._sample_callback, max_rate=50)
+        self.optitrack.events.sample.on(self._sample_callback, max_rate=30)
 
         register_exit_callback(self.close)
 
@@ -283,8 +283,9 @@ class BILBO_OptiTrackListener:
 
         if self.tracked_object is not None:
             if self.tracked_object.id in sample:
-                self.tracked_object.update(sample[self.tracked_object.id])
-                self.callbacks.sample.call(self.tracked_object.state)
-                self.events.sample.set(self.tracked_object.state)
+                if sample[self.tracked_object.id].valid:
+                    self.tracked_object.update(sample[self.tracked_object.id])
+                    self.callbacks.sample.call(self.tracked_object.state)
+                    self.events.sample.set(self.tracked_object.state)
             else:
                 self.logger.warning(f"ID {self.tracked_object.id} not found in OptiTrack Rigid Bodies Sample")
