@@ -74,10 +74,10 @@ class BILBO_Core:
         self.interface_events = BILBO_Interface_Events()
 
         self.device.events.event.on(self._handleLogMessage,
-                                    predicate=pred_flag_equals('event', 'log'))
+                                    predicate=pred_flag_equals('container', 'log'))
 
         self.device.events.event.on(self._handleSpeakEventMessage,
-                                    predicate=pred_flag_equals('event', 'speak'))
+                                    predicate=pred_flag_equals('container', 'speak'))
 
         # self.device.events.stream.on(self._handleStream, input_data=True)
         self.device.callbacks.stream.register(self._handleStream)
@@ -126,8 +126,8 @@ class BILBO_Core:
         self.interface_events.stop.set()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _handleLogMessage(self, log_message: JSON_Message):
-        log_data = log_message.data
+    def _handleLogMessage(self, event_data, **kwargs):
+        log_data = event_data.get('data', {}) or {}
 
         if 'level' not in log_data or 'message' not in log_data or 'logger' not in log_data:
             self.logger.error(f"Invalid log message: {log_data}")
@@ -146,8 +146,8 @@ class BILBO_Core:
             speak(f"{self.id}: {log_data['message']}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _handleSpeakEventMessage(self, message: JSON_Message):
-        data = message.data
+    def _handleSpeakEventMessage(self, event_data, **kwargs):
+        data = event_data.get('data', {}) or {}
         if data.get('message', None) is not None:
             speak(f"{self.id}: {data['message']}")
 

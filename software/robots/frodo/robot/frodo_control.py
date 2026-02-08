@@ -31,7 +31,7 @@ class FRODO_Control:
         self.logger = Logger(f"{self.information.id} Control")
 
         self.navigation_events = FRODO_Navigation_Events()
-        self.device.events.event.on(self._on_navigation_event, predicate=pred_flag_equals('event', 'navigation'))
+        self.device.events.event.on(self._on_navigation_event, predicate=pred_flag_equals('container', 'navigation'))
 
     # === METHODS ======================================================================================================
     def setSpeed(self, speed_left, speed_right):
@@ -170,15 +170,14 @@ class FRODO_Control:
                                            request_response=True)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_navigation_event(self, event, *args, **kwargs):
-        self.logger.important(f"Navigation event: {event}")
-        data = event.data
-        # Switch the different event types
-        navigation_event_type = data['type']
-        navigation_event_data = data['data']
+    def _on_navigation_event(self, event_data, *args, **kwargs):
+        self.logger.important(f"Navigation event: {event_data}")
+        data = event_data.get('data', {}) or {}
+        navigation_event_type = data.get('type', None)
+        navigation_event_data = data.get('data', {}) or {}
         element_id = navigation_event_data.get('element_id', '')
 
-        match data['type']:
+        match navigation_event_type:
             case 'started':
                 self.navigation_events.started.set(data=element_id, flags={'id': element_id})
             case 'finished':
@@ -193,4 +192,4 @@ class FRODO_Control:
             case 'error':
                 self.navigation_events.error.set(data=element_id, flags={'id': element_id})
             case _:
-                self.logger.warning(f"Unknown navigation event: {data['type']}")
+                self.logger.warning(f"Unknown navigation event: {navigation_event_type}")

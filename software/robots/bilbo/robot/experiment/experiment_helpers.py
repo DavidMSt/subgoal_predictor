@@ -4,6 +4,7 @@ import dataclasses
 from typing import TYPE_CHECKING
 
 import numpy as np
+import yaml
 from scipy.fft import rfftfreq, rfft
 from scipy.signal import find_peaks
 
@@ -242,7 +243,7 @@ def make_report(
     from core.utils.report import Report
     from core.utils.plotting.plot import Plot, Axis, AxisConfig
     from core.utils.plotting.map_plot import MapPlot
-    from robots.bilbo.robot.experiment.experiment_definitions import ExperimentData, ExperimentDefinition
+    from robots.bilbo.robot.experiment.experiment_definitions import ExperimentData
     from robots.bilbo.robot.bilbo_data import BILBO_STATE_DATA_DEFINITIONS
 
     # Load experiment data
@@ -353,7 +354,7 @@ def make_report(
         return False
 
     # Helper to add action info (used recursively for groups)
-    def process_action(action_def, index, is_nested=False, parent_sub_actions_data=None):
+    def process_action(action_def, index, is_nested=False, parent_sub_actions_data=None, depth=0):
         nonlocal color_index
         if action_def is None:
             return
@@ -361,10 +362,14 @@ def make_report(
         action_id = action_def.get('id', f'action_{index}')
         action_type = action_def.get('type', 'unknown')
 
+        # Loops are expanded to groups at runtime — treat as group for processing
+        if action_type == 'loop':
+            action_type = 'group'
+
         # Extract parameters - handle both formats:
         # 1. Full format: {'type': 'set_velocity', 'parameters': {'forward': 0.5}}
         # 2. Shorthand format: {'type': 'set_velocity', 'forward': 0.5}
-        reserved_fields = {'id', 'type', 'tick', 'after', 'time', 'delay', 'timeout', 'label', 'parameters', 'actions'}
+        reserved_fields = {'id', 'type', 'tick', 'after', 'time', 'delay', 'timeout', 'label', 'meta', 'parameters', 'actions'}
         if 'parameters' in action_def:
             params = action_def['parameters']
         else:
@@ -395,6 +400,9 @@ def make_report(
         action_status = action_timing.get('status', 'pending')
         action_error_message = action_timing.get('error_message')
         action_label = action_timing.get('label') or action_def.get('label')  # Prefer runtime data, fallback to definition
+        action_meta = action_timing.get('meta') or action_def.get('meta')  # Prefer runtime data, fallback to definition
+        # Use original_type from meta for display (e.g., 'loop', 'loop_iteration')
+        display_type = (action_meta or {}).get('original_type', action_type)
         is_action_error = action_status in ('error', 'ERROR')
         is_action_success = action_status in ('completed', 'COMPLETED', 'finished', 'FINISHED')
         is_action_pending = action_status in ('pending', 'PENDING')
@@ -417,6 +425,7 @@ def make_report(
                 'color': color,
                 'start_time': start_time,
                 'end_time': end_time,
+                'label_layer': (action_meta or {}).get('label_layer', 0),
             })
 
         # Format parameters for display (exclude nested actions from params string for groups)
@@ -455,7 +464,7 @@ def make_report(
         actions_info.append({
             'index': index,
             'id': action_id,
-            'type': action_type,
+            'type': display_type,
             'label': action_label,
             'params_str': params_str,
             'start_time': start_time,
@@ -469,6 +478,7 @@ def make_report(
             'is_error_action': is_error_action_flag,
             'error_message': action_error_message,
             'is_nested': is_nested,
+            'depth': depth,
             'is_group': action_type in ('group', 'parallel'),
             'waypoints': waypoints,
         })
@@ -491,7 +501,7 @@ def make_report(
                     'label': sub_action_data.get('label'),
                     'parameters': sub_params,
                 }
-                process_action(sub_action_def, f"{index}.{sub_idx}", is_nested=True, parent_sub_actions_data=sub_actions_data)
+                process_action(sub_action_def, f"{index}.{sub_idx}", is_nested=True, parent_sub_actions_data=sub_actions_data, depth=depth + 1)
         elif action_type in ('group', 'parallel'):
             # Fallback: use definition-based sub-actions (when no runtime data available)
             # Look for 'actions' at top level (new format) or in params (old format)
@@ -500,7 +510,7 @@ def make_report(
                 sub_action_id = sub_action.get('id', f"{action_id}_sub_{sub_idx}")
                 sub_action_with_id = dict(sub_action)
                 sub_action_with_id['id'] = sub_action_id
-                process_action(sub_action_with_id, f"{index}.{sub_idx}", is_nested=True, parent_sub_actions_data=None)
+                process_action(sub_action_with_id, f"{index}.{sub_idx}", is_nested=True, parent_sub_actions_data=None, depth=depth + 1)
 
     def _infer_type_from_params(params: dict) -> str:
         """Try to infer action type from parameters."""
@@ -536,6 +546,9 @@ def make_report(
     PHASE_BAR_HEIGHT = 0.07
 
     # Helper to calculate ylim with padding for phase bar
+    # Determine the number of phase bar layers needed
+    num_phase_layers = max((p.get('label_layer', 0) for p in phase_actions), default=0) + 1 if phase_actions else 1
+
     def calc_ylim_with_phase_padding(*data_arrays):
         """Calculate ylim that leaves room for phase bar at bottom."""
         all_data = np.concatenate([d for d in data_arrays if len(d) > 0])
@@ -543,9 +556,10 @@ def make_report(
         y_range = y_max - y_min
         if y_range == 0:
             y_range = 1.0  # Avoid division by zero
-        # Add padding: small margin at top, larger at bottom for phase bar
+        # Add padding: small margin at top, larger at bottom for phase bar(s)
         padding_top = 0.05 * y_range
-        padding_bottom = (PHASE_BAR_HEIGHT / (1 - PHASE_BAR_HEIGHT)) * y_range + 0.05 * y_range
+        total_phase_height = PHASE_BAR_HEIGHT * num_phase_layers
+        padding_bottom = (total_phase_height / (1 - total_phase_height)) * y_range + 0.05 * y_range
         return (y_min - padding_bottom, y_max + padding_top)
 
     # Helper to add phase visualization to an axis
@@ -568,6 +582,7 @@ def make_report(
                         start=phase['start_time'],
                         end=phase['end_time'],
                         color=phase['color'],
+                        layer=phase.get('label_layer', 0),
                     )
         else:
             # Phase background with labels at top
@@ -817,10 +832,11 @@ def make_report(
     experiment_yaml_highlighted = ''
     if definition:
         try:
-            # Create a clean experiment definition dict for YAML export
-            # This uses the original definition from the experiment data
-            exp_def = ExperimentDefinition.from_dict(definition)
-            experiment_yaml_raw = exp_def.to_yaml()
+            # Prefer the original source dict (preserves loop syntax, shorthand, etc.)
+            source = definition.get('source_dict') or definition
+            # Strip internal fields that shouldn't appear in the output YAML
+            yaml_dict = {k: v for k, v in source.items() if not k.startswith('_') and k != 'source_dict'}
+            experiment_yaml_raw = yaml.dump(yaml_dict, default_flow_style=False, sort_keys=False)
             experiment_yaml_highlighted = _highlight_yaml(experiment_yaml_raw)
         except Exception as e:
             # If YAML generation fails, just skip it

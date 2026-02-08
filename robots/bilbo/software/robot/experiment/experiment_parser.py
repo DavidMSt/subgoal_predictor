@@ -26,6 +26,7 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 import math
@@ -504,6 +505,7 @@ class ExperimentParser:
             actions=actions,
             timeout=data.get("timeout"),
             external_input_enabled=data.get("external_input_enabled", False),
+            source_dict=copy.deepcopy(data),
         )
 
     def parse_action(self, data: dict | str, index: int = 0, parent_id: str | None = None):
@@ -731,6 +733,25 @@ def _register_builtin_actions():
             ShorthandRule("group", value_key="actions"),
         ],
         description="Execute multiple actions sequentially as a named group"
+    ))
+
+    register_action(ActionEntry(
+        type_name="loop",
+        action_class=GroupAction,  # Loops are expanded into groups at parse time
+        parameters=[
+            ActionParameter("actions", list, required=True),
+            ActionParameter("count", int, default=None),
+            ActionParameter("variable", str, default=None),
+            ActionParameter("values", list, default=None),
+            ActionParameter("range", list, default=None),
+        ],
+        shorthands=[
+            ShorthandRule("loop", expansion=lambda v: {
+                "type": "loop",
+                "count": v if isinstance(v, int) else None,
+            }),
+        ],
+        description="Repeat a block of actions N times or over a list of values"
     ))
 
     register_action(ActionEntry(

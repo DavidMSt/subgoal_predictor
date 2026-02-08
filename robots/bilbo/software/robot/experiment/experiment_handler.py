@@ -9,6 +9,9 @@ import time
 from datetime import datetime
 from typing import Any
 
+from core.communication.wifi.bilbolab_wifi_interface import (
+    wifi_event_definition, WifiEventContainer, WifiEvent,
+)
 from core.communication.wifi.data_link import CommandArgument
 from core.utils.callbacks import Callback
 from core.utils.dataclass_utils import from_dict_auto, asdict_optimized
@@ -24,6 +27,7 @@ from robot.communication.serial.bilbo_serial_messages import BILBO_Sequencer_Eve
 from robot.control.bilbo_control import BILBO_Control
 from robot.control.bilbo_control_definitions import BILBO_Control_Mode
 from robot.core import get_logging_provider
+from robot.estimation.bilbo_estimation import BILBO_Estimation
 from robot.experiment.definitions import (
     BILBO_InputTrajectory, BILBO_TrajectoryData, BILBO_StateTrajectory,
     BILBO_TrajectoryExperimentData, BILBO_TrajectoryExperimentMeta,
@@ -85,6 +89,19 @@ class ExperimentMarker:
     hold: bool = False
 
 
+_EXPERIMENT_WIFI_EVENT = WifiEvent(data_type=dict)
+
+
+@wifi_event_definition
+class ExperimentWifiEvents(WifiEventContainer):
+    started: WifiEvent = _EXPERIMENT_WIFI_EVENT
+    finished: WifiEvent = _EXPERIMENT_WIFI_EVENT
+    error: WifiEvent = _EXPERIMENT_WIFI_EVENT
+    timeout: WifiEvent = _EXPERIMENT_WIFI_EVENT
+    trajectory_finished: WifiEvent = _EXPERIMENT_WIFI_EVENT
+    trajectory_aborted: WifiEvent = _EXPERIMENT_WIFI_EVENT
+
+
 # ======================================================================================================================
 # Experiment Handler
 # ======================================================================================================================
@@ -111,6 +128,7 @@ class BILBO_ExperimentHandler:
     # === INIT =========================================================================================================
     def __init__(self, common: BILBO_Common,
                  communication: BILBO_Communication,
+                 estimation: BILBO_Estimation,
                  interfaces: BILBO_Interfaces,
                  utilities: BILBO_Utilities,
                  control: BILBO_Control,
@@ -119,6 +137,7 @@ class BILBO_ExperimentHandler:
         # Process Inputs
         self.common = common
         self.communication = communication
+        self.estimation = estimation
         self.interfaces = interfaces
         self.utilities = utilities
         self.control = control
@@ -127,6 +146,7 @@ class BILBO_ExperimentHandler:
         # Make Logger and Events
         self.logger = Logger('Experiment Handler', "DEBUG")
         self.events = BILBO_ExperimentHandler_Events()
+        self.wifi_events = ExperimentWifiEvents(wifi=communication.wifi.wifi, id='experiment')
         self._internal_events = BILBO_ExperimentHandler.InternalEvents()
         self.action_event = Event(flags=EventFlag('id', str))
         self.markers = {}
@@ -181,6 +201,20 @@ class BILBO_ExperimentHandler:
         )
 
         self.communication.wifi.newCommand(
+            identifier='run_dilc_experiment',
+            function=self._run_dilc_experiment_external,
+            arguments=[
+                CommandArgument(
+                    name='settings',
+                    type=dict,
+                    optional=False,
+                    description="DILC experiment settings"
+                )
+            ],
+            description="Start a DILC experiment (blocking, runs in thread)",
+        )
+
+        self.communication.wifi.newCommand(
             identifier='stop_experiment',
             function=self.stop_current_experiment,
             arguments=[
@@ -226,13 +260,7 @@ class BILBO_ExperimentHandler:
         self.active_experiment.events.timeout.on(callback=Callback(self._on_experiment_timeout), once=True)
         self.status = BILBO_ExperimentHandler_Status.EXPERIMENT
 
-        self.communication.wifi.sendEvent(
-            event='experiment',
-            data={
-                'event': 'started',
-                'experiment_id': experiment.definition.id
-            }
-        )
+        self.wifi_events.started.send(data={'experiment_id': experiment.definition.id})
 
         return True
 
@@ -274,6 +302,31 @@ class BILBO_ExperimentHandler:
             raise ValueError(f"Expected ExperimentData, got {type(data)}")
 
         return data
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def run_dilc_experiment(self, settings):
+        """Run a DILC (Dual Iterative Learning Control) experiment.
+
+        This is a blocking call that runs the full experiment and returns results.
+
+        Args:
+            settings: DILC_Experiment_Settings with experiment configuration.
+
+        Returns:
+            DILC_Results on completion (includes partial data on error/abort), or None on failure.
+        """
+        from robot.experiment.trial_experiments.dilc import DILC_Experiment
+
+        experiment = DILC_Experiment(
+            common=self.common,
+            estimation=self.estimation,
+            control=self.control,
+            communication=self.communication,
+            interfaces=self.interfaces,
+            experiment_handler=self,
+            settings=settings,
+        )
+        return experiment.run()
 
     # ------------------------------------------------------------------------------------------------------------------
     def stop_current_experiment(self, reason: str = "External stop request") -> bool:
@@ -353,6 +406,8 @@ class BILBO_ExperimentHandler:
 
             if trace.caused_by(self._internal_events.trajectory_aborted):
                 self.logger.warning(f"Trajectory {trajectory.id} aborted before start")
+                self.events.trajectory_aborted.set(flags={'trajectory_id': trajectory.id})
+                self.wifi_events.trajectory_aborted.send(data={'trajectory_id': trajectory.id})
                 self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
                 return None
 
@@ -392,6 +447,7 @@ class BILBO_ExperimentHandler:
             if trace.caused_by(self._internal_events.trajectory_aborted):
                 self.logger.warning(f"Trajectory {trajectory.id} aborted during execution")
                 self.events.trajectory_aborted.set(flags={'trajectory_id': trajectory.id})
+                self.wifi_events.trajectory_aborted.send(data={'trajectory_id': trajectory.id})
                 self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
                 return None
 
@@ -439,14 +495,10 @@ class BILBO_ExperimentHandler:
             self.logger.info(f"Trajectory {trajectory.id} finished at tick {end_tick}")
 
             # 7.) Send the trajectory-finished event via Wi-Fi
-            self.communication.wifi.sendEvent(
-                event='trajectory',
-                data={
-                    'event': 'finished',
-                    'trajectory_id': trajectory.id,
-                    'data': trajectory_experiment_data
-                }
-            )
+            self.wifi_events.trajectory_finished.send(data={
+                'trajectory_id': trajectory.id,
+                'data': trajectory_experiment_data,
+            })
 
             self.trajectory_status = BILBO_ExperimentHandler_TrajectoryStatus.IDLE
             return trajectory_experiment_data
@@ -504,6 +556,34 @@ class BILBO_ExperimentHandler:
         return sample
 
     # === EXTERNAL METHODS =============================================================================================
+    def _run_dilc_experiment_external(self, settings: dict) -> bool:
+        """Handle WiFi command to start a DILC experiment (non-blocking)."""
+        if self.status != BILBO_ExperimentHandler_Status.IDLE:
+            self.logger.warning(f"Cannot start DILC experiment: handler is {self.status}")
+            return False
+
+        from robot.experiment.trial_experiments.dilc import DILC_Experiment_Settings
+
+        try:
+            dilc_settings = from_dict_auto(DILC_Experiment_Settings, settings)
+            self.logger.info(f"Received DILC experiment request: {dilc_settings.id}")
+        except Exception as e:
+            self.logger.error(f"Failed to parse DILC experiment settings: {e}")
+            return False
+
+        self.status = BILBO_ExperimentHandler_Status.EXPERIMENT
+        run_in_thread(self._run_dilc_experiment_thread, dilc_settings)
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _run_dilc_experiment_thread(self, settings):
+        """Thread target for DILC experiment execution."""
+        try:
+            self.run_dilc_experiment(settings)
+        finally:
+            self.status = BILBO_ExperimentHandler_Status.IDLE
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _run_trajectory_external(self, trajectory_data: dict) -> bool:
         try:
             trajectory = from_dict_auto(BILBO_InputTrajectory, trajectory_data)
@@ -746,14 +826,10 @@ class BILBO_ExperimentHandler:
         )
 
         # Send data via Wi-Fi
-        self.communication.wifi.sendEvent(
-            event='experiment',
-            data={
-                'event': 'finished',
-                'experiment_id': data['id'],
-                'data': filepath
-            }
-        )
+        self.wifi_events.finished.send(data={
+            'experiment_id': data['id'],
+            'data': filepath,
+        })
 
         self.active_experiment = None
 
@@ -786,30 +862,23 @@ class BILBO_ExperimentHandler:
                 flags={'experiment_id': data['id']}
             )
 
-            # Send data via Wi-Fi (same as finished, but with error event type)
-            self.communication.wifi.sendEvent(
-                event='experiment',
-                data={
-                    'event': status,
-                    'experiment_id': data['id'],
-                    'data': filepath,
-                    'error_action_id': data.get('error_action_id'),
-                    'error_message': data.get('error_message'),
-                }
-            )
+            # Send data via Wi-Fi
+            self.wifi_events.error.send(data={
+                'status': status,
+                'experiment_id': data['id'],
+                'data': filepath,
+                'error_action_id': data.get('error_action_id'),
+                'error_message': data.get('error_message'),
+            })
         else:
             # Old behavior: just a message (backward compatibility)
             self.logger.error(f"Experiment error: {data}")
             self.events.experiment_error.set(flags={'experiment_id': experiment_id})
 
-            self.communication.wifi.sendEvent(
-                event='experiment',
-                data={
-                    'event': 'error',
-                    'experiment_id': experiment_id,
-                    'error_message': str(data) if data else None,
-                }
-            )
+            self.wifi_events.error.send(data={
+                'experiment_id': experiment_id,
+                'error_message': str(data) if data else None,
+            })
 
         self.status = BILBO_ExperimentHandler_Status.IDLE
         self.active_experiment = None
@@ -829,13 +898,7 @@ class BILBO_ExperimentHandler:
 
         self.events.experiment_timeout.set(flags={'experiment_id': experiment_id})
 
-        self.communication.wifi.sendEvent(
-            event='experiment',
-            data={
-                'event': 'timeout',
-                'experiment_id': experiment_id,
-            }
-        )
+        self.wifi_events.timeout.send(data={'experiment_id': experiment_id})
 
         self.active_experiment = None
         self.status = BILBO_ExperimentHandler_Status.IDLE

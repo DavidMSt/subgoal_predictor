@@ -86,17 +86,25 @@ float Feedforward::stiction_term(float vref_now) const {
     }
 
     float v0 = config.v0_stiction;
+    float s;
     if (v0 <= 0.0f) {
         // fallback to "hard" sign
-        if (vref_now > 0.0f) return +config.Kc;
-        if (vref_now < 0.0f) return -config.Kc;
-        return 0.0f;
+        if (vref_now > 0.0f) s = 1.0f;
+        else if (vref_now < 0.0f) s = -1.0f;
+        else return 0.0f;
+    } else {
+        // Smooth sign to avoid chatter near zero:
+        // s = tanh(v / v0)  -> in (-1, +1)
+        s = tanhf(vref_now / v0);
     }
 
-    // Smooth sign to avoid chatter near zero:
-    // s = tanh(v / v0)  -> in (-1, +1)
-    const float s = tanhf(vref_now / v0);
-    return config.Kc * s;
+    // Stribeck decay: fade out stiction at higher speeds
+    float decay = 1.0f;
+    if (config.v_decay_stiction > 0.0f) {
+        decay = expf(-fabsf(vref_now) / config.v_decay_stiction);
+    }
+
+    return config.Kc * s * decay;
 }
 
 float Feedforward::apply_output_limit(float tau) const {

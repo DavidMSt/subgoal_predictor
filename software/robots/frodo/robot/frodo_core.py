@@ -39,11 +39,11 @@ class FRODO_Core:
         self.events = FRODO_Core_Events()
 
         self.device.events.event.on(self._handleLogMessage,
-                                    predicate=pred_flag_equals('event', 'log'),
+                                    predicate=pred_flag_equals('container', 'log'),
                                     )
 
         self.device.events.event.on(self._handleSpeakEventMessage,
-                                    predicate=pred_flag_equals('event', 'speak'),
+                                    predicate=pred_flag_equals('container', 'speak'),
                                     )
 
         self.device.callbacks.stream.register(self._handleStream)
@@ -54,8 +54,8 @@ class FRODO_Core:
                                     arguments={'frequency': frequency, 'time_ms': time_ms, 'repeats': repeats})
 
     # === PRIVATE METHODS ==============================================================================================
-    def _handleLogMessage(self, log_message: JSON_Message):
-        log_data = log_message.data
+    def _handleLogMessage(self, event_data, **kwargs):
+        log_data = event_data.get('data', {}) or {}
 
         if 'level' not in log_data or 'message' not in log_data or 'logger' not in log_data:
             self.logger.error(f"Invalid log message: {log_data}")
@@ -75,8 +75,8 @@ class FRODO_Core:
             speak(f"{self.id}: {log_data['message']}")
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _handleSpeakEventMessage(self, message: JSON_Message):
-        data = message.data
+    def _handleSpeakEventMessage(self, event_data, **kwargs):
+        data = event_data.get('data', {}) or {}
         if data.get('message', None) is not None:
             speak(f"{self.id}: {data['message']}")
 

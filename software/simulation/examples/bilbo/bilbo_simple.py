@@ -16,13 +16,14 @@ def main():
     N = 500
     # Generate the robot
     bilbo_dynamics = BILBO_Dynamics_2D(model=DEFAULT_BILBO_MODEL, Ts=0.01)
-    bilbo_dynamics.polePlacement(poles=BILBO_2D_POLES, apply_poles_to_system=True)
+    poles = [0, -10, -5 + 7j, -5 - 7j]
+
+
+    bilbo_dynamics.polePlacement(poles=poles, apply_poles_to_system=True)
 
     t = np.linspace(0, 5, N)  # 5 seconds over N points
-    u = 0.2 * np.sin(2 * np.pi * 0.5 * t)  # 0.2 amplitude, 0.5 Hz frequency
-
-    plt.plot(u)
-    plt.show()
+    # u = 0.2 * np.sin(2 * np.pi * 0.5 * t)  # 0.2 amplitude, 0.5 Hz frequency
+    u = np.ones(N)*(-1)
 
     states = bilbo_dynamics.simulate(u)
 

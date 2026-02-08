@@ -10,12 +10,23 @@ from core.communication.settings import UDP_PORT_ADDRESS_STREAM, WS_SERVER_PORT
 from core.communication.wifi.udp.protocols.udp_json_protocol import UDP_JSON_Message
 from core.communication.wifi.udp.udp import UDP_Broadcast, UDP
 from core.utils.callbacks import callback_definition, CallbackContainer
-from core.utils.dataclass_utils import asdict_optimized, from_dict
+from core.utils.dataclass_utils import asdict_optimized, from_dict, from_dict_auto
 from core.utils.events import event_definition, Event, EventFlag
 from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
 from core.utils.time import precise_sleep
 from core.utils.websockets import WebsocketServer, WebsocketServerClient
+
+
+@dataclasses.dataclass
+class WifiEventData:
+    """Structured payload received from a WifiEvent on the robot."""
+    event: str = ''  # event id (e.g. 'path_finished')
+    event_uid: str = ''  # full uid (e.g. 'position_control:path_finished')
+    container: str | None = None  # container id if given (e.g. 'position_control')
+    flags: dict = dataclasses.field(default_factory=dict)
+    data: Any = None  # actual event data
+
 
 # ======================================================================================================================
 DEBUG = False
@@ -57,7 +68,10 @@ class DeviceCallbacks:
 class DeviceEvents:
     rx: Event
     stream: Event
-    event: Event = Event(flags=EventFlag('event', str))
+    event: Event = Event(flags=[EventFlag('event', (str, type(None))),
+                                EventFlag('container', (str, type(None))),
+                                EventFlag('uid', (str, type(None))),
+                                EventFlag('flags', dict)])
     timeout: Event
 
 
@@ -296,8 +310,20 @@ class Device:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleEventMessage(self, message: JSON_Message):
+
+        # Parse structured WifiEventData if the payload matches
+        if not isinstance(message.data, dict):
+            self.logger.warning(f"Received non-dict event data: {message.data}. message: {message}")
+            return
+
+        event_id = message.data.get('event', None)
+        container = message.data.get('container', None)
+        uid = message.data.get('event_uid', None)
+        flags = message.data.get('flags', {})
+        data = message.data.get('data', None)
+
         self.callbacks.event.call(message)
-        self.events.event.set(data=message, flags={'event': message.event})
+        self.events.event.set(data=message.data, flags={'event': event_id, 'container': container, 'uid': uid, 'flags': flags})
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleStreamMessage(self, message: JSON_Message):

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import abc
+import copy
 import dataclasses
 import enum
 import json
 import math
+import re
 import threading
 import time
 from datetime import datetime
@@ -86,6 +88,34 @@ def _get_mode_name_from_trace(trace, control, control_mode_event=None) -> str:
     return "UNKNOWN"
 
 
+_VAR_PATTERN = re.compile(r'\$\{(\w+)\}')
+
+
+def _substitute_variables(obj: Any, variables: dict[str, Any]) -> Any:
+    """Recursively substitute ${variable} placeholders in a data structure.
+
+    If a string is exactly "${var}", returns the variable's value preserving its
+    original type (e.g. float stays float). If "${var}" is embedded in a larger
+    string, it is interpolated as a string. Dicts and lists are recursively
+    processed (copies are created; the original is not mutated).
+    """
+    if isinstance(obj, str):
+        # Full-string match: preserve type
+        m = _VAR_PATTERN.fullmatch(obj)
+        if m and m.group(1) in variables:
+            return variables[m.group(1)]
+        # Partial substitution: interpolate as string
+        def _replacer(match):
+            name = match.group(1)
+            return str(variables[name]) if name in variables else match.group(0)
+        return _VAR_PATTERN.sub(_replacer, obj)
+    if isinstance(obj, dict):
+        return {k: _substitute_variables(v, variables) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_substitute_variables(item, variables) for item in obj]
+    return obj
+
+
 # ======================================================================================================================
 # Status Enums
 # ======================================================================================================================
@@ -128,6 +158,8 @@ class ExperimentActionDefinition:
 
     label: str | None = None  # human-readable label for display in reports
 
+    meta: dict[str, Any] | None = None  # optional metadata for reports/analysis (e.g., label_layer)
+
     # action-specific stuff (parameters for the concrete action class)
     parameters: dict[str, Any] = dataclasses.field(default_factory=dict)
 
@@ -164,7 +196,7 @@ class ExperimentActionDefinition:
         action_type = d["type"]
 
         # Reserved fields that should not go into parameters
-        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "label", "parameters", "actions"}
+        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "label", "meta", "parameters", "actions"}
 
         # If 'parameters' is explicitly provided, use it; otherwise collect non-reserved fields
         if "parameters" in d:
@@ -174,6 +206,75 @@ class ExperimentActionDefinition:
                 k: v for k, v in d.items()
                 if k not in reserved_fields
             }
+
+        # --- Loop expansion: convert loop into nested groups at parse time ---
+        if action_type == "loop":
+            actions_list = parameters.pop("actions", None) or d.get("actions", [])
+            variable = parameters.pop("variable", None)
+            loop_count = parameters.pop("count", None)
+            loop_values = parameters.pop("values", None)
+            loop_range = parameters.pop("range", None)
+
+            # Determine iteration values
+            if loop_values is not None:
+                iteration_values = list(loop_values)
+            elif loop_range is not None:
+                if isinstance(loop_range, int):
+                    iteration_values = list(range(loop_range))
+                elif isinstance(loop_range, list):
+                    iteration_values = list(range(*loop_range))
+                else:
+                    raise ValueError(f"Invalid loop range: {loop_range}")
+            elif loop_count is not None:
+                iteration_values = list(range(int(loop_count)))
+            else:
+                raise ValueError("Loop action requires one of: count, values, or range")
+
+            if variable is None:
+                variable = "_index"
+
+            # Extract loop label/meta settings for iteration wrappers
+            loop_meta = d.get("meta") or {}
+            loop_labels_template = loop_meta.get("loop_labels")
+            loop_labels_layer = loop_meta.get("loop_labels_layer")
+
+            # Build iteration groups
+            iter_groups = []
+            for i, val in enumerate(iteration_values):
+                variables = {variable: val, "_index": i}
+                iter_actions = _substitute_variables(copy.deepcopy(actions_list), variables)
+                iter_meta = {"original_type": "loop_iteration"}
+                # Apply iteration label from meta template if provided
+                if loop_labels_template is not None:
+                    iter_meta["label_layer"] = loop_labels_layer if loop_labels_layer is not None else 0
+                iter_group = {
+                    "type": "group",
+                    "id": f"{action_id}_iter_{i}",
+                    "meta": iter_meta,
+                    "actions": iter_actions,
+                }
+                if loop_labels_template is not None:
+                    iter_group["label"] = _substitute_variables(loop_labels_template, variables)
+                iter_groups.append(iter_group)
+
+            # Build outer group that wraps all iterations
+            # Strip loop_labels/loop_labels_layer from meta before passing to outer group
+            outer_meta = {k: v for k, v in loop_meta.items() if k not in ("loop_labels", "loop_labels_layer")}
+            outer_meta["original_type"] = "loop"
+            outer_group = {
+                "type": "group",
+                "id": action_id,
+                "meta": outer_meta,
+                "actions": iter_groups,
+            }
+            if d.get("label") is not None:
+                outer_group["label"] = d["label"]
+            # Carry over scheduling fields
+            for field in ("tick", "after", "time", "delay", "timeout"):
+                if d.get(field) is not None:
+                    outer_group[field] = d[field]
+
+            return cls.from_dict(outer_group, index=index, parent_id=parent_id)
 
         # Parse sub-actions for group/parallel types
         sub_actions: dict[str, ExperimentActionDefinition] | None = None
@@ -199,6 +300,7 @@ class ExperimentActionDefinition:
             delay=d.get("delay"),
             timeout=d.get("timeout"),
             label=d.get("label"),
+            meta=d.get("meta"),
             parameters=parameters,
             sub_actions=sub_actions,
         )
@@ -221,6 +323,8 @@ class ExperimentActionDefinition:
             dict_out["timeout"] = self.timeout
         if self.label is not None:
             dict_out["label"] = self.label
+        if self.meta is not None:
+            dict_out["meta"] = self.meta
         if self.parameters:
             dict_out["parameters"] = self.parameters
         if self.sub_actions:
@@ -256,6 +360,7 @@ class ExperimentAction(abc.ABC):
     time: float | None = None
     timeout: float | None = None
     label: str | None = None  # Human-readable label for display
+    meta: dict[str, Any] | None = None  # Optional metadata for reports/analysis
 
     data: dict | Any | None = None  # Data collected by the action
 
@@ -310,6 +415,7 @@ class ExperimentAction(abc.ABC):
             "time": definition.time,
             "timeout": definition.timeout,
             "label": definition.label,
+            "meta": definition.meta,
         }
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -405,6 +511,7 @@ class ExperimentAction(abc.ABC):
             error_message=self._error_message,
             action_type=self.get_action_type_name(),
             label=self.label,
+            meta=self.meta,
             parameters=self.get_parameters(),
             data=self.data,
             sub_actions=None,
@@ -575,7 +682,9 @@ class SetVelocityAction(ExperimentAction):
 
     def execute(self) -> bool:
         self._on_started()
-        self.experiment.experiment_handler.control.set_velocity(self.forward, self.turn, normalized=self.normalized)
+        self.experiment.experiment_handler.control.set_velocity(self.forward,
+                                                                self.turn,
+                                                                normalized=self.normalized)
         self._on_finished()
         return True
 
@@ -887,6 +996,7 @@ class ParallelAction(ExperimentAction):
             error_message=self._error_message,
             action_type=self.get_action_type_name(),
             label=self.label,
+            meta=self.meta,
             parameters=self.get_parameters(),
             data=self.data,
             sub_actions=sub_actions_data,
@@ -1007,6 +1117,7 @@ class GroupAction(ExperimentAction):
             error_message=self._error_message,
             action_type=self.get_action_type_name(),
             label=self.label,
+            meta=self.meta,
             parameters=self.get_parameters(),
             data=self.data,
             sub_actions=sub_actions_data,
@@ -1699,6 +1810,7 @@ class ExperimentDefinition:
     actions: list[ExperimentActionDefinition]
     timeout: float | None = None
     external_input_enabled: bool = False  # Whether external inputs (joystick, etc.) are enabled during experiment
+    source_dict: dict | None = None  # Original definition dict before parsing/expansion (preserved for report YAML)
 
     # ----------------------------------------------------------------------
     @classmethod
@@ -1757,6 +1869,7 @@ class ExperimentActionData:
     error_message: str | None = None
     action_type: str | None = None  # Action type (e.g., 'set_velocity', 'wait_time')
     label: str | None = None  # Human-readable label for display
+    meta: dict[str, Any] | None = None  # Optional metadata from action definition (e.g., label_layer)
     parameters: dict[str, Any] | None = None  # Action input parameters (velocity, waypoints, etc.)
     data: Any | None = None  # Action output data (results, collected info)
     sub_actions: dict[str, 'ExperimentActionData'] | None = None  # For group/parallel actions
@@ -2384,6 +2497,8 @@ class Experiment:
                 status=container.status,
                 error_message=container.error_message,
                 action_type=action_execution_data.action_type,
+                label=action_execution_data.label,
+                meta=action_execution_data.meta,
                 parameters=action_execution_data.parameters,
                 data=action_execution_data.data,
                 sub_actions=action_execution_data.sub_actions,  # Include sub-actions from groups

@@ -267,6 +267,22 @@ bool BILBO_PositionControl::is_idle() const {
 }
 
 bool BILBO_PositionControl::reset() {
+	// Send termination events if a command was active (e.g., due to control mode change)
+	switch (mode) {
+	case bilbo_position_control_mode_t::FOLLOW_PATH:
+		_on_path_aborted();
+		_path_state = bilbo_path_state_t::IDLE;
+		break;
+	case bilbo_position_control_mode_t::DRIVE_TO_POINT:
+		_send_event(position_control_event_t::MOVE_TO_POINT_TIMEOUT);
+		break;
+	case bilbo_position_control_mode_t::TURN_TO_HEADING:
+		_send_event(position_control_event_t::TURN_TO_HEADING_TIMEOUT);
+		break;
+	default:
+		break;
+	}
+
 	_angular_integral = 0.0f;
 	_linear_integral = 0.0f;
 	_arrival_timer = 0.0f;
@@ -289,7 +305,9 @@ bilbo_position_control_output_t BILBO_PositionControl::update(
 
 	bilbo_position_control_output_t output = {0.0f, 0.0f};
 
-	_elapsed_time += config.Ts;
+	if (mode != bilbo_position_control_mode_t::IDLE) {
+		_elapsed_time += config.Ts;
+	}
 
 	switch (mode) {
 	case bilbo_position_control_mode_t::IDLE:
@@ -680,8 +698,17 @@ bilbo_position_control_output_t BILBO_PositionControl::_compute_control(
 	// Effective max speed: minimum of smoothed waypoint limit and corner factor
 	float max_speed = _current_speed_limit * corner_speed_factor;
 
-	// PI control on speed_dist = max(carrot_dist, dist_to_waypoint)
-	float v_p = config.kp_linear * speed_dist;
+	// Velocity profile: sqrt deceleration curve when decel_limit set, else linear kp*d
+	float v_p;
+	if (config.decel_limit > 0.0f && speed_dist > 0.0f) {
+		v_p = sqrtf(2.0f * config.decel_limit * speed_dist);
+	} else {
+		v_p = config.kp_linear * speed_dist;
+	}
+
+	// Velocity damping: prevent overshoot by braking when already moving
+	v_p = fmaxf(0.0f, v_p - config.kd_linear * fabsf(current_v));
+
 	float v_i = _linear_integral;
 	float v_unsat = v_p + v_i;
 	float v_sat = _clamp(v_unsat, 0.0f, max_speed);
@@ -1009,7 +1036,17 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_drive_to_point(
 	float max_speed = (_active_move_command.max_speed > 0.0f) ?
 		_active_move_command.max_speed : config.max_speed;
 
-	float v_p = config.kp_linear * carrot_dist;
+	// Velocity profile: sqrt deceleration curve when decel_limit set, else linear kp*d
+	float v_p;
+	if (config.decel_limit > 0.0f && carrot_dist > 0.0f) {
+		v_p = sqrtf(2.0f * config.decel_limit * carrot_dist);
+	} else {
+		v_p = config.kp_linear * carrot_dist;
+	}
+
+	// Velocity damping: prevent overshoot by braking when already moving
+	v_p = fmaxf(0.0f, v_p - config.kd_linear * fabsf(current_v));
+
 	float v_i = _linear_integral;
 	float v_unsat = v_p + v_i;
 	float v_sat = _clamp(v_unsat, 0.0f, max_speed);

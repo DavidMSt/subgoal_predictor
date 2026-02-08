@@ -180,6 +180,7 @@ bool BILBO_Sequencer::_startSequenceInternal() {
 		send_error("Cannot start sequence %d. Sequence data not loaded",
 				this->_start_requested_id);
 		this->_start_requested = false;
+		this->_sendStartFailedAbort();
 		return false;
 	}
 
@@ -188,6 +189,7 @@ bool BILBO_Sequencer::_startSequenceInternal() {
 		send_error("Cannot start sequence %d. Other sequence loaded: %d",
 				this->_start_requested_id, this->loaded_sequence.sequence_id);
 		this->_start_requested = false;
+		this->_sendStartFailedAbort();
 		return false;
 	}
 
@@ -198,6 +200,7 @@ bool BILBO_Sequencer::_startSequenceInternal() {
 				this->loaded_sequence.sequence_id, this->config.control->mode,
 				this->loaded_sequence.control_mode);
 		this->_start_requested = false;
+		this->_sendStartFailedAbort();
 		return false;
 	}
 
@@ -249,6 +252,9 @@ void BILBO_Sequencer::abortSequence() {
 		this->_callbacks.aborted.call(
 				(uint16_t) this->loaded_sequence.sequence_id);
 	}
+
+	// Re-enable VIC (TIC has to be manually re-enabled from the host)
+	this->config.control->set_vic_enabled(true);
 
 	// Clear any pending start requests
 	this->_start_requested = false;
@@ -337,6 +343,16 @@ bool BILBO_Sequencer::loadSequence(
 /* =============================================================== */
 twipr_sequencer_sequence_data_t BILBO_Sequencer::readSequence() {
 	return this->loaded_sequence;
+}
+
+/* =============================================================== */
+void BILBO_Sequencer::_sendStartFailedAbort() {
+	sequencer_event_message_data_t event_message_data = { .event =
+			TRAJECTORY_ABORTED,
+			.sequence_id = this->loaded_sequence.sequence_id, .sequence_tick =
+					0, .tick = tick_global };
+	BILBO_Message_Sequencer_Event msg(event_message_data);
+	sendMessage(msg);
 }
 
 /* =============================================================== */

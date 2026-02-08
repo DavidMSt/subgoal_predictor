@@ -1,6 +1,10 @@
+import dataclasses
+import sys
 import threading
 import time
-from typing import Union, Callable
+import types as _types
+import typing
+from typing import Union, Callable, Any, get_origin, get_args
 
 from core.communication.wifi.data_link import Command, CommandArgument, generateCommandDict
 from core.communication.wifi.protocol import JSON_Message
@@ -10,6 +14,259 @@ from core.utils.callbacks import callback_definition, CallbackContainer, Callbac
 from core.utils.events import event_definition, Event
 from core.utils.logging_utils import Logger
 from core.utils.time import precise_sleep
+
+
+# === WIFI EVENT DATA ==================================================================================================
+@dataclasses.dataclass
+class WifiEventData:
+    """Structured payload sent over the wire for every WifiEvent."""
+    event: str  # event id (e.g. 'path_finished')
+    event_uid: str  # full uid (e.g. 'position_control:path_finished')
+    container: str | None  # container id if given (e.g. 'position_control')
+    flags: dict  # flag values
+    data: Any  # actual event data
+
+
+# === WIFI EVENT FLAG ==================================================================================================
+class WifiEventFlag:
+    """
+    Flag definition for WifiEvent, mirroring EventFlag.
+
+    Flags are sent alongside event data and can be used on the host
+    to filter/route events (e.g. group='position_control').
+    """
+    id: str
+    types: tuple[type, ...]
+
+    def __init__(self, id: str, data_type: type | tuple[type, ...]):
+        self.id = id
+        if isinstance(data_type, tuple):
+            if not data_type or not all(isinstance(t, type) for t in data_type):
+                raise TypeError("data_type tuple must be non-empty and contain only types.")
+            self.types = data_type
+        elif isinstance(data_type, type):
+            self.types = (data_type,)
+        else:
+            raise TypeError("data_type must be a type or tuple[type, ...]")
+
+    def accepts(self, value: Any) -> bool:
+        return isinstance(value, self.types)
+
+    def describe(self) -> str:
+        return " | ".join(t.__name__ for t in self.types)
+
+
+# === WIFI EVENT =======================================================================================================
+class WifiEvent:
+    """
+    A single outbound WiFi event, mirroring Event.
+
+    Each WifiEvent has an id, an optional data_type (can be a dataclass),
+    and optional flags (WifiEventFlag) for host-side filtering.
+
+    Usage:
+        @wifi_event_definition
+        class ControlWifiEvents(WifiEventContainer):
+            path_finished: WifiEvent = WifiEvent(data_type=dict, flags=WifiEventFlag('group', str))
+            mode_changed: WifiEvent
+
+        container = ControlWifiEvents(wifi=self.communication.wifi)
+        container.path_finished.send(data={'x': 3}, flags={'group': 'position_control'})
+    """
+    id: str | None
+    data_type: type | None
+    flags: dict[str, WifiEventFlag]
+
+    parent: 'WifiEventContainer | None'
+    _wifi: 'BILBOLab_Wifi_Interface | None'
+
+    def __init__(self,
+                 id: str = None,
+                 data_type: type | None = None,
+                 flags: WifiEventFlag | list[WifiEventFlag] = None):
+        self.id = id
+        self.data_type = data_type
+        self.parent = None
+        self._wifi = None
+
+        if flags is None:
+            flags = []
+        if not isinstance(flags, list):
+            flags = [flags]
+
+        self.flags = {}
+        for flag in flags:
+            if flag.id in self.flags:
+                raise ValueError(f"Duplicate flag id '{flag.id}'")
+            self.flags[flag.id] = flag
+
+    @property
+    def uid(self) -> str:
+        if self.parent is None or self.parent.id is None:
+            return self.id
+        return f"{self.parent.id}:{self.id}"
+
+    def send(self, data: Any = None, flags: dict = None) -> None:
+        if self._wifi is None:
+            raise RuntimeError(f"WifiEvent '{self.id}' is not connected to a WiFi interface.")
+
+        # Validate flags
+        flags = flags or {}
+        for flag_id, value in flags.items():
+            if flag_id not in self.flags:
+                raise ValueError(f"Unknown flag '{flag_id}' for WifiEvent '{self.id}'")
+            if not self.flags[flag_id].accepts(value):
+                ef = self.flags[flag_id]
+                raise TypeError(
+                    f"Flag '{flag_id}' expects {ef.describe()}, got {type(value).__name__}"
+                )
+
+        # Validate data type
+        if data is not None and self.data_type is not None:
+            if not isinstance(data, self.data_type):
+                raise TypeError(
+                    f"WifiEvent '{self.id}' expects data of type {self.data_type.__name__}, "
+                    f"got {type(data).__name__}."
+                )
+
+        # Serialize dataclass data to dict
+        if data is not None and dataclasses.is_dataclass(data) and not isinstance(data, type):
+            data = dataclasses.asdict(data)
+
+        # Build structured event payload
+        container_id = self.parent.id if self.parent is not None else None
+        event_data = WifiEventData(
+            event=self.id,
+            event_uid=self.uid,
+            container=container_id,
+            flags=flags,
+            data=data,
+        )
+
+        self._wifi.sendEvent(event=self.uid, data=dataclasses.asdict(event_data))
+
+    def __repr__(self):
+        return f"<WifiEvent {self.uid}>"
+
+
+# === WIFI EVENT CONTAINER =============================================================================================
+class WifiEventContainer:
+    """
+    Container for WifiEvent instances, mirroring EventContainer.
+
+    Tracks registered events by id. When events from a container are
+    registered on the BILBOLab_Wifi_Interface, duplicate IDs are rejected.
+    """
+    id: str | None
+    wifi_events: dict[str, WifiEvent]
+
+    def __init__(self, wifi: 'BILBOLab_Wifi_Interface', id: str = None):
+        self.id = id
+        self._wifi = wifi
+        self.wifi_events = {}
+
+    def add_event(self, event: WifiEvent):
+        if event.id in self.wifi_events:
+            raise ValueError(f"WifiEvent '{event.id}' already exists in container '{self.id}'.")
+        if event.parent is not None:
+            raise ValueError(f"WifiEvent '{event.id}' already has a parent.")
+        self.wifi_events[event.id] = event
+        event.parent = self
+        event._wifi = self._wifi
+
+        # Register on the interface (checks global uniqueness)
+        self._wifi.registerWifiEvent(event)
+
+
+# === WIFI EVENT DEFINITION DECORATOR =================================================================================
+def wifi_event_definition(cls):
+    """
+    Per-instance WifiEvent fields, mirroring @event_definition.
+
+    Usage:
+        @wifi_event_definition
+        class PositionControlWifiEvents(WifiEventContainer):
+            path_finished: WifiEvent = WifiEvent(data_type=dict, flags=WifiEventFlag('group', str))
+            path_started: WifiEvent
+            mode_changed: WifiEvent = WifiEvent(flags=WifiEventFlag('group', str))
+    """
+    original_init = getattr(cls, '__init__', None)
+
+    # Resolve annotations (supports `from __future__ import annotations`)
+    try:
+        module_globals = sys.modules[cls.__module__].__dict__
+        hints = typing.get_type_hints(cls, globalns=module_globals, localns=dict(vars(cls)))
+    except Exception:
+        hints = getattr(cls, '__annotations__', {}) or {}
+
+    def _is_wifi_event_type(t) -> bool:
+        if t is WifiEvent:
+            return True
+        if isinstance(t, str):
+            return t == 'WifiEvent' or t.endswith('.WifiEvent')
+        origin = get_origin(t)
+        try:
+            is_union = (origin is typing.Union) or (origin is _types.UnionType)
+        except Exception:
+            is_union = (origin is typing.Union)
+        if is_union:
+            return any(_is_wifi_event_type(arg) for arg in get_args(t))
+        if origin is typing.ClassVar:
+            return False
+        return False
+
+    def _clone_wifi_event(template: WifiEvent, new_id: str) -> WifiEvent:
+        flags = [WifiEventFlag(ef.id, ef.types) for ef in template.flags.values()]
+        return WifiEvent(id=new_id, data_type=template.data_type, flags=flags)
+
+    def _ensure_container_bits(self):
+        if not hasattr(self, 'wifi_events') or not isinstance(getattr(self, 'wifi_events'), dict):
+            self.wifi_events = {}
+
+        if not hasattr(self, 'add_event') or not callable(getattr(self, 'add_event')):
+            def _add_event(_self, event: WifiEvent):
+                if event.id in _self.wifi_events:
+                    raise ValueError(f"WifiEvent '{event.id}' already exists in container.")
+                if event.parent is not None:
+                    raise ValueError(f"WifiEvent '{event.id}' already has a parent.")
+                _self.wifi_events[event.id] = event
+                event.parent = _self
+                event._wifi = _self._wifi
+                _self._wifi.registerWifiEvent(event)
+
+            setattr(self, 'add_event', _add_event.__get__(self, self.__class__))
+
+    def new_init(self, *args, **kwargs):
+        if original_init:
+            original_init(self, *args, **kwargs)
+
+        _ensure_container_bits(self)
+
+        # Process annotated attributes
+        if isinstance(hints, dict):
+            for attr_name, anno in hints.items():
+                default_val = getattr(cls, attr_name, None)
+
+                if isinstance(default_val, WifiEvent):
+                    ev = _clone_wifi_event(default_val, new_id=attr_name)
+                    setattr(self, attr_name, ev)
+                    self.add_event(ev)
+                    continue
+
+                if _is_wifi_event_type(anno) and attr_name not in self.__dict__:
+                    ev = WifiEvent(id=attr_name)
+                    setattr(self, attr_name, ev)
+                    self.add_event(ev)
+
+        # Pick up unannotated class-level WifiEvent defaults
+        for attr_name, value in vars(cls).items():
+            if isinstance(value, WifiEvent) and attr_name not in self.__dict__:
+                ev = _clone_wifi_event(value, new_id=attr_name)
+                setattr(self, attr_name, ev)
+                self.add_event(ev)
+
+    cls.__init__ = new_init
+    return cls
 
 
 # === BILBOLAB WIFI INTERFACE ==========================================================================================
@@ -32,6 +289,7 @@ class BILBOLab_Wifi_Interface:
     events: BILBOLab_Wifi_Interface_Events
 
     commands: dict[str, Command]
+    _wifi_events: dict[str, WifiEvent]
 
     connected: bool = False
     _server_time_offset: float = None
@@ -61,6 +319,9 @@ class BILBOLab_Wifi_Interface:
         # Commands
         self.commands = {}
 
+        # WiFi event registry
+        self._wifi_events = {}
+
         # Thread
         self._task = threading.Thread(target=self._taskFunction, daemon=True)
 
@@ -81,6 +342,7 @@ class BILBOLab_Wifi_Interface:
         if self._task is not None and self._task.is_alive():
             self._task.join()
         self.device.close()
+
     # ------------------------------------------------------------------------------------------------------------------
     def sendEvent(self, event: str, data: dict = None, request_id: int = 0) -> None:
         if data is None:
@@ -94,6 +356,17 @@ class BILBOLab_Wifi_Interface:
         message.data = data
         message.request_id = request_id
         self._send(message)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def registerWifiEvent(self, event: WifiEvent) -> None:
+        """Register a WifiEvent on this interface. Rejects duplicate UIDs."""
+        uid = event.uid
+        if uid in self._wifi_events:
+            raise ValueError(
+                f"WifiEvent '{uid}' is already registered on this interface."
+            )
+        self._wifi_events[uid] = event
+        event._wifi = self
 
     # ------------------------------------------------------------------------------------------------------------------
     def sendStream(self, data: dict = None, stream_id: str = None) -> None:
@@ -137,6 +410,7 @@ class BILBOLab_Wifi_Interface:
         if self._server_time_offset is None:
             return None
         return time.time() + self._server_time_offset
+
     # === PRIVATE METHODS ==============================================================================================
     def _taskFunction(self):
         while not self._exit:

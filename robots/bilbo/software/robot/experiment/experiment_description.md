@@ -219,6 +219,38 @@ Common actions have shorthand forms for cleaner YAML files.
 # Group tracks start_tick and end_tick for data extraction
 ```
 
+### Loop (Repeat Actions)
+
+```yaml
+# Repeat 5 times
+- type: loop
+  count: 5
+  actions:
+    - beep
+    - wait: 500ms
+
+# Iterate over values with substitution
+- type: loop
+  variable: speed
+  values: [0.2, 0.4, 0.6]
+  actions:
+    - type: set_velocity
+      forward: "${speed}"
+    - wait: 3s
+
+# Range-based iteration
+- type: loop
+  variable: i
+  range: [0, 3]
+  actions:
+    - type: group
+      id: "trial_${i}"
+      label: "Trial ${i}"
+      actions:
+        - beep
+        - wait: 1s
+```
+
 ### Position Control
 
 ```yaml
@@ -575,6 +607,96 @@ print(f"End time: {velocity_group.end_time}")      # seconds
     - set_mode: "VELOCITY"
     - velocity: [0.3, 0.0]
     - wait: 2s
+```
+
+---
+
+### `loop` - Repeat Actions
+
+Repeats a block of actions multiple times or iterates over a list of values. The loop is expanded into nested `group` actions at parse time, so the executor only ever sees groups.
+
+Supports three iteration modes:
+
+**1. Count-based repeat:**
+```yaml
+- type: loop
+  count: 5
+  actions:
+    - beep
+    - wait: 500ms
+```
+
+**2. Iterate over explicit values:**
+```yaml
+- type: loop
+  variable: speed
+  values: [0.2, 0.4, 0.6, 0.8, 1.0]
+  actions:
+    - type: set_velocity
+      forward: "${speed}"
+    - wait: 3s
+```
+
+**3. Range-based iteration:**
+```yaml
+- type: loop
+  variable: j
+  range: [0, 5]          # range(0, 5) -> 0, 1, 2, 3, 4
+  actions:
+    - type: group
+      id: "trial_${j}"
+      label: "Trial ${j}"
+      actions:
+        - type: set_velocity
+          forward: 0.5
+        - wait: 2s
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `actions` | list | required | List of actions to repeat each iteration |
+| `count` | int | None | Number of iterations (simple repeat) |
+| `variable` | string | `"_index"` | Loop variable name for `${variable}` substitution |
+| `values` | list | None | Explicit list of values to iterate over |
+| `range` | int/list | None | Range specification: `N`, `[end]`, `[start, end]`, or `[start, end, step]` |
+
+**Variable substitution:**
+- Use `${variable}` in any string field (action parameters, IDs, labels)
+- If a string is exactly `"${variable}"`, the original type is preserved (e.g., float stays float)
+- If `${variable}` is embedded in a larger string, it is interpolated as a string
+- The built-in variable `${_index}` (0-based iteration index) is always available
+
+**How it works:**
+The loop is expanded at parse time into a `group` containing one sub-`group` per iteration. Each iteration group has the loop variable substituted into all action parameters, IDs, and labels. This means:
+- The experiment executor only sees regular `group` actions
+- Loop iteration groups appear in reports and data extraction like any other group
+- Labels on iteration groups are auto-generated (e.g., `speed=0.2`, `iteration 0`)
+
+**Nested loops:**
+Loops can be nested. Inner loop variables are substituted correctly alongside outer variables:
+
+```yaml
+- type: loop
+  variable: speed
+  values: [0.2, 0.4]
+  actions:
+    - type: loop
+      variable: direction
+      values: [0.0, 0.5, -0.5]
+      actions:
+        - type: set_velocity
+          forward: "${speed}"
+          turn: "${direction}"
+        - wait: 2s
+```
+
+**Shorthand:**
+```yaml
+# Simple repeat shorthand
+- loop: 5
+  actions:
+    - beep
+    - wait: 500ms
 ```
 
 ---
@@ -1280,6 +1402,68 @@ print(f"Forward test: {len(forward_samples)} samples, "
       f"{forward_group.end_time - forward_group.start_time:.2f}s duration")
 print(f"Turn test: {len(turn_samples)} samples")
 print(f"Combined test: {len(combined_samples)} samples")
+```
+
+### Example 15: Using Loops for Parameter Sweeps
+
+Loops make it easy to test different parameter values without duplicating actions:
+
+```yaml
+id: velocity_sweep
+description: Test different forward velocities
+timeout: 60.0
+actions:
+  - mode: BALANCING
+  - wait: 2s
+  - mode: VELOCITY
+
+  # Sweep through velocities
+  - type: loop
+    variable: speed
+    values: [0.1, 0.2, 0.3, 0.4, 0.5]
+    actions:
+      - type: group
+        id: "test_${speed}"
+        label: "v=${speed} m/s"
+        actions:
+          - type: set_velocity
+            forward: "${speed}"
+          - wait: 3s
+          - velocity: [0.0, 0.0]
+          - wait: 1s
+
+  - mode: OFF
+```
+
+Each iteration creates a labeled group, so the report shows phase bars like "v=0.1 m/s", "v=0.2 m/s", etc.
+
+### Example 16: Repeated Trials with Loop
+
+```yaml
+id: repeated_trials
+description: Run 5 identical trials with beep between each
+timeout: 120.0
+actions:
+  - mode: BALANCING
+  - wait: 2s
+
+  - type: loop
+    count: 5
+    actions:
+      - type: group
+        id: "trial_${_index}"
+        label: "Trial ${_index}"
+        actions:
+          - beep
+          - mode: VELOCITY
+          - velocity: [0.3, 0.0]
+          - wait: 3s
+          - velocity: [0.0, 0.0]
+          - wait: 1s
+          - mode: BALANCING
+          - wait: 1s
+
+  - mode: OFF
 ```
 
 ---

@@ -80,6 +80,7 @@ struct feedforward_config_t {
 	// ---- stiction smoothing ----
 	uint8_t enable_stiction;
 	float v0_stiction;     // [m/s] smoothing width; must be > 0
+	float v_decay_stiction; // [m/s] Stribeck decay speed; 0 = disabled
 
 	// ---- output saturation (optional) ----
 	uint8_t enable_output_limit;

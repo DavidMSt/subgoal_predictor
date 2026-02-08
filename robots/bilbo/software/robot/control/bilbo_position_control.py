@@ -22,14 +22,17 @@ from typing import Any
 
 import yaml
 
+from core.communication.wifi.bilbolab_wifi_interface import (
+    wifi_event_definition, WifiEventContainer, WifiEvent, WifiEventFlag,
+)
 from core.communication.wifi.data_link import CommandArgument
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.dataclass_utils import from_dict_auto
-from core.utils.events import event_definition, Event, EventFlag
+from core.utils.events import event_definition, Event, EventFlag, wait_for_events, OR, TIMEOUT
 from core.utils.logging_utils import Logger
 from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
-from robot.control.bilbo_control_definitions import PositionControl_Config
+from robot.control.bilbo_control_definitions import PositionControl_Config, BILBO_Control_Mode
 from robot.lowlevel.stm32_addresses import TWIPR_AddressTables, TWIPR_PositionControlAddresses
 from robot.lowlevel.stm32_control import (
     BILBO_PositionControl_Event_Message,
@@ -89,11 +92,11 @@ class Waypoint:
                Speed transitions smoothly between waypoints (~0.5s).
                Corner angle slowdown still applies (takes minimum).
     """
-    x: float                                    # [m] world X coordinate
-    y: float                                    # [m] world Y coordinate
-    type: WaypointType = WaypointType.PASS      # arrival behavior
-    weight: float = 0.75                        # [0-1] corner sharpness (1=sharp, 0=smooth)
-    speed: float = 0.0                          # [m/s] max speed (0 = use path default)
+    x: float  # [m] world X coordinate
+    y: float  # [m] world Y coordinate
+    type: WaypointType = WaypointType.PASS  # arrival behavior
+    weight: float = 0.75  # [0-1] corner sharpness (1=sharp, 0=smooth)
+    speed: float = 0.0  # [m/s] max speed (0 = use path default)
 
     def to_ctypes(self) -> bilbo_waypoint_t:
         """Convert to ctypes struct for serial transmission"""
@@ -133,15 +136,15 @@ class PositionControlData:
     """Telemetry data from the position controller"""
     mode: PositionControlMode = PositionControlMode.IDLE
     path_state: PathState = PathState.IDLE
-    buffer_capacity: int = 0            # max waypoints the STM32 buffer can hold
-    buffer_used: int = 0                # current waypoints in STM32 buffer
+    buffer_capacity: int = 0  # max waypoints the STM32 buffer can hold
+    buffer_used: int = 0  # current waypoints in STM32 buffer
     waypoint_count: int = 0
     current_segment: int = 0
     carrot_x: float = 0.0
     carrot_y: float = 0.0
-    carrot_distance: float = 0.0        # [m] distance from robot to carrot
-    heading_error: float = 0.0          # [rad] heading error to carrot
-    speed_limit: float = 0.0            # [m/s] current speed limit
+    carrot_distance: float = 0.0  # [m] distance from robot to carrot
+    heading_error: float = 0.0  # [rad] heading error to carrot
+    speed_limit: float = 0.0  # [m/s] current speed limit
     v_cmd: float = 0.0
     psi_dot_cmd: float = 0.0
     elapsed_time: float = 0.0
@@ -213,6 +216,54 @@ class PositionControlCallbacks:
 
 
 # =============================================================================
+# WIFI EVENTS
+# =============================================================================
+
+@dataclasses.dataclass
+class PositionControlCommonData:
+    """Common data sent with every position control WiFi event"""
+    mode: int = 0
+    mode_name: str = ''
+    path_state: int = 0
+    waypoint_count: int = 0
+    current_waypoint_index: int = 0
+
+
+# Template: every position control WiFi event carries a 'group' flag
+_PC_WIFI_EVENT = WifiEvent(data_type=dict, flags=WifiEventFlag('group', str))
+
+
+@wifi_event_definition
+class PositionControlWifiEvents(WifiEventContainer):
+    """WiFi events sent by position control to host"""
+    # Path events
+    path_loaded: WifiEvent = _PC_WIFI_EVENT
+    path_started: WifiEvent = _PC_WIFI_EVENT
+    path_paused: WifiEvent = _PC_WIFI_EVENT
+    path_resumed: WifiEvent = _PC_WIFI_EVENT
+    path_finished: WifiEvent = _PC_WIFI_EVENT
+    path_timeout: WifiEvent = _PC_WIFI_EVENT
+    path_aborted: WifiEvent = _PC_WIFI_EVENT
+
+    # Waypoint events
+    waypoint_passed: WifiEvent = _PC_WIFI_EVENT
+    waypoint_reached: WifiEvent = _PC_WIFI_EVENT
+    waypoint_completed: WifiEvent = _PC_WIFI_EVENT
+    waypoint_buffer_full: WifiEvent = _PC_WIFI_EVENT
+
+    # Single-point command events
+    move_to_point_started: WifiEvent = _PC_WIFI_EVENT
+    move_to_point_completed: WifiEvent = _PC_WIFI_EVENT
+    move_to_point_timeout: WifiEvent = _PC_WIFI_EVENT
+    turn_to_heading_started: WifiEvent = _PC_WIFI_EVENT
+    turn_to_heading_completed: WifiEvent = _PC_WIFI_EVENT
+    turn_to_heading_timeout: WifiEvent = _PC_WIFI_EVENT
+
+    # Mode change
+    mode_changed: WifiEvent = _PC_WIFI_EVENT
+
+
+# =============================================================================
 # MAIN CLASS
 # =============================================================================
 
@@ -232,6 +283,12 @@ class BILBO_PositionControl:
         # Events and callbacks
         self.events = PositionControlEvents()
         self.callbacks = PositionControlCallbacks()
+
+        # WiFi events (registered on the interface, each sent as its own event)
+        self.wifi_events = PositionControlWifiEvents(
+            wifi=communication.wifi.wifi,
+            id='position_control',
+        )
 
         # Local state (mirrors STM32)
         self._mode = PositionControlMode.IDLE
@@ -705,11 +762,14 @@ class BILBO_PositionControl:
         }
 
         # Send path_loaded event with full path data
-        self._send_wifi_event('path_loaded', {
-            'waypoints': [{'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight, 'speed': wp.speed}
-                         for wp in waypoints],
-            'settings': self._current_path_settings
-        })
+        self.wifi_events.path_loaded.send(
+            data=self._common_event_data(
+                waypoints=[{'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name,
+                            'weight': wp.weight, 'speed': wp.speed} for wp in waypoints],
+                settings=self._current_path_settings,
+            ),
+            flags=self._WIFI_FLAGS,
+        )
 
         # Start path if requested
         if start:
@@ -809,9 +869,11 @@ class BILBO_PositionControl:
     # SINGLE-POINT COMMANDS
     # =========================================================================
 
+    # ------------------------------------------------------------------------------------------------------------------
     def move_to_point(self, x: float, y: float,
                       max_speed: float = 0.0,
-                      timeout: float = 0.0) -> bool:
+                      timeout: float = 0.0,
+                      blocking: bool = False) -> bool:
         """
         Drive to a single point.
 
@@ -820,7 +882,6 @@ class BILBO_PositionControl:
             max_speed: Maximum speed (0 = use config default)
             timeout: Command timeout (0 = no timeout)
         """
-        from robot.control.bilbo_control_definitions import BILBO_Control_Mode
 
         # Check if in POSITION mode
         if self._top_level_control_mode != BILBO_Control_Mode.POSITION:
@@ -862,12 +923,36 @@ class BILBO_PositionControl:
             # Reset tracking if command failed
             self._current_move_to_point = MoveToPointCommand()
             self.logger.error("Failed to start move_to_point command")
+            return False
 
-        return result or False
+        if not blocking:
+            return True
 
+        wait_timeout = timeout + 5.0 if timeout > 0 else 30.0  # maximum time of 30 seconds to go to a point
+        data, trace = wait_for_events(
+            OR(
+                self.events.move_to_point_completed,
+                self.events.move_to_point_timeout
+            ),
+            timeout=wait_timeout
+        )
+
+        if data is TIMEOUT or trace.caused_by(self.events.move_to_point_timeout):
+            self.logger.warning(f"Move to point timed out")
+            self._current_move_to_point = MoveToPointCommand()
+            if data is TIMEOUT:
+                # Python wait expired but firmware still running — force stop
+                self.reset()
+            return False
+
+        self.logger.info(f"Move to point completed ({x:.2f}, {y:.2f})")
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
     def turn_to_heading(self, heading: float,
                         max_angular_speed: float = 0.0,
-                        timeout: float = 0.0) -> bool:
+                        timeout: float = 0.0,
+                        blocking: bool = False) -> bool:
         """
         Rotate in place to face target heading.
 
@@ -875,6 +960,7 @@ class BILBO_PositionControl:
             heading: Target heading [rad]
             max_angular_speed: Maximum turn rate (0 = use config default)
             timeout: Command timeout (0 = no timeout)
+            blocking: If True, block until heading reached or timeout
         """
         from robot.control.bilbo_control_definitions import BILBO_Control_Mode
 
@@ -917,8 +1003,30 @@ class BILBO_PositionControl:
             # Reset tracking if command failed
             self._current_turn_to_heading = TurnToHeadingCommand()
             self.logger.error("Failed to start turn_to_heading command")
+            return False
 
-        return result or False
+        if not blocking:
+            return True
+
+        wait_timeout = timeout + 5.0 if timeout > 0 else 15.0
+        data, trace = wait_for_events(
+            OR(
+                self.events.turn_to_heading_completed,
+                self.events.turn_to_heading_timeout
+            ),
+            timeout=wait_timeout
+        )
+
+        if data is TIMEOUT or trace.caused_by(self.events.turn_to_heading_timeout):
+            self.logger.warning(f"Turn to heading timed out")
+            self._current_turn_to_heading = TurnToHeadingCommand()
+            if data is TIMEOUT:
+                # Python wait expired but firmware still running — force stop
+                self.reset()
+            return False
+
+        self.logger.info(f"Turn to heading completed ({math.degrees(heading):.1f} deg)")
+        return True
 
     # =========================================================================
     # RESET
@@ -992,21 +1100,24 @@ class BILBO_PositionControl:
                 self.events.path_started.set()
                 self.callbacks.path_started.call()
                 # Send path data with event for visualization
-                self._send_wifi_event('path_started', {
-                    'waypoints': [{'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight, 'speed': wp.speed}
-                                 for wp in self._waypoint_queue],
-                    'settings': self._current_path_settings
-                })
+                self.wifi_events.path_started.send(
+                    data=self._common_event_data(
+                        waypoints=[{'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name,
+                                    'weight': wp.weight, 'speed': wp.speed} for wp in self._waypoint_queue],
+                        settings=self._current_path_settings,
+                    ),
+                    flags=self._WIFI_FLAGS,
+                )
 
             case position_control_event_t.PATH_PAUSED:
                 self._path_state = PathState.PAUSED
                 self.events.path_paused.set()
-                self._send_wifi_event('path_paused')
+                self.wifi_events.path_paused.send(data=self._common_event_data(), flags=self._WIFI_FLAGS)
 
             case position_control_event_t.PATH_RESUMED:
                 self._path_state = PathState.RUNNING
                 self.events.path_resumed.set()
-                self._send_wifi_event('path_resumed')
+                self.wifi_events.path_resumed.send(data=self._common_event_data(), flags=self._WIFI_FLAGS)
 
             case position_control_event_t.PATH_FINISHED:
                 self._mode = PositionControlMode.IDLE
@@ -1020,7 +1131,7 @@ class BILBO_PositionControl:
                 self._waypoint_queue.clear()
                 self.events.path_finished.set()
                 self.callbacks.path_finished.call()
-                self._send_wifi_event('path_finished')
+                self.wifi_events.path_finished.send(data=self._common_event_data(), flags=self._WIFI_FLAGS)
 
             case position_control_event_t.PATH_TIMEOUT:
                 self._mode = PositionControlMode.IDLE
@@ -1031,9 +1142,10 @@ class BILBO_PositionControl:
                     self.logger.warning(f"Path timed out! Target was: ({target_wp.x:.2f}, {target_wp.y:.2f})")
                 else:
                     self.logger.warning("Path timed out!")
+                self._waypoint_queue.clear()
                 self.events.path_timeout.set()
                 self.callbacks.path_timeout.call()
-                self._send_wifi_event('path_timeout')
+                self.wifi_events.path_timeout.send(data=self._common_event_data(), flags=self._WIFI_FLAGS)
 
             case position_control_event_t.PATH_ABORTED:
                 self._mode = PositionControlMode.IDLE
@@ -1044,9 +1156,10 @@ class BILBO_PositionControl:
                     self.logger.warning(f"Path aborted! Was heading to: ({target_wp.x:.2f}, {target_wp.y:.2f})")
                 else:
                     self.logger.warning("Path aborted!")
+                self._waypoint_queue.clear()
                 self.events.path_aborted.set()
                 self.callbacks.path_aborted.call()
-                self._send_wifi_event('path_aborted')
+                self.wifi_events.path_aborted.send(data=self._common_event_data(), flags=self._WIFI_FLAGS)
 
             # Waypoint events
             case position_control_event_t.WAYPOINT_PASSED:
@@ -1056,12 +1169,16 @@ class BILBO_PositionControl:
                 wp_data = None
                 if idx < len(self._waypoint_queue):
                     wp = self._waypoint_queue[idx]
-                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight, 'speed': wp.speed}
+                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name,
+                               'weight': wp.weight, 'speed': wp.speed}
                     self.logger.info(f"Passed waypoint {idx}: ({wp.x:.2f}, {wp.y:.2f}) [{wp.type.name}]")
                 else:
                     self.logger.info(f"Passed waypoint {idx}")
                 self.events.waypoint_passed.set(flags={'index': idx})
-                self._send_wifi_event('waypoint_passed', {'waypoint_index': idx, 'waypoint': wp_data})
+                self.wifi_events.waypoint_passed.send(
+                    data=self._common_event_data(waypoint_index=idx, waypoint=wp_data),
+                    flags=self._WIFI_FLAGS,
+                )
 
             case position_control_event_t.WAYPOINT_REACHED:
                 idx = event_data.waypoint_index
@@ -1069,12 +1186,16 @@ class BILBO_PositionControl:
                 wp_data = None
                 if idx < len(self._waypoint_queue):
                     wp = self._waypoint_queue[idx]
-                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight, 'speed': wp.speed}
+                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name,
+                               'weight': wp.weight, 'speed': wp.speed}
                     self.logger.info(f"Reached waypoint {idx}: ({wp.x:.2f}, {wp.y:.2f}) [{wp.type.name}]")
                 else:
                     self.logger.info(f"Reached waypoint {idx}")
                 self.events.waypoint_reached.set(flags={'index': idx})
-                self._send_wifi_event('waypoint_reached', {'waypoint_index': idx, 'waypoint': wp_data})
+                self.wifi_events.waypoint_reached.send(
+                    data=self._common_event_data(waypoint_index=idx, waypoint=wp_data),
+                    flags=self._WIFI_FLAGS,
+                )
 
             case position_control_event_t.WAYPOINT_COMPLETED:
                 idx = event_data.waypoint_index
@@ -1083,24 +1204,27 @@ class BILBO_PositionControl:
                 next_wp_data = None
                 if self._waypoint_queue:
                     wp = self._waypoint_queue[0]
-                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name, 'weight': wp.weight, 'speed': wp.speed}
+                    wp_data = {'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'type_name': wp.type.name,
+                               'weight': wp.weight, 'speed': wp.speed}
                     next_wp_info = ""
                     if len(self._waypoint_queue) > 1:
                         next_wp = self._waypoint_queue[1]
-                        next_wp_data = {'x': next_wp.x, 'y': next_wp.y, 'type': next_wp.type.value, 'type_name': next_wp.type.name, 'weight': next_wp.weight, 'speed': next_wp.speed}
+                        next_wp_data = {'x': next_wp.x, 'y': next_wp.y, 'type': next_wp.type.value,
+                                        'type_name': next_wp.type.name, 'weight': next_wp.weight,
+                                        'speed': next_wp.speed}
                         next_wp_info = f" -> Next: ({next_wp.x:.2f}, {next_wp.y:.2f})"
-                    self.logger.info(f"Completed waypoint {idx}: ({wp.x:.2f}, {wp.y:.2f}) [{wp.type.name}]{next_wp_info}")
+                    self.logger.info(
+                        f"Completed waypoint {idx}: ({wp.x:.2f}, {wp.y:.2f}) [{wp.type.name}]{next_wp_info}")
                     self._waypoint_queue.pop(0)
                 else:
                     self.logger.info(f"Completed waypoint {idx}")
                 self._current_waypoint_index = idx + 1
                 self.events.waypoint_completed.set(flags={'index': idx})
                 self.callbacks.waypoint_completed.call(idx)
-                self._send_wifi_event('waypoint_completed', {
-                    'waypoint_index': idx,
-                    'waypoint': wp_data,
-                    'next_waypoint': next_wp_data
-                })
+                self.wifi_events.waypoint_completed.send(
+                    data=self._common_event_data(waypoint_index=idx, waypoint=wp_data, next_waypoint=next_wp_data),
+                    flags=self._WIFI_FLAGS,
+                )
 
             # Single-point command events
             case position_control_event_t.MOVE_TO_POINT_STARTED:
@@ -1108,11 +1232,12 @@ class BILBO_PositionControl:
                 self.events.move_to_point_started.set()
                 # Send target coordinates with event
                 cmd = self._current_move_to_point
-                self._send_wifi_event('move_to_point_started', {
-                    'target': {'x': cmd.x, 'y': cmd.y},
-                    'max_speed': cmd.max_speed,
-                    'timeout': cmd.timeout
-                })
+                self.wifi_events.move_to_point_started.send(
+                    data=self._common_event_data(
+                        target={'x': cmd.x, 'y': cmd.y}, max_speed=cmd.max_speed, timeout=cmd.timeout,
+                    ),
+                    flags=self._WIFI_FLAGS,
+                )
 
             case position_control_event_t.MOVE_TO_POINT_COMPLETED:
                 self._mode = PositionControlMode.IDLE
@@ -1125,7 +1250,9 @@ class BILBO_PositionControl:
                 else:
                     self.logger.info("Move to point completed")
                 self.events.move_to_point_completed.set()
-                self._send_wifi_event('move_to_point_completed', {'target': target_data})
+                self.wifi_events.move_to_point_completed.send(
+                    data=self._common_event_data(target=target_data), flags=self._WIFI_FLAGS,
+                )
 
             case position_control_event_t.MOVE_TO_POINT_TIMEOUT:
                 self._mode = PositionControlMode.IDLE
@@ -1138,45 +1265,55 @@ class BILBO_PositionControl:
                 else:
                     self.logger.warning("Move to point timed out")
                 self.events.move_to_point_timeout.set()
-                self._send_wifi_event('move_to_point_timeout', {'target': target_data})
+                self.wifi_events.move_to_point_timeout.send(
+                    data=self._common_event_data(target=target_data), flags=self._WIFI_FLAGS,
+                )
 
             case position_control_event_t.TURN_TO_HEADING_STARTED:
                 self._mode = PositionControlMode.TURN_TO_HEADING
                 self.events.turn_to_heading_started.set()
                 # Send target heading with event
                 cmd = self._current_turn_to_heading
-                self._send_wifi_event('turn_to_heading_started', {
-                    'heading': cmd.heading,
-                    'heading_deg': math.degrees(cmd.heading),
-                    'max_angular_speed': cmd.max_angular_speed,
-                    'timeout': cmd.timeout
-                })
+                self.wifi_events.turn_to_heading_started.send(
+                    data=self._common_event_data(
+                        heading=cmd.heading, heading_deg=math.degrees(cmd.heading),
+                        max_angular_speed=cmd.max_angular_speed, timeout=cmd.timeout,
+                    ),
+                    flags=self._WIFI_FLAGS,
+                )
 
             case position_control_event_t.TURN_TO_HEADING_COMPLETED:
                 self._mode = PositionControlMode.IDLE
                 # Log with target heading
                 cmd = self._current_turn_to_heading
-                heading_data = {'heading': cmd.heading, 'heading_deg': math.degrees(cmd.heading)} if cmd.active else None
+                heading_data = {'heading': cmd.heading,
+                                'heading_deg': math.degrees(cmd.heading)} if cmd.active else None
                 if cmd.active:
                     self.logger.info(f"Reached heading {cmd.heading:.2f} rad ({math.degrees(cmd.heading):.1f} deg)")
                     self._current_turn_to_heading.active = False
                 else:
                     self.logger.info("Turn to heading completed")
                 self.events.turn_to_heading_completed.set()
-                self._send_wifi_event('turn_to_heading_completed', heading_data)
+                self.wifi_events.turn_to_heading_completed.send(
+                    data=self._common_event_data(**(heading_data or {})), flags=self._WIFI_FLAGS,
+                )
 
             case position_control_event_t.TURN_TO_HEADING_TIMEOUT:
                 self._mode = PositionControlMode.IDLE
                 # Log with target heading
                 cmd = self._current_turn_to_heading
-                heading_data = {'heading': cmd.heading, 'heading_deg': math.degrees(cmd.heading)} if cmd.active else None
+                heading_data = {'heading': cmd.heading,
+                                'heading_deg': math.degrees(cmd.heading)} if cmd.active else None
                 if cmd.active:
-                    self.logger.warning(f"Turn to heading {cmd.heading:.2f} rad ({math.degrees(cmd.heading):.1f} deg) timed out")
+                    self.logger.warning(
+                        f"Turn to heading {cmd.heading:.2f} rad ({math.degrees(cmd.heading):.1f} deg) timed out")
                     self._current_turn_to_heading.active = False
                 else:
                     self.logger.warning("Turn to heading timed out")
                 self.events.turn_to_heading_timeout.set()
-                self._send_wifi_event('turn_to_heading_timeout', heading_data)
+                self.wifi_events.turn_to_heading_timeout.send(
+                    data=self._common_event_data(**(heading_data or {})), flags=self._WIFI_FLAGS,
+                )
 
             # Mode change
             case position_control_event_t.MODE_CHANGED:
@@ -1184,14 +1321,17 @@ class BILBO_PositionControl:
                 self._mode = new_mode
                 self.events.mode_changed.set(flags={'mode': new_mode})
                 self.callbacks.mode_changed.call(new_mode)
-                self._send_wifi_event('mode_changed', {'new_mode': new_mode.value, 'new_mode_name': new_mode.name})
+                self.wifi_events.mode_changed.send(
+                    data=self._common_event_data(new_mode=new_mode.value, new_mode_name=new_mode.name),
+                    flags=self._WIFI_FLAGS,
+                )
 
             # Buffer full
             case position_control_event_t.WAYPOINT_BUFFER_FULL:
                 self.logger.warning("Waypoint buffer full on STM32")
                 self.events.waypoint_buffer_full.set()
                 self.callbacks.waypoint_buffer_full.call()
-                self._send_wifi_event('waypoint_buffer_full')
+                self.wifi_events.waypoint_buffer_full.send(data=self._common_event_data(), flags=self._WIFI_FLAGS)
 
             case _:
                 self.logger.warning(f"Unhandled position control event: {event}")
@@ -1250,16 +1390,48 @@ class BILBO_PositionControl:
             self._current_move_to_point = MoveToPointCommand()
             self._current_turn_to_heading = TurnToHeadingCommand()
         else:
-            # Leaving POSITION mode: reset our state
-            if self._mode != PositionControlMode.IDLE:
-                self.logger.info(f"Control mode changed to {mode.name}, resetting position control state")
+            # Leaving POSITION mode: fire termination events if commands were active.
+            # The firmware also sends these events on reset(), but this acts as a safety net
+            # in case the serial events are delayed or lost.
+            if self._mode == PositionControlMode.FOLLOW_PATH:
+                self.logger.warning(f"Control mode changed to {mode.name} while path was running, aborting path")
                 self._mode = PositionControlMode.IDLE
                 self._path_state = PathState.IDLE
                 self._waypoint_queue.clear()
-                self._current_waypoint_index = 0
-                # Clear command tracking
+                self.events.path_aborted.set()
+                self.callbacks.path_aborted.call()
+                self.wifi_events.path_aborted.send(data=self._common_event_data(), flags=self._WIFI_FLAGS)
+            elif self._mode == PositionControlMode.DRIVE_TO_POINT:
+                self.logger.warning(f"Control mode changed to {mode.name} while move_to_point was active")
+                cmd = self._current_move_to_point
+                target_data = {'x': cmd.x, 'y': cmd.y} if cmd.active else None
+                self._mode = PositionControlMode.IDLE
                 self._current_move_to_point = MoveToPointCommand()
+                self.events.move_to_point_timeout.set()
+                self.wifi_events.move_to_point_timeout.send(
+                    data=self._common_event_data(target=target_data), flags=self._WIFI_FLAGS,
+                )
+            elif self._mode == PositionControlMode.TURN_TO_HEADING:
+                self.logger.warning(f"Control mode changed to {mode.name} while turn_to_heading was active")
+                cmd = self._current_turn_to_heading
+                heading_data = {'heading': cmd.heading,
+                                'heading_deg': math.degrees(cmd.heading)} if cmd.active else None
+                self._mode = PositionControlMode.IDLE
                 self._current_turn_to_heading = TurnToHeadingCommand()
+                self.events.turn_to_heading_timeout.set()
+                self.wifi_events.turn_to_heading_timeout.send(
+                    data=self._common_event_data(**(heading_data or {})), flags=self._WIFI_FLAGS,
+                )
+            elif self._mode != PositionControlMode.IDLE:
+                self.logger.info(f"Control mode changed to {mode.name}, resetting position control state")
+
+            # Always clean up local state
+            self._mode = PositionControlMode.IDLE
+            self._path_state = PathState.IDLE
+            self._waypoint_queue.clear()
+            self._current_waypoint_index = 0
+            self._current_move_to_point = MoveToPointCommand()
+            self._current_turn_to_heading = TurnToHeadingCommand()
 
     # =========================================================================
     # UTILITY METHODS
@@ -1473,20 +1645,17 @@ class BILBO_PositionControl:
     # WIFI EVENT EMISSION
     # =========================================================================
 
-    def _send_wifi_event(self, event_name: str, data: dict | None = None):
-        """Send position control event to host via WiFi"""
-        event_data = {
-            'event': event_name,
-            'mode': self._mode.value,
-            'mode_name': self._mode.name,
-            'path_state': self._path_state.value,
-            'waypoint_count': len(self._waypoint_queue),
-            'current_waypoint_index': self._current_waypoint_index,
-        }
-        if data:
-            event_data.update(data)
+    _WIFI_FLAGS = {'group': 'position_control'}
 
-        self.communication.wifi.sendEvent(
-            event='position_control',
-            data=event_data
-        )
+    def _common_event_data(self, **extra) -> dict:
+        """Build common event data dict, optionally merged with extra fields."""
+        data = dataclasses.asdict(PositionControlCommonData(
+            mode=self._mode.value,
+            mode_name=self._mode.name,
+            path_state=self._path_state.value,
+            waypoint_count=len(self._waypoint_queue),
+            current_waypoint_index=self._current_waypoint_index,
+        ))
+        if extra:
+            data.update(extra)
+        return data

@@ -241,6 +241,38 @@ Common actions have shorthand forms for cleaner YAML files.
 # Group tracks start_tick and end_tick for data extraction
 ```
 
+### Loop (Repeat Actions)
+
+```yaml
+# Repeat 5 times
+- type: loop
+  count: 5
+  actions:
+    - beep
+    - wait: 500ms
+
+# Iterate over values with substitution
+- type: loop
+  variable: speed
+  values: [0.2, 0.4, 0.6]
+  actions:
+    - type: set_velocity
+      forward: "${speed}"
+    - wait: 3s
+
+# Range-based iteration
+- type: loop
+  variable: i
+  range: [0, 3]
+  actions:
+    - type: group
+      id: "trial_${i}"
+      label: "Trial ${i}"
+      actions:
+        - beep
+        - wait: 1s
+```
+
 ### Position Control
 
 ```yaml
@@ -591,6 +623,96 @@ print(f"End time: {velocity_group.end_time}")      # seconds
     - set_mode: "VELOCITY"
     - velocity: [0.3, 0.0]
     - wait: 2s
+```
+
+---
+
+### `loop` - Repeat Actions
+
+Repeats a block of actions multiple times or iterates over a list of values. The loop is expanded into nested `group` actions at parse time, so the executor only ever sees groups.
+
+Supports three iteration modes:
+
+**1. Count-based repeat:**
+```yaml
+- type: loop
+  count: 5
+  actions:
+    - beep
+    - wait: 500ms
+```
+
+**2. Iterate over explicit values:**
+```yaml
+- type: loop
+  variable: speed
+  values: [0.2, 0.4, 0.6, 0.8, 1.0]
+  actions:
+    - type: set_velocity
+      forward: "${speed}"
+    - wait: 3s
+```
+
+**3. Range-based iteration:**
+```yaml
+- type: loop
+  variable: j
+  range: [0, 5]          # range(0, 5) -> 0, 1, 2, 3, 4
+  actions:
+    - type: group
+      id: "trial_${j}"
+      label: "Trial ${j}"
+      actions:
+        - type: set_velocity
+          forward: 0.5
+        - wait: 2s
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `actions` | list | required | List of actions to repeat each iteration |
+| `count` | int | None | Number of iterations (simple repeat) |
+| `variable` | string | `"_index"` | Loop variable name for `${variable}` substitution |
+| `values` | list | None | Explicit list of values to iterate over |
+| `range` | int/list | None | Range specification: `N`, `[end]`, `[start, end]`, or `[start, end, step]` |
+
+**Variable substitution:**
+- Use `${variable}` in any string field (action parameters, IDs, labels)
+- If a string is exactly `"${variable}"`, the original type is preserved (e.g., float stays float)
+- If `${variable}` is embedded in a larger string, it is interpolated as a string
+- The built-in variable `${_index}` (0-based iteration index) is always available
+
+**How it works:**
+The loop is expanded at parse time into a `group` containing one sub-`group` per iteration. Each iteration group has the loop variable substituted into all action parameters, IDs, and labels. This means:
+- The experiment executor only sees regular `group` actions
+- Loop iteration groups appear in reports and data extraction like any other group
+- Labels on iteration groups are auto-generated (e.g., `speed=0.2`, `iteration 0`)
+
+**Nested loops:**
+Loops can be nested. Inner loop variables are substituted correctly alongside outer variables:
+
+```yaml
+- type: loop
+  variable: speed
+  values: [0.2, 0.4]
+  actions:
+    - type: loop
+      variable: direction
+      values: [0.0, 0.5, -0.5]
+      actions:
+        - type: set_velocity
+          forward: "${speed}"
+          turn: "${direction}"
+        - wait: 2s
+```
+
+**Shorthand:**
+```yaml
+# Simple repeat shorthand
+- loop: 5
+  actions:
+    - beep
+    - wait: 500ms
 ```
 
 ---
@@ -972,6 +1094,50 @@ exp = (ExperimentBuilder("nav_test", "Navigation test", timeout=60.0)
        .build())
 ```
 
+**Loop Methods:**
+
+```python
+from robots.bilbo.robot.experiment import ExperimentBuilder
+
+# Parameter sweep using loop
+exp = (ExperimentBuilder("sweep_test", "Velocity sweep", timeout=60.0)
+       .set_mode("BALANCING")
+       .wait(time_s=2.0)
+       .set_mode("VELOCITY")
+
+       # Iterate over speed values
+       .loop(
+           actions=[
+               {"type": "set_velocity", "forward": "${speed}"},
+               {"type": "wait_time", "time_ms": 3000},
+               {"type": "set_velocity", "forward": 0.0, "turn": 0.0},
+               {"type": "wait_time", "time_ms": 1000},
+           ],
+           variable="speed",
+           values=[0.1, 0.2, 0.3, 0.4, 0.5],
+       )
+
+       .set_mode("OFF")
+       .build())
+
+# Simple repeat
+exp2 = (ExperimentBuilder("repeat_test", "Repeat 3 times")
+        .loop(
+            actions=[{"type": "beep"}, {"type": "wait_time", "time_ms": 500}],
+            count=3,
+        )
+        .build())
+
+# Range-based
+exp3 = (ExperimentBuilder("range_test", "Range loop")
+        .loop(
+            actions=[{"type": "beep", "frequency": "${freq}"}],
+            variable="freq",
+            loop_range=[400, 1200, 200],  # 400, 600, 800, 1000
+        )
+        .build())
+```
+
 ### Using Helper Functions
 
 For more control, use the helper functions directly:
@@ -980,7 +1146,7 @@ For more control, use the helper functions directly:
 from robots.bilbo.robot.experiment import (
     ExperimentDefinition,
     beep, set_mode, speak, wait_time, wait_ticks,
-    set_velocity, run_trajectory, parallel, group
+    set_velocity, run_trajectory, parallel, group, loop
 )
 
 exp = ExperimentDefinition(
@@ -1365,6 +1531,64 @@ print(f"Forward test: {len(forward_samples)} samples, "
 print(f"Turn test: {len(turn_samples)} samples")
 ```
 
+### Example 10: Loop - Parameter Sweep (YAML)
+
+```yaml
+id: velocity_sweep
+description: Test different forward velocities
+timeout: 120.0
+actions:
+  - mode: BALANCING
+  - wait: 2s
+  - mode: VELOCITY
+
+  # Loop over speed values
+  - type: loop
+    variable: speed
+    values: [0.1, 0.2, 0.3, 0.4, 0.5]
+    actions:
+      - type: group
+        id: "trial_${_index}"
+        label: "speed=${speed}"
+        actions:
+          - type: set_velocity
+            forward: "${speed}"
+          - wait: 3s
+          - velocity: [0.0, 0.0]
+          - wait: 1s
+
+  - mode: OFF
+  - speak: "Sweep complete"
+```
+
+### Example 11: Loop - Repeated Trials (YAML)
+
+```yaml
+id: repeated_trials
+description: Repeat the same test 5 times
+timeout: 120.0
+actions:
+  - mode: BALANCING
+  - wait: 2s
+
+  # Simple count-based loop
+  - type: loop
+    count: 5
+    actions:
+      - type: group
+        id: "trial_${_index}"
+        label: "Trial ${_index}"
+        actions:
+          - mode: VELOCITY
+          - velocity: [0.3, 0.0]
+          - wait: 3s
+          - velocity: [0.0, 0.0]
+          - mode: BALANCING
+          - wait: 2s
+
+  - mode: OFF
+```
+
 ---
 
 ## Experiment Reports
@@ -1409,26 +1633,28 @@ To get colored phase bars on your plots, add `label` to your group or long-runni
 
 9. **Use ExperimentBuilder for Python** - It provides better IDE support and prevents common errors.
 
+10. **Use loops for parameter sweeps** - Instead of copy-pasting action blocks with different values, use `loop` with `values` or `range` to iterate. Use `${variable}` substitution to inject values into actions.
+
 ### Position Control Tips
 
-10. **Set mode to POSITION first** - Position control actions require `mode: POSITION` before they can execute.
+11. **Set mode to POSITION first** - Position control actions require `mode: POSITION` before they can execute.
 
-11. **Use `wait: true` (default)** - Most position commands should wait for completion to ensure proper sequencing.
+12. **Use `wait: true` (default)** - Most position commands should wait for completion to ensure proper sequencing.
 
-12. **Set appropriate timeouts** - Position commands can take varying amounts of time; set timeouts to handle stuck situations.
+13. **Set appropriate timeouts** - Position commands can take varying amounts of time; set timeouts to handle stuck situations.
 
-13. **Waypoint types matter**:
+14. **Waypoint types matter**:
     - Use `PASS` for smooth path following (robot curves through waypoints)
     - Use `STOP` when the robot must come to a full stop at a waypoint
 
-14. **Waypoint weights control cornering**:
+15. **Waypoint weights control cornering**:
     - `weight: 1.0` = sharp corner (follows waypoint closely)
     - `weight: 0.0` = smooth curve (may cut corners significantly)
     - `weight: 0.75` = balanced default
 
-15. **Path files for reusable routes** - Store frequently used paths in YAML files for easy reuse.
+16. **Path files for reusable routes** - Store frequently used paths in YAML files for easy reuse.
 
-16. **Use `wait_position_event` for complex logic** - When you need to react to specific events like `waypoint_completed`.
+17. **Use `wait_position_event` for complex logic** - When you need to react to specific events like `waypoint_completed`.
 
 ---
 

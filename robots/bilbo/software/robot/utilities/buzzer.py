@@ -14,7 +14,7 @@ class twipr_beep_struct:
     }
 
 
-def beep(frequency: (str, float) = None, time_ms: int = 500, repeats: int = 1):
+def beep(frequency: str | float = None, time_ms: int = 500, repeats: int = 1):
     if frequency is None:
         frequency = 500
 

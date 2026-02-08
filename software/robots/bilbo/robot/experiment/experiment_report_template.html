@@ -169,8 +169,9 @@
             font-family: monospace;
             font-size: 0.75em;
             color: #95a5a6;
-            width: 24px;
+            min-width: 40px;
             flex-shrink: 0;
+            margin-right: 8px;
         }
 
         .action-id {
@@ -244,7 +245,6 @@
         }
 
         .action-item.nested {
-            margin-left: 28px;
             background: #f8fafc;
             border-left-color: #bdc3c7;
             border-left-style: dashed;
@@ -272,7 +272,6 @@
         }
 
         .action-waypoints {
-            margin-left: 28px;
             margin-top: 2px;
             margin-bottom: 2px;
             padding: 6px 10px;
@@ -322,15 +321,10 @@
         .action-error-msg {
             font-size: 0.75em;
             color: #721c24;
-            margin-left: 24px;
             padding: 4px 8px;
             background: #f8d7da;
             border-radius: 3px;
             margin-top: 4px;
-        }
-
-        .action-error-msg.nested {
-            margin-left: 48px;
         }
 
         .color-indicator {
@@ -597,7 +591,7 @@
             <div class="action-list">
                 {% for action in actions %}
                 <div class="action-item{% if action.has_phase %} has-phase{% endif %}{% if action.is_error_action %} error-action{% endif %}{% if action.is_nested %} nested{% endif %}{% if action.is_group %} group-parent{% endif %}"
-                     {% if action.color %}style="border-left-color: {{ action.color }};"{% endif %}>
+                     style="{% if action.depth > 0 %}margin-left: {{ action.depth * 28 }}px;{% endif %}{% if action.color %}border-left-color: {{ action.color }};{% endif %}">
                     <div class="color-indicator"{% if action.color %} style="background-color: {{ action.color }};"{% endif %}></div>
                     <span class="action-index">{{ action.index }}</span>
                     <span class="action-id">{{ action.id }}</span>
@@ -620,10 +614,10 @@
                     {% endif %}
                 </div>
                 {% if action.is_error and action.error_message %}
-                <div class="action-error-msg{% if action.is_nested %} nested{% endif %}">{{ action.error_message }}</div>
+                <div class="action-error-msg" style="margin-left: {{ action.depth * 28 + 24 }}px;">{{ action.error_message }}</div>
                 {% endif %}
                 {% if action.waypoints %}
-                <div class="action-waypoints{% if action.is_nested %} nested{% endif %}">
+                <div class="action-waypoints" style="margin-left: {{ action.depth * 28 + 28 }}px;">
                     <span class="wp-header">#</span>
                     <span class="wp-header">Position</span>
                     <span class="wp-header">Type</span>

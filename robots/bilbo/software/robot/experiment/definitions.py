@@ -1,4 +1,5 @@
 # ======================================================================================================================
+from __future__ import annotations
 import dataclasses
 import enum
 import time
@@ -13,6 +14,7 @@ from core.utils.json_utils import writeJSON, readJSON
 from robot.bilbo_common import BILBO_Config
 from robot.bilbo_definitions import BILBO_DynamicState
 from robot.control.bilbo_control_definitions import BILBO_Control_Mode, BILBO_ControlConfig
+from robot.experiment.helpers import generate_trajectory_inputs
 from robot.lowlevel.stm32_general import BILBO_CONTROL_DT
 
 
@@ -58,6 +60,10 @@ class BILBO_InputTrajectory:
         from robot.experiment.helpers import trajectory_inputs_to_vector
 
         return trajectory_inputs_to_vector(self.inputs, single_input=single_input)
+
+    @classmethod
+    def from_vector(cls, vector: np.ndarray, name: str, id: int, dt: float = None) -> BILBO_InputTrajectory:
+        return cls(name=name, id=id, inputs=generate_trajectory_inputs(vector), dt=dt or BILBO_CONTROL_DT)
 
     @classmethod
     def from_file(cls, file):

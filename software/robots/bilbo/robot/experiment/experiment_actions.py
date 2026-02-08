@@ -832,6 +832,24 @@ def _register_builtin_actions():
     ))
 
     register_action(ActionEntry(
+        type_name="loop",
+        parameters=[
+            ActionParameter("actions", list, required=True),
+            ActionParameter("count", int, default=None),
+            ActionParameter("variable", str, default=None),
+            ActionParameter("values", list, default=None),
+            ActionParameter("range", list, default=None),
+        ],
+        shorthands=[
+            ShorthandRule("loop", expansion=lambda v: {
+                "type": "loop",
+                "count": v if isinstance(v, int) else None,
+            }),
+        ],
+        description="Repeat a block of actions N times or over a list of values"
+    ))
+
+    register_action(ActionEntry(
         type_name="func",
         parameters=[
             ActionParameter("function", str, default=""),

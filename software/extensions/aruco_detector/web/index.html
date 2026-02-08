@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>ArUco Detector</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="container">
+        <video id="video" playsinline muted autoplay></video>
+        <canvas id="canvas"></canvas>
+        <canvas id="overlay"></canvas>
+
+        <div id="status-bar">
+            <span id="fps">-- FPS</span>
+            <span id="marker-count">0 markers</span>
+        </div>
+
+        <div id="controls">
+            <button id="btn-camera" title="Switch Camera">&#x1F504;</button>
+            <button id="btn-axes" title="Toggle Axes" class="active">Axes</button>
+            <button id="btn-ids" title="Toggle IDs" class="active">IDs</button>
+        </div>
+
+        <div id="start-screen">
+            <h1>ArUco Marker Detector</h1>
+            <p>DICT_4X4_100 (IDs 0-99)</p>
+            <button id="btn-start">Start Camera</button>
+        </div>
+    </div>
+
+    <!-- Vendored js-aruco2 libraries (load order matters: cv -> svd -> aruco -> dictionary -> posit) -->
+    <script src="lib/cv.js"></script>
+    <script src="lib/svd.js"></script>
+    <script src="lib/aruco.js"></script>
+    <script src="lib/aruco_4x4_1000.js"></script>
+    <script src="lib/posit1.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

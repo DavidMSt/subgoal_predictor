@@ -14,7 +14,7 @@ import yaml
 
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.dataclass_utils import from_dict_auto
-from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals
+from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals, wait_for_events, OR
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 
 
@@ -199,7 +199,7 @@ class BILBO_PositionControl:
         # Subscribe to position_control events from robot
         self.device.events.event.on(
             callback=self._handle_event,
-            predicate=pred_flag_equals('event', 'position_control')
+            predicate=pred_flag_equals('container', 'position_control'),
         )
 
         # Subscribe to top-level control mode changes to sync waypoint list
@@ -234,7 +234,7 @@ class BILBO_PositionControl:
     @property
     def is_busy(self) -> bool:
         """True if executing any command"""
-        return self._state.is_busy
+        return self._state.mode != PositionControlMode.IDLE
 
     @property
     def state(self) -> PositionControlState:
@@ -334,9 +334,9 @@ class BILBO_PositionControl:
         if result:
             self._waypoints = [
                 Waypoint(x=wp['x'], y=wp['y'],
-                        type=WaypointType(wp.get('type', 0)),
-                        weight=wp.get('weight', 0.75),
-                        speed=wp.get('speed', 0.0))
+                         type=WaypointType(wp.get('type', 0)),
+                         weight=wp.get('weight', 0.75),
+                         speed=wp.get('speed', 0.0))
                 for wp in wp_list
             ]
             self.logger.info(f"Set {len(wp_list)} waypoints")
@@ -353,9 +353,9 @@ class BILBO_PositionControl:
         if result:
             self._waypoints = [
                 Waypoint(x=wp['x'], y=wp['y'],
-                        type=WaypointType(wp.get('type', 0)),
-                        weight=wp.get('weight', 0.75),
-                        speed=wp.get('speed', 0.0))
+                         type=WaypointType(wp.get('type', 0)),
+                         weight=wp.get('weight', 0.75),
+                         speed=wp.get('speed', 0.0))
                 for wp in result
             ]
         return self._waypoints.copy()
@@ -483,7 +483,7 @@ class BILBO_PositionControl:
                     speed=wp_data.get('speed', 0.0)
                 ))
             self.logger.info(f"Loaded path with {len(self._waypoints)} waypoints" +
-                           (" and started" if start else ""))
+                             (" and started" if start else ""))
         return result or False
 
     def load_path_from_file(self, filepath: str, start: bool = False, clear_existing: bool = True) -> bool:
@@ -558,9 +558,11 @@ class BILBO_PositionControl:
     # SIMPLE COMMANDS
     # =========================================================================
 
-    def move_to(self, x: float, y: float,
+    def move_to(self, x: float,
+                y: float,
                 max_speed: float = 0.0,
-                timeout: float = 0.0) -> bool:
+                timeout: float = 0.0,
+                blocking: bool = False) -> bool:
         """
         Move to a single point.
 
@@ -568,20 +570,41 @@ class BILBO_PositionControl:
             x, y: Target position in world coordinates [m]
             max_speed: Maximum speed (0 = use default)
             timeout: Command timeout (0 = no timeout)
+            blocking: If True, wait for completion before returning
         """
+
+        self.logger.info(f"Moving to ({x:.2f}, {y:.2f})...")
+
         result = self.device.executeFunction(
             function_name='position_control_move_to',
-            arguments={'x': x, 'y': y, 'max_speed': max_speed, 'timeout': timeout},
+            arguments={'x': x,
+                       'y': y,
+                       'max_speed': max_speed,
+                       'timeout': timeout},
             return_type=bool,
             request_response=True
         )
-        if result:
-            self.logger.info(f"Moving to ({x:.2f}, {y:.2f})")
-        return result or False
+        if not result:
+            self.logger.warning(f"Failed to move to ({x:.2f}, {y:.2f})")
+            return False
 
+        if blocking:
+            wait_timeout = (timeout + 5.0) if timeout > 0 else 60.0
+            _, match = wait_for_events(
+                OR(self.events.move_to_point_completed, self.events.move_to_point_timeout),
+                timeout=wait_timeout,
+            )
+            if match is None:
+                return False
+            return match.caused_by(self.events.move_to_point_completed)
+
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
     def turn_to(self, heading: float,
                 max_angular_speed: float = 0.0,
-                timeout: float = 0.0) -> bool:
+                timeout: float = 0.0,
+                blocking: bool = False) -> bool:
         """
         Turn to a heading.
 
@@ -589,20 +612,36 @@ class BILBO_PositionControl:
             heading: Target heading [rad]
             max_angular_speed: Maximum turn rate (0 = use default)
             timeout: Command timeout (0 = no timeout)
+            blocking: If True, wait for completion before returning
         """
+        self.logger.info(f"Turning to {heading:.2f} rad...")
+
         result = self.device.executeFunction(
             function_name='position_control_turn_to',
             arguments={
                 'heading': heading,
                 'max_angular_speed': max_angular_speed,
-                'timeout': timeout
+                'timeout': timeout,
             },
             return_type=bool,
             request_response=True
         )
-        if result:
-            self.logger.info(f"Turning to {heading:.2f} rad")
-        return result or False
+
+        if not result:
+            self.logger.warning(f"Failed to turn to {heading:.2f} rad")
+            return False
+
+        if blocking:
+            wait_timeout = (timeout + 5.0) if timeout > 0 else 60.0
+            _, match = wait_for_events(
+                OR(self.events.turn_to_heading_completed, self.events.turn_to_heading_timeout),
+                timeout=wait_timeout,
+            )
+            if match is None:
+                return False
+            return match.caused_by(self.events.turn_to_heading_completed)
+
+        return True
 
     # =========================================================================
     # STATE & CONFIG
@@ -659,10 +698,10 @@ class BILBO_PositionControl:
     # EVENT HANDLING
     # =========================================================================
 
-    def _handle_event(self, message):
+    def _handle_event(self, event_data, **kwargs):
         """Handle position control events from robot"""
-        data = message.data
-        event_name = data.get('event', 'unknown')
+        event_name = event_data.get('event', 'unknown')
+        data = event_data.get('data', {}) or {}
 
         self.logger.debug(f"Position control event: {event_name}")
         self.logger.debug(f"Event data: {data}")
@@ -702,11 +741,13 @@ class BILBO_PositionControl:
                 self.callbacks.path_finished.call()
 
             case 'path_timeout':
+                self._waypoints.clear()
                 self._current_path = PathData()
                 self.events.path_timeout.set()
                 self.callbacks.path_timeout.call()
 
             case 'path_aborted':
+                self._waypoints.clear()
                 self._current_path = PathData()
                 self.events.path_aborted.set()
                 self.callbacks.path_aborted.call()
@@ -773,13 +814,15 @@ class BILBO_PositionControl:
                 self.callbacks.turn_to_heading_started.call(cmd)
 
             case 'turn_to_heading_completed':
-                target = {'heading': data.get('heading'), 'heading_deg': data.get('heading_deg')} if data.get('heading') is not None else None
+                target = {'heading': data.get('heading'), 'heading_deg': data.get('heading_deg')} if data.get(
+                    'heading') is not None else None
                 self._current_turn_to_heading.active = False
                 self.events.turn_to_heading_completed.set(data=target)
                 self.callbacks.turn_to_heading_completed.call(target)
 
             case 'turn_to_heading_timeout':
-                target = {'heading': data.get('heading'), 'heading_deg': data.get('heading_deg')} if data.get('heading') is not None else None
+                target = {'heading': data.get('heading'), 'heading_deg': data.get('heading_deg')} if data.get(
+                    'heading') is not None else None
                 self._current_turn_to_heading.active = False
                 self.events.turn_to_heading_timeout.set(data=target)
 

@@ -3,6 +3,9 @@ import dataclasses
 
 import numpy as np
 
+from core.communication.wifi.bilbolab_wifi_interface import (
+    wifi_event_definition, WifiEventContainer, WifiEvent,
+)
 from core.communication.wifi.data_link import CommandArgument
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.dataclass_utils import from_dict_auto
@@ -17,13 +20,13 @@ from robot.control.bilbo_control_config import load_config_by_name
 from robot.control.bilbo_control_definitions import BILBO_Control_Mode, BILBO_ControlConfig, PID_Config, \
     BILBO_Control_Status, \
     BILBO_Control_Event_Type, BILBO_Control_Inputs, VelocityControl_Config, PositionControl_Config, TIC_Config, \
-    VIC_Config, BILBO_Control_Sample, Feedforward_Config
+    VIC_Config, BILBO_Control_Sample, Feedforward_Config, FloorRoughness_Config
 from robot.control.bilbo_position_control import BILBO_PositionControl
 from robot.estimation.bilbo_estimation import BILBO_Estimation
 from robot.lowlevel.stm32_addresses import TWIPR_AddressTables, TWIPR_ControlAddresses
 from robot.lowlevel.stm32_control import bilbo_velocity_control_command_t, bilbo_control_input_ext_t, \
     bilbo_control_config_t, bilbo_tic_config_t, bilbo_vic_config_t, bilbo_position_control_config_t, \
-    bilbo_velocity_control_config_t, pid_control_config_t, feedforward_config_t, bilbo_ll_control_data
+    bilbo_velocity_control_config_t, pid_control_config_t, feedforward_config_t
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample
 
@@ -55,9 +58,17 @@ class BILBO_Control_Events:
     status_change: Event = Event(flags=EventFlag('status', str))
     vic_change: Event
     tic_change: Event
-    movement_element_finished: Event = Event(flags=EventFlag('id', int))
-    movement_element_timeout: Event = Event(flags=EventFlag('id', int))
     lowlevel_mode_change: Event = Event(flags=EventFlag('mode', BILBO_Control_Mode))
+
+
+_CONTROL_WIFI_EVENT = WifiEvent(data_type=dict)
+
+
+@wifi_event_definition
+class ControlWifiEvents(WifiEventContainer):
+    mode_change: WifiEvent = _CONTROL_WIFI_EVENT
+    vic_change: WifiEvent = _CONTROL_WIFI_EVENT
+    tic_change: WifiEvent = _CONTROL_WIFI_EVENT
 
 
 # TODO: this needs to be initially set somehow
@@ -78,6 +89,10 @@ class BILBO_Control:
     status: BILBO_Control_Status = BILBO_Control_Status.NORMAL
     _config: BILBO_ControlConfig | None = None
 
+    # Number of consecutive sample-batch mismatches before syncing mode from firmware.
+    # The callback fires once per batch at ~10 Hz, so 3 batches ≈ 300 ms.
+    _MODE_MISMATCH_THRESHOLD: int = 3
+
     # === INIT =========================================================================================================
     def __init__(self, common: BILBO_Common, estimation: BILBO_Estimation, comm: BILBO_Communication):
         self.callbacks = BILBO_Control_Callbacks()
@@ -88,6 +103,9 @@ class BILBO_Control:
         self.common = common
         self.estimation = estimation
         self.communication = comm
+
+        # WiFi events
+        self.wifi_events = ControlWifiEvents(wifi=comm.wifi.wifi, id='control')
 
         self.position_control = BILBO_PositionControl(common=self.common, communication=self.communication)
 
@@ -103,6 +121,8 @@ class BILBO_Control:
         self.controller_status = BILBO_Control_Controller_Status()
         self.inputs = BILBO_Control_Inputs()
         self.inputs.reset()
+        self._mode_transition_pending = False
+        self._mode_mismatch_count = 0
 
     # === METHODS ======================================================================================================
     def init(self):
@@ -156,19 +176,29 @@ class BILBO_Control:
         self.callbacks.update.call()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def set_mode(self, mode: BILBO_Control_Mode | int, *, wait_for_change: bool = True):
+    def set_mode(self, mode: BILBO_Control_Mode | int, *, wait_for_change: bool = True) -> bool:
         if isinstance(mode, int):
             mode_int = mode
             try:
                 mode = BILBO_Control_Mode(mode_int)
             except ValueError:
                 self.logger.warning(f"Failed to convert mode {mode_int} to BILBO_Control_Mode")
-                return
+                return False
 
         if mode == self.mode:
-            return
+            return True
 
+        self._mode_transition_pending = True
+        try:
+            return self._set_mode_internal(mode, wait_for_change=wait_for_change)
+        finally:
+            self._mode_transition_pending = False
+            self._mode_mismatch_count = 0
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_mode_internal(self, mode: BILBO_Control_Mode, *, wait_for_change: bool = True) -> bool:
         self.logger.info(f"Setting control mode to \"{mode.name}\"")
+        previous_mode = self.mode
         result = None
         match mode:
             case BILBO_Control_Mode.OFF:
@@ -176,7 +206,7 @@ class BILBO_Control:
                 result = self._set_lowlevel_control_mode(BILBO_Control_Mode.OFF)
             case BILBO_Control_Mode.DIRECT:
                 self.logger.warning("Direct mode is not supported yet")
-                return
+                return False
                 # result = self._set_lowlevel_control_mode(BILBO_Control_Mode.DIRECT)
             case BILBO_Control_Mode.BALANCING:
                 self.mode = BILBO_Control_Mode.BALANCING
@@ -185,7 +215,7 @@ class BILBO_Control:
 
                 if self.mode == BILBO_Control_Mode.OFF:
                     self.logger.warning("Cannot set velocity mode while in OFF mode. Go to BALANCING first")
-                    return
+                    return False
 
                 self.mode = BILBO_Control_Mode.VELOCITY
                 result = self._set_lowlevel_control_mode(BILBO_Control_Mode.VELOCITY)
@@ -202,23 +232,24 @@ class BILBO_Control:
                         "Cannot set position mode: no position source available "
                         "(dead reckoning disabled and tracker unavailable)"
                     )
-                    return
+                    return False
 
                 if self.mode == BILBO_Control_Mode.OFF:
                     self.logger.warning("Cannot set position mode while in OFF mode. Go to BALANCING or VELOCITY first")
-                    return
+                    return False
                 self.mode = BILBO_Control_Mode.POSITION
                 # Reset position control and clear any old paths/commands (firmware also does this)
                 self.position_control.reset()
                 result = self._set_lowlevel_control_mode(BILBO_Control_Mode.POSITION)
             case _:
                 self.logger.warning(f"Mode \"{mode}\" is not supported")
-                return
+                return False
 
         if result is None or not result:
             self.logger.warning("Failed to set control mode")
+            self.mode = previous_mode
             self.status = BILBO_Control_Status.ERROR
-            return
+            return False
 
         self.common.board.setRGBLEDExtern(
             CONTROL_MODE_COLORS[mode]
@@ -228,24 +259,21 @@ class BILBO_Control:
 
         # Wait for the low-level mode change event
         if wait_for_change:
-            result, _ = self.events.lowlevel_mode_change.wait(timeout=0.2,
+            result, _ = self.events.lowlevel_mode_change.wait(timeout=0.1,
                                                               stale_event_time=0.1,
                                                               predicate=pred_flag_equals('mode', mode))
 
             if result is TIMEOUT:
-                self.logger.warning(f"Failed to set control mode to \"{mode.name}\". Low-level mode change event timed out")
-                return
+                self.logger.warning(f"Failed to set control mode to \"{mode.name}\". Low-level mode change event "
+                                    f"timed out")
+                self.mode = previous_mode
+                return False
 
         self.callbacks.mode_change.call(mode, forced_change=False)
         self.events.mode_change.set(mode)
         self.common.events.control_mode_change.set(mode)
-        self.communication.wifi.sendEvent(
-            event='control',
-            data={
-                'event': 'mode_change',
-                'mode': mode.value,
-            }
-        )
+        self.wifi_events.mode_change.send(data={'mode': mode.value})
+        return True
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_config(self, config: BILBO_ControlConfig):
@@ -362,8 +390,6 @@ class BILBO_Control:
         self.inputs.velocity.forward = forward
         self.inputs.velocity.turn = turn
 
-    # NOTE: move_to and turn_to functionality is now in bilbo_position_control.py
-
     # ------------------------------------------------------------------------------------------------------------------
     def set_statefeedback_gain(self, K: list | np.ndarray) -> bool:
         """Set the state feedback gain K for balancing control."""
@@ -426,8 +452,6 @@ class BILBO_Control:
         return self._set_lowlevel_position_control_config(self._config.position_control)
 
     # ------------------------------------------------------------------------------------------------------------------
-
-    # ------------------------------------------------------------------------------------------------------------------
     def set_max_wheel_speed(self, speed: float):
         self.logger.info(f"Setting max wheel speed to {speed:.1f} m/s")
         self._config.general.max_wheel_speed = speed
@@ -476,24 +500,11 @@ class BILBO_Control:
             self.logger.warning(f"Roughness value must be between 0 and 1, got {roughness}. No adjustment done")
             return
 
-        # === Tuning constants (adjust these based on testing) ===
-        # Velocity control feedforward - Coulomb friction compensation
-        # Kc adds a constant pitch command in the direction of motion to overcome friction
-        ROUGHNESS_KC_MAX = 0.02  # Max Kc value at roughness=1.0 (tune based on carpet)
+        rough = self._config.floor_roughness
 
-        # Forward velocity control PID scaling
-        # Higher gains help overcome friction-induced lag
-        ROUGHNESS_V_KP_SCALE = 1.75  # At roughness=1.0, Kp multiplied by this factor
-        ROUGHNESS_V_KI_SCALE = 1.3  # At roughness=1.0, Ki multiplied by this factor
-
-        # Turn velocity control PID scaling (independent, lower scaling to avoid oscillations)
-        ROUGHNESS_PSIDOT_KP_SCALE = 1.25  # At roughness=1.0, Kp multiplied by this factor
-        ROUGHNESS_PSIDOT_KI_SCALE = 1.15  # At roughness=1.0, Ki multiplied by this factor
-
-        # Position control scaling
-        # Higher linear gains command more velocity for same position error
-        ROUGHNESS_POS_KP_SCALE = 1.5  # At roughness=1.0, kp_linear multiplied by this
-        ROUGHNESS_POS_KI_SCALE = 2.0  # At roughness=1.0, ki_linear multiplied by this
+        if not rough.enabled:
+            self.logger.info(f"Floor roughness compensation is disabled in config, skipping adjustment")
+            return
 
         # === Store baseline config if not already stored ===
         if not hasattr(self, '_baseline_velocity_config'):
@@ -506,20 +517,27 @@ class BILBO_Control:
 
         # === Calculate adjustment factors (linear interpolation) ===
         # Forward velocity factors
-        v_kp_factor = 1.0 + roughness * (ROUGHNESS_V_KP_SCALE - 1.0)
-        v_ki_factor = 1.0 + roughness * (ROUGHNESS_V_KI_SCALE - 1.0)
+        v_kv_factor = 1.0 + roughness * (rough.v_kv_scale - 1.0)
+        v_kp_factor = 1.0 + roughness * (rough.v_kp_scale - 1.0)
+        v_ki_factor = 1.0 + roughness * (rough.v_ki_scale - 1.0)
         # Turn velocity factors (independent, lower scaling)
-        psidot_kp_factor = 1.0 + roughness * (ROUGHNESS_PSIDOT_KP_SCALE - 1.0)
-        psidot_ki_factor = 1.0 + roughness * (ROUGHNESS_PSIDOT_KI_SCALE - 1.0)
+        psidot_kp_factor = 1.0 + roughness * (rough.psidot_kp_scale - 1.0)
+        psidot_ki_factor = 1.0 + roughness * (rough.psidot_ki_scale - 1.0)
         # Position control factors
-        pos_kp_factor = 1.0 + roughness * (ROUGHNESS_POS_KP_SCALE - 1.0)
-        pos_ki_factor = 1.0 + roughness * (ROUGHNESS_POS_KI_SCALE - 1.0)
-        kc_value = roughness * ROUGHNESS_KC_MAX
+        pos_kp_factor = 1.0 + roughness * (rough.pos_kp_scale - 1.0)
+        pos_ki_factor = 1.0 + roughness * (rough.pos_ki_scale - 1.0)
+        pos_decel_factor = 1.0 + roughness * (rough.pos_decel_scale - 1.0)
+        baseline_kc = baseline_vel.v.feedforward.Kc
+        kc_value = baseline_kc + roughness * (rough.kc_max - baseline_kc)
+        # Stribeck decay: linearly interpolate from baseline to target
+        baseline_v_decay = baseline_vel.v.feedforward.v_decay_stiction
+        v_decay_value = baseline_v_decay + roughness * (rough.v_decay_stiction_max - baseline_v_decay)
 
         self.logger.info(f"Adjusting for floor roughness={roughness:.2f}: "
-                         f"v_Kp×{v_kp_factor:.2f}, v_Ki×{v_ki_factor:.2f}, Kc={kc_value:.4f}, "
+                         f"v_Kv×{v_kv_factor:.2f}, v_Kp×{v_kp_factor:.2f}, v_Ki×{v_ki_factor:.2f}, Kc={kc_value:.4f}, "
+                         f"v_decay={v_decay_value:.3f}, "
                          f"psidot_Kp×{psidot_kp_factor:.2f}, psidot_Ki×{psidot_ki_factor:.2f}, "
-                         f"pos_kp×{pos_kp_factor:.2f}, pos_ki×{pos_ki_factor:.2f}")
+                         f"pos_kp×{pos_kp_factor:.2f}, pos_ki×{pos_ki_factor:.2f}, pos_decel×{pos_decel_factor:.2f}")
 
         # === Adjust forward velocity control ===
         adjusted_v_pid = PID_Config(
@@ -541,22 +559,23 @@ class BILBO_Control:
             setpoint_rate_limit=baseline_vel.v.pid.setpoint_rate_limit,
         )
 
-        # Enable stiction compensation when Kc > 0, with smooth transition zone
-        # v0_stiction controls the tanh transition width: tanh(v / v0)
-        # At v = v0, output is ~76% of Kc; at v = 2*v0, output is ~96% of Kc
-        use_stiction = kc_value > 0.0
-        v0_stiction = 0.05 if use_stiction else 0.0  # 5 cm/s transition zone
+        # Stiction compensation: enable when Kc is non-zero
+        # v0_stiction is preserved from baseline feedforward config
+        # v_decay_stiction is linearly interpolated (computed above)
+        use_stiction = abs(kc_value) > 0.0
+        v0_stiction = baseline_vel.v.feedforward.v0_stiction
 
         adjusted_v_ff = Feedforward_Config(
-            Kv=baseline_vel.v.feedforward.Kv,
+            Kv=baseline_vel.v.feedforward.Kv * v_kv_factor,
             Ka=baseline_vel.v.feedforward.Ka,
-            Kc=kc_value,  # Add Coulomb friction compensation
+            Kc=kc_value,
             enable_vref_slew=baseline_vel.v.feedforward.enable_vref_slew,
             vref_slew_rate=baseline_vel.v.feedforward.vref_slew_rate,
             enable_a_filter=baseline_vel.v.feedforward.enable_a_filter,
             Ta_filter=baseline_vel.v.feedforward.Ta_filter,
-            enable_stiction=use_stiction,  # Enable when Kc > 0
-            v0_stiction=v0_stiction,  # Smooth transition zone around zero
+            enable_stiction=use_stiction,
+            v0_stiction=v0_stiction,
+            v_decay_stiction=v_decay_value,
             enable_output_limit=baseline_vel.v.feedforward.enable_output_limit,
             output_limit=baseline_vel.v.feedforward.output_limit,
             enable_output_slew=baseline_vel.v.feedforward.enable_output_slew,
@@ -590,6 +609,7 @@ class BILBO_Control:
             ki_angular=baseline_pos.ki_angular,
             kp_linear=baseline_pos.kp_linear * pos_kp_factor,
             ki_linear=baseline_pos.ki_linear * pos_ki_factor,
+            kd_linear=baseline_pos.kd_linear,
             max_speed=baseline_pos.max_speed,
             max_turn_rate=baseline_pos.max_turn_rate,
             speed_transition_time=baseline_pos.speed_transition_time,
@@ -600,6 +620,8 @@ class BILBO_Control:
             arrival_dwell_time=baseline_pos.arrival_dwell_time,
             reverse_enter_angle=baseline_pos.reverse_enter_angle,
             reverse_exit_angle=baseline_pos.reverse_exit_angle,
+            corner_slowdown_distance=baseline_pos.corner_slowdown_distance,
+            decel_limit=baseline_pos.decel_limit * pos_decel_factor,
         )
 
         # === Apply to lowlevel ===
@@ -707,15 +729,26 @@ class BILBO_Control:
                                            arguments=[],
                                            description='Loads and applies the default control config')
 
-        # NOTE: move_to and turn_to are now handled by bilbo_position_control.py
-        # via position_control_move_to and position_control_turn_to WiFi commands
-
     # ------------------------------------------------------------------------------------------------------------------
     def _lowlevel_sample_callback(self, sample: BILBO_LL_Sample):
 
         # Update the controller status
         self.controller_status.vic_enabled = bool(sample.control.vic_enabled)
         self.controller_status.tic_enabled = bool(sample.control.tic_enabled)
+
+        # Mode mismatch detection from samples (safeguard against missed UART events)
+        ll_mode = BILBO_Control_Mode(sample.control.mode)
+        if ll_mode != self.mode and not self._mode_transition_pending:
+            self._mode_mismatch_count += 1
+            if self._mode_mismatch_count >= self._MODE_MISMATCH_THRESHOLD:
+                self.logger.warning(
+                    f"Mode mismatch detected from samples (firmware={ll_mode}, local={self.mode}). "
+                    f"Syncing to firmware mode."
+                )
+                self._mode_mismatch_count = 0
+                self._lowlevel_mode_change_event(ll_mode)
+        else:
+            self._mode_mismatch_count = 0
 
     # ------------------------------------------------------------------------------------------------------------------
     def _lowlevel_mode_change_event(self, mode_ll: BILBO_Control_Mode, *args, **kwargs):
@@ -743,11 +776,7 @@ class BILBO_Control:
             return
         self.controller_status.vic_enabled = bool(vic_enabled)
         self.events.vic_change.set(vic_enabled)
-        self.communication.wifi.sendEvent(event='control',
-                                          data={
-                                              'event': 'vic_change',
-                                              'vic_enabled': self.controller_status.vic_enabled,
-                                          })
+        self.wifi_events.vic_change.send(data={'vic_enabled': self.controller_status.vic_enabled})
         self.logger.debug(f"VIC enabled state changed to {vic_enabled}")
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -763,30 +792,9 @@ class BILBO_Control:
 
         self.controller_status.tic_enabled = bool(tic_enabled)
         self.events.tic_change.set(tic_enabled)
-        self.communication.wifi.sendEvent(event='control',
-                                          data={
-                                              'event': 'tic_change',
-                                              'tic_enabled': self.controller_status.tic_enabled,
-                                          })
+        self.wifi_events.tic_change.send(data={'tic_enabled': self.controller_status.tic_enabled})
 
         self.logger.debug(f"TIC enabled state changed to {tic_enabled}")
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _lowlevel_position_element_finished_event(self, data: dict, *args, **kwargs):
-        data = from_dict_auto(bilbo_ll_control_data, data)
-        self.logger.info(
-            f"Position element of type \"{data.position_control_data.current_mode.name}\" with ID \"{data.position_control_data.current_position_command.id}\" finished!")
-
-        # TODO
-        self.events.movement_element_finished.set(flags={
-            'id': data.position_control_data.current_position_command.id
-        })
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _lowlevel_position_element_timeout_event(self, data: dict, *args, **kwargs):
-        data = from_dict_auto(bilbo_ll_control_data, data)
-        self.logger.warning(
-            f"Position element of type \"{data.position_control_data.current_mode.name}\" with ID \"{data.position_control_data.current_position_command.id}\" timed out!")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_control_config(self, config: BILBO_ControlConfig) -> bool:
@@ -854,6 +862,7 @@ class BILBO_Control:
             Ta_filter=config.v.feedforward.Ta_filter,
             enable_stiction=config.v.feedforward.enable_stiction,
             v0_stiction=config.v.feedforward.v0_stiction,
+            v_decay_stiction=config.v.feedforward.v_decay_stiction,
             enable_output_limit=config.v.feedforward.enable_output_limit,
             output_limit=config.v.feedforward.output_limit,
             enable_output_slew=config.v.feedforward.enable_output_slew,
@@ -912,6 +921,7 @@ class BILBO_Control:
             Ta_filter=config.psidot.feedforward.Ta_filter,
             enable_stiction=config.psidot.feedforward.enable_stiction,
             v0_stiction=config.psidot.feedforward.v0_stiction,
+            v_decay_stiction=config.psidot.feedforward.v_decay_stiction,
             enable_output_limit=config.psidot.feedforward.enable_output_limit,
             output_limit=config.psidot.feedforward.output_limit,
             enable_output_slew=config.psidot.feedforward.enable_output_slew,
@@ -940,6 +950,7 @@ class BILBO_Control:
             ki_linear=config.ki_linear,
             max_speed=config.max_speed,
             max_turn_rate=config.max_turn_rate,
+            speed_transition_time=config.speed_transition_time,
             lookahead_base=config.lookahead_base,
             lookahead_gain=config.lookahead_gain,
             lookahead_max=config.lookahead_max,
@@ -947,6 +958,8 @@ class BILBO_Control:
             arrival_dwell_time=config.arrival_dwell_time,
             reverse_enter_angle=config.reverse_enter_angle,
             reverse_exit_angle=config.reverse_exit_angle,
+            corner_slowdown_distance=config.corner_slowdown_distance,
+            decel_limit=config.decel_limit,
         )
 
         # Also update the position_control module's config
@@ -1160,10 +1173,6 @@ class BILBO_Control:
                 self._lowlevel_vic_change_event(message.data)
             case BILBO_Control_Event_Type.TIC_CHANGED:
                 self._lowlevel_tic_change_event(message.data)
-            case BILBO_Control_Event_Type.POSITION_ELEMENT_FINISHED:
-                self._lowlevel_position_element_finished_event(message.data)
-            case BILBO_Control_Event_Type.POSITION_ELEMENT_TIMEOUT:
-                self._lowlevel_position_element_timeout_event(message.data)
             case _:
                 self.logger.warning(f"Unhandled control event: {event}")
     # ------------------------------------------------------------------------------------------------------------------

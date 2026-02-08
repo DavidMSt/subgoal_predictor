@@ -15,9 +15,11 @@ For action parsing and validation, see experiment_actions.py which provides:
 """
 from __future__ import annotations
 
+import copy
 import dataclasses
 import enum
 import json
+import re
 from typing import Any, Union, Literal
 
 import numpy as np
@@ -62,6 +64,34 @@ from robots.bilbo.robot.experiment.experiment_actions import (
 def _expand_shorthand(d: dict | str) -> dict:
     """Expand shorthand action definitions to full format using the action registry."""
     return _get_action_registry().expand_shorthand(d)
+
+
+_VAR_PATTERN = re.compile(r'\$\{(\w+)\}')
+
+
+def _substitute_variables(obj: Any, variables: dict[str, Any]) -> Any:
+    """Recursively substitute ${variable} placeholders in a data structure.
+
+    If a string is exactly "${var}", returns the variable's value preserving its
+    original type (e.g. float stays float). If "${var}" is embedded in a larger
+    string, it is interpolated as a string. Dicts and lists are recursively
+    processed (copies are created; the original is not mutated).
+    """
+    if isinstance(obj, str):
+        # Full-string match: preserve type
+        m = _VAR_PATTERN.fullmatch(obj)
+        if m and m.group(1) in variables:
+            return variables[m.group(1)]
+        # Partial substitution: interpolate as string
+        def _replacer(match):
+            name = match.group(1)
+            return str(variables[name]) if name in variables else match.group(0)
+        return _VAR_PATTERN.sub(_replacer, obj)
+    if isinstance(obj, dict):
+        return {k: _substitute_variables(v, variables) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_substitute_variables(item, variables) for item in obj]
+    return obj
 
 
 # ======================================================================================================================
@@ -152,7 +182,7 @@ ActionType = Literal[
     "beep", "set_mode", "set_tic", "speak", "set_marker", "run_trajectory",
     "wait_time", "wait_ticks", "wait_until_tick", "wait_event", "set_input",
     "set_velocity", "enable_external_input", "reset", "parallel", "group",
-    "func", "set_feedback_gain", "reset_control",
+    "loop", "func", "set_feedback_gain", "reset_control",
     # Position control actions
     "move_to", "turn_to", "set_waypoints", "start_path", "load_path", "stop_path",
     "wait_position_event"
@@ -162,7 +192,7 @@ ALLOWED_ACTIONS: list[str] = [
     "beep", "set_mode", "set_tic", "speak", "set_marker", "run_trajectory",
     "wait_time", "wait_ticks", "wait_until_tick", "wait_event", "set_input",
     "set_velocity", "enable_external_input", "reset", "parallel", "group",
-    "func", "set_feedback_gain", "reset_control",
+    "loop", "func", "set_feedback_gain", "reset_control",
     # Position control actions
     "move_to", "turn_to", "set_waypoints", "start_path", "load_path", "stop_path",
     "wait_position_event"
@@ -278,6 +308,24 @@ class GroupActionParams:
 
 
 @dataclasses.dataclass
+class LoopActionParams:
+    """Parameters for loop action (repeat a block of actions).
+
+    Supports three iteration modes:
+    - count: repeat N times (variable defaults to '_index')
+    - values: iterate over an explicit list of values
+    - range: iterate over range(start, end[, step])
+
+    The loop is expanded into nested groups at parse time.
+    """
+    actions: list[dict] = dataclasses.field(default_factory=list)
+    count: int | None = None
+    variable: str | None = None
+    values: list | None = None
+    range: list | int | None = None
+
+
+@dataclasses.dataclass
 class FuncActionParams:
     """Parameters for func action (execute arbitrary function on robot)."""
     function: str = ""
@@ -390,6 +438,7 @@ ACTION_PARAMS_MAPPING: dict[str, type] = {
     "reset": ResetActionParams,
     "parallel": ParallelActionParams,
     "group": GroupActionParams,
+    "loop": LoopActionParams,
     "func": FuncActionParams,
     "set_feedback_gain": SetFeedbackGainActionParams,
     "reset_control": ResetControlActionParams,
@@ -447,6 +496,8 @@ class ExperimentActionDefinition:
 
     label: str | None = None  # Human-readable label for display in reports
 
+    meta: dict[str, Any] | None = None  # Optional metadata for reports/analysis (e.g., label_layer)
+
     # Action-specific parameters
     parameters: dict[str, Any] = dataclasses.field(default_factory=dict)
 
@@ -486,7 +537,7 @@ class ExperimentActionDefinition:
         action_type = d["type"]
 
         # Reserved fields that should not go into parameters
-        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "label", "parameters", "actions"}
+        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "label", "meta", "parameters", "actions"}
 
         # If 'parameters' is explicitly provided, use it; otherwise collect non-reserved fields
         if "parameters" in d:
@@ -496,6 +547,75 @@ class ExperimentActionDefinition:
                 k: v for k, v in d.items()
                 if k not in reserved_fields
             }
+
+        # --- Loop expansion: convert loop into nested groups at parse time ---
+        if action_type == "loop":
+            actions_list = parameters.pop("actions", None) or d.get("actions", [])
+            variable = parameters.pop("variable", None)
+            loop_count = parameters.pop("count", None)
+            loop_values = parameters.pop("values", None)
+            loop_range = parameters.pop("range", None)
+
+            # Determine iteration values
+            if loop_values is not None:
+                iteration_values = list(loop_values)
+            elif loop_range is not None:
+                if isinstance(loop_range, int):
+                    iteration_values = list(range(loop_range))
+                elif isinstance(loop_range, list):
+                    iteration_values = list(range(*loop_range))
+                else:
+                    raise ValueError(f"Invalid loop range: {loop_range}")
+            elif loop_count is not None:
+                iteration_values = list(range(int(loop_count)))
+            else:
+                raise ValueError("Loop action requires one of: count, values, or range")
+
+            if variable is None:
+                variable = "_index"
+
+            # Extract loop label/meta settings for iteration wrappers
+            loop_meta = d.get("meta") or {}
+            loop_labels_template = loop_meta.get("loop_labels")
+            loop_labels_layer = loop_meta.get("loop_labels_layer")
+
+            # Build iteration groups
+            iter_groups = []
+            for i, val in enumerate(iteration_values):
+                variables = {variable: val, "_index": i}
+                iter_actions = _substitute_variables(copy.deepcopy(actions_list), variables)
+                iter_meta = {"original_type": "loop_iteration"}
+                # Apply iteration label from meta template if provided
+                if loop_labels_template is not None:
+                    iter_meta["label_layer"] = loop_labels_layer if loop_labels_layer is not None else 0
+                iter_group = {
+                    "type": "group",
+                    "id": f"{action_id}_iter_{i}",
+                    "meta": iter_meta,
+                    "actions": iter_actions,
+                }
+                if loop_labels_template is not None:
+                    iter_group["label"] = _substitute_variables(loop_labels_template, variables)
+                iter_groups.append(iter_group)
+
+            # Build outer group that wraps all iterations
+            # Strip loop_labels/loop_labels_layer from meta before passing to outer group
+            outer_meta = {k: v for k, v in loop_meta.items() if k not in ("loop_labels", "loop_labels_layer")}
+            outer_meta["original_type"] = "loop"
+            outer_group = {
+                "type": "group",
+                "id": action_id,
+                "meta": outer_meta,
+                "actions": iter_groups,
+            }
+            if d.get("label") is not None:
+                outer_group["label"] = d["label"]
+            # Carry over scheduling fields
+            for field in ("tick", "after", "time", "delay", "timeout"):
+                if d.get(field) is not None:
+                    outer_group[field] = d[field]
+
+            return cls.from_dict(outer_group, index=index, parent_id=parent_id)
 
         # Parse sub-actions for group/parallel types
         sub_actions: dict[str, ExperimentActionDefinition] | None = None
@@ -520,6 +640,7 @@ class ExperimentActionDefinition:
             delay=d.get("delay"),
             timeout=d.get("timeout"),
             label=d.get("label"),
+            meta=d.get("meta"),
             parameters=parameters,
             sub_actions=sub_actions,
         )
@@ -542,6 +663,8 @@ class ExperimentActionDefinition:
             dict_out["timeout"] = self.timeout
         if self.label is not None:
             dict_out["label"] = self.label
+        if self.meta is not None:
+            dict_out["meta"] = self.meta
         if self.parameters:
             dict_out["parameters"] = self.parameters
         if self.sub_actions:
@@ -595,6 +718,7 @@ class ExperimentDefinition:
     description: str
     actions: list[ExperimentActionDefinition]
     timeout: float | None = None
+    source_dict: dict | None = None  # Original definition dict before parsing/expansion (preserved for report YAML)
 
     @classmethod
     def from_dict(cls, data: dict) -> "ExperimentDefinition":
@@ -630,6 +754,7 @@ class ExperimentDefinition:
             description=data["description"],
             actions=actions,
             timeout=data.get("timeout"),
+            source_dict=copy.deepcopy(data),
         )
 
     @classmethod
@@ -653,7 +778,13 @@ class ExperimentDefinition:
         return cls.from_dict(data_dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
+        """Convert to dictionary for serialization.
+
+        Returns the original source dict if available (preserves loop syntax),
+        otherwise builds from the expanded actions.
+        """
+        if self.source_dict is not None:
+            return {k: v for k, v in self.source_dict.items() if k != 'source_dict'}
         return {
             "id": self.id,
             "description": self.description,
@@ -693,6 +824,7 @@ class ExperimentActionData:
     error_message: str | None = None
     action_type: str | None = None  # Action type (e.g., 'set_velocity', 'wait_time')
     label: str | None = None  # Human-readable label for display in reports
+    meta: dict[str, Any] | None = None  # Optional metadata from action definition (e.g., label_layer)
     parameters: dict[str, Any] | None = None  # Action input parameters
     data: Any | None = None  # Action output data
     sub_actions: dict[str, ExperimentActionData] | None = None  # For group/parallel actions
@@ -1039,6 +1171,53 @@ def group(actions: list[ExperimentActionDefinition | dict], **scheduling) -> Exp
         parameters={},
         sub_actions=sub_actions_dict if sub_actions_dict else None,
     )
+
+
+def loop(actions: list[ExperimentActionDefinition | dict], count: int | None = None,
+         variable: str | None = None, values: list | None = None,
+         loop_range: list | int | None = None, **scheduling) -> ExperimentActionDefinition:
+    """Create a loop action that repeats a block of actions.
+
+    The loop is expanded into nested groups at parse time. Supports three modes:
+    - count: repeat N times
+    - values: iterate over an explicit list
+    - loop_range: iterate over range(start, end[, step])
+
+    Args:
+        actions: List of actions to repeat each iteration
+        count: Number of iterations (simple repeat)
+        variable: Loop variable name for substitution (default: '_index')
+        values: Explicit list of values to iterate over
+        loop_range: Range specification: int, [end], [start, end], or [start, end, step]
+    """
+    # Convert ExperimentActionDefinition instances to dicts for the loop expansion
+    action_dicts = []
+    for a in actions:
+        if isinstance(a, ExperimentActionDefinition):
+            action_dicts.append(a.to_dict())
+        else:
+            action_dicts.append(a)
+
+    loop_dict: dict[str, Any] = {
+        "type": "loop",
+        "id": scheduling.get("id", "loop"),
+        "actions": action_dicts,
+    }
+    if count is not None:
+        loop_dict["count"] = count
+    if variable is not None:
+        loop_dict["variable"] = variable
+    if values is not None:
+        loop_dict["values"] = values
+    if loop_range is not None:
+        loop_dict["range"] = loop_range
+
+    # Carry over scheduling fields
+    for field in ("tick", "after", "time", "delay", "timeout", "label"):
+        if scheduling.get(field) is not None:
+            loop_dict[field] = scheduling[field]
+
+    return ExperimentActionDefinition.from_dict(loop_dict)
 
 
 def set_tic(enabled: bool = True, **scheduling) -> ExperimentActionDefinition:
@@ -1399,6 +1578,21 @@ class ExperimentBuilder:
         """Add a group of actions that execute sequentially with timing tracking."""
         group_id = id if id else self._next_id("group")
         return self.add(group(list(actions), id=group_id))
+
+    def loop(self, actions: list[ExperimentActionDefinition | dict], count: int | None = None,
+             variable: str | None = None, values: list | None = None,
+             loop_range: list | int | None = None, **kwargs) -> "ExperimentBuilder":
+        """Add a loop that repeats a block of actions.
+
+        Args:
+            actions: List of actions to repeat
+            count: Number of iterations (simple repeat)
+            variable: Loop variable name for ${variable} substitution
+            values: Explicit list of values to iterate over
+            loop_range: Range spec: int, [end], [start, end], or [start, end, step]
+        """
+        return self.add(loop(actions, count=count, variable=variable, values=values,
+                            loop_range=loop_range, id=self._next_id("loop"), **kwargs))
 
     def func(self, function: str, args: list = None, kwargs: dict = None) -> "ExperimentBuilder":
         return self.add(func(function, args, kwargs, id=self._next_id("func")))

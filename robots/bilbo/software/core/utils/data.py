@@ -56,6 +56,19 @@ def generate_time_vector(start, end, dt):
     num_points = int((end - start) / dt)
     return np.linspace(start, end, num_points)
 
+def generate_time_vector_by_length(num_samples, dt, start=0.0):
+    """
+    Generate a time vector given the number of samples and sample interval.
+
+    Parameters:
+        num_samples (int): Number of time samples.
+        dt (float): Sampling interval.
+        start (float, optional): Starting time (default = 0.0).
+
+    Returns:
+        numpy.ndarray: Time vector of length num_samples.
+    """
+    return start + np.arange(num_samples) * dt
 
 def generate_random_input(t_vector, f_cutoff, sigma_I):
     """

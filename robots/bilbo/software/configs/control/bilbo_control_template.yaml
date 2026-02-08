@@ -63,6 +63,7 @@ velocity_control:
       Ta_filter: 0.0
       enable_stiction: false
       v0_stiction: 0.0
+      v_decay_stiction: 0.0
       enable_output_limit: false
       output_limit: 0.0
       enable_output_slew: false
@@ -95,6 +96,7 @@ velocity_control:
       Ta_filter: 0.0
       enable_stiction: false
       v0_stiction: 0.0
+      v_decay_stiction: 0.0
       enable_output_limit: false
       output_limit: 0.0
       enable_output_slew: false

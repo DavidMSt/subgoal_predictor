@@ -41,7 +41,7 @@ class BILBO_Control:
         self.mode = None
 
         self.device.events.event.on(callback=self.handleEventMessage,
-                                    predicate=pred_flag_equals('event', 'control'))
+                                    predicate=pred_flag_equals('container', 'control'))
 
         self.core.events.stream.on(callback=self._sampleStreamHandler)
 
@@ -140,7 +140,6 @@ class BILBO_Control:
             return None
         return from_dict_auto(BILBO_ControlConfig, config)
 
-
     # ------------------------------------------------------------------------------------------------------------------
     def readControlConfiguration(self):
         ...
@@ -161,20 +160,22 @@ class BILBO_Control:
     #     })
 
     # ------------------------------------------------------------------------------------------------------------------
-    def handleEventMessage(self, message):
-        match message.data['event']:
+    def handleEventMessage(self, event_data, **kwargs):
+        event_name = event_data.get('event', None)
+        data = event_data.get('data', {}) or {}
+        match event_name:
             case 'mode_change':
-                self._handleModeChangeEvent(message.data)
+                self._handleModeChangeEvent(data)
             case 'configuration_change':
-                self._handleConfigurationChangeEvent(message.data)
+                self._handleConfigurationChangeEvent(data)
             case 'tic_change':
-                self._handle_tic_change_event(message.data)
+                self._handle_tic_change_event(data)
             case 'vic_change':
-                self._handle_vic_change_event(message.data)
+                self._handle_vic_change_event(data)
             case 'error':
                 ...
             case _:
-                self.core.logger.warning(f"Unknown control event message: {message.data['event']}")
+                self.core.logger.warning(f"Unknown control event message: {event_name}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleModeChangeEvent(self, message):
@@ -201,4 +202,10 @@ class BILBO_Control:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _sampleStreamHandler(self, sample: BILBO_Sample):
-        self.mode = sample.control.mode
+        new_mode = sample.control.mode
+        if new_mode != self.mode:
+            self.mode = new_mode
+            self.events.mode_changed.set(data=new_mode)
+            self.core.events.control_mode_changed.set(data=new_mode)
+        else:
+            self.mode = new_mode

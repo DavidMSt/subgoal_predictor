@@ -181,6 +181,7 @@ class Feedforward_Config:
     Ta_filter: float = 0.0
     enable_stiction: bool = False
     v0_stiction: float = 0.0
+    v_decay_stiction: float = 0.0
     enable_output_limit: bool = False
     output_limit: float = 0.0
     enable_output_slew: bool = False
@@ -201,18 +202,45 @@ class VelocityControl_Config:
 
 @dataclasses.dataclass
 class PositionControl_Config:
-    kp_linear: float = 0.0
-    ki_linear: float = 0.0
-    kp_angular: float = 0.0
-    ki_angular: float = 0.0
-    lookahead_distance: float = 0.3
-    allow_reverse: int = 1
-    backwards_switch_angle: float = np.deg2rad(100.0)
-    distance_arrival_tolerance: float = 0.05
-    angle_arrival_tolerance: float = np.deg2rad(5.0)
-    arrival_time: float = 2.0
-    max_speed_forward: float = 0.75
-    max_speed_turn: float = 3
+    """Configuration for the position controller (carrot-chase path following).
+    Mirrors the on-robot bilbo_control_definitions.PositionControl_Config."""
+    Ts: float = 0.01                        # [s] Update period
+    kp_angular: float = 10.0                # [rad/s per rad] Proportional gain for angular control
+    ki_angular: float = 0.3                 # [rad/s per rad*s] Integral gain for angular control
+    kp_linear: float = 2.0                  # [1/s] Proportional gain (fallback when decel_limit=0)
+    ki_linear: float = 0.0                  # [1/s^2] Integral gain for linear control
+    kd_linear: float = 0.5                  # [-] Velocity damping: subtracts kd_linear * |current_v| from speed command
+    max_speed: float = 0.4                  # [m/s] Maximum forward velocity
+    max_turn_rate: float = 5.0              # [rad/s] Maximum yaw rate
+    speed_transition_time: float = 0.5      # [s] Time to smoothly transition between waypoint speeds
+    lookahead_base: float = 0.15            # [m] Minimum lookahead distance
+    lookahead_gain: float = 0.3             # [s] Lookahead = base + gain * |velocity|
+    lookahead_max: float = 0.5              # [m] Maximum lookahead distance
+    arrival_tolerance: float = 0.05         # [m] Distance to consider "arrived"
+    arrival_dwell_time: float = 0.5         # [s] Hold time at STOP waypoint
+    reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
+    reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
+    corner_slowdown_distance: float = 0.5   # [m] Distance from corner to start slowing down
+    decel_limit: float = 0.0                # [m/s²] sqrt deceleration profile. 0 = disabled
+
+
+@dataclasses.dataclass
+class FloorRoughness_Config:
+    """Tuning parameters for floor roughness compensation.
+
+    These scale factors are applied at roughness=1.0 (linear interpolation from 1.0).
+    """
+    enabled: bool = True                    # Enable/disable roughness compensation
+    kc_max: float = -0.011              # Max Kc value at roughness=1.0 (Coulomb friction compensation)
+    v_decay_stiction_max: float = 0.15   # Stribeck decay speed at roughness=1.0 (linearly interpolated)
+    v_kv_scale: float = 1.1             # Forward velocity feedforward Kv scale at roughness=1.0
+    v_kp_scale: float = 1.6             # Forward velocity PID Kp scale at roughness=1.0
+    v_ki_scale: float = 1.3             # Forward velocity PID Ki scale at roughness=1.0
+    psidot_kp_scale: float = 1.25       # Turn velocity PID Kp scale at roughness=1.0
+    psidot_ki_scale: float = 1.15       # Turn velocity PID Ki scale at roughness=1.0
+    pos_kp_scale: float = 1.6           # Position control kp_linear scale at roughness=1.0
+    pos_ki_scale: float = 1.2           # Position control ki_linear scale at roughness=1.0
+    pos_decel_scale: float = 2.0        # Position control decel_limit scale at roughness=1.0
 
 
 @dataclasses.dataclass
@@ -256,6 +284,7 @@ class BILBO_ControlConfig:
         default_factory=TWIPR_Balancing_Control_Config)
     velocity_control: VelocityControl_Config = dataclasses.field(default_factory=VelocityControl_Config)
     position_control: PositionControl_Config = dataclasses.field(default_factory=PositionControl_Config)
+    floor_roughness: FloorRoughness_Config = dataclasses.field(default_factory=FloorRoughness_Config)
 
 
 class BILBO_Control_Status(enum.IntEnum):

@@ -214,8 +214,9 @@ struct bilbo_position_control_config_t {
 	// LINEAR CONTROL GAINS (speed toward carrot)
 	// -------------------------------------------------------------------------
 
-	float kp_linear = 2.0f;   // [1/s] Proportional gain: speed = kp_linear * carrot_distance
+	float kp_linear = 2.0f;   // [1/s] Proportional gain: speed = kp_linear * carrot_distance (fallback when decel_limit=0)
 	float ki_linear = 0.0f;   // [1/s^2] Integral gain (usually 0 for path following)
+	float kd_linear = 0.5f;   // [-] Velocity damping: subtracts kd_linear * |current_v| from speed command
 
 	// -------------------------------------------------------------------------
 	// SPEED LIMITS
@@ -252,6 +253,9 @@ struct bilbo_position_control_config_t {
 	// -------------------------------------------------------------------------
 
 	float corner_slowdown_distance = 0.5f;  // [m] Distance from corner to start slowing down
+
+	// SQRT DECELERATION PROFILE
+	float decel_limit = 0.0f;  // [m/s²] Max deceleration for sqrt profile. 0 = disabled (use linear kp*d)
 };
 
 /**

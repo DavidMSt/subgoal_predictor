@@ -216,6 +216,11 @@ private:
 
 	bool _startSequenceInternal();
 
+	/**
+	 * @brief Send a TRAJECTORY_ABORTED event when the queued start fails validation.
+	 */
+	void _sendStartFailedAbort();
+
 	/// Queued start request flag.
 	bool _start_requested = false;
 	/// Sequence id that was requested to start.

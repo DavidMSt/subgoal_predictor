@@ -288,7 +288,8 @@ class BILBO_Interfaces:
                                 self.control.set_external_input_forward_turn(axis_forward, axis_turn, normalized=True)
                             case BILBO_Control_Mode.VELOCITY:
                                 scale = (2 / 3) + (1 / 3) * axis_boost
-                                forward_command = axis_forward * scale
+                                # forward_command = axis_forward * scale
+                                forward_command = axis_forward
                                 self.control.set_velocity(forward_command, axis_turn, normalized=True)
                 case InputSource.WIFI_JOYSTICK:
                     input = self._external_joystick_input

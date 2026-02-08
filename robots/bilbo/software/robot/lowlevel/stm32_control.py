@@ -349,6 +349,7 @@ class feedforward_config:
     # ---- stiction smoothing ----
     enable_stiction: int = 0
     v0_stiction: float = 0.0
+    v_decay_stiction: float = 0.0
 
     # ---- output saturation ----
     enable_output_limit: int = 0
@@ -375,6 +376,7 @@ class feedforward_config_t(ctypes.Structure):
 
         ("enable_stiction", ctypes.c_uint8),
         ("v0_stiction", ctypes.c_float),
+        ("v_decay_stiction", ctypes.c_float),
 
         ("enable_output_limit", ctypes.c_uint8),
         ("output_limit", ctypes.c_float),
@@ -605,6 +607,7 @@ class bilbo_position_control_config:
     reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
     reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
     corner_slowdown_distance: float = 0.5
+    decel_limit: float = 0.0               # [m/s²] sqrt decel profile. 0 = disabled
 
 
 class bilbo_position_control_config_t(ctypes.Structure):
@@ -614,6 +617,7 @@ class bilbo_position_control_config_t(ctypes.Structure):
         ("ki_angular", ctypes.c_float),
         ("kp_linear", ctypes.c_float),
         ("ki_linear", ctypes.c_float),
+        ("kd_linear", ctypes.c_float),
         ("max_speed", ctypes.c_float),
         ("max_turn_rate", ctypes.c_float),
         ("speed_transition_time", ctypes.c_float),  # [s] Time to transition between waypoint speeds
@@ -625,6 +629,7 @@ class bilbo_position_control_config_t(ctypes.Structure):
         ("reverse_enter_angle", ctypes.c_float),
         ("reverse_exit_angle", ctypes.c_float),
         ("corner_slowdown_distance", ctypes.c_float),  # [m] Distance from corner to start slowing
+        ("decel_limit", ctypes.c_float),  # [m/s²] sqrt decel profile. 0 = disabled
     ]
 
 
