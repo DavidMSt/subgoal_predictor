@@ -2,10 +2,12 @@ import dataclasses
 
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.events import event_definition, Event
+from core.utils.files import file_exists
 from core.utils.logging_utils import Logger
 from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
+from robot.paths import CONTROL_PATH
 
 
 @dataclasses.dataclass
@@ -18,20 +20,15 @@ class TestbedSize:
 
 @dataclasses.dataclass
 class TestbedConfig:
-    """
-    Configuration settings for the testbed environment.
+    """Configuration settings for the testbed environment.
 
     Attributes:
+        id: Testbed identifier (e.g. 'track', 'lab'). Used to load a matching
+            control config file (<id>.yaml) from the robot's control config folder.
         size: The physical dimensions of the testbed area.
-        floor_roughness: A normalized coefficient representing floor texture.
-            Ranges from 0.0 (smooth) to 1.0 (maximum friction/roughness).
-            Used for speed and position control adaptation.
-            * 0.0: Smooth vinyl floor
-            * 0.5: Flat carpet
-            * 1.0: Rough carpet
     """
     size: TestbedSize
-    floor_roughness: float = 0.0
+    id: str | None = None
 
 
 @event_definition
@@ -66,7 +63,9 @@ class BILBO_TestbedManager:
         self.logger.info(f"Testbed config set to {config}")
         self.events.config_received.set(data=config)
 
-        self.control.adjust_for_floor_roughness(config.floor_roughness)
+        # Load testbed-specific control config if a matching file exists
+        if config.id is not None:
+            self._load_testbed_control_config(config.id)
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_data(self):
@@ -74,6 +73,31 @@ class BILBO_TestbedManager:
         return data
 
     # === PRIVATE METHODS ==============================================================================================
+    def _load_testbed_control_config(self, testbed_id: str):
+        """Load and apply a control config matching the testbed ID.
+
+        Looks for <testbed_id>.yaml in the robot's control config folder
+        (e.g. ~/robot/control/lab.yaml). If found, loads and applies it.
+        """
+        config_file = f"{CONTROL_PATH}{testbed_id}.yaml"
+        if not file_exists(config_file):
+            self.logger.info(f"No testbed-specific control config found at '{config_file}', keeping current config")
+            return
+
+        self.logger.info(f"Loading testbed control config '{testbed_id}.yaml'")
+        config = self.control.load_config(testbed_id)
+        if config is None:
+            self.logger.warning(f"Failed to load testbed control config '{testbed_id}.yaml'")
+            return
+
+        result = self.control.set_config(config)
+        if not result:
+            self.logger.warning(f"Failed to apply testbed control config '{testbed_id}.yaml'")
+            return
+
+        self.logger.info(f"Testbed control config '{testbed_id}.yaml' applied successfully")
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _register_wifi_commands(self):
         self.communication.wifi.newCommand(identifier='set_testbed_config',
                                            function=self.set_testbed_config,

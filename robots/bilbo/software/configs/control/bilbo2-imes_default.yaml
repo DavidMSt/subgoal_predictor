@@ -35,7 +35,6 @@ velocity_control:
       Kp: -0.005 #-0.02
       Kd: 0 #-0.0001
       Ki: -0.05 #-0.5
-      Ts: 0.0
       enable_i_limit: false
       i_term_limit: 0.0
       enable_input_limit: false
@@ -68,7 +67,6 @@ velocity_control:
       Kp: 0.01
       Kd: 0.0
       Ki: 0.05
-      Ts: 0.0
       enable_i_limit: false
       i_term_limit: 0.0
       enable_input_limit: false
@@ -97,11 +95,11 @@ velocity_control:
       enable_output_slew: false
       output_slew_rate: 0.0
 position_control:
-  Ts: 0.01
   kp_angular: 10.0
   ki_angular: 0.3
   kp_linear: 2.0
   ki_linear: 0.0
+  kd_linear: 0.5
   max_speed: 0.4
   max_turn_rate: 5.0
   lookahead_base: 0.15
@@ -112,3 +110,4 @@ position_control:
   reverse_enter_angle: 2.1
   reverse_exit_angle: 1.05
   corner_slowdown_distance: 0.5
+  decel_limit: 0.0

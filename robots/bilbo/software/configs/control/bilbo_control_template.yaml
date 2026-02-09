@@ -1,6 +1,5 @@
 name: ''
 description: ''
-mode: 0
 
 general:
   max_wheel_speed: 0.0
@@ -40,7 +39,6 @@ velocity_control:
       Kp: 0.0
       Kd: 0.0
       Ki: 0.0
-      Ts: 0.0
       enable_i_limit: false
       i_term_limit: 0.0
       enable_input_limit: false
@@ -73,7 +71,6 @@ velocity_control:
       Kp: 0.0
       Kd: 0.0
       Ki: 0.0
-      Ts: 0.0
       enable_i_limit: false
       i_term_limit: 0.0
       enable_input_limit: false
@@ -101,13 +98,12 @@ velocity_control:
       output_limit: 0.0
       enable_output_slew: false
       output_slew_rate: 0.0
-
 position_control:
-  Ts: 0.01
   kp_angular: 0.0
   ki_angular: 0.0
   kp_linear: 0.0
   ki_linear: 0.0
+  kd_linear: 0.0
   max_speed: 0.0
   max_turn_rate: 0.0
   lookahead_base: 0.0
@@ -118,3 +114,4 @@ position_control:
   reverse_enter_angle: 0.0
   reverse_exit_angle: 0.0
   corner_slowdown_distance: 0.0
+  decel_limit: 0.0

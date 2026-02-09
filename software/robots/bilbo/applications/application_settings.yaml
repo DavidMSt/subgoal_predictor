@@ -19,7 +19,6 @@ testbed:
   size:
     x: [0, 3]
     y: [0, 3]
-  floor_roughness: 0.85  # 0 = smooth, 1 = rough
 
 
 # mDNS: Advertises the GUI on the local network via multicast DNS

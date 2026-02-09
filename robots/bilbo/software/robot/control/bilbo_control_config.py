@@ -1,7 +1,6 @@
+import os
 from dataclasses import asdict
 from pathlib import Path
-
-from PIL.TiffImagePlugin import SOFTWARE
 
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.files import get_absolute_path, file_exists, copyFile
@@ -34,16 +33,24 @@ def write_config_to_file(file: str, config: BILBO_ControlConfig):
 
 
 def generate_default_config(robot_id: str):
-    # Check if the default file exists:
-    # file = get_absolute_path(f"./configs/control/{robot_id}_default.yaml")
-    file = f"{SOFTWARE_PATH}/configs/control/{robot_id}_default.yaml"
+    config_dir = f"{SOFTWARE_PATH}/configs/control/{robot_id}"
 
-    if not file_exists(file):
-        raise FileNotFoundError(f"Default config file not found: {file}")
+    if not os.path.isdir(config_dir):
+        raise FileNotFoundError(
+            f"Control config folder for robot '{robot_id}' not found at '{config_dir}'"
+        )
 
-    file_destination = f"{CONTROL_PATH}default.yaml"
-    copyFile(file, file_destination)
-    print(f"Default control config for {robot_id} copied to {file_destination}.")
+    files = [f for f in os.listdir(config_dir) if f.endswith('.yaml')]
+    if not files:
+        raise FileNotFoundError(f"No .yaml files found in '{config_dir}'")
+
+    for filename in files:
+        src = os.path.join(config_dir, filename)
+        dst = os.path.join(CONTROL_PATH, filename)
+        copyFile(src, dst)
+        print(f"  Copied {filename} -> {dst}")
+
+    print(f"Control configs for {robot_id}: copied {len(files)} file(s) to {CONTROL_PATH}")
 
 
 if __name__ == '__main__':

@@ -33,6 +33,7 @@ from core.utils.logging_utils import Logger
 from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control_definitions import PositionControl_Config, BILBO_Control_Mode
+from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
 from robot.lowlevel.stm32_addresses import TWIPR_AddressTables, TWIPR_PositionControlAddresses
 from robot.lowlevel.stm32_control import (
     BILBO_PositionControl_Event_Message,
@@ -112,11 +113,12 @@ class Waypoint:
 def position_control_config_to_ctypes(config: PositionControl_Config) -> bilbo_position_control_config_t:
     """Convert PositionControl_Config to ctypes struct for serial transmission"""
     return bilbo_position_control_config_t(
-        Ts=config.Ts,
+        Ts=LOOP_TIME_CONTROL,
         kp_angular=config.kp_angular,
         ki_angular=config.ki_angular,
         kp_linear=config.kp_linear,
         ki_linear=config.ki_linear,
+        kd_linear=config.kd_linear,
         max_speed=config.max_speed,
         max_turn_rate=config.max_turn_rate,
         speed_transition_time=config.speed_transition_time,
@@ -128,6 +130,7 @@ def position_control_config_to_ctypes(config: PositionControl_Config) -> bilbo_p
         reverse_enter_angle=config.reverse_enter_angle,
         reverse_exit_angle=config.reverse_exit_angle,
         corner_slowdown_distance=config.corner_slowdown_distance,
+        decel_limit=config.decel_limit,
     )
 
 
@@ -1361,6 +1364,11 @@ class BILBO_PositionControl:
 
     def _lowlevel_sample_callback(self, sample: BILBO_LL_Sample):
         """Handle low-level sample updates"""
+        # Only sync position control state when top-level control is in POSITION mode.
+        # The firmware's position control mode is stale/meaningless in other modes.
+        if self._top_level_control_mode != BILBO_Control_Mode.POSITION:
+            return
+
         # Sync position control data from sample if available
         if hasattr(sample, 'control') and hasattr(sample.control, 'position_control_data'):
             pos_data = sample.control.position_control_data

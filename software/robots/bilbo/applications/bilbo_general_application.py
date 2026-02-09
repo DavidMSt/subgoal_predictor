@@ -58,7 +58,6 @@ class OptitrackSettings:
 class TestbedSettings:
     type: str | None = None
     size: dict | None = None
-    floor_roughness: float | None = 0.0
 
 
 @dataclasses.dataclass

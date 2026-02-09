@@ -284,7 +284,6 @@ class BILBO_ControlConfig:
         default_factory=TWIPR_Balancing_Control_Config)
     velocity_control: VelocityControl_Config = dataclasses.field(default_factory=VelocityControl_Config)
     position_control: PositionControl_Config = dataclasses.field(default_factory=PositionControl_Config)
-    floor_roughness: FloorRoughness_Config = dataclasses.field(default_factory=FloorRoughness_Config)
 
 
 class BILBO_Control_Status(enum.IntEnum):

@@ -41,7 +41,6 @@ class PID_Config:
     Kp: float = 0.0
     Kd: float = 0.0
     Ki: float = 0.0
-    Ts: float = 0.0
     enable_i_limit: bool = False
     i_term_limit: float = 0.0
     enable_input_limit: bool = False
@@ -98,7 +97,6 @@ class PositionControl_Config:
     - Per-waypoint speed limits with smooth transitions
     - Reverse mode always enabled with hysteresis
     """
-    Ts: float = 0.01                        # [s] Update period
     kp_angular: float = 10.0                # [rad/s per rad] Proportional gain for angular control
     ki_angular: float = 0.3                 # [rad/s per rad*s] Integral gain for angular control
     kp_linear: float = 2.0                  # [1/s] Proportional gain: speed = kp_linear * carrot_distance (fallback when decel_limit=0)
@@ -178,7 +176,6 @@ class BILBO_ControlConfig:
         default_factory=TWIPR_Balancing_Control_Config)
     velocity_control: VelocityControl_Config = dataclasses.field(default_factory=VelocityControl_Config)
     position_control: PositionControl_Config = dataclasses.field(default_factory=PositionControl_Config)
-    floor_roughness: FloorRoughness_Config = dataclasses.field(default_factory=FloorRoughness_Config)
 
 
 class BILBO_Control_Status(enum.IntEnum):

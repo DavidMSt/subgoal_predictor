@@ -58,9 +58,9 @@ class BILBO_TestbedManager_Settings:
 class BILBO_TestbedConfig:
     """Configuration loaded from a testbed YAML file."""
     size: dict[str, list[float]]
+    id: str | None = None
     origin: dict | None = None
     limbo_marker: dict | None = None
-    floor_roughness: float = 0.0
 
 
 class BILBO_TestbedManager:
@@ -148,7 +148,11 @@ class BILBO_TestbedManager:
                 )
             config_path = get_absolute_path(f'../configs/testbeds/testbed-{self.settings.testbed_type}.yaml')
             config_dict = load_yaml(config_path)
-            return from_dict_auto(BILBO_TestbedConfig, config_dict)
+            config = from_dict_auto(BILBO_TestbedConfig, config_dict)
+            # Set id from testbed_type if not already in YAML
+            if config.id is None:
+                config.id = self.settings.testbed_type
+            return config
 
         elif self.settings.testbed_size is not None:
             # Use custom size
@@ -227,13 +231,13 @@ class BILBO_TestbedManager:
         # to robot-side format {'size': {'x_min': ..., 'x_max': ..., 'y_min': ..., 'y_max': ...}}
         size = self.testbed_config.size
         config_dict = {
+            'id': self.testbed_config.id,
             'size': {
                 'x_min': size['x'][0],
                 'x_max': size['x'][1],
                 'y_min': size['y'][0],
                 'y_max': size['y'][1],
             },
-            'floor_roughness': self.testbed_config.floor_roughness,
         }
 
         robot.device.executeFunction('set_testbed_config', arguments={'config': config_dict})

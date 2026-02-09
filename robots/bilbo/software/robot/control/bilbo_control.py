@@ -20,12 +20,12 @@ from robot.control.bilbo_control_config import load_config_by_name
 from robot.control.bilbo_control_definitions import BILBO_Control_Mode, BILBO_ControlConfig, PID_Config, \
     BILBO_Control_Status, \
     BILBO_Control_Event_Type, BILBO_Control_Inputs, VelocityControl_Config, PositionControl_Config, TIC_Config, \
-    VIC_Config, BILBO_Control_Sample, Feedforward_Config, FloorRoughness_Config
+    VIC_Config, BILBO_Control_Sample, Feedforward_Config
 from robot.control.bilbo_position_control import BILBO_PositionControl
 from robot.estimation.bilbo_estimation import BILBO_Estimation
 from robot.lowlevel.stm32_addresses import TWIPR_AddressTables, TWIPR_ControlAddresses
 from robot.lowlevel.stm32_control import bilbo_velocity_control_command_t, bilbo_control_input_ext_t, \
-    bilbo_control_config_t, bilbo_tic_config_t, bilbo_vic_config_t, bilbo_position_control_config_t, \
+    bilbo_control_config_t, bilbo_tic_config_t, bilbo_vic_config_t, \
     bilbo_velocity_control_config_t, pid_control_config_t, feedforward_config_t
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample
@@ -135,6 +135,8 @@ class BILBO_Control:
         if not result:
             self.logger.error("Failed to set default control config. Control will not work!")
             return
+        # Reset position control to clear any stale firmware state from a previous run
+        self.position_control.reset()
         self.controller_status.vic_enabled = False
         self.controller_status.tic_enabled = False
         self.logger.info("Control initialized successfully")
@@ -474,166 +476,6 @@ class BILBO_Control:
         self._set_lowlevel_tic_enabled(enable)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def adjust_for_floor_roughness(self, roughness: float):
-        """Adjust control gains to compensate for floor friction/roughness.
-
-        On rough floors (carpet), the robot needs more aggressive control to overcome
-        friction. This method scales:
-        - Velocity control: Feedforward Kc (Coulomb friction) and PID gains
-        - Position control: kp_linear and ki_linear gains
-
-        The adjustments are applied on top of the current config values.
-        Call with roughness=0 to restore baseline behavior.
-
-        Args:
-            roughness: value between 0 and 1.
-                0: smooth floor (vinyl, hardwood) - no adjustment
-                0.5: flat carpet - moderate adjustment
-                1.0: rough/thick carpet - maximum adjustment
-
-        Tuning guide:
-            - If robot still stops short: increase ROUGHNESS_KP_SCALE or ROUGHNESS_KC_MAX
-            - If robot overshoots: decrease scales
-            - If oscillation occurs: reduce KP scale, keep KC
-        """
-        if not 0 <= roughness <= 1:
-            self.logger.warning(f"Roughness value must be between 0 and 1, got {roughness}. No adjustment done")
-            return
-
-        rough = self._config.floor_roughness
-
-        if not rough.enabled:
-            self.logger.info(f"Floor roughness compensation is disabled in config, skipping adjustment")
-            return
-
-        # === Store baseline config if not already stored ===
-        if not hasattr(self, '_baseline_velocity_config'):
-            self._baseline_velocity_config = dataclasses.replace(self._config.velocity_control)
-        if not hasattr(self, '_baseline_position_config'):
-            self._baseline_position_config = dataclasses.replace(self._config.position_control)
-
-        baseline_vel = self._baseline_velocity_config
-        baseline_pos = self._baseline_position_config
-
-        # === Calculate adjustment factors (linear interpolation) ===
-        # Forward velocity factors
-        v_kv_factor = 1.0 + roughness * (rough.v_kv_scale - 1.0)
-        v_kp_factor = 1.0 + roughness * (rough.v_kp_scale - 1.0)
-        v_ki_factor = 1.0 + roughness * (rough.v_ki_scale - 1.0)
-        # Turn velocity factors (independent, lower scaling)
-        psidot_kp_factor = 1.0 + roughness * (rough.psidot_kp_scale - 1.0)
-        psidot_ki_factor = 1.0 + roughness * (rough.psidot_ki_scale - 1.0)
-        # Position control factors
-        pos_kp_factor = 1.0 + roughness * (rough.pos_kp_scale - 1.0)
-        pos_ki_factor = 1.0 + roughness * (rough.pos_ki_scale - 1.0)
-        pos_decel_factor = 1.0 + roughness * (rough.pos_decel_scale - 1.0)
-        baseline_kc = baseline_vel.v.feedforward.Kc
-        kc_value = baseline_kc + roughness * (rough.kc_max - baseline_kc)
-        # Stribeck decay: linearly interpolate from baseline to target
-        baseline_v_decay = baseline_vel.v.feedforward.v_decay_stiction
-        v_decay_value = baseline_v_decay + roughness * (rough.v_decay_stiction_max - baseline_v_decay)
-
-        self.logger.info(f"Adjusting for floor roughness={roughness:.2f}: "
-                         f"v_Kv×{v_kv_factor:.2f}, v_Kp×{v_kp_factor:.2f}, v_Ki×{v_ki_factor:.2f}, Kc={kc_value:.4f}, "
-                         f"v_decay={v_decay_value:.3f}, "
-                         f"psidot_Kp×{psidot_kp_factor:.2f}, psidot_Ki×{psidot_ki_factor:.2f}, "
-                         f"pos_kp×{pos_kp_factor:.2f}, pos_ki×{pos_ki_factor:.2f}, pos_decel×{pos_decel_factor:.2f}")
-
-        # === Adjust forward velocity control ===
-        adjusted_v_pid = PID_Config(
-            Kp=baseline_vel.v.pid.Kp * v_kp_factor,
-            Ki=baseline_vel.v.pid.Ki * v_ki_factor,
-            Kd=baseline_vel.v.pid.Kd,
-            Ts=baseline_vel.v.pid.Ts,
-            enable_i_limit=baseline_vel.v.pid.enable_i_limit,
-            i_term_limit=baseline_vel.v.pid.i_term_limit,
-            enable_input_limit=baseline_vel.v.pid.enable_input_limit,
-            input_limit=baseline_vel.v.pid.input_limit,
-            enable_output_limit=baseline_vel.v.pid.enable_output_limit,
-            output_limit=baseline_vel.v.pid.output_limit,
-            enable_d_filter=baseline_vel.v.pid.enable_d_filter,
-            Td_filter=baseline_vel.v.pid.Td_filter,
-            enable_rate_limit=baseline_vel.v.pid.enable_rate_limit,
-            rate_limit=baseline_vel.v.pid.rate_limit,
-            enable_setpoint_rate_limit=baseline_vel.v.pid.enable_setpoint_rate_limit,
-            setpoint_rate_limit=baseline_vel.v.pid.setpoint_rate_limit,
-        )
-
-        # Stiction compensation: enable when Kc is non-zero
-        # v0_stiction is preserved from baseline feedforward config
-        # v_decay_stiction is linearly interpolated (computed above)
-        use_stiction = abs(kc_value) > 0.0
-        v0_stiction = baseline_vel.v.feedforward.v0_stiction
-
-        adjusted_v_ff = Feedforward_Config(
-            Kv=baseline_vel.v.feedforward.Kv * v_kv_factor,
-            Ka=baseline_vel.v.feedforward.Ka,
-            Kc=kc_value,
-            enable_vref_slew=baseline_vel.v.feedforward.enable_vref_slew,
-            vref_slew_rate=baseline_vel.v.feedforward.vref_slew_rate,
-            enable_a_filter=baseline_vel.v.feedforward.enable_a_filter,
-            Ta_filter=baseline_vel.v.feedforward.Ta_filter,
-            enable_stiction=use_stiction,
-            v0_stiction=v0_stiction,
-            v_decay_stiction=v_decay_value,
-            enable_output_limit=baseline_vel.v.feedforward.enable_output_limit,
-            output_limit=baseline_vel.v.feedforward.output_limit,
-            enable_output_slew=baseline_vel.v.feedforward.enable_output_slew,
-            output_slew_rate=baseline_vel.v.feedforward.output_slew_rate,
-        )
-
-        # === Adjust turn velocity control (independent PID scaling, no Kc needed for turning) ===
-        adjusted_psidot_pid = PID_Config(
-            Kp=baseline_vel.psidot.pid.Kp * psidot_kp_factor,
-            Ki=baseline_vel.psidot.pid.Ki * psidot_ki_factor,
-            Kd=baseline_vel.psidot.pid.Kd,
-            Ts=baseline_vel.psidot.pid.Ts,
-            enable_i_limit=baseline_vel.psidot.pid.enable_i_limit,
-            i_term_limit=baseline_vel.psidot.pid.i_term_limit,
-            enable_input_limit=baseline_vel.psidot.pid.enable_input_limit,
-            input_limit=baseline_vel.psidot.pid.input_limit,
-            enable_output_limit=baseline_vel.psidot.pid.enable_output_limit,
-            output_limit=baseline_vel.psidot.pid.output_limit,
-            enable_d_filter=baseline_vel.psidot.pid.enable_d_filter,
-            Td_filter=baseline_vel.psidot.pid.Td_filter,
-            enable_rate_limit=baseline_vel.psidot.pid.enable_rate_limit,
-            rate_limit=baseline_vel.psidot.pid.rate_limit,
-            enable_setpoint_rate_limit=baseline_vel.psidot.pid.enable_setpoint_rate_limit,
-            setpoint_rate_limit=baseline_vel.psidot.pid.setpoint_rate_limit,
-        )
-
-        # === Adjust position control ===
-        adjusted_pos = PositionControl_Config(
-            Ts=baseline_pos.Ts,
-            kp_angular=baseline_pos.kp_angular,
-            ki_angular=baseline_pos.ki_angular,
-            kp_linear=baseline_pos.kp_linear * pos_kp_factor,
-            ki_linear=baseline_pos.ki_linear * pos_ki_factor,
-            kd_linear=baseline_pos.kd_linear,
-            max_speed=baseline_pos.max_speed,
-            max_turn_rate=baseline_pos.max_turn_rate,
-            speed_transition_time=baseline_pos.speed_transition_time,
-            lookahead_base=baseline_pos.lookahead_base,
-            lookahead_gain=baseline_pos.lookahead_gain,
-            lookahead_max=baseline_pos.lookahead_max,
-            arrival_tolerance=baseline_pos.arrival_tolerance,
-            arrival_dwell_time=baseline_pos.arrival_dwell_time,
-            reverse_enter_angle=baseline_pos.reverse_enter_angle,
-            reverse_exit_angle=baseline_pos.reverse_exit_angle,
-            corner_slowdown_distance=baseline_pos.corner_slowdown_distance,
-            decel_limit=baseline_pos.decel_limit * pos_decel_factor,
-        )
-
-        # === Apply to lowlevel ===
-        self.set_forward_velocity_pid_config(adjusted_v_pid)
-        self.set_forward_velocity_ff_config(adjusted_v_ff)
-        self.set_turn_velocity_pid_config(adjusted_psidot_pid)
-        self.set_position_control_config(adjusted_pos)
-
-        self._current_floor_roughness = roughness
-        self.logger.info(f"Floor roughness adjustment applied successfully")
-
-    # ------------------------------------------------------------------------------------------------------------------
     def get_sample(self) -> BILBO_Control_Sample:
         sample = BILBO_Control_Sample(
             status=self.status,
@@ -942,29 +784,9 @@ class BILBO_Control:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_position_control_config(self, config: PositionControl_Config) -> bool:
-        position_control_config = bilbo_position_control_config_t(
-            Ts=config.Ts,
-            kp_angular=config.kp_angular,
-            ki_angular=config.ki_angular,
-            kp_linear=config.kp_linear,
-            ki_linear=config.ki_linear,
-            max_speed=config.max_speed,
-            max_turn_rate=config.max_turn_rate,
-            speed_transition_time=config.speed_transition_time,
-            lookahead_base=config.lookahead_base,
-            lookahead_gain=config.lookahead_gain,
-            lookahead_max=config.lookahead_max,
-            arrival_tolerance=config.arrival_tolerance,
-            arrival_dwell_time=config.arrival_dwell_time,
-            reverse_enter_angle=config.reverse_enter_angle,
-            reverse_exit_angle=config.reverse_exit_angle,
-            corner_slowdown_distance=config.corner_slowdown_distance,
-            decel_limit=config.decel_limit,
-        )
-
-        # Also update the position_control module's config
-        self.position_control.set_config(config)
-        return True
+        # Config is sent to STM32 via position_control.set_config() which handles
+        # the ctypes conversion and serial transmission internally.
+        return self.position_control.set_config(config)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_tic_config(self, config: TIC_Config) -> bool:

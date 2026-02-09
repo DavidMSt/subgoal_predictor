@@ -760,7 +760,7 @@ class BILBO_CLI_CommandSet(CommandSet):
             # --- PID ---
             self.core.logger.info("    PID:")
             self.core.logger.info(
-                f"      Kp={pid.Kp}, Ki={pid.Ki}, Kd={pid.Kd}, Ts={pid.Ts}"
+                f"      Kp={pid.Kp}, Ki={pid.Ki}, Kd={pid.Kd}"
             )
             self.core.logger.info(
                 f"      limits: "
