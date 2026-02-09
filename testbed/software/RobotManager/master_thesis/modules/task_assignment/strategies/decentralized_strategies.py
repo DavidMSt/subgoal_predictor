@@ -5,6 +5,9 @@ from master_thesis.containers.general_containers.agent_container import FRODOAge
 from master_thesis.containers.general_containers.task_container import TaskContainer
 from core.utils.logging_utils import Logger
 from master_thesis.modules.task_assignment.strategies.base_strategy import BaseStrategy 
+from master_thesis.modules.task_assignment.gnn.dgnn_ga import DGNN_GA
+
+import torch
 
 
 class DecentralizedStrategyABC(BaseStrategy):
@@ -58,6 +61,27 @@ class DecentralizedStrategyABC(BaseStrategy):
         """
         ...
 
+class DGNNGAStrategy(DecentralizedStrategyABC):
+    """DGNNGA strategy according to the paper by Goarin et. al"""
+
+    name: str = 'DGNNGA'
+
+    def __init__(self, checkpoint_path: str = 'master_thesis/modules/task_assignment/gnn/checkpoints/dgnn_ga_N5-10_L5_F64_20251010_f90.pt') -> None:
+        super().__init__()
+
+        # load the model weights
+        checkpoint = torch.load(checkpoint_path, weights_only=True)
+
+        # create model instance
+        self.model = DGNN_GA(F=checkpoint['hidden_dim'], T=checkpoint['comm_rounds'])
+
+        # apply loaded weights
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+
+    def run(self, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
+        """Run per-agent GNN inference (decentralized neural network)."""
+        print(model.encoder)
+        
 
 class GreedyNearestStrategy(DecentralizedStrategyABC):
     """Greedy nearest task selection (decentralized)."""
@@ -168,15 +192,6 @@ class CBBAStrategy(DecentralizedStrategyABC):
     def run(self, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
         """Run per-agent CBBA step (decentralized auction-based)."""
         raise NotImplementedError("CBBA not yet implemented")
-
-
-class GNNStrategy(DecentralizedStrategyABC):
-    """Graph Neural Network strategy (decentralized)."""
-    name: str = 'GNN'
-
-    def run(self, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
-        """Run per-agent GNN inference (decentralized neural network)."""
-        raise NotImplementedError("GNN not yet implemented")
 
 
 class TwoTowersStrategy(DecentralizedStrategyABC):

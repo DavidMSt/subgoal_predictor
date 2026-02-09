@@ -1,3 +1,8 @@
 .venv
 wheels-*
 logs*
+*.pt
+*.tfevents.*
+
+# Exercise files (personal learning notes)
+master_thesis/exercises/

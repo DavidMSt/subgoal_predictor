@@ -1,5 +1,5 @@
-from master_thesis.universal.offline_plan_simulation import FRODO_OfflinePlan_Simulation
-from master_thesis.universal.offline_plan_agent import FRODOOfflinePlanAgent
+from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
+from master_thesis.universal.global_plan_agent import FRODOGlobalPlanAgent
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 
@@ -22,7 +22,7 @@ class RLEnvMLP(gym.Env):
         self.max_n = max_n
         self.max_episode_steps = max_episode_steps
         # Use 'fast' mode for non-real-time RL training
-        self.sim = FRODO_OfflinePlan_Simulation(Ts = 0.1, limits = limits, run_mode='fast')
+        self.sim = FRODO_Universal_Simulation(Ts = 0.1, limits = limits, run_mode='fast')
 
         # Silence loggers for RL training (only show errors)
         self._configure_logging_for_rl()
@@ -68,7 +68,7 @@ class RLEnvMLP(gym.Env):
         self._spawn_scenario()
         
         self.agents_list = sorted(self.sim.agents.values(), key=lambda a: a.agent_id)
-        assert all(isinstance(agent, FRODOOfflinePlanAgent) for agent in self.agents_list)
+        assert all(isinstance(agent, FRODOGlobalPlanAgent) for agent in self.agents_list)
         self.curr_agent_idx = 0
         self.agent_actions = {}
         
@@ -111,7 +111,7 @@ class RLEnvMLP(gym.Env):
         self.sim.spawn_agents(n, log_level='WARNING')
         self.sim.spawn_tasks(n)
 
-    def _get_obs(self, agent: FRODOOfflinePlanAgent):
+    def _get_obs(self, agent: FRODOGlobalPlanAgent):
         observations = []
         
         agent_cont = agent.container

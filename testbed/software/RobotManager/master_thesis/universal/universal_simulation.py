@@ -5,7 +5,7 @@ from core.utils.logging_utils import Logger
 
 from master_thesis.general.general_agent import FRODOGeneralAgent
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment #, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
-from master_thesis.universal.offline_plan_agent import FRODOOfflinePlanAgent
+from master_thesis.universal.global_plan_agent import FRODOGlobalPlanAgent
 
 from master_thesis.modules.motion_planning.mp_simulation_module import MPSimulationModule
 from master_thesis.modules.task_assignment.ta_simulation_module import TASimulationModule
@@ -94,7 +94,7 @@ class FRODO_General_CommandSet(CommandSet):
             color=color
         )
 
-class FRODO_OfflinePlan_Simulation(FRODO_general_Simulation):
+class FRODO_Universal_Simulation(FRODO_general_Simulation):
     """
     Simulation with offline planning agents: TA -> MP (OMPL) -> EXE.
 
@@ -102,7 +102,7 @@ class FRODO_OfflinePlan_Simulation(FRODO_general_Simulation):
     then execute them step-by-step. Good for static environments.
     """
 
-    agents: dict[str, FRODOOfflinePlanAgent] # type: ignore[assignment]
+    agents: dict[str, FRODOGlobalPlanAgent] # type: ignore[assignment]
     cli: FRODO_General_CommandSet | None = None
 
     def __init__(self, Ts=0.1, limits=((-5,5),(-5,5)), env=FrodoGeneralEnvironment, run_mode='rt'):
@@ -125,11 +125,11 @@ class FRODO_OfflinePlan_Simulation(FRODO_general_Simulation):
 
     def new_agent(self, # type: ignore[override]
                   agent_id: str,
-                  agent_class: type[FRODOOfflinePlanAgent] = FRODOOfflinePlanAgent,
+                  agent_class: type[FRODOGlobalPlanAgent] = FRODOGlobalPlanAgent,
                   start_config: tuple[float, float, float]  = (0.0, 0.0, 0.0),
                   color:tuple[float, float, float] = (1.0,1.0,1.0),
                   log_level: str = 'INFO'
-                  ) -> FRODOOfflinePlanAgent | None:
+                  ) -> FRODOGlobalPlanAgent | None:
 
         # Pass env_container as kwarg to FRODOOfflinePlanAgent
         agent = super().new_agent(
@@ -142,7 +142,7 @@ class FRODO_OfflinePlan_Simulation(FRODO_general_Simulation):
         )
 
         # keep linter quiet
-        assert isinstance(agent, FRODOOfflinePlanAgent)
+        assert isinstance(agent, FRODOGlobalPlanAgent)
 
         # Set lwr_cont reference in both TA and MP modules (now that it's been created by parent's add_agent)
         agent.tam.lwr = agent.lwr_cont
@@ -155,11 +155,11 @@ class FRODO_OfflinePlan_Simulation(FRODO_general_Simulation):
 
         return agent
 
-    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOOfflinePlanAgent, log_level: str = 'INFO') -> Sequence[FRODOOfflinePlanAgent]:
+    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOGlobalPlanAgent, log_level: str = 'INFO') -> Sequence[FRODOGlobalPlanAgent]:
         # Pass log_level to parent - agents will be created with correct logger level from the start
         result = super().spawn_agents(n, configurations, agent_class, log_level=log_level)
 
-        return cast(Sequence[FRODOOfflinePlanAgent], result)
+        return cast(Sequence[FRODOGlobalPlanAgent], result)
 
     def reset_simulation(self):
         """Reset the simulation to initial state - clears all agents, tasks, and obstacles."""
@@ -236,17 +236,20 @@ class FRODO_OfflinePlan_Simulation(FRODO_general_Simulation):
         self.environment.scheduling.actions['step'].run()
 
     
+# =======================================================================================
+# ======================================== Examples =====================================
+# =======================================================================================
 
 def assignment_example_simple():
      # create simulation (no web gui)
-    sim = FRODO_OfflinePlan_Simulation(
+    sim = FRODO_Universal_Simulation(
         # Ts=0.1,
         limits = ((-4, 4), (-6, 6))
     )
     sim.init()
 
     # spawn task and agents
-    sim.spawn_agents(n = 1, agent_class=FRODOOfflinePlanAgent)
+    sim.spawn_agents(n = 1, agent_class=FRODOGlobalPlanAgent)
     sim.spawn_tasks(1)
 
     # assign task to agent
@@ -257,7 +260,7 @@ def central_ta_example():
     from master_thesis.task_assignment.strategies.centralized_strategies import RandomStrategyCent
      # Simulation Init
     env_size = 10
-    sim = FRODO_OfflinePlan_Simulation(
+    sim = FRODO_Universal_Simulation(
         Ts=0.1,
         limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
     )
@@ -289,7 +292,7 @@ def local_ta_example():
     from master_thesis.modules.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
      # Simulation Init
     env_size = 10
-    sim = FRODO_OfflinePlan_Simulation(
+    sim = FRODO_Universal_Simulation(
         Ts=0.1,
         limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
     )
@@ -325,10 +328,33 @@ def local_ta_example():
     sim.start_exe()
     sim.logger.warning(f'this is the current agent position: {sim.agents["vfrodo0"].configuration}')
 
+def dgnn_ga_example():
+    import numpy as np
+
+    env_size = 10
+    sim = FRODO_Universal_Simulation(
+        Ts=0.1,
+        limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
+    )
+    
+    start_ag1, start_ag2 = (3.0,3.0,3.0), (0.0,0.0,0.0)
+    sim.new_agent('vfrodo0', start_config= start_ag1)
+    sim.new_agent('vfrodo1', start_config= start_ag2)
+
+    sim.new_task('task0', -1.0, 2.0, np.pi/2)
+    sim.new_task('task1', 4.0, 4.0, -np.pi)
+
+    sim.init()
+    sim.start()
+
+    result_decent = sim.start_ta(strategy=StrategyType.DGNNGA)
+    print(result_decent)
+
 
 
 if __name__ == "__main__":
 
 #    general_example()
     # central_ta_example()
-    local_ta_example()
+    # local_ta_example()
+    dgnn_ga_example()

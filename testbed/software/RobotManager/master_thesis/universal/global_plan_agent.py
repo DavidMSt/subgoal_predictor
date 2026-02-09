@@ -16,7 +16,7 @@ from master_thesis.containers.general_containers.task_container import TaskConta
 
 import master_thesis.modules.task_assignment.strategies.centralized_strategies 
 
-class FRODOOfflinePlanAgent(FRODOGeneralAgent):
+class FRODOGlobalPlanAgent(FRODOGeneralAgent):
     """
     Agent with offline planning pipeline: TA -> MP (OMPL) -> EXE (trajectory playback).
 
@@ -204,7 +204,7 @@ def main():
     sim.init()
 
     # Initialize Agent
-    agent = FRODOOfflinePlanAgent(agent_id = 'frodo01', env_container=sim.environment.environment_container ,start_config= (0.0,0.0,0.0))
+    agent = FRODOGlobalPlanAgent(agent_id = 'frodo01', env_container=sim.environment.environment_container ,start_config= (0.0,0.0,0.0))
     sim.add_agent(agent)
 
     # Initialize Task

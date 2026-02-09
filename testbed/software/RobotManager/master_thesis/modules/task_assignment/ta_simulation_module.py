@@ -97,7 +97,7 @@ class TASimulationModule():
             return result
 
         else:
-            raise ValueError(f"Unknown strategy: {strategy}")
+            raise ValueError(f"Selected strategy: {strategy} neither known as centralized or decentralized")
 
     def _wait_for_decentralized_decisions(
         self,

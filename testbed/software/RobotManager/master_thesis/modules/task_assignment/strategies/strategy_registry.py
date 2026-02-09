@@ -6,7 +6,7 @@ from master_thesis.modules.task_assignment.strategies.centralized_strategies imp
 from master_thesis.modules.task_assignment.strategies.decentralized_strategies import (
     GreedyNearestStrategy,
     CBBAStrategy,
-    GNNStrategy,
+    DGNNGAStrategy,
     TwoTowersStrategy
 )
 
@@ -19,7 +19,7 @@ class StrategyType(Enum):
     # Decentralized
     GREEDY_NEAREST = 'greedy_nearest'
     CBBA = 'cbba'
-    GNN = 'gnn'
+    DGNNGA = 'dgnnga'
     TWO_TOWERS = 'two_towers'
 
 class StrategyRegistry:
@@ -33,7 +33,7 @@ class StrategyRegistry:
     _DECENTRALIZED = {
         StrategyType.GREEDY_NEAREST: GreedyNearestStrategy,
         StrategyType.CBBA: CBBAStrategy,
-        StrategyType.GNN: GNNStrategy,
+        StrategyType.DGNNGA: DGNNGAStrategy,
         StrategyType.TWO_TOWERS: TwoTowersStrategy,
     }
     
