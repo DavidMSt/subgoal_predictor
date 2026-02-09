@@ -59,4 +59,4 @@ def compute_squared_cost_matrix_from_containers(
         device=device
     )
 
-    return compute_squared_cost_matrix(agent_positions, task_positions).pow(2)
+    return compute_squared_cost_matrix(agent_positions, task_positions)

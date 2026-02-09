@@ -159,4 +159,3 @@ class TASimulationModule():
         )
 
         return result
-
