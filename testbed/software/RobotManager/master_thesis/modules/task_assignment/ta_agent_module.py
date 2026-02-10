@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Callable
 
 from extensions.simulation.src import core as core
 from core.utils.logging_utils import Logger
@@ -56,8 +57,9 @@ class TAAgentModule():
 
     def __init__(self, agent_id: str, 
                  agent_container: FRODOAgentContainer, 
-                 lwr_cont: LocalWorldContainer,
-                 logger: Logger):
+                 lwr_cont: LocalWorldContainer| None,
+                 logger: Logger,
+                 comm_func: Callable | None):
 
         # Set ID of corresponding agent
         self.agent_id = agent_id
@@ -76,12 +78,21 @@ class TAAgentModule():
         # TODO: Use metric, e.g. dubins distance which accounts for turning radius - also make this more elegant?
         self.distance_fun = DistanceCalculator(self.ta_container.config.distance_metric).measure  # set the cost function
 
+        # communication related things
+        self.comm_func = comm_func
+        self.agent_cont.comm_buffer["task_costs"] = {}
+        self.agent_cont.comm_buffer["assigned_task"] = {}
+
     def perform_task_assignment(self) -> TaskContainer | None:
-        """Execute task assignment using strategy from container state.
+        """
+        Execute task assignment using strategy from container state. 
+        Will always be decentralized assignment, since central versions are computed at simulation level.
 
         Returns:
             TaskContainer: Chosen task, or None if no assignment made
         """
+        assert isinstance(self.lwr, LocalWorldContainer)
+
         # Get strategy from state (set by simulation)
         strategy_name = self.ta_container.state.current_strategy
         if not strategy_name:
@@ -100,7 +111,8 @@ class TAAgentModule():
             agent_container=self.agent_cont,
             task_containers=visible_tasks,
             visible_agent_containers=visible_neighbors,
-            logger=self.logger
+            logger=self.logger,
+            comm_function = self.comm_func
         )
 
         return chosen_task

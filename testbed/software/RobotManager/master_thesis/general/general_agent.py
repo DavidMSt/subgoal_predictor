@@ -11,10 +11,10 @@ from applications.FRODO.simulation.frodo_simulation import FRODO_Simulation,  FR
 from extensions.simulation.src.objects.frodo.frodo import FRODO_DynamicAgent
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.cli.cli import CommandSet, Command, CommandArgument
-from extensions.simulation.src.objects.frodo.frodo import FRODO_State
+# from extensions.simulation.src.objects.frodo.frodo import FRODO_State
 import extensions.simulation.src.core as core
 from core.utils.logging_utils import Logger
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer, FRODO_Agent_Config
+from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer, FRODO_Agent_Config, FRODO_AgentState
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 
@@ -45,7 +45,7 @@ class FRODOGeneralAgent(FRODO_DynamicAgent, FRODO_SimulationObject):
         self.container = FRODOAgentContainer(
             agent_id= agent_id,
             config=agent_config,
-            state = FRODO_State(x = start_config[0], y = start_config[1], psi = start_config[2], v = 0.0, psi_dot = 0.0)
+            state = FRODO_AgentState(x = start_config[0], y = start_config[1], psi = start_config[2], v = 0.0, psi_dot = 0.0)
         )
         # self.lwr = LocalWorldRepresentation(self_agent=self.container)
         # ─────────────────────────────────────────────

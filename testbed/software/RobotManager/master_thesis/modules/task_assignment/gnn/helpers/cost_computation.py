@@ -13,7 +13,7 @@ from master_thesis.containers.general_containers.agent_container import FRODOAge
 from master_thesis.containers.general_containers.task_container import TaskContainer
 
 
-def compute_squared_cost_matrix(
+def squared_cost_matrix_from_tensors(
     agent_positions: torch.Tensor,
     task_positions: torch.Tensor,
 ) -> torch.Tensor:
@@ -30,11 +30,10 @@ def compute_squared_cost_matrix(
     return torch.cdist(agent_positions, task_positions).pow(2)
 
 
-def compute_squared_cost_matrix_from_containers(
-    agents: List[FRODOAgentContainer],
-    tasks: List[TaskContainer],
-    device: torch.device = None,
-) -> torch.Tensor:
+def squared_cost_dict_from_containers(
+    agent_cont: FRODOAgentContainer,
+    task_cont_dict: dict[str, TaskContainer],
+) -> dict[str, torch.Tensor]:
     """
     Compute cost matrix from agent and task containers.
 
@@ -48,15 +47,17 @@ def compute_squared_cost_matrix_from_containers(
     Returns:
         Cost matrix of shape (N_r, N_g)
     """
-    agent_positions = torch.tensor(
-        [[a.x, a.y] for a in agents],
-        dtype=torch.float32,
-        device=device
+    
+
+    agent_position = torch.tensor(
+        (agent_cont.x, agent_cont.y),
+        dtype=torch.float32
     )
     task_positions = torch.tensor(
-        [[t.x, t.y] for t in tasks],
-        dtype=torch.float32,
-        device=device
+        [[t.x, t.y] for t in task_cont_dict.values()],
+        dtype=torch.float32
     )
 
-    return compute_squared_cost_matrix(agent_positions, task_positions)
+    cost_vector = squared_cost_matrix_from_tensors(agent_position, task_positions)
+
+    return dict(zip(task_ids, cost_vector.tolist()))

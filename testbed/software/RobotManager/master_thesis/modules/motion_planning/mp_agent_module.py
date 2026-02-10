@@ -18,10 +18,10 @@ from master_thesis.containers.base_container import BaseContainer
 # TODO: Apply offset bidirectional from ompl to simulation and from simulation back (initialization of start config)
 
 class MPAgentModule():
-    lwr_cont: LocalWorldContainer
+    lwr_cont: LocalWorldContainer | None
     agent_cont: FRODOAgentContainer
 
-    def __init__(self,agent_cont: FRODOAgentContainer, lwr_cont: LocalWorldContainer, logger: Logger, mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino) -> None:
+    def __init__(self,agent_cont: FRODOAgentContainer, lwr_cont: LocalWorldContainer | None, logger: Logger, mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino) -> None:
         self.agent_cont = agent_cont
         self.lwr_cont = lwr_cont
         self.logger = logger

@@ -14,6 +14,7 @@ from master_thesis.modules.local_control.mppi_controller import MPPIController, 
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
+from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 
 
 class FRODOReactiveAgent(FRODOGeneralAgent):
@@ -61,6 +62,12 @@ class FRODOReactiveAgent(FRODOGeneralAgent):
             )
             controller = MPPIController(config)
 
+        # TODO: Use bilbolab code for this if possible
+        print('this is the container', self.container)
+
+        self.container.comm_buffer["task_costs"] = {}
+        self.container.comm_buffer["assigned_task"] = {}
+
         # ------------------------------------------------------------------
         # MODULES
         # ------------------------------------------------------------------
@@ -71,6 +78,7 @@ class FRODOReactiveAgent(FRODOGeneralAgent):
             agent_container=self.container,
             lwr_cont=None,  # Will be set after agent is added to simulation
             logger=self.logger,
+            comm_func= self.comm_func
         )
 
         # Local Control module (replaces MP + EXE)
@@ -182,6 +190,26 @@ class FRODOReactiveAgent(FRODOGeneralAgent):
     def controller(self) -> LocalController:
         """Access to the local controller."""
         return self.lcm.controller
+    
+    # TODO: is there an alternative from bilbolab? 
+    def comm_func(self, payload: dict[str, dict]):
+        assert isinstance(self.lwr_cont, LocalWorldContainer)
+
+        self.container.comm_buffer["received_from"].clear()
+        self.container.comm_buffer["task_costs"].clear()
+        self.container.comm_buffer["assigned_task"].clear()
+
+        for neighbor_cont in self.lwr_cont.neighbors.values():
+            for topic, data in payload.items():
+                if topic not in neighbor_cont.comm_buffer:
+                    continue  # neighbor doesn't have this topic, skip
+
+                if topic == "task_costs":
+                    for task_id, cost in data.items():
+                        if task_id in neighbor_cont.comm_buffer[topic]:
+                            neighbor_cont.comm_buffer[topic][task_id].append(cost)
+            
+            neighbor_cont.comm_buffer["received_from"].append(self.container.agent_id)
 
 
 def main():

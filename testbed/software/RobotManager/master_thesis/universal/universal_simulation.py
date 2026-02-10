@@ -330,6 +330,7 @@ def local_ta_example():
 
 def dgnn_ga_example():
     import numpy as np
+    from master_thesis.universal.local_plan_agent import FRODOReactiveAgent
 
     env_size = 10
     sim = FRODO_Universal_Simulation(
@@ -338,8 +339,8 @@ def dgnn_ga_example():
     )
     
     start_ag1, start_ag2 = (3.0,3.0,3.0), (0.0,0.0,0.0)
-    sim.new_agent('vfrodo0', start_config= start_ag1)
-    sim.new_agent('vfrodo1', start_config= start_ag2)
+    sim.new_agent('vfrodo0', start_config= start_ag1, agent_class= FRODOReactiveAgent)
+    sim.new_agent('vfrodo1', start_config= start_ag2, agent_class= FRODOReactiveAgent)
 
     sim.new_task('task0', -1.0, 2.0, np.pi/2)
     sim.new_task('task1', 4.0, 4.0, -np.pi)

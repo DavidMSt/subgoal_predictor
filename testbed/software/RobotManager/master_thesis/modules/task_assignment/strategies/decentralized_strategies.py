@@ -6,6 +6,8 @@ from master_thesis.containers.general_containers.task_container import TaskConta
 from core.utils.logging_utils import Logger
 from master_thesis.modules.task_assignment.strategies.base_strategy import BaseStrategy 
 from master_thesis.modules.task_assignment.gnn.dgnn_ga import DGNN_GA
+from master_thesis.modules.task_assignment.gnn.helpers.cost_computation import squared_cost_dict_from_containers
+from typing import Callable
 
 import torch
 
@@ -19,7 +21,7 @@ class DecentralizedStrategyABC(BaseStrategy):
     """
     name: str = 'DecentralizedBase'
 
-    def solve(self, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer] | None = None, logger: Logger | None = None) -> TaskContainer | None:
+    def solve(self, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], comm_func: Callable , visible_agent_containers: dict[str, FRODOAgentContainer] | None = None, logger: Logger | None = None) -> TaskContainer | None:
         """Decentralized solver - common setup, then calls run().
 
         Args:
@@ -42,11 +44,12 @@ class DecentralizedStrategyABC(BaseStrategy):
             agent_container=agent_container,
             task_containers=task_containers,
             visible_agent_containers=visible_agent_containers or {},
-            logger=logger
+            logger=logger,
+            comm_func = comm_func
         )
 
     @abstractmethod
-    def run(self, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
+    def run(self, comm_func, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
         """Strategy-specific implementation.
 
         Args:
@@ -63,10 +66,13 @@ class DecentralizedStrategyABC(BaseStrategy):
 
 class DGNNGAStrategy(DecentralizedStrategyABC):
     """DGNNGA strategy according to the paper by Goarin et. al"""
+    
 
     name: str = 'DGNNGA'
 
     def __init__(self, checkpoint_path: str = 'master_thesis/modules/task_assignment/gnn/checkpoints/dgnn_ga_N5-10_L5_F64_20251010_f90.pt') -> None:
+        
+
         super().__init__()
 
         # load the model weights
@@ -78,9 +84,27 @@ class DGNNGAStrategy(DecentralizedStrategyABC):
         # apply loaded weights
         self.model.load_state_dict(checkpoint['model_state_dict'])
 
-    def run(self, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
+        # set device
+        self.device = torch.device('cpu')
+
+    def run(self, comm_func: Callable, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
         """Run per-agent GNN inference (decentralized neural network)."""
-        print(model.encoder)
+        L = 5
+        
+        # compute agents' own cost to visible tasks
+        own_cost_vec_dict = squared_cost_dict_from_containers(agent_cont = agent_container, 
+                                                        task_cont_dict= task_containers)
+        
+        # communicate with others
+        
+
+
+        encoded_embeddings = ...
+
+        for i in range(L):
+            ...
+
+        pred_assignment = ...
         
 
 class GreedyNearestStrategy(DecentralizedStrategyABC):

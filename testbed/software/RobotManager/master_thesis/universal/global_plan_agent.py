@@ -30,6 +30,10 @@ class FRODOGlobalPlanAgent(FRODOGeneralAgent):
     def __init__(self, env_container, agent_id: str, Ts=0.1, start_config=(0.0,0.0,0.0), color: tuple[float, float, float] = (1.0, 1.0, 1.0), log_level: str = 'INFO') -> None:
         super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, color=color, log_level=log_level)
      
+        # TODO: Use bilbolab code for this if possible
+        self.container.comm_buffer["task_costs"] = {}
+        self.container.comm_buffer["assigned_task"] = {}
+
         # ------------------------------------------------------------------
         # MODULES
         # ------------------------------------------------------------------
@@ -46,6 +50,7 @@ class FRODOGlobalPlanAgent(FRODOGeneralAgent):
             agent_container=self.container,
             lwr_cont=None,  # Will be set after agent is added to simulation
             logger=self.logger,
+            comm_func= self.comm_func
         )
 
         self.exi = EXEAgentModule(
@@ -192,6 +197,25 @@ class FRODOGlobalPlanAgent(FRODOGeneralAgent):
     def exe_cont(self):
         return self.exi.exe_cont
 
+    # TODO: is there an alternative from bilbolab? 
+    def comm_func(self, payload: dict[str, dict]):
+        assert isinstance(self.lwr_cont, LocalWorldContainer)
+
+        self.container.comm_buffer["received_from"].clear()
+        self.container.comm_buffer["task_costs"].clear()
+        self.container.comm_buffer["assigned_task"].clear()
+
+        for neighbor_cont in self.lwr_cont.neighbors.values():
+            for topic, data in payload.items():
+                if topic not in neighbor_cont.comm_buffer:
+                    continue  # neighbor doesn't have this topic, skip
+
+                if topic == "task_costs":
+                    for task_id, cost in data.items():
+                        if task_id in neighbor_cont.comm_buffer[topic]:
+                            neighbor_cont.comm_buffer[topic][task_id].append(cost)
+            
+            neighbor_cont.comm_buffer["received_from"].append(self.container.agent_id)
 
 
 def main():
