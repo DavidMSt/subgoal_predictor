@@ -112,7 +112,7 @@ class TAAgentModule():
             task_containers=visible_tasks,
             visible_agent_containers=visible_neighbors,
             logger=self.logger,
-            comm_function = self.comm_func
+            comm_func = self.comm_func
         )
 
         return chosen_task

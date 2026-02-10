@@ -5,7 +5,7 @@ from core.utils.logging_utils import Logger
 
 from master_thesis.general.general_agent import FRODOGeneralAgent
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment #, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
-from master_thesis.universal.global_plan_agent import FRODOGlobalPlanAgent
+from master_thesis.universal.global_plan_agent import FRODOUniversalAgent
 
 from master_thesis.modules.motion_planning.mp_simulation_module import MPSimulationModule
 from master_thesis.modules.task_assignment.ta_simulation_module import TASimulationModule
@@ -102,7 +102,7 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
     then execute them step-by-step. Good for static environments.
     """
 
-    agents: dict[str, FRODOGlobalPlanAgent] # type: ignore[assignment]
+    agents: dict[str, FRODOUniversalAgent] # type: ignore[assignment]
     cli: FRODO_General_CommandSet | None = None
 
     def __init__(self, Ts=0.1, limits=((-5,5),(-5,5)), env=FrodoGeneralEnvironment, run_mode='rt'):
@@ -125,11 +125,11 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
 
     def new_agent(self, # type: ignore[override]
                   agent_id: str,
-                  agent_class: type[FRODOGlobalPlanAgent] = FRODOGlobalPlanAgent,
+                  agent_class: type[FRODOUniversalAgent] = FRODOUniversalAgent,
                   start_config: tuple[float, float, float]  = (0.0, 0.0, 0.0),
                   color:tuple[float, float, float] = (1.0,1.0,1.0),
                   log_level: str = 'INFO'
-                  ) -> FRODOGlobalPlanAgent | None:
+                  ) -> FRODOUniversalAgent | None:
 
         # Pass env_container as kwarg to FRODOOfflinePlanAgent
         agent = super().new_agent(
@@ -142,7 +142,7 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
         )
 
         # keep linter quiet
-        assert isinstance(agent, FRODOGlobalPlanAgent)
+        assert isinstance(agent, FRODOUniversalAgent)
 
         # Set lwr_cont reference in both TA and MP modules (now that it's been created by parent's add_agent)
         agent.tam.lwr = agent.lwr_cont
@@ -155,11 +155,11 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
 
         return agent
 
-    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOGlobalPlanAgent, log_level: str = 'INFO') -> Sequence[FRODOGlobalPlanAgent]:
+    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOUniversalAgent, log_level: str = 'INFO') -> Sequence[FRODOUniversalAgent]:
         # Pass log_level to parent - agents will be created with correct logger level from the start
         result = super().spawn_agents(n, configurations, agent_class, log_level=log_level)
 
-        return cast(Sequence[FRODOGlobalPlanAgent], result)
+        return cast(Sequence[FRODOUniversalAgent], result)
 
     def reset_simulation(self):
         """Reset the simulation to initial state - clears all agents, tasks, and obstacles."""
@@ -249,7 +249,7 @@ def assignment_example_simple():
     sim.init()
 
     # spawn task and agents
-    sim.spawn_agents(n = 1, agent_class=FRODOGlobalPlanAgent)
+    sim.spawn_agents(n = 1, agent_class=FRODOUniversalAgent)
     sim.spawn_tasks(1)
 
     # assign task to agent
@@ -330,7 +330,7 @@ def local_ta_example():
 
 def dgnn_ga_example():
     import numpy as np
-    from master_thesis.universal.local_plan_agent import FRODOReactiveAgent
+    from master_thesis.universal.global_plan_agent import FRODOUniversalAgent
 
     env_size = 10
     sim = FRODO_Universal_Simulation(
@@ -339,8 +339,8 @@ def dgnn_ga_example():
     )
     
     start_ag1, start_ag2 = (3.0,3.0,3.0), (0.0,0.0,0.0)
-    sim.new_agent('vfrodo0', start_config= start_ag1, agent_class= FRODOReactiveAgent)
-    sim.new_agent('vfrodo1', start_config= start_ag2, agent_class= FRODOReactiveAgent)
+    sim.new_agent('vfrodo0', start_config= start_ag1, agent_class= FRODOUniversalAgent)
+    sim.new_agent('vfrodo1', start_config= start_ag2, agent_class= FRODOUniversalAgent)
 
     sim.new_task('task0', -1.0, 2.0, np.pi/2)
     sim.new_task('task1', 4.0, 4.0, -np.pi)

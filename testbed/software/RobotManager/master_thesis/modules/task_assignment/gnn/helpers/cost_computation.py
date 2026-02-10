@@ -50,7 +50,7 @@ def squared_cost_dict_from_containers(
     
 
     agent_position = torch.tensor(
-        (agent_cont.x, agent_cont.y),
+        [(agent_cont.x, agent_cont.y)], # wrap within extra list, to get 2d tensor
         dtype=torch.float32
     )
     task_positions = torch.tensor(
@@ -58,6 +58,7 @@ def squared_cost_dict_from_containers(
         dtype=torch.float32
     )
 
-    cost_vector = squared_cost_matrix_from_tensors(agent_position, task_positions)
+    cost_vector = squared_cost_matrix_from_tensors(agent_position, task_positions).squeeze() # make 1d
+    task_ids = task_cont_dict.keys()
 
     return dict(zip(task_ids, cost_vector.tolist()))
