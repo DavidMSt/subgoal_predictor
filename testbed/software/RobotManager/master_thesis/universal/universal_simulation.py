@@ -5,7 +5,7 @@ from core.utils.logging_utils import Logger
 
 from master_thesis.general.general_agent import FRODOGeneralAgent
 from master_thesis.general.general_simulation import FRODO_general_Simulation, FrodoGeneralEnvironment #, SIMULATED_AGENTS, SIMULATED_OBSTACLES, SIMULATED_TASKS
-from master_thesis.universal.global_plan_agent import FRODOUniversalAgent
+from master_thesis.universal.universal_agent import FRODOUniversalAgent
 
 from master_thesis.modules.motion_planning.mp_simulation_module import MPSimulationModule
 from master_thesis.modules.task_assignment.ta_simulation_module import TASimulationModule
@@ -330,7 +330,7 @@ def local_ta_example():
 
 def dgnn_ga_example():
     import numpy as np
-    from master_thesis.universal.global_plan_agent import FRODOUniversalAgent
+    from master_thesis.universal.universal_agent import FRODOUniversalAgent
 
     env_size = 10
     sim = FRODO_Universal_Simulation(

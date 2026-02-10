@@ -31,7 +31,7 @@ from extensions.joystick.joystick_manager import JoystickManager, Joystick
 
 # thesis imports
 from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
-from master_thesis.universal.global_plan_agent import FRODOUniversalAgent
+from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.general.general_obstacle import GeneralObstacle
 from master_thesis.gui.demo_scenarios.maze_examples import maze_single_2x2, maze_multi_4x4
 from master_thesis.general.general_task import GeneralTask

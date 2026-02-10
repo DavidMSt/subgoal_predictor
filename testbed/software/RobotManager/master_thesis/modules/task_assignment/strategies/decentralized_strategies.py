@@ -10,6 +10,7 @@ from master_thesis.modules.task_assignment.gnn.helpers.cost_computation import s
 from typing import Callable
 
 import torch
+import time
 
 
 class DecentralizedStrategyABC(BaseStrategy):
@@ -89,6 +90,7 @@ class DGNNGAStrategy(DecentralizedStrategyABC):
 
     def run(self, comm_func: Callable, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
         """Run per-agent GNN inference (decentralized neural network)."""
+
         L = 5
         
         # compute agents' own cost to visible tasks
@@ -96,15 +98,43 @@ class DGNNGAStrategy(DecentralizedStrategyABC):
                                                         task_cont_dict= task_containers)
         
         # communicate with others
-        
+        for visible_agent_cont in visible_agent_containers.values():
+            visible_agent_cont.comm_buffer['task_costs'][agent_container.agent_id] = own_cost_vec_dict # add another entry 
 
+        # wait until all costs have been recevied from other agents
+        self._wait_comm_received(agent_container, visible_agent_containers, logger)
 
+        # piece together all costs for the known tasks
+        cost_matrix = self._create_cost_mat(own_cost_vec_dict, agent_container)
+
+        # encode the cost into embedding using encoder module
         encoded_embeddings = ...
 
         for i in range(L):
             ...
 
         pred_assignment = ...
+
+        # clear TA related dicts from an agents comm buffer
+        agent_container.comm_buffer['task_costs'].clear()
+        agent_container.comm_buffer['assigned_task'].clear()
+
+    @staticmethod
+    def _wait_comm_received(agent_cont, visible_agent_conts, logger):
+        timeout = 1.0
+        start = time.time()
+        while len(agent_cont.comm_buffer['task_costs']) < len(visible_agent_conts):
+            if time.time() - start > timeout:
+                print('name: ', agent_cont.agent_id, visible_agent_conts)
+                print('comm buffer, ', len(agent_cont.comm_buffer['task_costs']), len(visible_agent_conts))
+                logger.warning("dgnn-ga: timeout waiting for neighbor cost")
+                break
+            time.sleep(0.01)
+
+    @staticmethod
+    def _create_cost_mat(own_cost_vec_dict, agent_contaier):
+        received_costs = agent_contaier.comm_buffer['task_costs']
+
         
 
 class GreedyNearestStrategy(DecentralizedStrategyABC):
