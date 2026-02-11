@@ -1869,8 +1869,8 @@ class RobotUI:
     def on_new_tracker_sample(self, sample, *args, **kwargs):
         if not self._built:
             return
-        if self.manager.tracker is not None and self.robot.id in self.manager.tracker.robots:
-            state = self.manager.tracker.robots[self.robot.id].state
+        if self.manager.tracker is not None and self.robot.id in self.manager.tracker.bilbos:
+            state = self.manager.tracker.bilbos[self.robot.id].state
 
             # Show green (tracked) agent on first tracker sample
             if not self._tracker_agent_shown:
@@ -2505,7 +2505,7 @@ class BILBO_GUI_OverviewPage:
                         cell.color = [0.8, 0, 0]
 
             # Go through the BILBOs
-            for bilbo_id, bilbo in self.manager.tracker.robots.items():
+            for bilbo_id, bilbo in self.manager.tracker.bilbos.items():
                 row = tracker_table.get_row_by_id(row_id=bilbo_id)
                 if row:
                     cell_x = row.get_cell('x')

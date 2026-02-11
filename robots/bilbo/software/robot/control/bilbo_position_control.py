@@ -417,14 +417,20 @@ class BILBO_PositionControl:
         from robot.testbed.obstacles import CircleObstacle as TestbedCircle, BoxObstacle as TestbedBox
         pad = self._OBSTACLE_PADDING
         result = []
-        # Convert testbed manager obstacles to planner format with padding
+        # Convert testbed manager obstacles to planner format with padding.
+        # The planner uses axis-aligned boxes, so rotated boxes are converted
+        # to their axis-aligned bounding box.
         if self.testbed_manager is not None:
             for obs in self.testbed_manager.obstacles:
                 if isinstance(obs, TestbedCircle):
                     result.append(CircleObstacle(cx=obs.x, cy=obs.y, radius=obs.radius + pad))
                 elif isinstance(obs, TestbedBox):
+                    c = math.cos(obs.psi)
+                    s = math.sin(obs.psi)
+                    aabb_w = abs(obs.width * c) + abs(obs.height * s)
+                    aabb_h = abs(obs.width * s) + abs(obs.height * c)
                     result.append(BoxObstacle(cx=obs.x, cy=obs.y,
-                                              width=obs.width + 2 * pad, height=obs.height + 2 * pad))
+                                              width=aabb_w + 2 * pad, height=aabb_h + 2 * pad))
         # Add per-call extras (no padding — caller controls sizing)
         if extra_obstacles:
             result.extend(self._parse_planner_obstacles(extra_obstacles))

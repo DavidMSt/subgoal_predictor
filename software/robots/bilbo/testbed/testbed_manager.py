@@ -60,6 +60,7 @@ class TrackedObjects:
     origin: Origin_OptiTrack_Config | None | str = None
     limbo_bar: LimboMarker_OptiTrack_Config | None | str = None
     boxes: list[BoxObstacle_OptiTrack_Config | str] = dataclasses.field(default_factory=list)
+    walls: list[WallObstacle_OptiTrack_Config | str] = dataclasses.field(default_factory=list)
     robots: list[BILBO_Config | str] = dataclasses.field(default_factory=list)
 
     def __post_init__(self):
@@ -72,6 +73,11 @@ class TrackedObjects:
         self.boxes = [
             _resolve_config_from_file(box, _TRACKED_OBJECTS_DIR, BoxObstacle_OptiTrack_Config) if isinstance(box, str) else box
             for box in self.boxes
+        ]
+
+        self.walls = [
+            _resolve_config_from_file(wall, _TRACKED_OBJECTS_DIR, WallObstacle_OptiTrack_Config) if isinstance(wall, str) else wall
+            for wall in self.walls
         ]
 
         self.robots = [
