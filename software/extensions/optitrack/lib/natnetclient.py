@@ -289,7 +289,6 @@ class NatNetClient:
             'marker_sets': {},
             'labeled_markers': {},
         }
-
         data = memoryview(data)
         offset = 0
 
@@ -751,8 +750,8 @@ class NatNetClient:
                 if len(data) > 0:
                     self._process_message(data)
             except socket.timeout:
-                # Send keep-alive for unicast mode
-                if not self.use_multicast and not self._stop_threads:
+                # Send keep-alive to maintain connection (required for NatNet 4.x / Motive 3+)
+                if not self._stop_threads:
                     self._send_request(self.command_socket, self.NAT_KEEPALIVE)
             except socket.error as e:
                 if not self._stop_threads:

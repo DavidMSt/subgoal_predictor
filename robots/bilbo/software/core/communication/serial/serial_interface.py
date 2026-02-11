@@ -112,6 +112,7 @@ class Serial_Interface:
         self.known_messages = []
 
         self._readRequests = []
+        self._lock = threading.Lock()  # Protects _send + _registerRead atomicity and _readRequests access
 
     # ------------------------------------------------------------------------------------------------------------------
     def init(self):
@@ -144,7 +145,8 @@ class Serial_Interface:
 
         data_bytes = value_to_bytes(value, type)
 
-        self._send(cmd=SerialCommandType.UART_CMD_WRITE, module=module, address=address, flag=0, data=data_bytes)
+        with self._lock:
+            self._send(cmd=SerialCommandType.UART_CMD_WRITE, module=module, address=address, flag=0, data=data_bytes)
 
     # ------------------------------------------------------------------------------------------------------------------
     def echo(self, module: int = 0, address: int | list = None, value=None, type=ctypes.c_uint8, flag: int = 0):
@@ -162,9 +164,9 @@ class Serial_Interface:
     def read(self, address, module: int = 1, type=None):
         assert (type is None or is_valid_ctype(type))
 
-        # Send the message for reading
-        self._send(cmd=SerialCommandType.UART_CMD_READ, module=module, address=address, flag=0, data=[])
-        request = self._registerRead(module=module, address=address)
+        with self._lock:
+            self._send(cmd=SerialCommandType.UART_CMD_READ, module=module, address=address, flag=0, data=[])
+            request = self._registerRead(module=module, address=address)
 
         event_success = request.event.wait(timeout=0.1)
 
@@ -175,6 +177,10 @@ class Serial_Interface:
             else:
                 return bytes_to_value(request.msg.data, type)
         else:
+            # Timeout or error — remove stale request so it doesn't consume future responses
+            with self._lock:
+                if request in self._readRequests:
+                    self._readRequests.remove(request)
             return None
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -191,21 +197,25 @@ class Serial_Interface:
         else:
             buffer = None
 
-        # logger.info(f"Sending function call to module {module} and address {address} with data {buffer}")
-        self._send(cmd=SerialCommandType.UART_CMD_FCT, module=module, address=address, flag=0, data=buffer)
+        req = None
+        with self._lock:
+            self._send(cmd=SerialCommandType.UART_CMD_FCT, module=module, address=address, flag=0, data=buffer)
+            if output_type is not None:
+                req = self._registerRead(module=module, address=address)
 
-        # Register for reading if type is not None
-        if output_type is not None:
-            req = self._registerRead(module=module, address=address)
+        # Wait for response outside the lock so the RX thread can deliver answers
+        if req is not None:
             event_success = req.event.wait(timeout=timeout)
             if event_success and req.msg.flag == 1:
-                # Check if the data length matches the data type
                 if not ctypes.sizeof(output_type) == len(req.msg.data):
                     return None
                 else:
-                    x = ctype_to_value(bytes_to_ctype(req.msg.data, output_type), output_type)
                     return ctype_to_value(bytes_to_ctype(req.msg.data, output_type), output_type)
             else:
+                # Timeout or error — remove stale request so it doesn't consume future responses
+                with self._lock:
+                    if req in self._readRequests:
+                        self._readRequests.remove(req)
                 return None
         else:
             return None
@@ -258,21 +268,24 @@ class Serial_Interface:
     # ------------------------------------------------------------------------------------------------------------------
     def _handleMessage_answer(self, msg):
 
-        # Go through all the read requests and check if anyone waits for this
-        if len(self._readRequests) == 0:
-            return
+        with self._lock:
+            if len(self._readRequests) == 0:
+                return
 
-        found_request = None
-        for req in self._readRequests:
-            if req.module == msg.module and req.address == msg.address:
-                logger.debug(f"Got an answer for request {req.module}:{req.address}")
-                req.msg = msg
-                req.event.set()
-                found_request = req
-                break
+            found_request = None
+            for req in self._readRequests:
+                if req.module == msg.module and req.address == msg.address:
+                    logger.debug(f"Got an answer for request {req.module}:{req.address}")
+                    req.msg = msg
+                    found_request = req
+                    break
 
+            if found_request is not None:
+                self._readRequests.remove(found_request)
+
+        # Set event outside lock so the waiting thread can wake up immediately
         if found_request is not None:
-            self._readRequests.remove(found_request)
+            found_request.event.set()
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleMessage_stream(self, message):

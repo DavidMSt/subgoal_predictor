@@ -851,9 +851,8 @@ class RobotUI:
         def map_double_click(data, *args, **kwargs):
             x = data['x']
             y = data['y']
-            safety_margin = 0.2
             if testbed_size['x'][0] < x < testbed_size['x'][1] and testbed_size['y'][0] < y < testbed_size['y'][1]:
-                self.robot.position_control.move_to(x, y)
+                self.robot.position_control.plan_and_follow(target=(x, y))
             else:
                 self.logger.warning(f"Position out of bounds: {x}, {y}")
 
