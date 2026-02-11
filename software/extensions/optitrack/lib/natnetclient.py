@@ -21,6 +21,7 @@ It provides a unified interface that works with both old and new systems.
 
 import socket
 import struct
+import time
 from threading import Thread
 from typing import Callable
 
@@ -778,10 +779,18 @@ class NatNetClient:
         self._command_thread = Thread(target=self._command_thread_function, daemon=True)
         self._command_thread.start()
 
+        self._keep_alive_thread = Thread(target=self.run_alive_thread, daemon=True)
+        self._keep_alive_thread.start()
+
         # Try NatNet 4.x protocol first (works with both new and old systems)
         self.logger.debug(f"Connecting to Motive server at {self.server_address}...")
         self._send_request(self.command_socket, self.NAT_CONNECT)
         self.request_model_definitions()
+
+    def run_alive_thread(self):
+        while not self._stop_threads:
+            self._send_request(self.command_socket, self.NAT_KEEPALIVE)
+            time.sleep(2)
 
     def close(self):
         """Stop the NatNet client and clean up resources."""
@@ -804,6 +813,12 @@ class NatNetClient:
 
         if self._data_thread and self._data_thread.is_alive():
             self._data_thread.join(timeout=1.0)
+
+        if self._keep_alive_thread and self._keep_alive_thread.is_alive():
+            self._keep_alive_thread.join(timeout=1.0)
+
+
+
 
     def request_model_definitions(self):
         """Request model definitions from the server."""
