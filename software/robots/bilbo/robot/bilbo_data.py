@@ -6,6 +6,7 @@ import dacite
 from dacite import from_dict
 
 from core.utils.dataclass_utils import from_dict_auto
+from robots.bilbo.definitions import BILBO_DynamicState
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_Control_Status, BILBO_Control_Inputs
 
 
@@ -256,17 +257,6 @@ class TWIPR_Control_Sample:
 
 
 @dataclasses.dataclass
-class BILBO_DynamicState:
-    x: float = 0.0
-    y: float = 0.0
-    v: float = 0.0
-    theta: float = 0.0
-    theta_dot: float = 0.0
-    psi: float = 0.0
-    psi_dot: float = 0.0
-
-
-@dataclasses.dataclass
 class BILBO_ConfigurationState:
     x: float = 0.0
     y: float = 0.0
@@ -353,11 +343,10 @@ class BILBO_PositionControl_Sample:
     mode_name: str = ''
     path_state: int = 0
     path_state_name: str = ''
-    waypoint_count: int = 0
-    current_waypoint_index: int = 0
+    path_point_count: int = 0
+    current_index: int = 0
     is_busy: bool = False
     data: dict = dataclasses.field(default_factory=dict)
-    waypoints: list = dataclasses.field(default_factory=list)  # List of waypoint dicts
 
 
 @dataclasses.dataclass

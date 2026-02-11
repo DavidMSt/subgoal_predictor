@@ -56,7 +56,7 @@ class ExperimentActionStatus(enum.StrEnum):
 # Import parsing utilities from experiment_actions
 from robots.bilbo.robot.experiment.experiment_actions import (
     parse_time_ms as _parse_time,
-    normalize_waypoints as _normalize_waypoints,
+    normalize_path_points as _normalize_path_points,
     get_registry as _get_action_registry,
 )
 
@@ -184,7 +184,7 @@ ActionType = Literal[
     "set_velocity", "enable_external_input", "reset", "parallel", "group",
     "loop", "func", "set_feedback_gain", "reset_control",
     # Position control actions
-    "move_to", "turn_to", "set_waypoints", "start_path", "load_path", "stop_path",
+    "move_to", "turn_to", "set_path", "set_waypoints", "start_path", "load_path", "stop_path",
     "wait_position_event"
 ]
 
@@ -194,7 +194,7 @@ ALLOWED_ACTIONS: list[str] = [
     "set_velocity", "enable_external_input", "reset", "parallel", "group",
     "loop", "func", "set_feedback_gain", "reset_control",
     # Position control actions
-    "move_to", "turn_to", "set_waypoints", "start_path", "load_path", "stop_path",
+    "move_to", "turn_to", "set_path", "set_waypoints", "start_path", "load_path", "stop_path",
     "wait_position_event"
 ]
 
@@ -370,20 +370,26 @@ class TurnToActionParams:
 
 
 @dataclasses.dataclass
-class WaypointDef:
-    """A single waypoint definition."""
+class PathPointDef:
+    """A single path point definition."""
     x: float
     y: float
-    type: str = "PASS"  # "PASS" or "STOP"
-    weight: float = 0.75  # Corner sharpness [0-1], 1=sharp, 0=smooth
-    speed: float = 0.0  # Max speed [m/s] for this waypoint (0 = use path's max_speed)
+
+
+# Backwards-compatible alias
+WaypointDef = PathPointDef
 
 
 @dataclasses.dataclass
-class SetWaypointsActionParams:
-    """Parameters for set_waypoints action."""
-    waypoints: list[dict | WaypointDef] = dataclasses.field(default_factory=list)
+class SetPathActionParams:
+    """Parameters for set_path action."""
+    points: list[dict | PathPointDef] = dataclasses.field(default_factory=list)
+    stop_indices: list[int] = dataclasses.field(default_factory=list)
     clear_existing: bool = True
+
+
+# Backwards-compatible alias
+SetWaypointsActionParams = SetPathActionParams
 
 
 @dataclasses.dataclass
@@ -445,7 +451,8 @@ ACTION_PARAMS_MAPPING: dict[str, type] = {
     # Position control actions
     "move_to": MoveToActionParams,
     "turn_to": TurnToActionParams,
-    "set_waypoints": SetWaypointsActionParams,
+    "set_path": SetPathActionParams,
+    "set_waypoints": SetWaypointsActionParams,  # legacy alias
     "start_path": StartPathActionParams,
     "load_path": LoadPathActionParams,
     "stop_path": StopPathActionParams,
@@ -1368,35 +1375,42 @@ def turn_to(heading: float = 0.0, heading_deg: float | None = None,
     )
 
 
-def set_waypoints(waypoints: list[dict | list | tuple], clear_existing: bool = True,
-                  **scheduling) -> ExperimentActionDefinition:
-    """Create a set_waypoints action.
+def set_path(points: list[dict | list | tuple], stop_indices: list[int] | None = None,
+             clear_existing: bool = True, **scheduling) -> ExperimentActionDefinition:
+    """Create a set_path action to load dense path points.
 
     Args:
-        waypoints: List of waypoints. Each can be:
-            - [x, y] - simple coordinate pair
-            - [x, y, "STOP"] - with type
-            - [x, y, weight] - with weight
-            - [x, y, "STOP", weight] - with type and weight
-            - [x, y, "STOP", weight, speed] - with type, weight, and speed
-            - {"x": x, "y": y, "type": "PASS", "weight": 0.75, "speed": 0.0} - full dict
-        clear_existing: If True, clear existing waypoints first
+        points: List of path points. Each can be:
+            - [x, y] - coordinate pair
+            - {"x": x, "y": y} - dict
+        stop_indices: List of point indices where the robot should stop
+        clear_existing: If True, clear existing path first
     """
+    params = {"points": _normalize_path_points(points), "clear_existing": clear_existing}
+    if stop_indices:
+        params["stop_indices"] = stop_indices
     return ExperimentActionDefinition(
-        id=scheduling.get("id", "set_waypoints"),
-        type="set_waypoints",
+        id=scheduling.get("id", "set_path"),
+        type="set_path",
         tick=scheduling.get("tick"),
         after=scheduling.get("after"),
         time=scheduling.get("time"),
         delay=scheduling.get("delay"),
         timeout=scheduling.get("timeout"),
-        parameters={"waypoints": _normalize_waypoints(waypoints), "clear_existing": clear_existing}
+        parameters=params
     )
+
+
+# Backwards-compatible alias
+def set_waypoints(waypoints: list[dict | list | tuple], clear_existing: bool = True,
+                  **scheduling) -> ExperimentActionDefinition:
+    """Legacy alias for set_path."""
+    return set_path(waypoints, clear_existing=clear_existing, **scheduling)
 
 
 def start_path(allow_reverse: bool = False, timeout: float = 0.0, max_speed: float = 0.0,
                wait: bool = True, **scheduling) -> ExperimentActionDefinition:
-    """Create a start_path action to start following the loaded waypoints.
+    """Create a start_path action to start following the loaded path.
 
     Args:
         allow_reverse: If True, robot may drive backwards when efficient
@@ -1420,12 +1434,12 @@ def load_path(path: dict | str, start: bool = False, clear_existing: bool = True
               allow_reverse: bool | None = None, timeout: float | None = None,
               max_speed: float | None = None, wait: bool = True,
               **scheduling) -> ExperimentActionDefinition:
-    """Create a load_path action to load waypoints from a dict or file.
+    """Create a load_path action to load a path from a dict or file.
 
     Args:
         path: Path dict or file path (YAML/JSON)
         start: If True, automatically start path after loading
-        clear_existing: If True, clear existing waypoints before loading
+        clear_existing: If True, clear existing path before loading
         allow_reverse: Override for allow_reverse setting
         timeout: Override for timeout setting
         max_speed: Override for max_speed setting
@@ -1473,7 +1487,7 @@ def wait_position_event(event: str, timeout: float | None = None,
             - "path_finished", "path_timeout", "path_aborted"
             - "move_to_point_completed", "move_to_point_timeout"
             - "turn_to_heading_completed", "turn_to_heading_timeout"
-            - "waypoint_completed", "waypoint_reached"
+            - "stop_reached", "stop_completed"
         timeout: Timeout in seconds (None = no timeout)
     """
     params = {"event": event}
@@ -1614,9 +1628,14 @@ class ExperimentBuilder:
         return self.add(turn_to(heading, heading_deg, max_angular_speed, timeout, wait,
                                id=self._next_id("turn_to")))
 
+    def set_path(self, points: list[dict | list | tuple], stop_indices: list[int] | None = None,
+                 clear_existing: bool = True) -> "ExperimentBuilder":
+        return self.add(set_path(points, stop_indices, clear_existing, id=self._next_id("set_path")))
+
     def set_waypoints(self, waypoints: list[dict | list | tuple],
                       clear_existing: bool = True) -> "ExperimentBuilder":
-        return self.add(set_waypoints(waypoints, clear_existing, id=self._next_id("set_waypoints")))
+        """Legacy alias for set_path."""
+        return self.set_path(waypoints, clear_existing=clear_existing)
 
     def start_path(self, allow_reverse: bool = False, timeout: float = 0.0, max_speed: float = 0.0,
                    wait: bool = True) -> "ExperimentBuilder":

@@ -1,29 +1,47 @@
+testbed:
+  id: lab
+  size:
+    x: [ 0 , 3 ]
+    y: [ 0 , 3 ]
+
+
+robots:
+  autostart: false
+  autostop: false
+
 extensions:
   display: true
   limbobar: true
   timecode: false
 
-optitrack:
+simulation:
+  enabled: true
+  Ts: 0.01
+  obstacles:
+    - id: box1_sim
+      type: box
+      size: [ 1, 0.5 ]
+      state: [ 1,1, 1.57 ]
+    - id: box2_sim
+      type: box
+      size: [ 1, 0.5 ]
+      state: [ 2,1, 1.57 ]
+  robots: null
+
+tracker:
   enabled: true
   server: palantir.lan
+  sample_rate: 30
 
-# Testbed configuration:
-# - type: Name of a predefined testbed (e.g., 'track', 'lab') or null for custom/infinite
-# - size: [width, height] in meters. Only used if type is null. If both are null, defaults to 10x10m
-#testbed:
-#  type: track
-#  size: null
+tracked_objects:
+  origin: bilbo-origin
+  limbo_bar: bilbo-limbo-bar
+  boxes:
+    - box-1
+    - box-2
+  robots:
+    - bilbo2
 
-testbed:
-  type: lab
-  size:
-    x: [0, 3]
-    y: [0, 3]
-
-
-# mDNS: Advertises the GUI on the local network via multicast DNS
-# When enabled, other devices can access the GUI via http://<hostname>.local/gui
-# No DNS configuration needed - works automatically on the local network
 mdns:
   enabled: true
   hostname: bilbolab  # Will be accessible as bilbolab.local

@@ -245,7 +245,15 @@ class BILBO_Common:
     # ------------------------------------------------------------------------------------------------------------------
     def _connection_check_task(self):
         while not self._exit:
-            self.connection_strength = getSignalStrength('wlan0')['percent']
+            try:
+                result = getSignalStrength('wlan0')
+                if result is not None:
+                    self.connection_strength = result['percent']
+                else:
+                    # No wlan0 interface (e.g. simulation on Mac) — stop checking
+                    return
+            except Exception:
+                return
             self.internet_connected = check_internet(timeout=1)
             time.sleep(2)
 

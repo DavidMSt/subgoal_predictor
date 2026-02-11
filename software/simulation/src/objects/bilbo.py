@@ -846,6 +846,7 @@ class BILBO_DynamicAgent(Agent):
     def eigenstructureAssignment(self, poles: list | np.ndarray,
                                  eigenvectors: list | np.ndarray):
         self.K = self.dynamics.eigenstructureAssignment(poles, eigenvectors, apply_poles_to_system=False)
+        print(self.K)
 
     # === PRIVATE METHODS ==============================================================================================
     def _controller(self) -> BILBO_3D_Input:

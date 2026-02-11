@@ -4,31 +4,28 @@
  *  Created on: Jan 25, 2026
  *      Author: lehmann
  *
- *  SIMPLIFIED PATH FOLLOWING IMPLEMENTATION
- *  ========================================
+ *  DENSE PATH FOLLOWING IMPLEMENTATION
+ *  ====================================
  *
- *  Key design principles (practical, tested in real-world):
+ *  Key design principles:
  *
- *  1. DECOUPLED SPEED AND STEERING
- *     - Speed = kp_linear * max(dist_to_waypoint, carrot_dist)
- *     - Steering = heading toward carrot (where to steer)
- *     - Maintains speed through PASS waypoints (carrot advances freely)
- *     - Slows at tight corners (carrot blocked by weight+angle)
- *     - Slows at STOP waypoints (carrot stays at waypoint)
+ *  1. DENSE PRE-PLANNED PATH
+ *     - Path is a dense array of (x,y) points (5-100mm spacing)
+ *     - Curvature encoded in sample spacing: tight curves = close points
+ *     - Up to 1024 points with up to 16 explicit STOP indices
  *
- *  2. CARROT ON SEGMENTS (for steering only)
- *     - Carrot always stays on the line between waypoints
- *     - Cannot go backward on current segment
- *     - Small lookahead = tight path following
- *     - Advancing to next segment depends on weight + corner angle
+ *  2. SPEED FROM LOCAL SPACING
+ *     - v_target = max_speed * (local_spacing / max_spacing)
+ *     - Constant index-rate through array = variable speed matching curvature
+ *     - Deceleration near STOP points and path end
  *
- *  3. WEIGHT + ANGLE for corners
- *     - effective_weight = weight * (corner_angle / PI)
- *     - Straight path (angle=0): carrot advances freely regardless of weight
- *     - Sharp corner (angle=PI): full weight effect
+ *  3. ADAPTIVE LOOKAHEAD (pure pursuit)
+ *     - lookahead = v_target / kp_linear, clamped to lookahead_min
+ *     - Carrot placed along path at lookahead distance ahead
+ *     - At max_speed: lookahead = max_speed/kp_linear, so kp*carrot_dist ~ max_speed
  *
- *  4. REVERSE MODE always enabled
- *     - Robot can drive backwards when target is behind
+ *  4. REVERSE MODE (optional, per-path)
+ *     - Robot drives backwards when target is behind
  *     - Hysteresis prevents oscillation
  */
 
@@ -42,6 +39,9 @@
 
 static constexpr float EPSILON = 1e-6f;
 
+// Number of segments ahead to search when projecting robot onto path
+static constexpr uint16_t PROJECTION_SEARCH_WINDOW = 30;
+
 // ============================================================================
 // CONSTRUCTOR
 // ============================================================================
@@ -49,12 +49,14 @@ static constexpr float EPSILON = 1e-6f;
 BILBO_PositionControl::BILBO_PositionControl() {
 	mode = bilbo_position_control_mode_t::IDLE;
 	_path_state = bilbo_path_state_t::IDLE;
-	_waypoint_count = 0;
-	_current_segment = 0;
+	_path_count = 0;
+	_stop_count = 0;
+	_progress = 0.0f;
 	_reverse_mode_active = false;
 
-	memset(_waypoint_buffer, 0, sizeof(_waypoint_buffer));
-	memset(_segment_lengths, 0, sizeof(_segment_lengths));
+	memset(_path_buffer, 0, sizeof(_path_buffer));
+	memset(_cumul_dist, 0, sizeof(_cumul_dist));
+	memset(_stop_indices, 0, sizeof(_stop_indices));
 }
 
 // ============================================================================
@@ -111,70 +113,86 @@ bool BILBO_PositionControl::move_to_point(const move_to_point_command_t& command
 }
 
 // ============================================================================
-// PATH FOLLOWING - WAYPOINT MANAGEMENT
+// PATH MANAGEMENT
 // ============================================================================
 
-void BILBO_PositionControl::clear_waypoints() {
-	_waypoint_count = 0;
+void BILBO_PositionControl::clear_path() {
+	_path_count = 0;
+	_stop_count = 0;
 	_path_state = bilbo_path_state_t::IDLE;
-	_current_segment = 0;
-	_carrot_t = 0.0f;
+	_progress = 0.0f;
 	_angular_integral = 0.0f;
 	_linear_integral = 0.0f;
 	_arrival_timer = 0.0f;
 	_reverse_mode_active = false;
-	_current_speed_limit = 0.0f;
-	_target_speed_limit = 0.0f;
-	_waypoint_reached_sent = false;
-
-	memset(_segment_lengths, 0, sizeof(_segment_lengths));
+	_stop_reached_sent = false;
+	_next_stop_ptr = 0;
+	_path_max_speed = 0.0f;
+	_path_max_spacing = 0.0f;
+	_path_total_length = 0.0f;
 }
 
-bool BILBO_PositionControl::add_waypoint(const bilbo_waypoint_t& waypoint) {
-	if (_waypoint_count >= WAYPOINT_BUFFER_SIZE) {
-		_send_event(position_control_event_t::WAYPOINT_BUFFER_FULL);
+bool BILBO_PositionControl::add_path_point(float x, float y) {
+	if (_path_count >= PATH_BUFFER_SIZE) {
+		_send_event(position_control_event_t::PATH_BUFFER_FULL);
 		return false;
 	}
 
-	_waypoint_buffer[_waypoint_count] = waypoint;
-	_waypoint_count++;
+	_path_buffer[_path_count].x = x;
+	_path_buffer[_path_count].y = y;
+	_path_count++;
 	return true;
 }
 
-bool BILBO_PositionControl::add_waypoint_xy(float x, float y,
-                                            bilbo_waypoint_type_t type,
-                                            float weight,
-                                            float speed) {
-	bilbo_waypoint_t wp;
-	wp.x = x;
-	wp.y = y;
-	wp.type = type;
-	wp.weight = _clamp(weight, 0.0f, 1.0f);
-	wp.speed = (speed > 0.0f) ? speed : 0.0f;  // 0 means use path default
-	return add_waypoint(wp);
-}
-
-uint16_t BILBO_PositionControl::get_waypoint_count() const {
-	return _waypoint_count;
-}
-
-bilbo_waypoint_t BILBO_PositionControl::get_current_waypoint() const {
-	bilbo_waypoint_t wp = {0.0f, 0.0f, bilbo_waypoint_type_t::PASS, 0.0f};
-
-	if (_waypoint_count > 0 && _current_segment < _waypoint_count) {
-		wp = _waypoint_buffer[_current_segment];
+bool BILBO_PositionControl::add_path_points_batch(const path_points_batch_t& batch) {
+	if (batch.count == 0 || batch.count > BILBO_POSITION_CONTROL_BATCH_SIZE) {
+		return false;
+	}
+	if (batch.start_index + batch.count > PATH_BUFFER_SIZE) {
+		_send_event(position_control_event_t::PATH_BUFFER_FULL);
+		return false;
 	}
 
-	return wp;
+	memcpy(&_path_buffer[batch.start_index], batch.points,
+			batch.count * sizeof(path_point_t));
+
+	uint16_t end = batch.start_index + batch.count;
+	if (end > _path_count) {
+		_path_count = end;
+	}
+	return true;
+}
+
+bool BILBO_PositionControl::set_path(const path_point_t* pts, uint16_t count) {
+	if (count > PATH_BUFFER_SIZE) {
+		_send_event(position_control_event_t::PATH_BUFFER_FULL);
+		return false;
+	}
+
+	memcpy(_path_buffer, pts, count * sizeof(path_point_t));
+	_path_count = count;
+	return true;
+}
+
+bool BILBO_PositionControl::add_stop_index(uint16_t index) {
+	if (_stop_count >= MAX_STOPS) {
+		return false;
+	}
+	_stop_indices[_stop_count] = index;
+	_stop_count++;
+	return true;
+}
+
+uint16_t BILBO_PositionControl::get_path_point_count() const {
+	return _path_count;
 }
 
 // ============================================================================
 // PATH FOLLOWING - EXECUTION CONTROL
 // ============================================================================
 
-bool BILBO_PositionControl::start_path(const bilbo_path_start_cmd_t& command,
-                                       const bilbo_position_state_t& start_state) {
-	if (_waypoint_count == 0) {
+bool BILBO_PositionControl::start_path(const bilbo_path_start_cmd_t& command) {
+	if (_path_count < 2) {
 		return false;
 	}
 
@@ -182,32 +200,44 @@ bool BILBO_PositionControl::start_path(const bilbo_path_start_cmd_t& command,
 		return false;
 	}
 
-	// Store start position
-	_start_x = start_state.x;
-	_start_y = start_state.y;
+	// Compute cumulative distances
+	_compute_cumulative_distances();
 
-	// Initialize carrot at start
-	_carrot_x = start_state.x;
-	_carrot_y = start_state.y;
-	_carrot_t = 0.0f;
+	// Resolve max speed
+	_path_max_speed = (command.max_speed > 0.0f) ? command.max_speed : config.max_speed;
 
-	// Compute segment lengths
-	_compute_segment_lengths();
+	// Resolve max spacing: auto-detect from path if not specified
+	if (command.max_spacing > 0.0f) {
+		_path_max_spacing = command.max_spacing;
+	} else {
+		// Find the maximum inter-point distance
+		_path_max_spacing = 0.0f;
+		for (uint16_t i = 1; i < _path_count; i++) {
+			float seg_len = _cumul_dist[i] - _cumul_dist[i - 1];
+			if (seg_len > _path_max_spacing) {
+				_path_max_spacing = seg_len;
+			}
+		}
+		if (_path_max_spacing < EPSILON) {
+			_path_max_spacing = 0.01f;  // Fallback: 10mm
+		}
+	}
+
+	_path_total_length = _cumul_dist[_path_count - 1];
 
 	// Initialize state
-	_current_segment = 0;
+	_progress = 0.0f;
 	_angular_integral = 0.0f;
 	_linear_integral = 0.0f;
 	_arrival_timer = 0.0f;
 	_elapsed_time = 0.0f;
 	_reverse_mode_active = false;
-	_waypoint_reached_sent = false;
+	_stop_reached_sent = false;
+	_next_stop_ptr = 0;
 
-	// Initialize speed limits based on first waypoint
-	float path_max_speed = (command.max_speed > 0.0f) ? command.max_speed : config.max_speed;
-	float first_wp_speed = _waypoint_buffer[0].speed;
-	_target_speed_limit = (first_wp_speed > 0.0f) ? first_wp_speed : path_max_speed;
-	_current_speed_limit = _target_speed_limit;  // Start at target (no ramp at path start)
+	// Initialize carrot at first path point
+	_carrot_x = _path_buffer[0].x;
+	_carrot_y = _path_buffer[0].y;
 
 	// Store command
 	_active_path_command = command;
@@ -215,6 +245,13 @@ bool BILBO_PositionControl::start_path(const bilbo_path_start_cmd_t& command,
 	// Set mode and state
 	_path_state = bilbo_path_state_t::RUNNING;
 	_set_mode(bilbo_position_control_mode_t::FOLLOW_PATH);
+
+	send_info("PATH START: %d pts, %d stops, max_speed=%.2f, max_spacing=%.3f, total_len=%.2f",
+	          _path_count, _stop_count, _path_max_speed, _path_max_spacing, _path_total_length);
+	for (uint8_t i = 0; i < _stop_count; i++) {
+		send_info("  STOP[%d] = index %d (%.2f, %.2f)", i, _stop_indices[i],
+		          _path_buffer[_stop_indices[i]].x, _path_buffer[_stop_indices[i]].y);
+	}
 
 	_on_path_started();
 	return true;
@@ -288,9 +325,7 @@ bool BILBO_PositionControl::reset() {
 	_arrival_timer = 0.0f;
 	_elapsed_time = 0.0f;
 	_reverse_mode_active = false;
-	_current_speed_limit = 0.0f;
-	_target_speed_limit = 0.0f;
-	this->clear_waypoints();
+	this->clear_path();
 	this->_set_mode(bilbo_position_control_mode_t::IDLE);
 	return true;
 }
@@ -329,12 +364,173 @@ bilbo_position_control_output_t BILBO_PositionControl::update(
 	// Update telemetry
 	data.mode = mode;
 	data.path_state = _path_state;
-	data.buffer_capacity = WAYPOINT_BUFFER_SIZE;
-	data.buffer_used = _waypoint_count;
+	data.buffer_capacity = PATH_BUFFER_SIZE;
+	data.buffer_used = _path_count;
 	data.output = output;
 	data.elapsed_time = _elapsed_time;
 
 	return output;
+}
+
+// ============================================================================
+// PATH GEOMETRY
+// ============================================================================
+
+void BILBO_PositionControl::_compute_cumulative_distances() {
+	_cumul_dist[0] = 0.0f;
+	for (uint16_t i = 1; i < _path_count; i++) {
+		float dx = _path_buffer[i].x - _path_buffer[i - 1].x;
+		float dy = _path_buffer[i].y - _path_buffer[i - 1].y;
+		_cumul_dist[i] = _cumul_dist[i - 1] + sqrtf(dx * dx + dy * dy);
+	}
+}
+
+// ============================================================================
+// PATH TRACKING HELPERS
+// ============================================================================
+
+/**
+ * Project robot position onto path segments starting from last_progress.
+ * Searches forward up to PROJECTION_SEARCH_WINDOW segments.
+ * Returns the floating-point index of the closest projection (monotonic: >= last_progress).
+ */
+float BILBO_PositionControl::_project_onto_path(float robot_x, float robot_y,
+                                                 float last_progress) const {
+	uint16_t start_seg = (uint16_t)last_progress;
+	if (start_seg >= _path_count - 1) {
+		start_seg = _path_count - 2;
+	}
+
+	uint16_t end_seg = start_seg + PROJECTION_SEARCH_WINDOW;
+	if (end_seg >= _path_count - 1) {
+		end_seg = _path_count - 2;
+	}
+
+	float best_progress = last_progress;
+	float best_dist_sq = 1e30f;
+
+	for (uint16_t i = start_seg; i <= end_seg; i++) {
+		float ax = _path_buffer[i].x;
+		float ay = _path_buffer[i].y;
+		float bx = _path_buffer[i + 1].x;
+		float by = _path_buffer[i + 1].y;
+
+		float dx = bx - ax;
+		float dy = by - ay;
+		float len_sq = dx * dx + dy * dy;
+
+		float t;
+		if (len_sq < EPSILON) {
+			t = 0.0f;
+		} else {
+			t = ((robot_x - ax) * dx + (robot_y - ay) * dy) / len_sq;
+			t = _clamp(t, 0.0f, 1.0f);
+		}
+
+		float proj_x = ax + t * dx;
+		float proj_y = ay + t * dy;
+		float dist_sq = (robot_x - proj_x) * (robot_x - proj_x) +
+		                (robot_y - proj_y) * (robot_y - proj_y);
+
+		float candidate = (float)i + t;
+
+		// Only accept if monotonically forward
+		if (candidate >= last_progress && dist_sq < best_dist_sq) {
+			best_dist_sq = dist_sq;
+			best_progress = candidate;
+		}
+	}
+
+	return best_progress;
+}
+
+/**
+ * Advance along path from a given progress by a distance in meters.
+ * Returns new progress value, clamped to [0, path_count-1].
+ */
+float BILBO_PositionControl::_advance_along_path(float from_progress,
+                                                  float distance_meters) const {
+	if (_path_count < 2) return from_progress;
+
+	float current_arc = _cumul_dist_at(from_progress);
+	float target_arc = current_arc + distance_meters;
+
+	// Clamp to path end
+	if (target_arc >= _cumul_dist[_path_count - 1]) {
+		return (float)(_path_count - 1);
+	}
+	if (target_arc <= 0.0f) {
+		return 0.0f;
+	}
+
+	// Binary search for the segment containing target_arc
+	uint16_t lo = 0, hi = _path_count - 1;
+	while (lo < hi - 1) {
+		uint16_t mid = (lo + hi) / 2;
+		if (_cumul_dist[mid] <= target_arc) {
+			lo = mid;
+		} else {
+			hi = mid;
+		}
+	}
+
+	// Interpolate within segment [lo, lo+1]
+	float seg_start = _cumul_dist[lo];
+	float seg_end = _cumul_dist[lo + 1];
+	float seg_len = seg_end - seg_start;
+
+	float t = 0.0f;
+	if (seg_len > EPSILON) {
+		t = (target_arc - seg_start) / seg_len;
+		t = _clamp(t, 0.0f, 1.0f);
+	}
+
+	return (float)lo + t;
+}
+
+/**
+ * Interpolate path position at a floating-point progress value.
+ */
+void BILBO_PositionControl::_interpolate_path(float progress,
+                                               float& out_x, float& out_y) const {
+	if (_path_count == 0) {
+		out_x = 0.0f;
+		out_y = 0.0f;
+		return;
+	}
+
+	// Clamp progress
+	if (progress <= 0.0f) {
+		out_x = _path_buffer[0].x;
+		out_y = _path_buffer[0].y;
+		return;
+	}
+	if (progress >= (float)(_path_count - 1)) {
+		out_x = _path_buffer[_path_count - 1].x;
+		out_y = _path_buffer[_path_count - 1].y;
+		return;
+	}
+
+	uint16_t idx = (uint16_t)progress;
+	float t = progress - (float)idx;
+
+	out_x = _path_buffer[idx].x + t * (_path_buffer[idx + 1].x - _path_buffer[idx].x);
+	out_y = _path_buffer[idx].y + t * (_path_buffer[idx + 1].y - _path_buffer[idx].y);
+}
+
+/**
+ * Get cumulative arc length at a floating-point progress value.
+ */
+float BILBO_PositionControl::_cumul_dist_at(float progress) const {
+	if (_path_count < 2) return 0.0f;
+
+	if (progress <= 0.0f) return _cumul_dist[0];
+	if (progress >= (float)(_path_count - 1)) return _cumul_dist[_path_count - 1];
+
+	uint16_t idx = (uint16_t)progress;
+	float t = progress - (float)idx;
+
+	return _cumul_dist[idx] + t * (_cumul_dist[idx + 1] - _cumul_dist[idx]);
 }
 
 // ============================================================================
@@ -347,11 +543,13 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_follow_path(
 
 	bilbo_position_control_output_t output = {0.0f, 0.0f};
 
-	if (_path_state != bilbo_path_state_t::RUNNING || _waypoint_count == 0) {
+	if (_path_state != bilbo_path_state_t::RUNNING || _path_count < 2) {
 		return output;
 	}
 
-	// Check timeout
+	// -----------------------------------------------------------------
+	// 1. TIMEOUT check
+	// -----------------------------------------------------------------
 	if (_active_path_command.timeout > 0.0f &&
 		_elapsed_time > _active_path_command.timeout) {
 		_on_path_timeout();
@@ -360,368 +558,159 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_follow_path(
 		return output;
 	}
 
-	// Check final arrival
-	if (_check_final_arrival(current_state)) {
-		_on_path_finished();
-		_path_state = bilbo_path_state_t::IDLE;
-		_set_mode(bilbo_position_control_mode_t::IDLE);
-		return output;
+	// -----------------------------------------------------------------
+	// 2. PROJECT robot onto path (monotonic forward)
+	// -----------------------------------------------------------------
+	_progress = _project_onto_path(current_state.x, current_state.y, _progress);
+
+	// -----------------------------------------------------------------
+	// 3. LOCAL SPACING at robot position
+	// -----------------------------------------------------------------
+	uint16_t seg_idx = (uint16_t)_progress;
+	if (seg_idx >= _path_count - 1) {
+		seg_idx = _path_count - 2;
 	}
+	float spacing = _cumul_dist[seg_idx + 1] - _cumul_dist[seg_idx];
 
-	// Compute lookahead distance
-	float lookahead = _compute_lookahead(current_v);
+	// -----------------------------------------------------------------
+	// 4. TARGET SPEED from spacing (power-law with offset)
+	//    ratio = (spacing - MIN_SPACING) / (max_spacing - MIN_SPACING)
+	//    v_target = max_speed * ratio^alpha
+	//    Boundaries: max_spacing → max_speed, MIN_SPACING → 0
+	// -----------------------------------------------------------------
+	static constexpr float PATH_MIN_SPACING = 0.005f;  // [m] matches planner SAMPLE_DS_MIN
 
-	// Advance carrot along path
-	_advance_carrot(current_state, lookahead);
-
-	// Compute control output
-	output = _compute_control(current_state, current_v);
-
-	// Check intermediate STOP waypoints
-	_check_intermediate_stop(current_state);
-
-	// Update telemetry
-	data.waypoint_count = _waypoint_count;
-	data.current_segment = _current_segment;
-	data.carrot_x = _carrot_x;
-	data.carrot_y = _carrot_y;
-
-	return output;
-}
-
-// ============================================================================
-// PATH GEOMETRY METHODS
-// ============================================================================
-
-void BILBO_PositionControl::_compute_segment_lengths() {
-	for (uint16_t i = 0; i < _waypoint_count; i++) {
-		float ax, ay, bx, by;
-		_get_segment_points(i, ax, ay, bx, by);
-		_segment_lengths[i] = _distance(ax, ay, bx, by);
-	}
-}
-
-void BILBO_PositionControl::_get_segment_points(uint16_t segment_idx,
-                                                float& ax, float& ay,
-                                                float& bx, float& by) const {
-	if (segment_idx == 0) {
-		ax = _start_x;
-		ay = _start_y;
+	float v_target;
+	float denom = _path_max_spacing - PATH_MIN_SPACING;
+	if (denom > EPSILON) {
+		float ratio = (spacing - PATH_MIN_SPACING) / denom;
+		ratio = _clamp(ratio, 0.0f, 1.0f);
+		v_target = _path_max_speed * powf(ratio, config.speed_curvature_power);
 	} else {
-		ax = _waypoint_buffer[segment_idx - 1].x;
-		ay = _waypoint_buffer[segment_idx - 1].y;
+		v_target = _path_max_speed;
 	}
 
-	bx = _waypoint_buffer[segment_idx].x;
-	by = _waypoint_buffer[segment_idx].y;
-}
+	// -----------------------------------------------------------------
+	// 5. STOP DECELERATION
+	// -----------------------------------------------------------------
+	float robot_arc = _cumul_dist_at(_progress);
 
-/**
- * Compute corner angle at a waypoint.
- * Returns angle in [0, PI]: 0 = straight, PI = U-turn
- */
-float BILBO_PositionControl::_compute_corner_angle_at(uint16_t waypoint_idx) const {
-	if (waypoint_idx >= _waypoint_count - 1) {
-		return 0.0f;  // Last waypoint has no outgoing segment
-	}
-
-	// Incoming vector: previous -> this waypoint
-	float ax, ay, bx, by;
-	_get_segment_points(waypoint_idx, ax, ay, bx, by);
-	float v1x = bx - ax;
-	float v1y = by - ay;
-
-	// Outgoing vector: this waypoint -> next
-	const bilbo_waypoint_t& next_wp = _waypoint_buffer[waypoint_idx + 1];
-	float v2x = next_wp.x - bx;
-	float v2y = next_wp.y - by;
-
-	// Compute angle between vectors
-	float mag1 = sqrtf(v1x * v1x + v1y * v1y);
-	float mag2 = sqrtf(v2x * v2x + v2y * v2y);
-
-	if (mag1 < EPSILON || mag2 < EPSILON) {
-		return 0.0f;
-	}
-
-	float dot = v1x * v2x + v1y * v2y;
-	float cos_angle = _clamp(dot / (mag1 * mag2), -1.0f, 1.0f);
-
-	return acosf(cos_angle);  // [0, PI]
-}
-
-// ============================================================================
-// CARROT ADVANCEMENT
-// ============================================================================
-
-/**
- * Project robot position onto a segment and return t parameter [0,1]
- */
-float BILBO_PositionControl::_project_robot_to_segment(
-		const bilbo_position_state_t& robot_state,
-		uint16_t segment_idx) const {
-
-	float ax, ay, bx, by;
-	_get_segment_points(segment_idx, ax, ay, bx, by);
-
-	float dx = bx - ax;
-	float dy = by - ay;
-	float len_sq = dx * dx + dy * dy;
-
-	if (len_sq < EPSILON) {
-		return 1.0f;  // Degenerate segment
-	}
-
-	float t = ((robot_state.x - ax) * dx + (robot_state.y - ay) * dy) / len_sq;
-	return _clamp(t, 0.0f, 1.0f);
-}
-
-/**
- * Advance carrot along the path.
- *
- * Key algorithm:
- * 1. Project robot onto current segment
- * 2. Place carrot at robot_t + lookahead/segment_length
- * 3. If carrot wants to go past waypoint, check weight + corner angle
- * 4. Carrot can never go backward
- */
-void BILBO_PositionControl::_advance_carrot(
-		const bilbo_position_state_t& robot_state,
-		float lookahead) {
-
-	if (_current_segment >= _waypoint_count) {
-		return;
-	}
-
-	// Get current segment info
-	float ax, ay, bx, by;
-	_get_segment_points(_current_segment, ax, ay, bx, by);
-	float seg_len = _segment_lengths[_current_segment];
-
-	// Project robot onto segment
-	float robot_t = _project_robot_to_segment(robot_state, _current_segment);
-
-	// Convert lookahead to t-parameter
-	float lookahead_t = (seg_len > EPSILON) ? (lookahead / seg_len) : 1.0f;
-
-	// Desired carrot position
-	float desired_t = robot_t + lookahead_t;
-
-	// Check if carrot wants to advance past current waypoint
-	if (desired_t >= 1.0f && _current_segment < _waypoint_count - 1) {
-		const bilbo_waypoint_t& wp = _waypoint_buffer[_current_segment];
-		bool is_stop = (wp.type == bilbo_waypoint_type_t::STOP);
-
-		if (is_stop) {
-			// STOP waypoint: carrot stays at waypoint until robot arrives
-			desired_t = 1.0f;
-		} else {
-			// PASS waypoint: weight + corner angle determines advancement
-
-			// Compute corner angle (skip for segment 0 - the "incoming" direction
-			// from arbitrary start position is not part of the designed path)
-			float angle_factor = 0.0f;
-			if (_current_segment > 0) {
-				float corner_angle = _compute_corner_angle_at(_current_segment);
-				// Effective weight: weight is modulated by corner sharpness
-				// - Straight path (angle=0): effective_weight = 0 (free advancement)
-				// - Sharp corner (angle=PI): effective_weight = full weight
-				// Using sqrt for less aggressive modulation - allows user weight to have
-				// more effect even on moderate corners (e.g., 30° corner: sqrt(0.1)=0.32 vs 0.1)
-				angle_factor = sqrtf(corner_angle / M_PI);  // [0, 1], sqrt for gentler modulation
-			}
-			float effective_weight = wp.weight * angle_factor;
-
-			// Distance robot needs to be from waypoint before carrot can advance
-			float robot_threshold = (1.0f - effective_weight) * lookahead;
-			float robot_dist_to_wp = _distance(robot_state.x, robot_state.y,
-			                                   wp.x, wp.y);
-
-			if (robot_dist_to_wp > robot_threshold) {
-				// Robot too far: carrot stops at waypoint
-				desired_t = 1.0f;
+	// Decelerate toward next STOP point
+	if (_next_stop_ptr < _stop_count) {
+		uint16_t stop_idx = _stop_indices[_next_stop_ptr];
+		float d_to_stop = _cumul_dist[stop_idx] - robot_arc;
+		if (d_to_stop > 0.0f) {
+			float v_brake;
+			if (config.decel_limit > 0.0f) {
+				v_brake = sqrtf(2.0f * config.decel_limit * d_to_stop);
 			} else {
-				// Robot close enough: advance to next segment
-				float overshoot = desired_t - 1.0f;
-				_on_waypoint_passed(_current_segment);
-				_current_segment++;
-				_angular_integral = 0.0f;  // Reset integrator for new segment
-
-				if (_current_segment < _waypoint_count) {
-					// Continue on next segment
-					float next_seg_len = _segment_lengths[_current_segment];
-					_carrot_t = (next_seg_len > EPSILON) ?
-						(overshoot * seg_len / next_seg_len) : 0.0f;
-					_carrot_t = _clamp(_carrot_t, 0.0f, 1.0f);
-
-					// Update segment points for carrot calculation
-					_get_segment_points(_current_segment, ax, ay, bx, by);
-					_carrot_x = ax + _carrot_t * (bx - ax);
-					_carrot_y = ay + _carrot_t * (by - ay);
-					return;
-				}
+				v_brake = config.kp_linear * d_to_stop;
 			}
+			v_target = fminf(v_target, v_brake);
 		}
 	}
 
-	// Carrot can never go backward on current segment
-	_carrot_t = fmaxf(_carrot_t, _clamp(desired_t, 0.0f, 1.0f));
+	// Always decelerate toward path end (last point)
+	float d_to_end = _cumul_dist[_path_count - 1] - robot_arc;
+	if (d_to_end > 0.0f) {
+		float v_brake_end;
+		if (config.decel_limit > 0.0f) {
+			v_brake_end = sqrtf(2.0f * config.decel_limit * d_to_end);
+		} else {
+			v_brake_end = config.kp_linear * d_to_end;
+		}
+		v_target = fminf(v_target, v_brake_end);
+	} else {
+		v_target = 0.0f;
+	}
 
-	// Compute carrot XY
-	_carrot_x = ax + _carrot_t * (bx - ax);
-	_carrot_y = ay + _carrot_t * (by - ay);
-}
+	// -----------------------------------------------------------------
+	// 6. COMPUTE LOOKAHEAD
+	// -----------------------------------------------------------------
+	float lookahead;
+	if (config.kp_linear > EPSILON) {
+		// Scale lookahead with target speed: faster = look further ahead
+		lookahead = v_target / config.kp_linear;
+	} else {
+		// No kp_linear: use lookahead_base scaled by speed fraction
+		lookahead = config.lookahead_base * (v_target / fmaxf(_path_max_speed, EPSILON));
+	}
+	lookahead = fmaxf(lookahead, config.lookahead_min);
 
-// ============================================================================
-// CONTROL OUTPUT
-// ============================================================================
+	// -----------------------------------------------------------------
+	// 7. PLACE CARROT along path
+	// -----------------------------------------------------------------
+	float carrot_progress = _advance_along_path(_progress, lookahead);
 
-float BILBO_PositionControl::_compute_lookahead(float v) const {
-	float lookahead = config.lookahead_base +
-	                  config.lookahead_gain * fabsf(v);
-	return _clamp(lookahead, config.lookahead_base, config.lookahead_max);
-}
+	// Clamp carrot at next STOP index
+	if (_next_stop_ptr < _stop_count) {
+		uint16_t stop_idx = _stop_indices[_next_stop_ptr];
+		if (carrot_progress > (float)stop_idx) {
+			carrot_progress = (float)stop_idx;
+		}
+	}
 
-/**
- * Compute velocity and yaw rate commands.
- *
- * Key features:
- * 1. Speed = kp_linear * max(dist_to_waypoint, carrot_dist)
- *    - Maintains speed through PASS waypoints when carrot advances
- *    - Slows at tight corners (carrot can't advance due to weight+angle)
- *    - Slows at STOP waypoints (carrot stays at waypoint)
- * 2. Heading toward carrot (small lookahead = tight path following)
- * 3. Reverse mode with hysteresis (always enabled)
- * 4. cos(heading_error) speed scaling
- * 5. PI angular control with anti-windup
- */
-bilbo_position_control_output_t BILBO_PositionControl::_compute_control(
-		const bilbo_position_state_t& robot_state,
-		float current_v) {
+	// Clamp at path end
+	if (carrot_progress > (float)(_path_count - 1)) {
+		carrot_progress = (float)(_path_count - 1);
+	}
 
-	bilbo_position_control_output_t output = {0.0f, 0.0f};
+	_interpolate_path(carrot_progress, _carrot_x, _carrot_y);
 
-	// Distance and angle to carrot (for steering)
-	float dx_carrot = _carrot_x - robot_state.x;
-	float dy_carrot = _carrot_y - robot_state.y;
+	// Distance and angle to carrot
+	float dx_carrot = _carrot_x - current_state.x;
+	float dy_carrot = _carrot_y - current_state.y;
 	float carrot_dist = sqrtf(dx_carrot * dx_carrot + dy_carrot * dy_carrot);
 	float angle_to_carrot = atan2f(dy_carrot, dx_carrot);
 
-	// Distance to current target waypoint
-	const bilbo_waypoint_t& target_wp = _waypoint_buffer[_current_segment];
-	float dist_to_waypoint = _distance(robot_state.x, robot_state.y,
-	                                   target_wp.x, target_wp.y);
+	// Heading error (forward)
+	float heading_error_fwd = _normalize_angle(angle_to_carrot - current_state.psi);
 
-	// Speed distance: use the larger of carrot_dist and dist_to_waypoint
-	// - Keeps speed up when carrot advances past PASS waypoints
-	// - Slows down at tight corners (carrot blocked by weight+angle)
-	// - Slows down at STOP waypoints (carrot stays at waypoint)
-	float speed_dist = fmaxf(carrot_dist, dist_to_waypoint);
-
-	// Heading error to carrot (forward)
-	float heading_error_fwd = _normalize_angle(angle_to_carrot - robot_state.psi);
-
-	// -------------------------------------------------------------------------
-	// Reverse mode with hysteresis (always enabled)
-	// -------------------------------------------------------------------------
-
-	float abs_heading_error = fabsf(heading_error_fwd);
-
-	if (!_reverse_mode_active && abs_heading_error > config.reverse_enter_angle) {
-		_reverse_mode_active = true;
-		_angular_integral = 0.0f;  // Reset on mode switch
-	} else if (_reverse_mode_active && abs_heading_error < config.reverse_exit_angle) {
-		_reverse_mode_active = false;
-		_angular_integral = 0.0f;  // Reset on mode switch
-	}
-
-	// In reverse mode, flip the target heading
+	// -----------------------------------------------------------------
+	// 8. REVERSE MODE (if allow_reverse)
+	// -----------------------------------------------------------------
 	float heading_error = heading_error_fwd;
-	if (_reverse_mode_active) {
-		heading_error = _normalize_angle(heading_error_fwd + M_PI);
+
+	if (_active_path_command.allow_reverse) {
+		float abs_heading_error = fabsf(heading_error_fwd);
+
+		if (!_reverse_mode_active && abs_heading_error > config.reverse_enter_angle) {
+			_reverse_mode_active = true;
+			_angular_integral = 0.0f;
+		} else if (_reverse_mode_active && abs_heading_error < config.reverse_exit_angle) {
+			_reverse_mode_active = false;
+			_angular_integral = 0.0f;
+		}
+
+		if (_reverse_mode_active) {
+			heading_error = _normalize_angle(heading_error_fwd + M_PI);
+		}
 	}
 
 	data.heading_error = heading_error;
 	data.carrot_distance = carrot_dist;
 
-	// -------------------------------------------------------------------------
-	// Velocity command: v = kp_linear * speed_dist
-	// -------------------------------------------------------------------------
-
-	// Determine path-level max speed
-	float path_max_speed = config.max_speed;
-	if (_active_path_command.max_speed > 0.0f) {
-		path_max_speed = fminf(path_max_speed, _active_path_command.max_speed);
-	}
-
-	// Get per-waypoint speed target (0 = use path default)
-	float wp_speed = target_wp.speed;
-	_target_speed_limit = (wp_speed > 0.0f) ? fminf(wp_speed, path_max_speed) : path_max_speed;
-
-	// Smooth transition to target speed over config.speed_transition_time
-	// Rate = (target - current) / transition_time, clamped for stability
-	if (config.speed_transition_time > EPSILON) {
-		float speed_diff = _target_speed_limit - _current_speed_limit;
-		float max_rate = path_max_speed / config.speed_transition_time;  // Max change per second
-		float rate = _clamp(speed_diff / config.speed_transition_time, -max_rate, max_rate);
-		_current_speed_limit += rate * config.Ts;
-		_current_speed_limit = _clamp(_current_speed_limit, 0.0f, path_max_speed);
+	// -----------------------------------------------------------------
+	// 9. SPEED COMMAND
+	// -----------------------------------------------------------------
+	float v_cmd;
+	if (config.decel_limit > EPSILON) {
+		// Deceleration profile already limits v_target, use it directly
+		// Pre-compensate for velocity damping so steady-state speed matches v_target:
+		// at equilibrium: v = v_cmd - kd*v  →  v = v_cmd/(1+kd)
+		// so set v_cmd = v_target * (1+kd) to get v ≈ v_target after damping
+		v_cmd = v_target * (1.0f + config.kd_linear);
 	} else {
-		_current_speed_limit = _target_speed_limit;  // Instant transition
+		// Proportional fallback: speed = min(v_target, kp * distance_to_carrot)
+		v_cmd = fminf(v_target, config.kp_linear * carrot_dist);
 	}
 
-	// Corner angle slowdown: reduce speed based on upcoming corner sharpness
-	// Only applies when approaching the corner, not the entire segment.
-	//
-	// NOTE: Skip segment 0 because the "incoming" direction (from arbitrary start
-	// position to first waypoint) is not part of the designed path.
-	float corner_speed_factor = 1.0f;
-	if (_current_segment > 0 && _current_segment < _waypoint_count - 1) {
-		float corner_angle = _compute_corner_angle_at(_current_segment);
-		// Factor: 1.0 for straight (angle=0), decreasing for sharper corners
-		// Using cosine for smooth transition: cos(0)=1, cos(PI)=-1
-		// Map to [0.3, 1.0] range: even sharp corners allow some speed
-		float cos_angle = cosf(corner_angle);  // [-1, 1]
-		float full_corner_factor = 0.65f + 0.35f * cos_angle;  // [0.3, 1.0]
-		full_corner_factor = _clamp(full_corner_factor, 0.3f, 1.0f);
-
-		// Fade in slowdown as we approach the corner
-		// - Far from corner: no slowdown (factor = 1.0)
-		// - At corner: full slowdown based on angle
-		float fade = _clamp(1.0f - dist_to_waypoint / config.corner_slowdown_distance, 0.0f, 1.0f);
-		// fade = 0 when far, 1 when close
-
-		// Interpolate between 1.0 (no slowdown) and full_corner_factor
-		corner_speed_factor = 1.0f - fade * (1.0f - full_corner_factor);
-	}
-
-	// Effective max speed: minimum of smoothed waypoint limit and corner factor
-	float max_speed = _current_speed_limit * corner_speed_factor;
-
-	// Velocity profile: sqrt deceleration curve when decel_limit set, else linear kp*d
-	float v_p;
-	if (config.decel_limit > 0.0f && speed_dist > 0.0f) {
-		v_p = sqrtf(2.0f * config.decel_limit * speed_dist);
-	} else {
-		v_p = config.kp_linear * speed_dist;
-	}
-
-	// Velocity damping: prevent overshoot by braking when already moving
-	v_p = fmaxf(0.0f, v_p - config.kd_linear * fabsf(current_v));
-
-	float v_i = _linear_integral;
-	float v_unsat = v_p + v_i;
-	float v_sat = _clamp(v_unsat, 0.0f, max_speed);
-
-	// Anti-windup for linear integral
-	if (fabsf(v_unsat - v_sat) < EPSILON) {
-		_linear_integral += config.ki_linear * speed_dist * config.Ts;
-		_linear_integral = _clamp(_linear_integral, 0.0f, max_speed);
-	}
+	// Velocity damping
+	v_cmd = fmaxf(0.0f, v_cmd - config.kd_linear * fabsf(current_v));
 
 	// Scale by cos(heading_error) - slow down when not facing carrot
 	float cos_scale = fmaxf(0.0f, cosf(heading_error));
-	float v_cmd = v_sat * cos_scale;
+	v_cmd *= cos_scale;
 
 	// Reverse mode: negate velocity
 	if (_reverse_mode_active) {
@@ -729,12 +718,11 @@ bilbo_position_control_output_t BILBO_PositionControl::_compute_control(
 	}
 
 	output.v_cmd = v_cmd;
-	data.speed_limit = v_sat;
+	data.speed_limit = v_target;
 
-	// -------------------------------------------------------------------------
-	// Angular command: PI control on heading error
-	// -------------------------------------------------------------------------
-
+	// -----------------------------------------------------------------
+	// 10. ANGULAR COMMAND - PI control with anti-windup
+	// -----------------------------------------------------------------
 	float w_p = config.kp_angular * heading_error;
 	float w_i = _angular_integral;
 	float w_unsat = w_p + w_i;
@@ -752,76 +740,141 @@ bilbo_position_control_output_t BILBO_PositionControl::_compute_control(
 		_angular_integral = _clamp(_angular_integral, -max_integral, max_integral);
 	}
 
-	// Fade yaw rate near arrival to prevent jitter
+	// Fade yaw rate near carrot to prevent jitter at stops/end
 	float fade_radius = 2.0f * config.arrival_tolerance;
-	float w_fade = _clamp(speed_dist / fade_radius, 0.0f, 1.0f);
+	float w_fade = _clamp(carrot_dist / fade_radius, 0.0f, 1.0f);
 
 	output.psi_dot_cmd = w_sat * w_fade;
 
-	return output;
-}
+	// -----------------------------------------------------------------
+	// 11. ARRIVAL CHECKS
+	// -----------------------------------------------------------------
 
-// ============================================================================
-// ARRIVAL / COMPLETION
-// ============================================================================
+	// Get robot's position on path
+	float robot_path_x, robot_path_y;
+	_interpolate_path(_progress, robot_path_x, robot_path_y);
+	float dist_to_robot_proj = _distance(current_state.x, current_state.y,
+	                                      robot_path_x, robot_path_y);
 
-bool BILBO_PositionControl::_check_final_arrival(
-		const bilbo_position_state_t& robot_state) {
+	// PATH END check
+	float last_pt_dist = _distance(current_state.x, current_state.y,
+	                                _path_buffer[_path_count - 1].x,
+	                                _path_buffer[_path_count - 1].y);
+	float progress_threshold = (float)(_path_count - 1) - 1.0f;
+	bool near_end = (_progress >= progress_threshold) &&
+	                (last_pt_dist < config.arrival_tolerance);
 
-	if (_current_segment < _waypoint_count - 1) {
-		return false;
+	// Debug: log when near path end (throttled to ~2 Hz via tick counter)
+	if (_progress >= progress_threshold - 5.0f) {
+		static uint16_t _dbg_tick = 0;
+		if (++_dbg_tick >= 50) {  // every 50 ticks = 0.5s at 100Hz
+			send_info("PATH END: prog=%.1f/%d, dist=%.3f, tol=%.3f, near=%d, v_tgt=%.2f, v_cmd=%.2f",
+			          _progress, _path_count - 1, last_pt_dist,
+			          config.arrival_tolerance, (int)near_end, v_target, output.v_cmd);
+			_dbg_tick = 0;
+		}
 	}
 
-	const bilbo_waypoint_t& final_wp = _waypoint_buffer[_waypoint_count - 1];
-	float dist = _distance(robot_state.x, robot_state.y, final_wp.x, final_wp.y);
+	// STOP check (only if not at end)
+	bool near_stop = false;
+	uint16_t current_stop_idx = 0;
+	if (_next_stop_ptr < _stop_count) {
+		current_stop_idx = _stop_indices[_next_stop_ptr];
+		float stop_pt_dist = _distance(current_state.x, current_state.y,
+		                                _path_buffer[current_stop_idx].x,
+		                                _path_buffer[current_stop_idx].y);
+		near_stop = (_progress >= (float)current_stop_idx - 1.0f) &&
+		            (stop_pt_dist < config.arrival_tolerance);
+	}
 
-	if (dist < config.arrival_tolerance) {
+	if (near_end) {
+		// PATH END arrival — output zero while dwelling
+		output.v_cmd = 0.0f;
+		output.psi_dot_cmd = 0.0f;
 		_arrival_timer += config.Ts;
 		if (_arrival_timer >= config.arrival_dwell_time) {
-			return true;
+			send_info("PATH FINISHED: progress=%.1f, last_pt_dist=%.3f", _progress, last_pt_dist);
+			_on_path_finished();
+			_path_state = bilbo_path_state_t::IDLE;
+			_set_mode(bilbo_position_control_mode_t::IDLE);
 		}
-	} else {
-		_arrival_timer = 0.0f;
-	}
-
-	return false;
-}
-
-void BILBO_PositionControl::_check_intermediate_stop(
-		const bilbo_position_state_t& robot_state) {
-
-	if (_current_segment >= _waypoint_count - 1) {
-		return;  // Handled by _check_final_arrival
-	}
-
-	const bilbo_waypoint_t& wp = _waypoint_buffer[_current_segment];
-
-	if (wp.type != bilbo_waypoint_type_t::STOP) {
-		return;
-	}
-
-	float dist = _distance(robot_state.x, robot_state.y, wp.x, wp.y);
-
-	if (dist < config.arrival_tolerance) {
-		// Only send WAYPOINT_REACHED event once when first entering tolerance
-		if (!_waypoint_reached_sent) {
-			_on_waypoint_reached(_current_segment);
-			_waypoint_reached_sent = true;
+		return output;
+	} else if (near_stop) {
+		// STOP point arrival — output zero while dwelling
+		if (!_stop_reached_sent) {
+			send_info("STOP REACHED: stop[%d] idx=%d, progress=%.1f, dist=%.3f",
+			          _next_stop_ptr, current_stop_idx,
+			          _progress, _distance(current_state.x, current_state.y,
+			                               _path_buffer[current_stop_idx].x,
+			                               _path_buffer[current_stop_idx].y));
+			_on_stop_reached(current_stop_idx);
+			_stop_reached_sent = true;
 		}
 
+		output.v_cmd = 0.0f;
+		output.psi_dot_cmd = 0.0f;
 		_arrival_timer += config.Ts;
 		if (_arrival_timer >= config.arrival_dwell_time) {
-			_on_waypoint_completed(_current_segment);
-			_current_segment++;
-			_carrot_t = 0.0f;
+			send_info("STOP COMPLETED: stop[%d] idx=%d, dwell=%.2fs",
+			          _next_stop_ptr, current_stop_idx, config.arrival_dwell_time);
+			_on_stop_completed(current_stop_idx);
+			_next_stop_ptr++;
 			_arrival_timer = 0.0f;
 			_angular_integral = 0.0f;
-			_waypoint_reached_sent = false;  // Reset for next STOP waypoint
+			_stop_reached_sent = false;
 		}
+		return output;
 	} else {
 		_arrival_timer = 0.0f;
-		_waypoint_reached_sent = false;  // Reset if robot leaves tolerance zone
+		_stop_reached_sent = false;
 	}
+
+	// -----------------------------------------------------------------
+	// 12. FINAL APPROACH — when at path end but outside tolerance,
+	//     override with move_to_point-like drive toward last point
+	// -----------------------------------------------------------------
+	if (_progress >= (float)(_path_count - 1) - 0.5f && !near_end) {
+		float dx_last = _path_buffer[_path_count - 1].x - current_state.x;
+		float dy_last = _path_buffer[_path_count - 1].y - current_state.y;
+		float dist_last = sqrtf(dx_last * dx_last + dy_last * dy_last);
+		float angle_to_last = atan2f(dy_last, dx_last);
+		float he_last = _normalize_angle(angle_to_last - current_state.psi);
+
+		// Speed: sqrt decel toward last point (same as move_to_point)
+		float v_final;
+		if (config.decel_limit > EPSILON) {
+			v_final = sqrtf(2.0f * config.decel_limit * dist_last);
+		} else {
+			v_final = config.kp_linear * dist_last;
+		}
+		v_final = fmaxf(0.0f, v_final - config.kd_linear * fabsf(current_v));
+		v_final = fminf(v_final, _path_max_speed);
+
+		// Allow reverse if overshot (heading > 120°)
+		bool reverse_last = fabsf(he_last) > config.reverse_enter_angle;
+		if (reverse_last) {
+			he_last = _normalize_angle(he_last + M_PI);
+			output.v_cmd = -v_final * fmaxf(0.0f, cosf(he_last));
+		} else {
+			output.v_cmd = v_final * fmaxf(0.0f, cosf(he_last));
+		}
+
+		// Angular with fade near target (prevent jitter)
+		float w_last = _clamp(config.kp_angular * he_last,
+		                       -config.max_turn_rate, config.max_turn_rate);
+		float fade_last = _clamp(dist_last / (2.0f * config.arrival_tolerance), 0.0f, 1.0f);
+		output.psi_dot_cmd = w_last * fade_last;
+	}
+
+	// Update telemetry
+	data.path_point_count = _path_count;
+	data.current_index = (uint16_t)_progress;
+	data.carrot_x = _carrot_x;
+	data.carrot_y = _carrot_y;
+	data.remaining_path_length = fmaxf(0.0f, d_to_end);
+	data.progress = _progress;
+
+	return output;
 }
 
 // ============================================================================
@@ -844,19 +897,14 @@ void BILBO_PositionControl::_on_path_started() {
 	_send_event(position_control_event_t::PATH_STARTED);
 }
 
-void BILBO_PositionControl::_on_waypoint_passed(uint16_t waypoint_idx) {
-	_send_event(position_control_event_t::WAYPOINT_PASSED, waypoint_idx);
-	callbacks.waypoint_passed.call(waypoint_idx);
+void BILBO_PositionControl::_on_stop_reached(uint16_t path_idx) {
+	_send_event(position_control_event_t::WAYPOINT_REACHED, path_idx);
+	callbacks.stop_reached.call(path_idx);
 }
 
-void BILBO_PositionControl::_on_waypoint_reached(uint16_t waypoint_idx) {
-	_send_event(position_control_event_t::WAYPOINT_REACHED, waypoint_idx);
-	callbacks.waypoint_reached.call(waypoint_idx);
-}
-
-void BILBO_PositionControl::_on_waypoint_completed(uint16_t waypoint_idx) {
-	_send_event(position_control_event_t::WAYPOINT_COMPLETED, waypoint_idx);
-	callbacks.waypoint_completed.call(waypoint_idx);
+void BILBO_PositionControl::_on_stop_completed(uint16_t path_idx) {
+	_send_event(position_control_event_t::WAYPOINT_COMPLETED, path_idx);
+	callbacks.stop_completed.call(path_idx);
 }
 
 void BILBO_PositionControl::_on_path_finished() {
@@ -1036,12 +1084,14 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_drive_to_point(
 	float max_speed = (_active_move_command.max_speed > 0.0f) ?
 		_active_move_command.max_speed : config.max_speed;
 
-	// Velocity profile: sqrt deceleration curve when decel_limit set, else linear kp*d
+	// Velocity profile: use actual distance to target for speed (not carrot_dist)
+	// sqrt profile gives large values at far distances that survive kd damping
+	// and are only clamped to max_speed at the final v_sat step
 	float v_p;
-	if (config.decel_limit > 0.0f && carrot_dist > 0.0f) {
-		v_p = sqrtf(2.0f * config.decel_limit * carrot_dist);
+	if (config.decel_limit > 0.0f && dist > 0.0f) {
+		v_p = sqrtf(2.0f * config.decel_limit * dist);
 	} else {
-		v_p = config.kp_linear * carrot_dist;
+		v_p = config.kp_linear * dist;
 	}
 
 	// Velocity damping: prevent overshoot by braking when already moving

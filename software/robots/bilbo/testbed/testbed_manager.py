@@ -1,129 +1,183 @@
 import dataclasses
+import os
 
-from robots.bilbo.settings import AUTOSTOP_ROBOTS, AUTOSTART_ROBOTS
-from robots.bilbo.testbed.devices.testbed_extensions import BILBO_TestbedExtensions
-from robots.bilbo.testbed.testbed_objects import BILBO_TestbedAgent
-from robots.bilbo.testbed.tracker.bilbo_tracker import BILBO_Tracker, BILBO_Tracker_Status
 from core.utils.dataclass_utils import from_dict_auto
-from core.utils.events import event_definition, Event, EventFlag
-from core.utils.files import get_absolute_path
+from core.utils.events import Event, event_definition, EventFlag
 from core.utils.logging_utils import Logger
 from core.utils.sound.sound import speak
+from extensions.cli.cli import CommandSet, Command, CommandArgument
 from core.utils.timecode.timecode_server import TimecodeServer
-from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
+from core.utils.yaml_utils import load_yaml
+from robots.bilbo.definitions import BoxObstacle_Config, BoxObstacle_State
 from robots.bilbo.manager.bilbo_manager import BILBO_Manager
 from robots.bilbo.robot.bilbo import BILBO
-from robots.bilbo.robot.bilbo_definitions import BILBO_OriginConfig, BILBO_LimboMarkerConfig
-from core.utils.yaml_utils import load_yaml
+from robots.bilbo.robot.bilbo_definitions import BILBO_Config
+from robots.bilbo.simulation.virtual_testbed import VirtualTestbed, SimulatedBoxObstacle, VirtualTestbed_Config
+from robots.bilbo.testbed.devices.testbed_extensions import BILBO_TestbedExtensions
+from robots.bilbo.testbed.objects import RealTestbedBILBO, VirtualTestbedBILBO, \
+    RealBoxObstacle, VirtualTestbedBoxObstacle
+from robots.bilbo.testbed.testbed import Testbed, TestbedConfig
+from robots.bilbo.testbed.tracker.tracked_objects import Origin_OptiTrack_Config, LimboMarker_OptiTrack_Config, \
+    BoxObstacle_OptiTrack_Config, WallObstacle_OptiTrack_Config
+from robots.bilbo.testbed.tracker.tracker import BILBO_Tracker, BILBO_Tracker_Config, BILBO_Tracker_Status
+
+# Config directories
+_CONFIGS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'configs'))
+_TRACKED_OBJECTS_DIR = os.path.join(_CONFIGS_DIR, 'tracked_objects')
+_ROBOTS_DIR = os.path.join(_CONFIGS_DIR, 'robots')
 
 
+def _resolve_config_from_file(name: str, directory: str, data_class):
+    """Load a YAML config file and convert it to a dataclass instance."""
+    path = os.path.join(directory, f'{name}.yaml')
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Config file for '{name}' not found: {path}")
+    yaml_data = load_yaml(path)
+    return from_dict_auto(data_class, yaml_data)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass
+class TestbedSettings:
+    id: str | None = None  # ID of the testbed. Is used by the robots to set specific control configs
+    size: dict[str, list[float]] | None = None
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass
+class TrackerSettings:
+    enabled: bool = True
+    server: str = 'palantir.lan'
+    sample_rate: int = 30
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass
+class TrackedObjects:
+    origin: Origin_OptiTrack_Config | None | str = None
+    limbo_bar: LimboMarker_OptiTrack_Config | None | str = None
+    boxes: list[BoxObstacle_OptiTrack_Config | str] = dataclasses.field(default_factory=list)
+    robots: list[BILBO_Config | str] = dataclasses.field(default_factory=list)
+
+    def __post_init__(self):
+        if isinstance(self.origin, str):
+            self.origin = _resolve_config_from_file(self.origin, _TRACKED_OBJECTS_DIR, Origin_OptiTrack_Config)
+
+        if isinstance(self.limbo_bar, str):
+            self.limbo_bar = _resolve_config_from_file(self.limbo_bar, _TRACKED_OBJECTS_DIR, LimboMarker_OptiTrack_Config)
+
+        self.boxes = [
+            _resolve_config_from_file(box, _TRACKED_OBJECTS_DIR, BoxObstacle_OptiTrack_Config) if isinstance(box, str) else box
+            for box in self.boxes
+        ]
+
+        self.robots = [
+            _resolve_config_from_file(robot, _ROBOTS_DIR, BILBO_Config) if isinstance(robot, str) else robot
+            for robot in self.robots
+        ]
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass
+class ExtensionsSettings:
+    timecode: bool = False
+    limbobar: bool = True
+    display: bool = True
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass
+class RobotSettings:
+    autostart: bool = False
+    autostop: bool = False
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass
+class TestbedManagerSettings:
+    testbed: TestbedSettings = dataclasses.field(default_factory=TestbedSettings)
+    robots: RobotSettings = dataclasses.field(default_factory=RobotSettings)
+    tracker: TrackerSettings = dataclasses.field(default_factory=TrackerSettings)
+    tracked_objects: TrackedObjects = dataclasses.field(default_factory=TrackedObjects)
+    extensions: ExtensionsSettings = dataclasses.field(default_factory=ExtensionsSettings)
+    simulation: VirtualTestbed_Config = dataclasses.field(default_factory=VirtualTestbed_Config)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
 @event_definition
-class BILBO_TestbedManager_Events:
+class TestbedManagerEvents:
+    new_bilbo: Event = Event(copy_data_on_set=False)
+    bilbo_removed: Event = Event(copy_data_on_set=False)
+    new_obstacle: Event = Event(copy_data_on_set=False)
+    obstacle_removed: Event = Event(copy_data_on_set=False)
+
     new_robot: Event = Event(copy_data_on_set=False, flags=[EventFlag('type', str), EventFlag('id', str)])
     robot_disconnected: Event = Event(copy_data_on_set=False, flags=[EventFlag('type', str), EventFlag('id', str)])
     new_tracker_sample: Event
     initialized: Event = Event(copy_data_on_set=False)
 
 
-DEFAULT_TESTBED_SIZE = {
-    'x': [-5, 5],
-    'y': [-5, 5]
-}
+# ----------------------------------------------------------------------------------------------------------------------
+class TestbedManager:
+    testbed: Testbed  # Combined testbed with real and virtual agents and objects
 
-# Available predefined testbed configurations
-AVAILABLE_TESTBEDS = ['track', 'lab']
+    # Sources
+    tracker: BILBO_Tracker | None = None
+    virtual_testbed: VirtualTestbed | None = None
 
-
-@dataclasses.dataclass
-class BILBO_TestbedManager_Settings:
-    """Settings for the testbed manager.
-
-    Testbed resolution logic:
-    1. If testbed_type is set (e.g., 'track', 'lab'): Load predefined config from configs/testbeds/
-    2. If testbed_type is None and testbed_size is set: Use custom size
-    3. If both are None: Use default 10x10m testbed
-    """
-    testbed_type: str | None = 'track'  # Name of predefined testbed ('track', 'lab') or None
-    testbed_size: dict[str, list[
-        float]] | None = None  # Custom size (dict with 'x' and 'y' keys. Size is a list with [min, max] values) or None
-    tracker_max_sample_rate: int = 30
-    use_optitrack: bool = True
-    optitrack_server: str = 'palantir.lan'
-    use_limbobar: bool = True
-    use_display: bool = True
-    use_timecode: bool = False
-
-
-@dataclasses.dataclass
-class BILBO_TestbedConfig:
-    """Configuration loaded from a testbed YAML file."""
-    size: dict[str, list[float]]
-    id: str | None = None
-    origin: dict | None = None
-    limbo_marker: dict | None = None
-
-
-class BILBO_TestbedManager:
-    robot_manager: BILBO_Manager
-    tracker: BILBO_Tracker | None
-    bilbos: dict[str, BILBO_TestbedAgent]
+    # Extensions
     extensions: BILBO_TestbedExtensions | None
-    settings: BILBO_TestbedManager_Settings
-    testbed_config: BILBO_TestbedConfig | None
     timecode_server: TimecodeServer | None
 
+    # Robots
+    robot_manager: BILBO_Manager
+
     # === INIT =========================================================================================================
-    def __init__(self, settings: BILBO_TestbedManager_Settings):
+    def __init__(self,
+                 settings: TestbedManagerSettings | dict,
+                 ):
+
         self.logger = Logger('BILBO Testbed Manager', 'DEBUG')
+
+        if isinstance(settings, dict):
+            settings = from_dict_auto(TestbedManagerSettings, settings)
+
         self.settings = settings
+        self.events = TestbedManagerEvents()
+        self.virtual_testbed = VirtualTestbed(settings.simulation)
 
-        self.robot_manager = BILBO_Manager(enable_scanner=AUTOSTART_ROBOTS, autostop_robots=AUTOSTOP_ROBOTS)
-        self.events = BILBO_TestbedManager_Events()
+        self.robot_manager = BILBO_Manager(enable_scanner=settings.robots.autostart,
+                                           autostop_robots=settings.robots.autostop)
 
-        # OptiTrack tracker (optional)
-        if self.settings.use_optitrack:
-            self.tracker = BILBO_Tracker(max_sample_rate=self.settings.tracker_max_sample_rate,
-                                         server_address=self.settings.optitrack_server)
-            self.tracker.events.new_sample.on(self._on_new_tracker_sample, max_rate=30)
-            self.tracker.events.description_received.on(self._on_tracker_initialized, once=True)
-            self.tracker.events.new_rigid_body.on(self._on_tracker_new_rigid_body)
+        if self.settings.tracker.enabled:
+            self.tracker = BILBO_Tracker(BILBO_Tracker_Config(
+                server=self.settings.tracker.server,
+                max_sample_rate=self.settings.tracker.sample_rate,
+            ))
         else:
             self.tracker = None
 
-        # Joystick Control
-        self.joystick_control = BILBO_JoystickControl(bilbo_manager=self.robot_manager, run_in_thread=True)
-
-        self.bilbos = {}
-
-        # Timecode server (optional)
-        if self.settings.use_timecode:
+        if self.settings.extensions.timecode:
             self.timecode_server = TimecodeServer()
         else:
             self.timecode_server = None
 
-        # Testbed extensions (display, limbobar) - only create if any extension is enabled
-        if self.settings.use_display or self.settings.use_limbobar:
+        if self.settings.extensions.limbobar or self.settings.extensions.display:
             self.extensions = BILBO_TestbedExtensions(
-                use_limbobar=self.settings.use_limbobar,
-                use_display=self.settings.use_display
+                use_limbobar=self.settings.extensions.limbobar,
+                use_display=self.settings.extensions.display
             )
         else:
             self.extensions = None
 
-        self.testbed_config = None
-
-        self.robot_manager.events.new_robot.on(self._on_new_robot)
-        self.robot_manager.events.robot_disconnected.on(self._on_robot_disconnected)
+        self.testbed = Testbed()
+        self.cli = self._build_cli()
 
     # === METHODS ======================================================================================================
     def init(self):
-        # Load or create testbed config
-        self.testbed_config = self._resolve_testbed_config()
-
-        # self.logger.info(f"Testbed size: {self.testbed_config.size['x'][0]}m x {self.testbed_config.size['x'][1]}m x {self.testbed_config.size['y'][0]}m x {self.testbed_config.size['y'][1]}m")
-
+        self._register_events()
         self.robot_manager.init()
-        self.joystick_control.init()
+        self.virtual_testbed.init()
 
         if self.tracker is not None:
             self.tracker.init()
@@ -131,54 +185,13 @@ class BILBO_TestbedManager:
         self.events.initialized.set()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _resolve_testbed_config(self) -> BILBO_TestbedConfig:
-        """Resolve testbed configuration based on settings.
-
-        Priority:
-        1. Named testbed (testbed_type) → Load from predefined config file
-        2. Custom size (testbed_size) → Create minimal config with given size
-        3. Neither → Use default 10x10m testbed
-        """
-        if self.settings.testbed_type is not None:
-            # Load predefined testbed config
-            if self.settings.testbed_type not in AVAILABLE_TESTBEDS:
-                raise ValueError(
-                    f"Testbed '{self.settings.testbed_type}' not found. "
-                    f"Available testbeds: {AVAILABLE_TESTBEDS}"
-                )
-            config_path = get_absolute_path(f'../configs/testbeds/testbed-{self.settings.testbed_type}.yaml')
-            config_dict = load_yaml(config_path)
-            config = from_dict_auto(BILBO_TestbedConfig, config_dict)
-            # Set id from testbed_type if not already in YAML
-            if config.id is None:
-                config.id = self.settings.testbed_type
-            return config
-
-        elif self.settings.testbed_size is not None:
-            # Use custom size
-            self.logger.info(f"Using custom testbed size: {self.settings.testbed_size}")
-            return BILBO_TestbedConfig(
-                size=self.settings.testbed_size
-            )
-
-        else:
-            # Use default size
-            self.logger.info(f"No testbed specified, using default size: {DEFAULT_TESTBED_SIZE}")
-            return BILBO_TestbedConfig(
-                size=DEFAULT_TESTBED_SIZE
-            )
-
-    # ------------------------------------------------------------------------------------------------------------------
     def start(self):
+        self.robot_manager.start()
+        self.virtual_testbed.start()
         if self.tracker is not None:
             self.tracker.start()
-
         if self.timecode_server is not None:
             self.timecode_server.start()
-
-        self.robot_manager.start()
-        self.joystick_control.start()
-
         if self.extensions is not None:
             self.extensions.start()
 
@@ -186,73 +199,50 @@ class BILBO_TestbedManager:
     def emergency_stop(self):
         self.robot_manager.emergencyStop()
 
-    # === PRIVATE METHODS ==============================================================================================
+    # === EVENT HANDLERS: ROBOT MANAGER ================================================================================
     def _on_new_robot(self, robot: BILBO):
-
-        if robot.id in self.bilbos:
+        if robot.id in self.testbed.bilbos:
             self.logger.warning(f"Robot {robot.id} already exists.")
             return
 
         self.logger.info(f"New robot connected: {robot.id}")
         speak(f"Robot {robot.id} connected")
 
+        # Get the tracked object for this robot
         tracked_object = None
         if self.tracker is not None:
             if self.tracker.status != BILBO_Tracker_Status.RUNNING:
                 self.logger.warning(f"Tracker is not running, cannot get optitrack data for robot {robot.id}")
             else:
-                # Check if there is a tracked object for this robot
                 tracked_object = self.tracker.add_robot(robot.id, robot.config)
                 if tracked_object is None:
                     self.logger.warning(f"OptiTrack is running, but robot {robot.id} does not exist in tracker")
 
-        container = BILBO_TestbedAgent(id=robot.id,
-                                       robot=robot,
-                                       tracked_object=tracked_object)
-
-        self.bilbos[robot.id] = container
+        testbed_bilbo = RealTestbedBILBO(
+            id=robot.id,
+            robot=robot,
+            tracked_object=tracked_object,
+            config=robot.config
+        )
 
         if self.timecode_server is not None:
             self.timecode_server.add_target(robot.device.address)
 
-        # Send testbed config to the robot
         self._send_testbed_config_to_robot(robot)
 
-        self.events.new_robot.set(container, flags={'type': 'robot', 'id': robot.id})
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _send_testbed_config_to_robot(self, robot: BILBO):
-        """Send the current testbed configuration to a robot."""
-        if self.testbed_config is None:
-            self.logger.warning(f"No testbed config to send to robot {robot.id}")
-            return
-
-        # Convert host-side format {'x': [min, max], 'y': [min, max]}
-        # to robot-side format {'size': {'x_min': ..., 'x_max': ..., 'y_min': ..., 'y_max': ...}}
-        size = self.testbed_config.size
-        config_dict = {
-            'id': self.testbed_config.id,
-            'size': {
-                'x_min': size['x'][0],
-                'x_max': size['x'][1],
-                'y_min': size['y'][0],
-                'y_max': size['y'][1],
-            },
-        }
-
-        robot.device.executeFunction('set_testbed_config', arguments={'config': config_dict})
-        self.logger.info(f"Sent testbed config to robot {robot.id}")
+        self.testbed.add_bilbo(testbed_bilbo)
+        self.events.new_bilbo.set(testbed_bilbo)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_robot_disconnected(self, robot: BILBO):
         self.logger.info(f"Robot disconnected: {robot.id}")
         speak(f"Robot {robot.id} disconnected")
-        if robot.id not in self.bilbos:
-            self.logger.warning(f"Robot {robot.id} does not exist in bilbos")
+
+        if robot.id not in self.testbed.bilbos:
+            self.logger.warning(f"Robot {robot.id} does not exist in testbed")
             return
 
-        container = self.bilbos[robot.id]
-        del self.bilbos[robot.id]
+        self.testbed.remove_bilbo(robot.id)
 
         if self.tracker is not None:
             self.tracker.remove_robot(robot.id)
@@ -260,44 +250,264 @@ class BILBO_TestbedManager:
         if self.timecode_server is not None:
             self.timecode_server.remove_target(robot.device.address)
 
-        self.events.robot_disconnected.set(container, flags={'type': 'robot', 'id': robot.id})
+        self.events.bilbo_removed.set(robot.id)
+        self.events.robot_disconnected.set(robot, flags={'type': 'robot', 'id': robot.id})
 
-    # ------------------------------------------------------------------------------------------------------------------
+    # === EVENT HANDLERS: TRACKER ======================================================================================
     def _on_tracker_initialized(self, *args, **kwargs):
-        if self.testbed_config is None:
-            return
+        if self.settings.tracked_objects.origin is not None:
+            self.tracker.add_origin(self.settings.tracked_objects.origin.id, self.settings.tracked_objects.origin)
 
-        if self.testbed_config.origin is not None:
-            origin_config = from_dict_auto(BILBO_OriginConfig, self.testbed_config.origin)
-            self.tracker.add_origin(origin_config.id, origin_config)
+        if self.settings.tracked_objects.limbo_bar is not None:
+            self.tracker.add_limbo_bar(self.settings.tracked_objects.limbo_bar.id,
+                                       self.settings.tracked_objects.limbo_bar)
 
-        if self.testbed_config.limbo_marker is not None:
-            limbo_marker_config = from_dict_auto(BILBO_LimboMarkerConfig, self.testbed_config.limbo_marker)
-            self.tracker.add_limbo_bar(limbo_marker_config.id, limbo_marker_config)
+        if self.settings.tracked_objects.boxes is not None and isinstance(self.settings.tracked_objects.boxes, list):
+            for box_tracking_config in self.settings.tracked_objects.boxes:
+                tracked_box = self.tracker.add_obstacle(box_tracking_config.id, box_tracking_config)
+                if tracked_box is not None:
+                    # Look up obstacle dimensions from testbed config by matching ID
+                    obstacle_config = self._get_obstacle_config_by_id(box_tracking_config.id)
+                    if obstacle_config is not None:
+                        real_obstacle = RealBoxObstacle(
+                            id=box_tracking_config.id,
+                            config=obstacle_config,
+                            tracked_object=tracked_box
+                        )
+                        self.testbed.add_obstacle(real_obstacle)
+                        self.events.new_obstacle.set(real_obstacle)
+                    else:
+                        self.logger.warning(
+                            f"Tracked box {box_tracking_config.id} has no matching obstacle config with dimensions")
+
+        if self.settings.tracked_objects.walls is not None and isinstance(self.settings.tracked_objects.walls, list):
+            for wall in self.settings.tracked_objects.walls:
+                self.tracker.add_wall(wall.id, wall)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_new_tracker_sample(self, *args, **kwargs):
+        self.testbed.update()
         self.events.new_tracker_sample.set()
 
-        # # Skip limbo bar evaluation during cooldown
-        # if self._limbobar_cooldown:
-        #     return
-        #
-        # for bilbo in self.bilbos.values():
-        #     self.limbobar.update(bilbo)
-        #
-        # if self.limbobar.hit:
-        #     self.extensions.limbo_bar.blinkRed()
-        #     self._limbobar_cooldown = True
-        #     set_timeout(self._limbobar_end_cooldown, 3)
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_tracker_new_rigid_body(self, rigid_body, *args, **kwargs):
+        self.logger.warning(f"Dynamically adding rigid body {rigid_body} to testbed is not yet supported!")
+
+    # === EVENT HANDLERS: VIRTUAL TESTBED ==============================================================================
+    def _on_virtual_new_bilbo(self, bilbo_id, *args, **kwargs):
+        if bilbo_id in self.testbed.bilbos:
+            self.logger.warning(f"Simulated BILBO {bilbo_id} already exists in testbed")
+            return
+
+        sim_bilbo = self.virtual_testbed.bilbos.get(bilbo_id)
+        if sim_bilbo is None:
+            self.logger.error(f"Simulated BILBO {bilbo_id} not found in virtual testbed")
+            return
+
+        testbed_bilbo = VirtualTestbedBILBO(
+            id=bilbo_id,
+            simulation_object=sim_bilbo,
+            config=None
+        )
+
+        self.testbed.add_bilbo(testbed_bilbo)
+        self.events.new_bilbo.set(testbed_bilbo)
 
     # ------------------------------------------------------------------------------------------------------------------
-    # def _limbobar_end_cooldown(self):
-    #     """Reset limbo bar and end cooldown period."""
-    #     self.limbobar.reset()
-    #     self._limbobar_cooldown = False
+    def _on_virtual_new_obstacle(self, sim_obstacle: SimulatedBoxObstacle, *args, **kwargs):
+        if not isinstance(sim_obstacle, SimulatedBoxObstacle):
+            self.logger.warning(f"Unsupported simulated obstacle type: {type(sim_obstacle).__name__}")
+            return
+
+        obstacle_id = sim_obstacle.config.id
+        if obstacle_id in self.testbed.obstacles:
+            self.logger.warning(f"Simulated obstacle {obstacle_id} already exists in testbed")
+            return
+
+        virtual_obstacle = VirtualTestbedBoxObstacle(
+            id=obstacle_id,
+            config=sim_obstacle.config,
+            simulation_object=sim_obstacle
+        )
+
+        self.testbed.add_obstacle(virtual_obstacle)
+        self.events.new_obstacle.set(virtual_obstacle)
+        self._sync_obstacles_to_robots()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_tracker_new_rigid_body(self, rigid_body: dict):
-        self.logger.error(f"Received rigid body from OptiTrack: {rigid_body}. This is currently not supported. All "
-                          f"rigid bodies need to be available before starting the application!")
+    def _on_virtual_bilbo_removed(self, bilbo_id, *args, **kwargs):
+        if bilbo_id in self.testbed.bilbos:
+            self.testbed.remove_bilbo(bilbo_id)
+            self.events.bilbo_removed.set(bilbo_id)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_virtual_obstacle_removed(self, obstacle_id, *args, **kwargs):
+        if obstacle_id in self.testbed.obstacles:
+            self.testbed.remove_obstacle(obstacle_id)
+            self.events.obstacle_removed.set(obstacle_id)
+            self._sync_obstacles_to_robots()
+
+    # === CLI ==========================================================================================================
+    def _build_cli(self) -> CommandSet:
+        """Build the 'testbed' command set for obstacle management."""
+
+        add_box_command = Command(
+            name='addBox',
+            function=self._cli_add_box,
+            description='Add a box obstacle to the virtual testbed',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='x', type=float, description='Center X [m]'),
+                CommandArgument(name='y', type=float, description='Center Y [m]'),
+                CommandArgument(name='width', short_name='w', type=float, description='Width [m]'),
+                CommandArgument(name='height', short_name='h', type=float, description='Height [m]'),
+                CommandArgument(name='psi', short_name='p', type=float, optional=True, default=0.0,
+                                description='Orientation [rad]'),
+                CommandArgument(name='id', short_name='i', type=str, optional=True, default='',
+                                description='Obstacle ID (auto-generated if empty)'),
+            ]
+        )
+
+        remove_command = Command(
+            name='remove',
+            function=self._cli_remove_obstacle,
+            description='Remove an obstacle by ID',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='id', type=str, description='Obstacle ID to remove'),
+            ]
+        )
+
+        clear_command = Command(
+            name='clearAll',
+            function=self._cli_clear_obstacles,
+            description='Remove all virtual obstacles',
+            arguments=[]
+        )
+
+        list_command = Command(
+            name='list',
+            function=self._cli_list_obstacles,
+            description='List all obstacles',
+            arguments=[]
+        )
+
+        set_state_command = Command(
+            name='setState',
+            function=self._cli_set_state,
+            description='Change obstacle position/orientation',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='id', type=str, description='Obstacle ID'),
+                CommandArgument(name='x', type=float, description='New X [m]'),
+                CommandArgument(name='y', type=float, description='New Y [m]'),
+                CommandArgument(name='psi', short_name='p', type=float, optional=True, default=None,
+                                description='New orientation [rad]'),
+            ]
+        )
+
+        return CommandSet(
+            name='testbed',
+            commands=[add_box_command, remove_command, clear_command, list_command, set_state_command]
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _cli_add_box(self, x: float, y: float, width: float, height: float,
+                     psi: float = 0.0, id: str = ''):
+        if not id:
+            idx = 1
+            while f"box_obstacle_{idx}" in self.virtual_testbed.obstacles:
+                idx += 1
+            id = f"box_obstacle_{idx}"
+        config = BoxObstacle_Config(id=id, width=width, height=height)
+        state = BoxObstacle_State(x=x, y=y, psi=psi)
+        result = self.virtual_testbed.add_box_obstacle(config=config, state=state)
+        if result:
+            self.logger.info(f"Added box obstacle '{config.id}' at ({x:.2f}, {y:.2f}) "
+                             f"{width:.2f}x{height:.2f} psi={psi:.2f}")
+        else:
+            self.logger.error("Failed to add box obstacle")
+
+    def _cli_remove_obstacle(self, id: str):
+        if id in self.virtual_testbed.obstacles:
+            del self.virtual_testbed.obstacles[id]
+            self.virtual_testbed.events.obstacle_removed.set(id)
+            self.logger.info(f"Removed obstacle '{id}'")
+        else:
+            self.logger.error(f"Obstacle '{id}' not found in virtual testbed")
+
+    def _cli_clear_obstacles(self):
+        obstacle_ids = list(self.virtual_testbed.obstacles.keys())
+        for obs_id in obstacle_ids:
+            del self.virtual_testbed.obstacles[obs_id]
+            self.virtual_testbed.events.obstacle_removed.set(obs_id)
+        self.logger.info(f"Cleared {len(obstacle_ids)} obstacles")
+
+    def _cli_list_obstacles(self):
+        all_obstacles = self.testbed.obstacles
+        if not all_obstacles:
+            self.logger.info("No obstacles")
+            return
+        self.logger.info(f"Obstacles ({len(all_obstacles)}):")
+        for obs_id, obs in all_obstacles.items():
+            d = obs.to_dict()
+            self.logger.info(f"  [{d['id']}] Box at ({d['x']:.2f}, {d['y']:.2f}) "
+                             f"{d['width']:.2f}x{d['height']:.2f} psi={d.get('psi', 0):.2f}")
+
+    def _cli_set_state(self, id: str, x: float, y: float, psi: float = None):
+        if id not in self.virtual_testbed.obstacles:
+            self.logger.error(f"Obstacle '{id}' not found in virtual testbed")
+            return
+        sim_obstacle = self.virtual_testbed.obstacles[id]
+        sim_obstacle.set_state(x=x, y=y, psi=psi if psi is not None else sim_obstacle.state.psi)
+        self.logger.info(f"Updated obstacle '{id}' to ({x:.2f}, {y:.2f})")
+
+    # === OBSTACLE SYNCING =============================================================================================
+    def _sync_obstacles_to_robots(self):
+        """Send the current obstacle list to all connected robots."""
+        obstacles_data = [obs.to_dict() for obs in self.testbed.obstacles.values()]
+        for bilbo_id, testbed_bilbo in self.testbed.bilbos.items():
+            from robots.bilbo.testbed.objects import RealTestbedBILBO
+            if isinstance(testbed_bilbo, RealTestbedBILBO):
+                testbed_bilbo.robot.position_control.send_obstacles(obstacles_data)
+
+    # === PRIVATE METHODS ==============================================================================================
+    def _send_testbed_config_to_robot(self, robot: BILBO):
+        """Send the testbed config (size + obstacles) to a robot."""
+        config = self.testbed.get_config()
+        if not config:
+            return
+        robot.device.executeFunction('set_testbed_config', arguments={'config': config})
+        self.logger.info(f"Sent testbed config to robot {robot.id}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _get_obstacle_config_by_id(self, obstacle_id: str) -> BoxObstacle_Config | None:
+        """Look up obstacle dimensions from testbed config by ID."""
+        if self.testbed_config is None:
+            return None
+        for obs_def in self.testbed_config.obstacles:
+            obs_id = obs_def.get('id') if isinstance(obs_def, dict) else getattr(obs_def, 'id', None)
+            if obs_id == obstacle_id:
+                if isinstance(obs_def, dict):
+                    return from_dict_auto(BoxObstacle_Config, obs_def)
+                return obs_def
+        return None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _register_events(self):
+        # Robot Manager
+        self.robot_manager.events.new_robot.on(self._on_new_robot)
+        self.robot_manager.events.robot_disconnected.on(self._on_robot_disconnected)
+
+        # Tracker
+        if self.tracker is not None:
+            self.tracker.events.new_sample.on(self._on_new_tracker_sample, max_rate=30)
+            self.tracker.events.description_received.on(self._on_tracker_initialized, once=True)
+            self.tracker.events.new_rigid_body.on(self._on_tracker_new_rigid_body)
+
+        # Virtual Testbed
+        if self.virtual_testbed is not None:
+            self.virtual_testbed.events.new_bilbo.on(self._on_virtual_new_bilbo)
+            self.virtual_testbed.events.bilbo_removed.on(self._on_virtual_bilbo_removed)
+            self.virtual_testbed.events.new_obstacle.on(self._on_virtual_new_obstacle)
+            self.virtual_testbed.events.obstacle_removed.on(self._on_virtual_obstacle_removed)

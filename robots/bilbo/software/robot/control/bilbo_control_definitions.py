@@ -87,32 +87,29 @@ class VelocityControl_Config:
 
 @dataclasses.dataclass
 class PositionControl_Config:
-    """Configuration for the position controller (carrot-chase path following)
+    """Configuration for the position controller (dense path following)
 
     This config is synced to the firmware's bilbo_position_control_config_t.
 
-    Simplified algorithm:
-    - Speed = kp_linear * carrot_distance (simple and robust)
-    - Weight + corner angle determines how carrot advances past waypoints
-    - Per-waypoint speed limits with smooth transitions
-    - Reverse mode always enabled with hysteresis
+    Dense path tracking with adaptive speed from sample spacing:
+    - Speed derived from local inter-point spacing (tight curves = slow)
+    - Adaptive lookahead = v_target / kp_linear
+    - Reverse mode optional per-path
     """
     kp_angular: float = 10.0                # [rad/s per rad] Proportional gain for angular control
     ki_angular: float = 0.3                 # [rad/s per rad*s] Integral gain for angular control
-    kp_linear: float = 2.0                  # [1/s] Proportional gain: speed = kp_linear * carrot_distance (fallback when decel_limit=0)
+    kp_linear: float = 2.0                  # [1/s] Proportional gain: speed = kp_linear * carrot_distance
     ki_linear: float = 0.0                  # [1/s^2] Integral gain for linear control (usually 0)
     kd_linear: float = 0.5                  # [-] Velocity damping: subtracts kd_linear * |current_v| from speed command
     max_speed: float = 0.4                  # [m/s] Maximum forward velocity
     max_turn_rate: float = 5.0              # [rad/s] Maximum yaw rate
-    speed_transition_time: float = 0.5      # [s] Time to smoothly transition between waypoint speeds
-    lookahead_base: float = 0.15            # [m] Minimum lookahead distance
-    lookahead_gain: float = 0.3             # [s] Lookahead = base + gain * |velocity|
-    lookahead_max: float = 0.5              # [m] Maximum lookahead distance
+    lookahead_base: float = 0.15            # [m] Base lookahead (used by move_to_point)
+    lookahead_min: float = 0.03             # [m] Minimum lookahead for path following
     arrival_tolerance: float = 0.05         # [m] Distance to consider "arrived"
-    arrival_dwell_time: float = 0.5         # [s] Hold time at STOP waypoint
+    arrival_dwell_time: float = 0.5         # [s] Hold time at STOP point / path end
     reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
     reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
-    corner_slowdown_distance: float = 0.5   # [m] Distance from corner to start slowing down
+    speed_curvature_power: float = 0.5     # [-] Exponent for spacing→speed mapping (1.0=linear, 0.5=sqrt)
     decel_limit: float = 0.0               # [m/s²] sqrt deceleration profile. 0 = disabled (linear kp*d)
 
 
@@ -222,11 +219,10 @@ class BILBO_PositionControl_Sample:
     mode_name: str = ''
     path_state: int = 0
     path_state_name: str = ''
-    waypoint_count: int = 0
-    current_waypoint_index: int = 0
+    path_point_count: int = 0
+    current_index: int = 0
     is_busy: bool = False
     data: dict = dataclasses.field(default_factory=dict)
-    waypoints: list = dataclasses.field(default_factory=list)  # List of waypoint dicts
 
 
 @dataclasses.dataclass

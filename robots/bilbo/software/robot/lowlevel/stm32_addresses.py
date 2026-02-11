@@ -63,19 +63,19 @@ class TWIPR_PositionControlAddresses(enum.IntEnum):
     SET_CONFIG = 0x60
     GET_CONFIG = 0x61
     CLEAR_PATH = 0x62
-    ADD_WAYPOINT = 0x63
-    ADD_WAYPOINT_XY = 0x63  # Same address, different struct
+    ADD_PATH_POINT = 0x63
     START_PATH = 0x64
     PAUSE_PATH = 0x65
     RESUME_PATH = 0x66
     ABORT_PATH = 0x67
     READ_PATH_STATE = 0x68
     READ_DATA = 0x69
-    READ_WAYPOINT_COUNT = 0x6A
+    READ_PATH_POINT_COUNT = 0x6A
     TURN_TO_HEADING = 0x6B
     MOVE_TO_POINT = 0x6C
     RESET = 0x6D
-    READ_CURRENT_WAYPOINT = 0x6E
+    ADD_STOP_INDEX = 0x6E
+    ADD_PATH_BATCH = 0x6F
 
 
 class TWIPR_SequencerAddresses(enum.IntEnum):

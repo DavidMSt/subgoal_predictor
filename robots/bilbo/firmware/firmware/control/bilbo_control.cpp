@@ -226,9 +226,9 @@ bool BILBO_Control::set_mode(bilbo_control_mode_t mode) {
 		this->set_tic_enabled(false);
 		this->balancing_control.set_mode(twipr_balancing_control_mode_t::ON);
 		this->velocity_control.reset();
-		// Reset position control and clear any existing waypoints/commands
+		// Reset position control and clear any existing path/commands
 		this->position_control.reset();
-		this->position_control.clear_waypoints();
+		this->position_control.clear_path();
 //		send_info("Set mode to POSITION. Tick: %d", tick_global);
 		break;
 	}
@@ -499,18 +499,20 @@ bilbo_position_control_config_t BILBO_Control::get_position_control_config() {
 }
 
 bool BILBO_Control::position_clear_path() {
-	this->position_control.clear_waypoints();
+	this->position_control.clear_path();
 	return true;
 }
 
-bool BILBO_Control::position_add_waypoint(bilbo_waypoint_t waypoint) {
-	return this->position_control.add_waypoint(waypoint);
+bool BILBO_Control::position_add_path_point(path_point_t point) {
+	return this->position_control.add_path_point(point.x, point.y);
 }
 
-bool BILBO_Control::position_add_waypoint_xy(float x, float y,
-                                              bilbo_waypoint_type_t type,
-                                              float weight) {
-	return this->position_control.add_waypoint_xy(x, y, type, weight);
+bool BILBO_Control::position_add_path_points_batch(path_points_batch_t batch) {
+	return this->position_control.add_path_points_batch(batch);
+}
+
+bool BILBO_Control::position_add_stop_index(uint16_t index) {
+	return this->position_control.add_stop_index(index);
 }
 
 bool BILBO_Control::position_start_path(bilbo_path_start_cmd_t cmd) {
@@ -519,8 +521,7 @@ bool BILBO_Control::position_start_path(bilbo_path_start_cmd_t cmd) {
 		return false;
 	}
 
-	bilbo_position_state_t start_state = this->config.estimation->position_state;
-	return this->position_control.start_path(cmd, start_state);
+	return this->position_control.start_path(cmd);
 }
 
 void BILBO_Control::position_pause_path() {
@@ -543,8 +544,8 @@ bilbo_position_control_data_t BILBO_Control::position_get_data() {
 	return this->position_control.get_data();
 }
 
-uint16_t BILBO_Control::position_get_waypoint_count() {
-	return this->position_control.get_waypoint_count();
+uint16_t BILBO_Control::position_get_path_point_count() {
+	return this->position_control.get_path_point_count();
 }
 
 bool BILBO_Control::position_turn_to_heading(turn_to_heading_command_t cmd) {

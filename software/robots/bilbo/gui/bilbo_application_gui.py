@@ -13,9 +13,10 @@ from extensions.gui.src.lib.objects.python.joystick_assignment import JoystickAs
 from robots.bilbo.gui.applications.dilc_app import DILC_APP
 from robots.bilbo.gui.applications.input_viewer import InputViewerApplication
 from robots.bilbo.robot.bilbo_position_control import (
-    MoveToPointCommand, TurnToHeadingCommand, PathData, Waypoint, WaypointType
+    MoveToPointCommand, TurnToHeadingCommand, PathData
 )
-from robots.bilbo.testbed.testbed_manager import BILBO_TestbedManager
+from robots.bilbo.testbed.testbed_manager import TestbedManager, TestbedManagerSettings
+from robots.bilbo.testbed.objects import TestbedBILBO, RealTestbedBILBO
 from core.utils.callbacks import callback_definition, CallbackContainer, Callback
 from core.utils.colors import get_color_from_palette, random_color_from_palette, get_palette
 from core.utils.lipo import lipo_soc
@@ -25,13 +26,13 @@ from core.utils.timecode.timecode import Timecode
 from core.utils.timecode.timecode_server import TimecodeServerStatus
 from extensions.babylon.src.babylon import BabylonVisualization
 from extensions.babylon.src.lib.objects.bilbo.bilbo import BabylonBilbo
-from extensions.babylon.src.lib.objects.box.box import WallFancy
+from extensions.babylon.src.lib.objects.box.box import Box, WallFancy
 from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
 from extensions.cli.cli import CLI
 from extensions.gui.src.app import App, Folder, FolderPage
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.map.map import MapWidget
-from extensions.gui.src.lib.map.map_objects import Agent, Point, Line, MapObject
+from extensions.gui.src.lib.map.map_objects import Agent, Point, Line, Circle, Rectangle, MapObject
 from extensions.gui.src.lib.objects.objects import Widget_Group, ContextMenuItem, ContextMenuGroup
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.objects.python.buttons import MultiStateButton, Button
@@ -58,7 +59,7 @@ from robots.bilbo.robot.bilbo_utilities import CONTROL_MODE_COLORS
 from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandler_Status
 from robots.bilbo.robot.experiment.experiment_definitions import BILBO_InputTrajectory
 from robots.bilbo.robot.experiment.multi_trial_experiments import DILC_Experiment
-from robots.bilbo.testbed.testbed_objects import BILBO_TestbedAgent
+# TestbedBILBO and RealTestbedBILBO imported above from testbed.objects
 from core.utils.mdns import MDNSAdvertiser
 from core.utils.network.port_forwarder import PortForwarder
 from extensions.gui.settings import PORT_JS_APP
@@ -71,778 +72,6 @@ MDNS_HOSTNAME = "bilbolab"  # Will be accessible as http://bilbolab.local/gui (w
 # === GLOBAL VARIABLES =================================================================================================
 js_control: Optional[BILBO_JoystickControl] = None
 
-
-# # ======================================================================================================================
-# class BILBO_Application_GUI_Robot_Category:
-#     robot: BILBO
-#     category: Category
-#     pages: Dict[str, Page]
-#     gui: GUI
-#
-#     # === INIT =========================================================================================================
-#     def __init__(self, robot: BILBO, gui: GUI):
-#         self.robot = robot
-#         self.gui = gui
-#
-#         self.pages: Dict[str, Page] = {}
-#         self.category = Category(id=robot.id, icon='🤖')
-#         self._buildPages()
-#
-#         self.robot.core.events.stream.on(self._streamCallback)
-#         self.logger = Logger(f"Category {self.robot.id}")
-#
-#         # Register some events
-#         self.robot.experiment_handler.events.dilc_experiment_started.on(self._onDILCExperimentStarted,
-#                                                                         spawn_new_threads=True)
-#
-#     # === METHODS ======================================================================================================
-#
-#     # === PRIVATE HELPERS ==============================================================================================
-#     @staticmethod
-#     def _palette(i: int) -> list[float]:
-#         """Convenience access to a consistent pastel palette."""
-#         return get_color_from_palette('pastel', 5, i)
-#
-#     @staticmethod
-#     def _classify_connection_strength(signal_strength: float) -> str:
-#         """Map a numeric signal strength (0..100) to low/medium/high."""
-#         if signal_strength > 85:
-#             return 'high'
-#         if signal_strength > 30:
-#             return 'medium'
-#         return 'low'
-#
-#     @staticmethod
-#     def _create_toggle_button(
-#             parent_group: Widget_Group,
-#             *,
-#             widget_id: str,
-#             title: str,
-#             grid_row: int,
-#             grid_column: int,
-#             states: tuple = ('OFF', 'ON'),
-#             colors: tuple = ([0.4, 0, 0], [0, 0.4, 0]),
-#             on_click: Optional[Callable[[str], None]] = None,
-#             **kwargs
-#     ) -> MultiStateButton:
-#         """
-#         Create a 2-state toggle button and (optionally) wire a simple on_click handler
-#         that gets the chosen state ('OFF'|'ON' or custom states).
-#
-#         NOTE: The click callback from MultiStateButton may pass (state, index, ...)
-#         OR just (index, ...). This handler handles both.
-#         """
-#         btn = MultiStateButton(
-#             id=widget_id,
-#             states=list(states),
-#             color=colors,
-#             title=title,
-#             **kwargs,
-#         )
-#         parent_group.addWidget(btn, row=grid_row, column=grid_column, width=2, height=2)
-#
-#         if on_click is not None:
-#             def _handler(*cb_args, **cb_kwargs):
-#                 # Try to find the index argument in a resilient way
-#                 idx = cb_kwargs.get('index', None)
-#                 if idx is None:
-#                     if len(cb_args) >= 2:
-#                         # (state, index, ...)
-#                         idx = cb_args[1]
-#                     elif len(cb_args) >= 1:
-#                         # (index, ...)
-#                         idx = cb_args[0]
-#                     else:
-#                         # Fallback: use current state position (best-effort)
-#                         try:
-#                             idx = btn.states.index(btn.state)
-#                         except Exception:
-#                             idx = 0
-#                 # Convert to int in case we got a string/np scalar
-#                 idx = int(idx)
-#                 desired_state = btn.getStateByIndex(idx + 1)  # API is 1-based
-#                 on_click(desired_state)
-#
-#             btn.callbacks.click.register(_handler)
-#
-#         return btn
-#
-#     def _add_plot(
-#             self,
-#             page: Page,
-#             *,
-#             widget_id: str,
-#             title: str,
-#             color_index: int,
-#             timeseries_id: str,
-#             series_name: str,
-#             unit: str,
-#             vmin: float,
-#             vmax: float,
-#             grid_column: int,
-#             grid_width: int = 9,
-#             grid_height: int = 9,
-#     ):
-#         """Create a plot widget with a dedicated Y-axis + a single timeseries, add to page, and return both."""
-#         # New widget class + API: Y-axis is separate from the timeseries
-#         plot = RT_Plot_Widget(
-#             widget_id=widget_id,
-#             plot_config={
-#                 "title": title,
-#                 "show_title": True,
-#                 "legend_label_type": "point",
-#             },
-#             server_mode=ServerMode.EXTERNAL,
-#             update_mode=UpdateMode.CONTINUOUS,
-#         )
-#         page.addWidget(plot, column=grid_column, width=grid_width, height=grid_height)
-#
-#         # Palette helper -> ensure RGBA
-#         base_col = list(self._palette(color_index))
-#         if len(base_col) == 3:
-#             rgba = base_col + [1.0]
-#         else:
-#             rgba = base_col[:4]
-#
-#         # Add a dedicated Y axis for this series
-#         y_axis_id = f"{timeseries_id}_y"
-#         y_axis = plot.plot.add_y_axis(
-#             y_axis_id,
-#             {
-#                 "label": f"{series_name} [{unit}]" if unit else series_name,
-#                 "min": vmin,
-#                 "max": vmax,
-#                 "color": rgba,
-#                 "grid_color": [0.5, 0.5, 0.5, 0.4],
-#                 "precision": 2,
-#                 "highlight_zero": True,
-#                 "side": "left",
-#             },
-#         )
-#
-#         # Add the timeseries bound to that Y axis
-#         ts = TimeSeries(
-#             id=timeseries_id,
-#             y_axis=y_axis,  # can pass the object or its id
-#             name=series_name,
-#             unit=unit,
-#             color=rgba,
-#             fill_color=rgba[:-1] + [0.15] if len(rgba) == 4 else base_col + [0.15],
-#             fill=False,
-#             tension=0.0,
-#             precision=2,
-#             width=2,
-#         )
-#         ts.set_value(0.0)
-#         plot.plot.add_timeseries(ts)
-#
-#         return plot, ts
-#
-#     @staticmethod
-#     def _add_digital_number(
-#             parent_group: Widget_Group,
-#             *,
-#             widget_id: str,
-#             row: int,
-#             title: str,
-#             min_value: float,
-#             max_value: float,
-#             increment: float,
-#             **kwargs
-#     ) -> DigitalNumberWidget:
-#         dn = DigitalNumberWidget(
-#             widget_id=widget_id,
-#             min_value=min_value,
-#             max_value=max_value,
-#             value=0,
-#             increment=increment,
-#             title=title,
-#             title_position='left',
-#             color=[0.3, 0.3, 0.3],
-#             warn_on_out_of_bounds=False,
-#             **kwargs,
-#         )
-#         parent_group.addWidget(dn, row=row, column=1, width=10, height=1)
-#         return dn
-#
-#     # === PRIVATE METHODS ==============================================================================================
-#     def _buildPages(self):
-#         page_overview = Page(id='overview', name='Overview')
-#         self.category.addPage(page_overview)
-#         self.pages['overview'] = page_overview
-#
-#         self._buildOverviewPage()
-#
-#         page_control = Page(id='control', name='Control', icon='🎛️')
-#         self.category.addPage(page_control)
-#         self.pages['control'] = page_control
-#
-#         page_experiment = Page(id='experiment', name='Experiment', icon='🧪')
-#         self.category.addPage(page_experiment)
-#         self.pages['experiment'] = page_experiment
-#
-#         page_data = Page(id='data', name='Data', icon='📈')
-#         self.category.addPage(page_data)
-#         self.pages['data'] = page_data
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def _buildOverviewPage(self):
-#         time.sleep(0.01)
-#         overview_page = self.pages['overview']
-#
-#         # --- GENERAL GROUP ---
-#         self.general_group = Widget_Group(group_id='general_group', title='General', rows=5, columns=11)
-#         overview_page.addWidget(self.general_group, row=1, column=1, width=11, height=6)
-#         self._createGeneralGroup()
-#
-#         # --- CONTROL GROUP ---
-#         self.control_group = Widget_Group(group_id='control_group', title='Control', rows=11, columns=11,
-#                                           show_title=True)
-#         overview_page.addWidget(self.control_group, row=7, column=1, width=11, height=12)
-#
-#         # --- EXPERIMENT GROUP ---
-#         self.experiment_group = Widget_Group(group_id='experiment_group', title='Experiment', rows=17, columns=11,
-#                                              show_title=True)
-#         overview_page.addWidget(self.experiment_group, row=1, column=12, width=11, height=18)
-#         self._createExperimentGroup()
-#
-#         # --- DATA GROUP ---
-#         self.data_group = Widget_Group(group_id='data_group', title='Data', rows=17, columns=10, show_title=True)
-#         overview_page.addWidget(self.data_group, row=1, column=23, width=10, height=18)
-#         self._createDataGroup()
-#
-#         # --- MODE BUTTON ---
-#         mode_button = self._create_toggle_button(
-#             self.control_group,
-#             widget_id='mode_button',
-#             title='Mode',
-#             grid_row=5,
-#             grid_column=1,
-#             states=['OFF', 'BALANCING', 'VELOCITY'],
-#             colors=[[0.4, 0, 0], [0, 0.4, 0], [0.4, 0.4, 0]],
-#             on_click=lambda desired: self.robot.control.setControlMode(
-#                 BILBO_Control_Mode.OFF if desired == 'OFF' else BILBO_Control_Mode.BALANCING
-#             ),
-#             tooltip='Enable/disable control mode',
-#         )
-#
-#         mode_mapping = {
-#             BILBO_Control_Mode.OFF: 'OFF',
-#             BILBO_Control_Mode.BALANCING: 'BALANCING',
-#             BILBO_Control_Mode.VELOCITY: 'VELOCITY',
-#             BILBO_Control_Mode.POSITION: 'POSITION',
-#         }
-#
-#         # Initial state
-#         if self.robot.control.mode is not None:
-#             mode_button.state = mode_mapping[self.robot.control.mode]
-#
-#         # Keep the button in sync with robot mode changes
-#         def robot_control_mode_change_callback(mode):
-#             mode_button.state = mode_mapping[mode]
-#
-#         self.robot.control.events.mode_changed.on(robot_control_mode_change_callback)
-#
-#         # --- TIC BUTTON ---
-#         self.tic_button = self._create_toggle_button(
-#             self.control_group,
-#             widget_id='tic_button',
-#             title='TIC',
-#             grid_row=5,
-#             grid_column=4,
-#             on_click=lambda desired: self.robot.control.enableTIC(desired == 'ON'),
-#             tooltip='Enable/disable Theta Integral Control',
-#         )
-#
-#         # --- VIC BUTTON ---
-#         # Note: In the original code, VIC button is display-only and driven by config changes.
-#         # We keep that behavior (no click handler) to avoid altering semantics.
-#         self.vic_button = self._create_toggle_button(
-#             self.control_group,
-#             widget_id='vic_button',
-#             title='VIC',
-#             grid_row=5,
-#             grid_column=7,
-#             on_click=None,
-#             tooltip='Enable/disable Velocity Integral Control',
-#         )
-#
-#         # Keep TIC/VIC buttons in sync with configuration changes
-#         def robot_control_config_change_callback(config):
-#             self.logger.important("Control config changed")
-#             tic_enabled = config['balancing_control']['tic']['enabled']
-#             self.tic_button.state = 'ON' if tic_enabled else 'OFF'
-#
-#             vic_enabled = config['balancing_control']['vic']['enabled']
-#             self.vic_button.state = 'ON' if vic_enabled else 'OFF'
-#
-#         # self.robot.control.events.configuration_changed.on(robot_control_config_change_callback)
-#
-#         def on_tic_mode_change(mode):
-#             self.tic_button.state = 'ON' if mode else 'OFF'
-#
-#         self.robot.control.events.tic_mode_changed.on(on_tic_mode_change)
-#
-#         # --- PLOTS ---
-#         # Theta
-#         self.theta_plot, self.theta_timeseries = self._add_plot(
-#             overview_page,
-#             widget_id='theta_plot',
-#             title='Theta',
-#             color_index=0,
-#             timeseries_id='theta_ds',
-#             series_name='Theta',
-#             unit='deg',
-#             vmin=-100,
-#             vmax=100,
-#             grid_column=33,
-#         )
-#
-#         # Theta Dot
-#         self.theta_dot_plot, self.theta_dot_timeseries = self._add_plot(
-#             overview_page,
-#             widget_id='theta_dot_plot',
-#             title='Theta Dot',
-#             color_index=1,
-#             timeseries_id='theta_dot_ds',
-#             series_name='Theta Dot',
-#             unit='deg/s',
-#             vmin=-800,
-#             vmax=800,
-#             grid_column=33,
-#         )
-#
-#         # V
-#         self.v_plot, self.v_timeseries = self._add_plot(
-#             overview_page,
-#             widget_id='v_plot',
-#             title='V',
-#             color_index=2,
-#             timeseries_id='v_ds',
-#             series_name='V',
-#             unit='m/s',
-#             vmin=-2,
-#             vmax=2,
-#             grid_column=42,
-#         )
-#
-#         # Psi Dot
-#         self.psi_dot_plot, self.psi_dot_timeseries = self._add_plot(
-#             overview_page,
-#             widget_id='psi_dot_plot',
-#             title='Psi Dot',
-#             color_index=3,
-#             timeseries_id='psi_dot_ds',
-#             series_name='Psi Dot',
-#             unit='deg/s',
-#             vmin=-360,
-#             vmax=360,
-#             grid_column=42,
-#         )
-#
-#         # overview_page.addWidget(test_button)
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def _createGeneralGroup(self):
-#
-#         self.general_status_widget = StatusWidget(
-#             widget_id='general_status_widget',
-#             title='Status',
-#             elements={
-#                 'el1': StatusWidgetElement(label='Status',
-#                                            color=[0, 0.5, 0],
-#                                            status='ok',
-#                                            ),
-#                 'el2': StatusWidgetElement(label='Controller',
-#                                            color=[0, 0.5, 0],
-#                                            status='running',
-#                                            ),
-#                 'el3': StatusWidgetElement(label='Experiment',
-#                                            color=[0.5, 0.5, 0.5],
-#                                            status='idle',
-#                                            )
-#
-#             }
-#         )
-#         self.general_group.addWidget(self.general_status_widget, row=1, column=1, width=11, height=3)
-#
-#         # Battery
-#         self.battery_indicator = BatteryIndicatorWidget(
-#             widget_id='battery_indicator',
-#             label_position='center',
-#             show='voltage',
-#         )
-#         self.general_group.addWidget(self.battery_indicator, row=4, column=9, width=3, height=2)
-#
-#         # Connection
-#         self.connection_strength_indicator = ConnectionIndicator(widget_id='connection_strength_indicator')
-#         self.general_group.addWidget(self.connection_strength_indicator, row=4, column=1, width=3, height=2)
-#
-#         # Internet
-#         self.internet_indicator = InternetIndicator(widget_id='internet_indicator')
-#         self.general_group.addWidget(self.internet_indicator, row=4, column=4, width=2, height=2)
-#
-#         # Joystick indicator + context menu
-#         self.joystick_indicator = JoystickIndicator(widget_id='joystick_indicator')
-#         self.joystick_indicator.setValue(False)
-#         self.general_group.addWidget(self.joystick_indicator, row=4, column=6, width=3, height=2)
-#
-#         # Context menu group
-#         joystick_group = ContextMenuGroup(id='joystick_group', name='Joysticks')
-#         self.joystick_indicator.context_menu.addItem(joystick_group)
-#
-#         # Guard: if joystick control is not provided, stop here
-#         if js_control is None:
-#             return
-#
-#         self.joystick_contextmenu_items: Dict[str, dict] = {}
-#
-#         def _register_item(joystick):
-#             joystick_id = str(joystick.id)
-#             item = ContextMenuItem(id=joystick_id, name=f"{joystick.name} (ID: {joystick_id})")
-#             joystick_group.addItem(item)
-#
-#             # Clicking assigns the joystick to this robot
-#             item.callbacks.click.register(
-#                 Callback(function=js_control.assignJoystick, inputs={'joystick': joystick, 'bilbo': self.robot})
-#             )
-#
-#             self.joystick_contextmenu_items[joystick_id] = {
-#                 'item': item,
-#                 'joystick': joystick,
-#                 'assignment': None,
-#             }
-#
-#         # Initial population
-#         for joystick_id, joystick_data in js_control.getJoysticksWithAssignments().items():
-#             _register_item(joystick_data['joystick'])
-#
-#         # Live updates
-#         def add_joystick_menu_item(joystick, *args, **kwargs):
-#             _register_item(joystick)
-#
-#         def remove_joystick_menu_item(joystick, *args, **kwargs):
-#             jid = str(joystick.id)
-#             if jid in self.joystick_contextmenu_items:
-#                 joystick_group.removeItem(self.joystick_contextmenu_items[jid]['item'])
-#                 del self.joystick_contextmenu_items[jid]
-#
-#         def new_assignment(joystick, robot: BILBO, *args, **kwargs):
-#             self.logger.info(f'New assignment: {joystick.id} -> {robot.id}')
-#             jid = str(joystick.id)
-#             if jid in self.joystick_contextmenu_items:
-#                 item = self.joystick_contextmenu_items[jid]
-#                 if robot == self.robot:
-#                     item['item'].name = f"{item['joystick'].name} (ID: {jid}) ✅"
-#                 else:
-#                     item['item'].name = f"{item['joystick'].name} (ID: {jid}) (-> {robot.id})"
-#
-#         def assignment_removed(joystick, robot: BILBO, *args, **kwargs):
-#             self.logger.info(f'Assignment removed: {joystick.id} -> {robot.id}')
-#             jid = str(joystick.id)
-#             if jid in self.joystick_contextmenu_items:
-#                 item = self.joystick_contextmenu_items[jid]
-#                 item['item'].name = f"{item['joystick'].name} (ID: {jid})"
-#
-#         js_control.callbacks.new_joystick.register(add_joystick_menu_item)
-#         js_control.callbacks.joystick_disconnected.register(remove_joystick_menu_item)
-#         js_control.callbacks.new_assignment.register(new_assignment)
-#         js_control.callbacks.assigment_removed.register(assignment_removed)
-#
-#         # Click callback on the joystick indicator
-#         def joystick_indicator_click_callback(*args, **kwargs):
-#             # Check if our robot has a joystick assigned
-#             if js_control is not None:
-#                 joystick = js_control.robotIsAssigned(self.robot)
-#                 if joystick is not None:
-#                     # If so, open the context menu
-#                     joystick.rumble(strength=1, duration=1000)
-#
-#         self.joystick_indicator.callbacks.click.register(joystick_indicator_click_callback)
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def _createDataGroup(self):
-#         text_widget = TextWidget(widget_id='text_widget', color=[0.3, 0.3, 0.3], font_weight='bold')
-#         text_widget.text = 'States'
-#         self.data_group.addWidget(text_widget, row=13, column=1, width=10, height=1)
-#
-#         # Digital numbers
-#         self.theta_digital_number = self._add_digital_number(
-#             self.data_group,
-#             widget_id='theta_dnw',
-#             row=14,
-#             title='Theta',
-#             min_value=-99,
-#             max_value=99,
-#             increment=0.1,
-#             color_ranges=[
-#                 {'min': -0.15, 'max': 0.15, 'color': [0, 0.8, 0]}
-#             ]
-#         )
-#         self.v_digital_number = self._add_digital_number(
-#             self.data_group,
-#             widget_id='v_dnw',
-#             row=15,
-#             title='V',
-#             min_value=-2,
-#             max_value=2,
-#             increment=0.1,
-#         )
-#         self.theta_dot_digital_number = self._add_digital_number(
-#             self.data_group,
-#             widget_id='theta_dot_dnw',
-#             row=16,
-#             title='Theta Dot',
-#             min_value=-999,
-#             max_value=999,
-#             increment=0.1,
-#         )
-#         self.psi_dot_digital_number = self._add_digital_number(
-#             self.data_group,
-#             widget_id='psi_dot_dnw',
-#             row=17,
-#             title='Psi Dot',
-#             min_value=-999,
-#             max_value=999,
-#             increment=0.1,
-#         )
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def _createExperimentGroup(self):
-#
-#         self.experiment_handler_status_widget = StatusWidget(
-#             widget_id='experiment_handler_status_widget',
-#             title='Experiment',
-#             elements={
-#                 'status': StatusWidgetElement(label='Experiment:',
-#                                               color=[0, 0.5, 0],
-#                                               status='idle',
-#                                               ),
-#             }
-#         )
-#
-#         self.experiment_group.addWidget(self.experiment_handler_status_widget, row=1, column=1, width=11, height=1)
-#
-#         def setExperimentHandlerStatus(status: BILBO_ExperimentHandler_Status):
-#             match status:
-#                 case BILBO_ExperimentHandler_Status.IDLE:
-#                     self.experiment_handler_status_widget.elements['status'].status = '---'
-#                     self.experiment_handler_status_widget.elements['status'].color = [0.3, 0.3, 0.3]
-#                 case BILBO_ExperimentHandler_Status.EXPERIMENT_RUNNING:
-#                     self.experiment_handler_status_widget.elements[
-#                         'status'].status = f'{type(self.robot.experiment_handler.experiment).__name__}'
-#                     self.experiment_handler_status_widget.elements['status'].color = [0, 0.5, 0]
-#
-#             self.experiment_handler_status_widget.updateConfig()
-#
-#         setExperimentHandlerStatus(self.robot.experiment_handler.status)
-#
-#         self.robot.experiment_handler.events.status_changed.on(setExperimentHandlerStatus)
-#
-#         # Experiment Status
-#         self.experiment_status_widget = StatusWidget(
-#             widget_id='experiment_status_widget',
-#             title='Experiment Status',
-#             elements={
-#                 'status': StatusWidgetElement(label='Status:',
-#                                               color=[0, 0.5, 0],
-#                                               status='idle',
-#                                               ),
-#             }
-#         )
-#
-#         self.experiment_group.addWidget(self.experiment_status_widget, row=2, column=1, width=11, height=1)
-#
-#         def set_experiment_status(*args, **kwargs):
-#             return
-#             try:
-#                 if self.robot.experiment_handler.experiment is None:
-#                     self.experiment_status_widget.elements['status'].status = '---'
-#                     self.experiment_status_widget.elements['status'].color = [0.3, 0.3, 0.3]
-#                 else:
-#                     match self.robot.experiment_handler.experiment.status:
-#                         case BILBO_Experiment_Status.NONE:
-#                             self.experiment_status_widget.elements['status'].status = '---'
-#                             self.experiment_status_widget.elements['status'].color = [0.3, 0.3, 0.3]
-#                         case BILBO_Experiment_Status.RUNNING_TRAJECTORY:
-#                             self.experiment_status_widget.elements['status'].status = 'running'
-#                             self.experiment_status_widget.elements['status'].color = [0, 0.5, 0]
-#                         case BILBO_Experiment_Status.CALCULATING:
-#                             self.experiment_status_widget.elements['status'].status = 'calculating'
-#                             self.experiment_status_widget.elements['status'].color = [0.0, 0.0, 0.5]
-#                         case BILBO_Experiment_Status.WAITING_FOR_USER:
-#                             self.experiment_status_widget.elements['status'].status = 'waiting for user'
-#                             self.experiment_status_widget.elements['status'].color = [184 / 255, 107 / 255, 48 / 255]
-#
-#                 self.experiment_status_widget.updateConfig()
-#             except Exception as e:
-#                 ...
-#
-#         set_experiment_status()
-#
-#         # self.robot.experiment_handler.events.experiment_status_changed.on(set_experiment_status)
-#
-#         # Text Widget Showing current trajectory info
-#         self.trajectory_info_widget = TextWidget(widget_id='trajectory_info_widget',
-#                                                  title='Trajectory Info',
-#                                                  horizontal_alignment='left',
-#                                                  vertical_alignment='top')
-#
-#         def setTrajectoryInfo(trajectory: BILBO_InputTrajectory | None):
-#             if trajectory is None:
-#                 self.trajectory_info_widget.text = f"<strong>Trajectory:</strong> ---"
-#                 self.trajectory_info_widget.updateConfig()
-#                 return
-#
-#             self.trajectory_info_widget.text = f"""<strong>Trajectory:</strong> {trajectory.name}
-#             <strong>Status:</strong> {'loaded'}
-#             <strong>Steps:</strong> {trajectory.length}
-#             <strong>Duration:</strong> {trajectory.time_vector[-1]} s"""
-#             self.trajectory_info_widget.updateConfig()
-#
-#         setTrajectoryInfo(self.robot.experiment_handler.current_trajectory)
-#
-#         # Event Listeners
-#
-#         def trajectory_started(*args, **kwargs):
-#             setTrajectoryInfo(self.robot.experiment_handler.getCurrentTrajectory())
-#             self.resume_button.disable()
-#             self.abort_button.enable()
-#
-#         def trajectory_finished(*args, **kwargs):
-#             setTrajectoryInfo(None)
-#             self.resume_button.disable()
-#             self.abort_button.disable()
-#
-#         def trajectory_stopped(*args, **kwargs):
-#             setTrajectoryInfo(None)
-#             self.resume_button.disable()
-#             self.abort_button.disable()
-#
-#         def trajectory_loaded(*args, **kwargs):
-#             setTrajectoryInfo(self.robot.experiment_handler.getLoadedTrajectory())
-#             self.resume_button.enable()
-#             self.abort_button.enable()
-#
-#         self.robot.experiment_handler.events.ll_trajectory_started.on(trajectory_started)
-#         self.robot.experiment_handler.events.ll_trajectory_finished.on(trajectory_finished)
-#         self.robot.experiment_handler.events.ll_trajectory_aborted.on(trajectory_stopped)
-#         self.robot.experiment_handler.events.trajectory_loaded.on(trajectory_loaded)
-#
-#         self.experiment_group.addWidget(self.trajectory_info_widget, row=8, column=1, width=11, height=3)
-#
-#         # Loading Bar Indicator
-#         self.experiment_progress_bar_indicator = ProgressIndicator(widget_id='experiment_loading_bar_indicator',
-#                                                                    track_fill_color=[0.2, 0.5, 0.2],
-#                                                                    track_visible=False)
-#         self.experiment_progress_bar_indicator.value = 0.5
-#
-#         self.experiment_group.addWidget(self.experiment_progress_bar_indicator, row=11, column=1, width=11, height=1)
-#
-#         # Controls
-#         self.experiment_control_group = Widget_Group(
-#             group_id='experiment_control_group',
-#             title='Experiment Control',
-#             rows=1,
-#             columns=5,
-#             show_title=True,
-#         )
-#         self.experiment_group.addWidget(self.experiment_control_group, row=12, column=1, width=11, height=3)
-#
-#         self.resume_button = Button(widget_id='resume_button', text='Resume', color=[0.0, 0.4, 0.0])
-#         self.resume_button.disable()
-#         self.resume_button.callbacks.click.register(self.robot.core.interface_events.resume.set, discard_inputs=True)
-#
-#         self.experiment_control_group.addWidget(self.resume_button, row=1, column=1, width=1, height=1)
-#
-#         self.abort_button = Button(widget_id='abort_button', text='Abort', color=[0.4, 0.0, 0.0])
-#         self.experiment_control_group.addWidget(self.abort_button, row=1, column=2, width=1, height=1)
-#         self.abort_button.disable()
-#
-#         self.stop_button = Button(widget_id='stop_button', text='Stop Exp', color=[0.4, 0, 0])
-#         # self.stop_button.callbacks.click.register(self.robot.experiment_handler.stopExperiment, discard_inputs=True)
-#         self.experiment_control_group.addWidget(self.stop_button, row=1, column=5, width=1, height=1)
-#
-#         self.experiment_apps_group = Widget_Group(
-#             group_id='experiment_apps_group',
-#             title='Apps',
-#             rows=1,
-#             columns=5,
-#             show_title=True,
-#         )
-#         self.experiment_group.addWidget(self.experiment_apps_group, row=15, column=1, width=11, height=3)
-#
-#         dilc_button = Button(widget_id='dilc_button', text='DILC', color=[0.4, 0.4, 0.4])
-#         # dilc_button.callbacks.click.register(self.robot.experiments.startDILC)
-#         self.experiment_apps_group.addWidget(dilc_button, row=1, column=1, width=1, height=1)
-#
-#         # def dilc_button_click(*args, **kwargs):
-#         #     self.robot.experiment_handler.runExperiment(DILC_Experiment)
-#         #     self._openDILCApp()
-#
-#         # dilc_button.callbacks.click.register(dilc_button_click)
-#
-#         iml_button = Button(widget_id='iml_button', text='IML', color=[0.4, 0.4, 0.4])
-#         self.experiment_apps_group.addWidget(iml_button, row=1, column=2, width=1, height=1)
-#         iml_button.disable()
-#
-#         iitl_button = Button(widget_id='iitl_button', text='IITL', color=[0.4, 0.4, 0.4])
-#         self.experiment_apps_group.addWidget(iitl_button, row=1, column=3, width=1, height=1)
-#         iitl_button.disable()
-#
-#         dilc_rls_button = Button(widget_id='dilc_rls_button', text='DILC RLS', color=[0.4, 0.4, 0.4])
-#         self.experiment_apps_group.addWidget(dilc_rls_button, row=1, column=4, width=1, height=1)
-#         dilc_rls_button.disable()
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     # def _openDILCApp(self, *args, **kwargs):
-#     #     dilc_app = DILC_App(self.robot)
-#     #     dilc_app.open(gui=self.gui)
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def _onDILCExperimentStarted(self, data: DILC_Experiment, *args, **kwargs):
-#         self.logger.info("Starting DILC App ... ")
-#
-#         app = DILC_APP(gui=self.gui, robot=self.robot, experiment=data)
-#
-#         app.open(gui=self.gui)
-#
-#     # ------------------------------------------------------------------------------------------------------------------
-#     def _streamCallback(self, sample: BILBO_Sample, *args, **kwargs):
-#         # Digital numbers
-#         self.theta_digital_number.value = np.rad2deg(wrapToPi(sample.lowlevel.estimation.state.theta))
-#         self.v_digital_number.value = sample.lowlevel.estimation.state.v
-#         self.theta_dot_digital_number.value = np.rad2deg(sample.lowlevel.estimation.state.theta_dot)
-#         self.psi_dot_digital_number.value = np.rad2deg(sample.lowlevel.estimation.state.psi_dot)
-#
-#         # Plots (new API uses set_value)
-#         self.theta_timeseries.set_value(sample.lowlevel.estimation.state.theta * 180.0 / 3.141592653589793)
-#         self.v_timeseries.set_value(sample.lowlevel.estimation.state.v)
-#         self.theta_dot_timeseries.set_value(sample.lowlevel.estimation.state.theta_dot * 180.0 / 3.141592653589793)
-#         self.psi_dot_timeseries.set_value(sample.lowlevel.estimation.state.psi_dot * 180.0 / 3.141592653589793)
-#
-#         # Battery / indicators — throttle to every ~200 ticks
-#         if self.robot.core.tick % 200 == 0:
-#             voltage = sample.sensors.power.bat_voltage
-#             cells = self.robot.config.electronics.battery_cells
-#             self.battery_indicator.setValue(percentage=lipo_soc(voltage=voltage, cells=cells), voltage=voltage)
-#
-#             # Connection
-#             signal_strength = sample.connection.strength
-#             self.connection_strength_indicator.setValue(self._classify_connection_strength(signal_strength))
-#
-#             # Internet
-#             self.internet_indicator.setValue(sample.connection.internet)
-#
-#             # Joystick assigned?
-#             if js_control is not None:
-#                 self.joystick_indicator.setValue(js_control.robotIsAssigned(self.robot) is not None)
-#             else:
-#                 self.joystick_indicator.setValue(False)
-#
-#         # TIC (reserved for future logic if needed)
-
-
 # ======================================================================================================================
 class RobotUI:
     _built: bool = False
@@ -853,7 +82,7 @@ class RobotUI:
     _additional_map_objects: list[MapObject] = []
 
     # === INIT =========================================================================================================
-    def __init__(self, robot: BILBO, manager: BILBO_TestbedManager, gui: GUI, app: App, application_settings):
+    def __init__(self, robot: BILBO, manager: TestbedManager, gui: GUI, app: App, application_settings):
         self.robot = robot
         self.gui = gui
         self.app = app
@@ -865,11 +94,13 @@ class RobotUI:
         self.gui.categories['robots'].addCategory(self.category)
 
         self._additional_map_objects: list[MapObject] = []
+        self._obstacle_map_objects: dict[str, MapObject] = {}  # obstacle_id -> map object
 
         self.folder = Folder(folder_id=robot.id)
 
         self.robot.core.events.stream.on(self.on_robot_stream)
-        self.manager.tracker.events.new_sample.on(self.on_new_tracker_sample, max_rate=20)
+        if self.manager.tracker is not None:
+            self.manager.tracker.events.new_sample.on(self.on_new_tracker_sample, max_rate=20)
         self.logger = Logger(f"Category {self.robot.id}")
 
         # Register some events
@@ -1580,17 +811,17 @@ class RobotUI:
         self.plots.append(psi_dot_plot)
         self.plots.append(position_plot)
 
-        testbed_size = self.manager.testbed_config.size
+        testbed_size = self.manager.settings.testbed.size
         self.map_widget = MapWidget(widget_id='map_widget',
                                     title='Testbed',
-                                    limits={"x": [self.manager.testbed_config.size['x'][0],
-                                                  self.manager.testbed_config.size['x'][1]],
-                                            "y": [self.manager.testbed_config.size['y'][0],
-                                                  self.manager.testbed_config.size['y'][1]]},
-                                    initial_display_center=[(self.manager.testbed_config.size['x'][0] +
-                                                             self.manager.testbed_config.size['x'][1]) / 2,
-                                                            (self.manager.testbed_config.size['y'][0] +
-                                                             self.manager.testbed_config.size['y'][1]) / 2],
+                                    limits={"x": [self.manager.settings.testbed.size['x'][0],
+                                                  self.manager.settings.testbed.size['x'][1]],
+                                            "y": [self.manager.settings.testbed.size['y'][0],
+                                                  self.manager.settings.testbed.size['y'][1]]},
+                                    initial_display_center=[(self.manager.settings.testbed.size['x'][0] +
+                                                             self.manager.settings.testbed.size['x'][1]) / 2,
+                                                            (self.manager.settings.testbed.size['y'][0] +
+                                                             self.manager.settings.testbed.size['y'][1]) / 2],
                                     tiles=True,
                                     tile_size=0.5,
                                     show_grid=False,
@@ -1610,10 +841,11 @@ class RobotUI:
             id=f"robot_map_agent_tracked", x=0, y=0, psi=0,
             size=0.1, arrow_length=0.25, arrow_width=0.05,
             color=[0.2, 0.8, 0.2],  # Green
-            show_name=False
+            show_name=False,
+            visible=False
         )
-        self.robot_map_agent_tracked.visible = False
         self._tracker_agent_shown = False
+        self._first_stream_tick: int | None = None
         self.map_widget.map.addObject(self.robot_map_agent_tracked)
 
         def map_double_click(data, *args, **kwargs):
@@ -1628,92 +860,64 @@ class RobotUI:
         self.map_widget.map.events.double_click.on(map_double_click)
 
         # === POSITION CONTROL VISUALIZATION ===
-        # Colors for different waypoint types
-        WAYPOINT_COLORS = {
-            WaypointType.PASS: [0.2, 0.6, 1.0, 1.0],   # Blue for pass-through
-            WaypointType.STOP: [1.0, 0.4, 0.2, 1.0],   # Orange for stop
-        }
-        WAYPOINT_DIM_ALPHA = 0.3  # Alpha for completed waypoints
-        PATH_LINE_COLOR = [0.4, 0.7, 1.0, 0.6]  # Light blue for path lines
+        STOP_POINT_COLOR = [1.0, 0.4, 0.2, 1.0]    # Orange for stop points
+        STOP_DIM_ALPHA = 0.3                         # Alpha for completed stop points
+        PATH_LINE_COLOR = [0.4, 0.7, 1.0, 0.6]      # Light blue for path lines
         MOVE_TO_POINT_COLOR = [0.9, 0.3, 0.9, 1.0]  # Magenta for move_to_point target
         TURN_TO_HEADING_COLOR = [0.2, 0.9, 0.5, 0.8]  # Green for turn_to_heading indicator
 
-        # Track path waypoint objects separately for completion dimming
-        self._path_waypoint_objects: list[Point] = []
+        # Track path stop point objects for completion dimming
+        self._path_stop_objects: list[Point] = []
         self._path_line_objects: list[Line] = []
+        self._planned_path_objects: list[MapObject] = []
 
         def _clear_position_objects():
             """Clear all position control visualization objects"""
             for obj in self._additional_map_objects:
                 try:
-                    # Only try to remove if the object still exists in the map
                     if obj.id in self.map_widget.map.objects:
                         self.map_widget.map.removeObject(obj)
                 except Exception:
                     pass
             self._additional_map_objects = []
-            self._path_waypoint_objects = []
+            self._path_stop_objects = []
             self._path_line_objects = []
 
+        def _clear_planned_path():
+            """Clear planned path preview objects"""
+            for obj in self._planned_path_objects:
+                try:
+                    if obj.id in self.map_widget.map.objects:
+                        self.map_widget.map.removeObject(obj)
+                except Exception:
+                    pass
+            self._planned_path_objects = []
+
         def _on_position_mode_changed(*args, **kwargs):
-            # Only clear if there are objects to clear (avoids duplicate warnings
-            # when path_finished already cleared them before mode_changed fires)
             if self._additional_map_objects:
                 _clear_position_objects()
 
         self.robot.position_control.events.mode_changed.on(_on_position_mode_changed)
 
         def _on_path_loaded(path_data: PathData, *args, **kwargs):
-            """Visualize loaded path with waypoints and connecting lines"""
-            if not path_data or not path_data.waypoints:
+            """Visualize loaded dense path — path info only (no individual points)"""
+            if not path_data or path_data.path_point_count == 0:
                 return
 
             _clear_position_objects()
 
-            prev_point = None
-            for i, wp in enumerate(path_data.waypoints):
-                # Create waypoint point
-                wp_color = WAYPOINT_COLORS.get(wp.type, WAYPOINT_COLORS[WaypointType.PASS]).copy()
-                point = Point(
-                    id=f"waypoint_{i}",
-                    x=wp.x,
-                    y=wp.y,
-                    size=0.06 if wp.type == WaypointType.STOP else 0.04,
-                    color=wp_color,
-                    border_color=[1, 1, 1, 0.8],
-                    border_width=2,
-                    show_name=False,
-                )
-                self.map_widget.map.addObject(point)
-                self._additional_map_objects.append(point)
-                self._path_waypoint_objects.append(point)
-
-                # Create line from previous waypoint
-                if prev_point is not None:
-                    line = Line(
-                        id=f"path_line_{i}",
-                        start=prev_point,
-                        end=point,
-                        color=PATH_LINE_COLOR,
-                        width=2,
-                        style='dashed',
-                        show_name=False,
-                    )
-                    self.map_widget.map.addObject(line)
-                    self._additional_map_objects.append(line)
-                    self._path_line_objects.append(line)
-
-                prev_point = point
+            # For dense paths we don't visualize individual points (too many).
+            # We show stop indices as orange markers if available.
+            # The actual path polyline would require the full point data
+            # which is only on the robot/firmware side.
 
         self.robot.position_control.events.path_loaded.on(_on_path_loaded)
 
         def _on_path_started(path_data: PathData, *args, **kwargs):
-            """Visualize started path (same as loaded, ensures visualization)"""
-            if not path_data or not path_data.waypoints:
+            """Ensure visualization exists when path starts"""
+            if not path_data or path_data.path_point_count == 0:
                 return
-
-            # If waypoints aren't already visualized, visualize them
-            if not self._path_waypoint_objects:
+            if not self._path_stop_objects and not self._path_line_objects:
                 _on_path_loaded(path_data)
 
         self.robot.position_control.events.path_started.on(_on_path_started)
@@ -1726,28 +930,20 @@ class RobotUI:
         self.robot.position_control.events.path_aborted.on(_on_path_finished)
         self.robot.position_control.events.path_timeout.on(_on_path_finished)
 
-        def _on_waypoint_completed(data: dict, *args, **kwargs):
-            """Dim completed waypoint"""
+        def _on_stop_completed(data: dict, *args, **kwargs):
+            """Dim completed stop point"""
             if data is None:
                 return
             idx = data.get('index', 0)
 
-            # Dim the completed waypoint
-            if idx < len(self._path_waypoint_objects):
-                wp_obj = self._path_waypoint_objects[idx]
-                # Get current color and reduce alpha
-                current_color = wp_obj.config.get('color', [0.5, 0.5, 0.5, 1.0])
-                dimmed_color = current_color[:3] + [WAYPOINT_DIM_ALPHA]
-                wp_obj.updateConfig(color=dimmed_color)
+            # Dim the completed stop point
+            if idx < len(self._path_stop_objects):
+                obj = self._path_stop_objects[idx]
+                current_color = obj.config.get('color', [0.5, 0.5, 0.5, 1.0])
+                dimmed_color = current_color[:3] + [STOP_DIM_ALPHA]
+                obj.updateConfig(color=dimmed_color)
 
-            # Also dim the line leading to this waypoint
-            if idx < len(self._path_line_objects):
-                line_obj = self._path_line_objects[idx]
-                current_color = line_obj.config.get('color', PATH_LINE_COLOR)
-                dimmed_color = current_color[:3] + [WAYPOINT_DIM_ALPHA]
-                line_obj.updateConfig(color=dimmed_color)
-
-        self.robot.position_control.events.waypoint_completed.on(_on_waypoint_completed)
+        self.robot.position_control.events.stop_completed.on(_on_stop_completed)
 
         def _on_move_to_point_started(command: MoveToPointCommand, *args, **kwargs):
             """Show move_to_point target"""
@@ -1776,7 +972,7 @@ class RobotUI:
             for obj in reversed(self._additional_map_objects):
                 if isinstance(obj, Point) and obj.id.startswith('move_to_target_'):
                     current_color = obj.config.get('color', MOVE_TO_POINT_COLOR)
-                    dimmed_color = current_color[:3] + [WAYPOINT_DIM_ALPHA]
+                    dimmed_color = current_color[:3] + [STOP_DIM_ALPHA]
                     obj.updateConfig(color=dimmed_color)
                     break
 
@@ -1846,11 +1042,166 @@ class RobotUI:
             for obj in self._additional_map_objects:
                 if isinstance(obj, (Point, Line)) and ('heading_' in obj.id):
                     current_color = obj.config.get('color', TURN_TO_HEADING_COLOR)
-                    dimmed_color = current_color[:3] + [WAYPOINT_DIM_ALPHA]
+                    dimmed_color = current_color[:3] + [STOP_DIM_ALPHA]
                     obj.updateConfig(color=dimmed_color)
 
         self.robot.position_control.events.turn_to_heading_completed.on(_on_turn_to_heading_completed)
         self.robot.position_control.events.turn_to_heading_timeout.on(_on_turn_to_heading_completed)
+
+        # --- Obstacle visualization (from testbed) ---
+        OBSTACLE_FILL_COLOR = [0.9, 0.2, 0.2, 0.3]          # Transparent red fill
+        OBSTACLE_BORDER_COLOR = [1.0, 1.0, 1.0, 0.8]        # White border
+        OBSTACLE_BORDER_WIDTH = 2
+
+        def _add_obstacle_to_map(obstacle, *args, **kwargs):
+            """Add a testbed obstacle to the 2D map."""
+            from robots.bilbo.testbed.objects import BoxObstacle
+            if not isinstance(obstacle, BoxObstacle):
+                return
+            obs_id = obstacle.id
+            if obs_id in self._obstacle_map_objects:
+                return
+            state = obstacle.state
+            map_obj = Rectangle(
+                id=f"obstacle_{obs_id}",
+                x=state.x, y=state.y, psi=state.psi,
+                width=obstacle.config.width, height=obstacle.config.height,
+                color=OBSTACLE_FILL_COLOR,
+                border_color=OBSTACLE_BORDER_COLOR,
+                border_width=OBSTACLE_BORDER_WIDTH,
+                show_name=False,
+                layer=0,
+            )
+            self.map_widget.map.addObject(map_obj)
+            self._obstacle_map_objects[obs_id] = map_obj
+
+        def _remove_obstacle_from_map(obstacle, *args, **kwargs):
+            """Remove a testbed obstacle from the 2D map."""
+            from robots.bilbo.testbed.objects import BoxObstacle
+            if isinstance(obstacle, BoxObstacle):
+                obs_id = obstacle.id
+            elif isinstance(obstacle, str):
+                obs_id = obstacle
+            else:
+                return
+            if obs_id in self._obstacle_map_objects:
+                obj = self._obstacle_map_objects.pop(obs_id)
+                try:
+                    self.map_widget.map.removeObject(obj)
+                except Exception:
+                    pass
+
+        # Add existing obstacles
+        for obs in self.manager.testbed.obstacles.values():
+            _add_obstacle_to_map(obs)
+
+        # Subscribe to testbed obstacle events
+        self.manager.testbed.events.obstacle_added.on(_add_obstacle_to_map)
+        self.manager.testbed.events.obstacle_removed.on(_remove_obstacle_from_map)
+
+        # --- Planned path visualization ---
+        PLANNED_PATH_COLOR = [0.4, 0.8, 1.0, 0.5]          # Light blue, semi-transparent
+        PLANNED_PATH_POINT_SIZE = 0.015                      # Small dots along path
+        PLANNED_PATH_LINE_WIDTH = 2
+        PLANNED_PATH_TARGET_COLOR = [0.2, 1.0, 0.4, 0.9]   # Green target point
+        PLANNED_PATH_TARGET_SIZE = 0.04
+        PLANNED_PATH_SUBSAMPLE = 5                           # Show every Nth point to avoid clutter
+        WAYPOINT_PASS_COLOR = [1.0, 0.8, 0.2, 0.9]         # Yellow for PASS waypoints
+        WAYPOINT_STOP_COLOR = [1.0, 0.3, 0.3, 0.9]         # Red for STOP waypoints
+        WAYPOINT_SIZE = 0.035                                # Waypoint marker size
+        WAYPOINT_BORDER_COLOR = [1.0, 1.0, 1.0, 0.9]       # White border
+
+        def _draw_planned_path(path_data: PathData):
+            """Draw a planned/loaded path as a polyline with target marker."""
+            _clear_planned_path()
+
+            points = path_data.path_points
+            if not points or len(points) < 2:
+                return
+
+            # Subsample for visualization (dense paths may have 500+ points)
+            vis_indices = list(range(0, len(points), PLANNED_PATH_SUBSAMPLE))
+            if vis_indices[-1] != len(points) - 1:
+                vis_indices.append(len(points) - 1)
+
+            # Create point objects along the path
+            prev_point_obj = None
+            for i, idx in enumerate(vis_indices):
+                x, y = points[idx]
+                is_last = (idx == len(points) - 1)
+
+                pt = Point(
+                    id=f"planned_path_pt_{generate_uuid()[:8]}",
+                    x=x, y=y,
+                    size=PLANNED_PATH_TARGET_SIZE if is_last else PLANNED_PATH_POINT_SIZE,
+                    color=PLANNED_PATH_TARGET_COLOR if is_last else PLANNED_PATH_COLOR,
+                    border_color=[1, 1, 1, 0.8] if is_last else [0, 0, 0, 0],
+                    border_width=2 if is_last else 0,
+                    shape='circle',
+                    show_name=False,
+                )
+                self.map_widget.map.addObject(pt)
+                self._planned_path_objects.append(pt)
+
+                # Connect consecutive points with lines
+                if prev_point_obj is not None:
+                    ln = Line(
+                        id=f"planned_path_ln_{generate_uuid()[:8]}",
+                        start=prev_point_obj,
+                        end=pt,
+                        color=PLANNED_PATH_COLOR,
+                        width=PLANNED_PATH_LINE_WIDTH,
+                        style='solid',
+                        show_name=False,
+                    )
+                    self.map_widget.map.addObject(ln)
+                    self._planned_path_objects.append(ln)
+
+                prev_point_obj = pt
+
+            # Draw waypoint markers (on top of path)
+            if path_data.waypoints:
+                for i, wp in enumerate(path_data.waypoints):
+                    wx = wp.get('x', 0)
+                    wy = wp.get('y', 0)
+                    wp_type = wp.get('type', 'PASS').upper()
+                    is_stop = wp_type == 'STOP'
+                    color = WAYPOINT_STOP_COLOR if is_stop else WAYPOINT_PASS_COLOR
+
+                    wp_pt = Point(
+                        id=f"planned_path_wp_{generate_uuid()[:8]}",
+                        x=wx, y=wy,
+                        size=WAYPOINT_SIZE,
+                        color=color,
+                        border_color=WAYPOINT_BORDER_COLOR,
+                        border_width=2,
+                        shape='diamond',
+                        show_name=False,
+                    )
+                    self.map_widget.map.addObject(wp_pt)
+                    self._planned_path_objects.append(wp_pt)
+
+        def _on_path_planned(path_data: PathData, *args, **kwargs):
+            """Visualize a planned path preview."""
+            if not path_data or path_data.path_point_count == 0:
+                return
+            _draw_planned_path(path_data)
+
+        self.robot.position_control.events.path_planned.on(_on_path_planned)
+
+        # Also draw path when loaded (has compressed points now)
+        def _on_path_loaded_viz(path_data: PathData, *args, **kwargs):
+            if not path_data or not path_data.path_points:
+                return
+            _draw_planned_path(path_data)
+
+        self.robot.position_control.events.path_loaded.on(_on_path_loaded_viz)
+
+        # Clear planned path when path finishes/aborts/cleared or a new path starts
+        self.robot.position_control.events.path_finished.on(lambda *a, **kw: _clear_planned_path())
+        self.robot.position_control.events.path_aborted.on(lambda *a, **kw: _clear_planned_path())
+        self.robot.position_control.events.path_timeout.on(lambda *a, **kw: _clear_planned_path())
+        self.robot.position_control.events.path_cleared.on(lambda *a, **kw: _clear_planned_path())
 
         navigation_group = Widget_Group(widget_id='navigation_group',
                                         title='Navigation',
@@ -2504,7 +1855,10 @@ class RobotUI:
         self.input_right_timeseries.set_value(sample.lowlevel.control.output.u_right)
 
         # Update red (estimated) map agent from robot estimation state
-        if self.robot.core.tick % 5 == 0:  # ~20Hz update rate
+        tick = self.robot.core.tick
+        if self._first_stream_tick is None:
+            self._first_stream_tick = tick
+        if (tick - self._first_stream_tick) % 5 == 0:
             self.robot_map_agent_estimated.update(
                 x=sample.estimation.state.x,
                 y=sample.estimation.state.y,
@@ -2515,16 +1869,23 @@ class RobotUI:
     def on_new_tracker_sample(self, sample, *args, **kwargs):
         if not self._built:
             return
-        if self.robot.id in self.manager.tracker.robots:
+        if self.manager.tracker is not None and self.robot.id in self.manager.tracker.robots:
             state = self.manager.tracker.robots[self.robot.id].state
 
             # Show green (tracked) agent on first tracker sample
             if not self._tracker_agent_shown:
-                self.robot_map_agent_tracked.visible = True
+                self.robot_map_agent_tracked.updateConfig(visible=True)
                 self._tracker_agent_shown = True
 
             # Update green (tracked) agent from OptiTrack
             self.robot_map_agent_tracked.update(x=state.x, y=state.y, psi=state.psi)
+
+        # Update obstacle positions on map
+        for obs_id, map_obj in self._obstacle_map_objects.items():
+            if obs_id in self.manager.testbed.obstacles:
+                obs = self.manager.testbed.obstacles[obs_id]
+                s = obs.state
+                map_obj.update(x=s.x, y=s.y, psi=s.psi)
 
     # ------------------------------------------------------------------------------------------------------------------
     def on_control_mode_changed(self, mode: BILBO_Control_Mode, *args, **kwargs):
@@ -2895,28 +2256,33 @@ class BILBO_Application_App_Robot_Folder:
 # ======================================================================================================================
 class BILBO_GUI_OverviewPage:
     page: Page
-    manager: BILBO_TestbedManager
+    manager: TestbedManager
 
     @dataclasses.dataclass
     class RobotContainer:
-        robot: BILBO_TestbedAgent
+        robot: TestbedBILBO
         babylon: BabylonBilbo
 
     robots: dict[str, RobotContainer]
+    _obstacle_babylon_objects: dict[str, Box]
 
-    def __init__(self, manager: BILBO_TestbedManager):
+    def __init__(self, manager: TestbedManager):
         self.manager = manager
 
         self.logger = Logger("Testbed Page")
         self.page = Page(id='testbed_page', name='Testbed')
         self.robots = {}
+        self._obstacle_babylon_objects = {}
+        self.babylon_visualization = None
 
         self._buildPage()
 
-        self.manager.events.new_robot.on(self._on_new_testbed_robot)
-        self.manager.events.robot_disconnected.on(self._on_testbed_robot_disconnected)
+        self.manager.events.new_bilbo.on(self._on_new_testbed_robot)
+        self.manager.events.bilbo_removed.on(self._on_testbed_robot_disconnected)
         self.manager.events.new_tracker_sample.on(self._on_new_tracker_sample)
         self.manager.events.initialized.on(self._on_testbed_initialized)
+        self.manager.testbed.events.obstacle_added.on(self._on_obstacle_added)
+        self.manager.testbed.events.obstacle_removed.on(self._on_obstacle_removed)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _buildPage(self):
@@ -2979,7 +2345,7 @@ class BILBO_GUI_OverviewPage:
     # ------------------------------------------------------------------------------------------------------------------
     def _build_timecode(self):
         """Build the timecode group. Disabled if timecode is not enabled in settings."""
-        timecode_enabled = self.manager.settings.use_timecode
+        timecode_enabled = self.manager.settings.extensions.timecode
 
         timecode_group = Widget_Group(group_id='timecode_group',
                                       title='Timecode',
@@ -3030,7 +2396,7 @@ class BILBO_GUI_OverviewPage:
     # ------------------------------------------------------------------------------------------------------------------
     def _build_tracker_overview(self):
         """Build the tracker overview group. Disabled if OptiTrack is not enabled in settings."""
-        optitrack_enabled = self.manager.settings.use_optitrack
+        optitrack_enabled = self.manager.settings.tracker.enabled
 
         tracker_group = Widget_Group(group_id='tracker_group',
                                      title='Tracker',
@@ -3191,8 +2557,8 @@ class BILBO_GUI_OverviewPage:
 
         Widgets are disabled if their corresponding feature is not enabled in settings.
         """
-        use_display = self.manager.settings.use_display
-        use_limbobar = self.manager.settings.use_limbobar
+        use_display = self.manager.settings.extensions.display
+        use_limbobar = self.manager.settings.extensions.limbobar
 
         display_group = Widget_Group(
             group_id='display_group',
@@ -3251,46 +2617,111 @@ class BILBO_GUI_OverviewPage:
             self.limbo_height_slider.disable()
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _on_new_testbed_robot(self, robot: BILBO_TestbedAgent):
+    def _on_new_testbed_robot(self, robot: TestbedBILBO, *args, **kwargs):
         if robot.id in self.robots:
             self.logger.warning(f'Testbed robot {robot.id} already exists. Skipping.')
             return
 
+        color = robot.config.general.color if robot.config else [0.5, 0.5, 0.5]
+        text = robot.config.general.short_id if robot.config else robot.id
+
         container = self.RobotContainer(
             robot=robot,
-            babylon=BabylonBilbo(object_id=robot.id,
-                                 color=robot.robot.config.general.color,
-                                 text=robot.robot.config.general.short_id)
+            babylon=BabylonBilbo(object_id=robot.id, color=color, text=text)
         )
 
         self.robots[robot.id] = container
         self.babylon_visualization.addObject(container.babylon)
 
+        # Subscribe to the robot's own stream so the 3D model updates
+        # from estimation state (works even without OptiTrack tracker)
+        if isinstance(robot, RealTestbedBILBO):
+            babylon_ref = container.babylon
+            robot.robot.core.events.stream.on(
+                lambda sample, _b=babylon_ref: _b.set_state(
+                    x=sample.estimation.state.x,
+                    y=sample.estimation.state.y,
+                    theta=sample.estimation.state.theta,
+                    psi=sample.estimation.state.psi,
+                ),
+                max_rate=20,
+            )
+
         # ------------------------------------------------------------------------------------------------------------------
 
-    def _on_testbed_robot_disconnected(self, robot: BILBO_TestbedAgent):
-        if robot.id not in self.robots:
-            self.logger.warning(f'Testbed robot {robot.id} not found. Skipping.')
+    def _on_testbed_robot_disconnected(self, robot_id: str, *args, **kwargs):
+        if robot_id not in self.robots:
+            self.logger.warning(f'Testbed robot {robot_id} not found. Skipping.')
             return
 
-        self.babylon_visualization.removeObject(self.robots[robot.id].babylon)
-        del self.robots[robot.id]
+        self.babylon_visualization.removeObject(self.robots[robot_id].babylon)
+        del self.robots[robot_id]
 
         # ------------------------------------------------------------------------------------------------------------------
 
     def _on_new_tracker_sample(self, *args, **kwargs):
         for robot in self.robots.values():
+            state = robot.robot.state
             robot.babylon.set_state(
-                x=robot.robot.tracked_object.state.x,
-                y=robot.robot.tracked_object.state.y,
-                theta=robot.robot.tracked_object.state.theta,
-                psi=robot.robot.tracked_object.state.psi,
+                x=state.x,
+                y=state.y,
+                theta=state.theta,
+                psi=state.psi,
             )
+
+        # Update obstacle 3D positions
+        for obs_id, box in self._obstacle_babylon_objects.items():
+            if obs_id in self.manager.testbed.obstacles:
+                obs = self.manager.testbed.obstacles[obs_id]
+                s = obs.state
+                box.setPosition(x=s.x, y=s.y, z=0.125)
+                import qmt
+                box.setOrientation(qmt.quatFromAngleAxis(s.psi, [0, 0, 1]))
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_obstacle_added(self, obstacle, *args, **kwargs):
+        """Add a box obstacle to the Babylon 3D view."""
+        from robots.bilbo.testbed.objects import BoxObstacle
+        if not isinstance(obstacle, BoxObstacle):
+            return
+        if self.babylon_visualization is None:
+            return
+        obs_id = obstacle.id
+        if obs_id in self._obstacle_babylon_objects:
+            return
+
+        s = obstacle.state
+        box = Box(
+            object_id=f"obstacle_{obs_id}",
+            color=[0.8, 0.15, 0.15],
+            alpha=0.8,
+            size={'x': obstacle.config.width, 'y': obstacle.config.height, 'z': 0.25},
+        )
+        box.setPosition(x=s.x, y=s.y, z=0.125)
+        import qmt
+        box.setOrientation(qmt.quatFromAngleAxis(s.psi, [0, 0, 1]))
+        self.babylon_visualization.addObject(box)
+        self._obstacle_babylon_objects[obs_id] = box
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_obstacle_removed(self, obstacle, *args, **kwargs):
+        """Remove a box obstacle from the Babylon 3D view."""
+        from robots.bilbo.testbed.objects import BoxObstacle
+        if isinstance(obstacle, BoxObstacle):
+            obs_id = obstacle.id
+        elif isinstance(obstacle, str):
+            obs_id = obstacle
+        else:
+            return
+        if obs_id in self._obstacle_babylon_objects:
+            box = self._obstacle_babylon_objects.pop(obs_id)
+            if self.babylon_visualization is not None:
+                self.babylon_visualization.removeObject(box)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_testbed_initialized(self, *args, **kwargs):
         # Babylon
-        testbed_size = self.manager.testbed_config.size
+        testbed_size = self.manager.settings.testbed.size
 
         target_x = (testbed_size['x'][0] + testbed_size['x'][1]) / 2
         target_y = (testbed_size['y'][0] + testbed_size['y'][1]) / 2
@@ -3313,6 +2744,10 @@ class BILBO_GUI_OverviewPage:
                             size_x=testbed_size['x'],
                             size_y=testbed_size['y'])
         self.babylon_visualization.addObject(floor)
+
+        # Add existing testbed obstacles to Babylon
+        for obstacle in self.manager.testbed.obstacles.values():
+            self._on_obstacle_added(obstacle)
 
         # testbed_size = [3, 3]  # Size in meters
 
@@ -3361,9 +2796,9 @@ class BILBO_Application_GUI:
     def __init__(self,
                  settings,
                  host,
-                 testbed_manager: BILBO_TestbedManager,
+                 testbed_manager: TestbedManager,
                  cli: CLI = None,
-                 joystick_control: BILBO_JoystickControl = None,
+                 joystick_control: BILBO_JoystickControl | None = None,
                  enable_mdns: bool = True,
                  mdns_hostname: str = MDNS_HOSTNAME,
                  mdns_use_port_80: bool = False):
@@ -3398,15 +2833,11 @@ class BILBO_Application_GUI:
         self.gui.callbacks.emergency_stop.register(self.callbacks.emergency_stop.call)
 
         self.categories = {}
-        # self.robot_categories = {}
-        # self.robot_app_folders = {}
         self.robot_ui = {}
 
         self._addCategoriesAndPages()
 
         self._addApplications()
-
-        # self.gui.addApplication(self.example_app)
 
         self.logger = Logger('gui')
 
@@ -3417,6 +2848,10 @@ class BILBO_Application_GUI:
         self.mdns_advertiser = None
         # Port forwarder for port 80 access (optional, requires sudo)
         self.port_forwarder = None
+
+        # Subscribe to testbed manager events for robot connect/disconnect
+        self.testbed_manager.events.new_bilbo.on(self._on_new_bilbo)
+        self.testbed_manager.events.bilbo_removed.on(self._on_bilbo_removed)
 
     # === METHODS ======================================================================================================
     def init(self):
@@ -3473,7 +2908,6 @@ class BILBO_Application_GUI:
 
     # ------------------------------------------------------------------------------------------------------------------
     def addRobot(self, robot: BILBO):
-
         self.robot_ui[robot.id] = RobotUI(robot=robot,
                                           manager=self.testbed_manager,
                                           gui=self.gui,
@@ -3483,18 +2917,50 @@ class BILBO_Application_GUI:
         self.gui.callout_handler.add(callout_type=CalloutType.INFO,
                                      title='Robot Connected',
                                      content=f'Robot {robot.id} connected.',
-                                     # buttons=[callout_button],
                                      timeout=5)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def removeRobot(self, robot: BILBO):
-        self.logger.important(f'Removing robot {robot.id} from GUI')
+    def removeRobot(self, robot_id: str):
+        if robot_id not in self.robot_ui:
+            return
+        self.logger.important(f'Removing robot {robot_id} from GUI')
 
         self.gui.callout_handler.add(callout_type=CalloutType.WARNING,
                                      title='Robot Disconnected',
-                                     content=f'Robot {robot.id} disconnected.',
+                                     content=f'Robot {robot_id} disconnected.',
                                      timeout=5)
-        self.robot_ui[robot.id].close()
+        self.robot_ui[robot_id].close()
+        del self.robot_ui[robot_id]
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_new_bilbo(self, testbed_bilbo: TestbedBILBO, *args, **kwargs):
+        """Handle new robot from testbed manager. Wait for initialization before building UI."""
+        if not isinstance(testbed_bilbo, RealTestbedBILBO):
+            return
+
+        robot = testbed_bilbo.robot
+
+        # Set GUI reference on experiment handler for file picker functionality
+        robot.experiment_handler.set_gui(self.gui)
+
+        # Wait for first sample before building robot UI
+        if not robot.core.initialized:
+            robot.core.events.initialized.on(
+                callback=Callback(
+                    function=self.addRobot,
+                    inputs={'robot': robot},
+                    discard_inputs=True
+                ),
+                once=True,
+                discard_data=True
+            )
+        else:
+            self.addRobot(robot)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_bilbo_removed(self, robot_id: str, *args, **kwargs):
+        """Handle robot disconnect from testbed manager."""
+        self.removeRobot(robot_id)
 
     # === PRIVATE METHODS ==============================================================================================
     def _addCategoriesAndPages(self):

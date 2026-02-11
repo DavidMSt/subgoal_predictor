@@ -59,17 +59,14 @@ class UDP_Socket:
 
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
 
-        match getOS():
-            case 'Linux'| 'MAC':
-                self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 
 
         self._socket.settimeout(0)
 
-        # set ip and port
-        self._socket.bind((str(self.address), self.port))
-        # self._socket.bind(("", self.port))  # FOR RASPBERRY PI
+        self._socket.bind(("", self.port))
         self._thread = threading.Thread(target=self._thread_fun)
         self._exit = False
 

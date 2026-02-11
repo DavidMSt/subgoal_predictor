@@ -132,17 +132,16 @@ public:
 
 	// Position control interface - Path following
 	bool position_clear_path();
-	bool position_add_waypoint(bilbo_waypoint_t waypoint);
-	bool position_add_waypoint_xy(float x, float y,
-	                              bilbo_waypoint_type_t type = bilbo_waypoint_type_t::PASS,
-	                              float weight = 0.75f);
+	bool position_add_path_point(path_point_t point);
+	bool position_add_path_points_batch(path_points_batch_t batch);
+	bool position_add_stop_index(uint16_t index);
 	bool position_start_path(bilbo_path_start_cmd_t cmd);
 	void position_pause_path();
 	void position_resume_path();
 	void position_abort_path();
 	bilbo_path_state_t position_get_path_state();
 	bilbo_position_control_data_t position_get_data();
-	uint16_t position_get_waypoint_count();
+	uint16_t position_get_path_point_count();
 
 	// Position control interface - Single-point commands
 	bool position_turn_to_heading(turn_to_heading_command_t cmd);

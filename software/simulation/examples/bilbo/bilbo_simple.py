@@ -12,14 +12,18 @@ from simulation.src.objects.bilbo import BILBO_Dynamics_2D, DEFAULT_BILBO_MODEL,
     BILBO_Dynamics_2D_Linear, BILBO_2D_POLES, BILBO_MICHAEL_MODEL
 
 
+def example_3D():
+    ...
+
 def main():
     N = 500
     # Generate the robot
     bilbo_dynamics = BILBO_Dynamics_2D(model=DEFAULT_BILBO_MODEL, Ts=0.01)
-    poles = [0, -10, -5 + 7j, -5 - 7j]
+    poles = [0, -10, -5 + 3j, -5 - 3j]
 
 
-    bilbo_dynamics.polePlacement(poles=poles, apply_poles_to_system=True)
+    K = bilbo_dynamics.polePlacement(poles=poles, apply_poles_to_system=True)
+    print(K)
 
     t = np.linspace(0, 5, N)  # 5 seconds over N points
     # u = 0.2 * np.sin(2 * np.pi * 0.5 * t)  # 0.2 amplitude, 0.5 Hz frequency

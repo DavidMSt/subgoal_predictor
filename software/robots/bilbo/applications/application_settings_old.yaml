@@ -1,0 +1,32 @@
+extensions:
+  display: true
+  limbobar: true
+  timecode: false
+
+optitrack:
+  enabled: true
+  server: palantir.lan
+
+# Testbed configuration:
+# - type: Name of a predefined testbed (e.g., 'track', 'lab') or null for custom/infinite
+# - size: [width, height] in meters. Only used if type is null. If both are null, defaults to 10x10m
+#testbed:
+#  type: track
+#  size: null
+
+testbed:
+  type: lab
+  size:
+    x: [0, 3]
+    y: [0, 3]
+
+
+# mDNS: Advertises the GUI on the local network via multicast DNS
+# When enabled, other devices can access the GUI via http://<hostname>.local/gui
+# No DNS configuration needed - works automatically on the local network
+mdns:
+  enabled: true
+  hostname: bilbolab  # Will be accessible as bilbolab.local
+  # To access without port (bilbolab.local/gui instead of bilbolab.local:8400/gui),
+  # set use_port_80 to true. This requires running the application with sudo.
+  use_port_80: true

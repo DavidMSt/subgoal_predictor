@@ -1,0 +1,7 @@
+id: "limbo-marker"
+points: [ 1 , 2, 3, 4 ]
+x_start: 3
+x_end: 1
+y_start: 2
+y_end: 4
+limbo_direction: -1.57

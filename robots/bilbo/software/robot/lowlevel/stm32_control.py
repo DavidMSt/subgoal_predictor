@@ -74,12 +74,6 @@ class bilbo_position_control_mode_t(enum.IntEnum):
     FOLLOW_PATH = 3      # Following waypoint path
 
 
-class bilbo_waypoint_type_t(enum.IntEnum):
-    """Waypoint arrival behavior (enum class bilbo_waypoint_type_t : uint8_t)"""
-    PASS = 0  # Smooth transition, corner cutting allowed based on weight
-    STOP = 1  # Must stop at this waypoint
-
-
 class bilbo_path_state_t(enum.IntEnum):
     """Path execution state machine (enum class bilbo_path_state_t : uint8_t)"""
     IDLE = 0     # No path loaded or path completed
@@ -90,7 +84,7 @@ class bilbo_path_state_t(enum.IntEnum):
 class position_control_event_t(enum.IntEnum):
     """Position control events (enum class position_control_event_t : uint8_t)"""
     PATH_STARTED = 0
-    WAYPOINT_PASSED = 1
+    # 1 reserved (was WAYPOINT_PASSED)
     WAYPOINT_REACHED = 2
     WAYPOINT_COMPLETED = 3
     PATH_PAUSED = 4
@@ -105,7 +99,7 @@ class position_control_event_t(enum.IntEnum):
     TURN_TO_HEADING_COMPLETED = 13
     TURN_TO_HEADING_TIMEOUT = 14
     MODE_CHANGED = 15
-    WAYPOINT_BUFFER_FULL = 16
+    PATH_BUFFER_FULL = 16
 
 
 class control_event_t(enum.IntEnum):
@@ -470,24 +464,30 @@ class bilbo_position_state_t(ctypes.Structure):
     ]
 
 
-# --- Waypoint definition ---
+# --- Path point definition (dense path representation) ---
 
 @dataclass
-class bilbo_waypoint:
-    """Single waypoint definition"""
-    x: float = 0.0                                      # [m] world X coordinate
-    y: float = 0.0                                      # [m] world Y coordinate
-    type: bilbo_waypoint_type_t = bilbo_waypoint_type_t.PASS
-    weight: float = 0.75                                # [0-1] corner sharpness (1=sharp, 0=smooth)
+class path_point:
+    """Single path point (x, y)"""
+    x: float = 0.0   # [m] world X coordinate
+    y: float = 0.0   # [m] world Y coordinate
 
 
-class bilbo_waypoint_t(ctypes.Structure):
+class path_point_t(ctypes.Structure):
     _fields_ = [
         ("x", ctypes.c_float),
         ("y", ctypes.c_float),
-        ("type", ctypes.c_uint8),
-        ("weight", ctypes.c_float),
-        ("speed", ctypes.c_float),  # [m/s] max speed for this waypoint (0 = use path default)
+    ]
+
+
+BATCH_SIZE = 10
+
+
+class path_points_batch_t(ctypes.Structure):
+    _fields_ = [
+        ("start_index", ctypes.c_uint16),
+        ("count", ctypes.c_uint16),
+        ("points", path_point_t * BATCH_SIZE),
     ]
 
 
@@ -496,16 +496,18 @@ class bilbo_waypoint_t(ctypes.Structure):
 @dataclass
 class bilbo_path_start_cmd:
     """Command to start path execution"""
-    allow_reverse: int = 0      # If non-zero, robot may drive backwards when more efficient
-    timeout: float = 0.0        # [s] Maximum time for path execution, 0 = no timeout
     max_speed: float = 0.0      # [m/s] Speed override, 0 = use config default
+    max_spacing: float = 0.0    # [m] Max inter-point spacing, 0 = auto-detect
+    timeout: float = 0.0        # [s] Maximum time for path execution, 0 = no timeout
+    allow_reverse: int = 0      # If non-zero, robot may drive backwards when more efficient
 
 
 class bilbo_path_start_cmd_t(ctypes.Structure):
     _fields_ = [
-        ("allow_reverse", ctypes.c_uint8),
-        ("timeout", ctypes.c_float),
         ("max_speed", ctypes.c_float),
+        ("max_spacing", ctypes.c_float),
+        ("timeout", ctypes.c_float),
+        ("allow_reverse", ctypes.c_uint8),
     ]
 
 
@@ -570,12 +572,12 @@ class bilbo_position_control_output_t(ctypes.Structure):
 
 @dataclass
 class bilbo_position_control_config:
-    """Configuration parameters for position control (carrot-chase path following)
+    """Configuration parameters for position control (dense path following)
 
-    Simplified algorithm:
-    - Speed = kp_linear * carrot_distance (simple and robust)
-    - Weight + corner angle determines how carrot advances past waypoints
-    - Reverse mode always enabled with hysteresis
+    Dense path tracking with adaptive speed from sample spacing:
+    - Speed derived from local inter-point spacing (tight curves = slow)
+    - Adaptive lookahead = v_target / kp_linear
+    - Reverse mode optional per-path
     """
 
     # Timing
@@ -588,25 +590,25 @@ class bilbo_position_control_config:
     # Linear control gains (speed toward carrot)
     kp_linear: float = 2.0                  # [1/s] speed = kp_linear * carrot_distance
     ki_linear: float = 0.0                  # [1/s^2] Integral gain (usually 0)
+    kd_linear: float = 0.5                  # [-] Velocity damping
 
     # Speed limits
-    max_speed: float = 0.4                  # [m/s] Maximum forward velocity
+    max_speed: float = 0.5                  # [m/s] Maximum forward velocity
     max_turn_rate: float = 5.0              # [rad/s] Maximum yaw rate
-    speed_transition_time: float = 0.5      # [s] Time to transition between waypoint speeds
 
-    # Lookahead parameters (carrot position)
-    lookahead_base: float = 0.15            # [m] Minimum lookahead distance
-    lookahead_gain: float = 0.3             # [s] Lookahead = base + gain * |velocity|
-    lookahead_max: float = 0.5              # [m] Maximum lookahead distance
+    # Lookahead parameters
+    lookahead_base: float = 0.15            # [m] Base lookahead (used by move_to_point)
+    lookahead_min: float = 0.03             # [m] Minimum lookahead for path following
 
     # Arrival and dwell
     arrival_tolerance: float = 0.05         # [m] Distance to consider "arrived"
-    arrival_dwell_time: float = 0.5         # [s] Hold time at STOP waypoint
+    arrival_dwell_time: float = 0.5         # [s] Hold time at STOP point / path end
 
-    # Reverse mode (always enabled)
+    # Reverse mode
     reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
     reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
-    corner_slowdown_distance: float = 0.5
+
+    # Deceleration
     decel_limit: float = 0.0               # [m/s²] sqrt decel profile. 0 = disabled
 
 
@@ -620,16 +622,14 @@ class bilbo_position_control_config_t(ctypes.Structure):
         ("kd_linear", ctypes.c_float),
         ("max_speed", ctypes.c_float),
         ("max_turn_rate", ctypes.c_float),
-        ("speed_transition_time", ctypes.c_float),  # [s] Time to transition between waypoint speeds
         ("lookahead_base", ctypes.c_float),
-        ("lookahead_gain", ctypes.c_float),
-        ("lookahead_max", ctypes.c_float),
+        ("lookahead_min", ctypes.c_float),
         ("arrival_tolerance", ctypes.c_float),
         ("arrival_dwell_time", ctypes.c_float),
         ("reverse_enter_angle", ctypes.c_float),
         ("reverse_exit_angle", ctypes.c_float),
-        ("corner_slowdown_distance", ctypes.c_float),  # [m] Distance from corner to start slowing
-        ("decel_limit", ctypes.c_float),  # [m/s²] sqrt decel profile. 0 = disabled
+        ("speed_curvature_power", ctypes.c_float),
+        ("decel_limit", ctypes.c_float),
     ]
 
 
@@ -642,12 +642,12 @@ class bilbo_position_control_data:
     path_state: bilbo_path_state_t = bilbo_path_state_t.IDLE
 
     # Buffer status
-    buffer_capacity: int = 0            # maximum waypoints the buffer can hold
-    buffer_used: int = 0                # current number of waypoints in buffer
+    buffer_capacity: int = 0            # maximum path points the buffer can hold
+    buffer_used: int = 0                # current number of path points in buffer
 
     # Path progress
-    waypoint_count: int = 0             # total waypoints in path
-    current_segment: int = 0            # current segment index
+    path_point_count: int = 0           # total path points in path
+    current_index: int = 0              # current path index (floor of progress)
 
     # Carrot (lookahead) position
     carrot_x: float = 0.0               # [m] current carrot X
@@ -665,6 +665,9 @@ class bilbo_position_control_data:
     elapsed_time: float = 0.0           # [s] time since path started
     remaining_path_length: float = 0.0  # [m] approximate remaining distance
 
+    # Dense path progress
+    progress: float = 0.0               # floating-point index [0, N-1]
+
 
 class bilbo_position_control_data_t(ctypes.Structure):
     _fields_ = [
@@ -672,8 +675,8 @@ class bilbo_position_control_data_t(ctypes.Structure):
         ("path_state", ctypes.c_uint8),
         ("buffer_capacity", ctypes.c_uint16),
         ("buffer_used", ctypes.c_uint16),
-        ("waypoint_count", ctypes.c_uint16),
-        ("current_segment", ctypes.c_uint16),
+        ("path_point_count", ctypes.c_uint16),
+        ("current_index", ctypes.c_uint16),
         ("carrot_x", ctypes.c_float),
         ("carrot_y", ctypes.c_float),
         ("carrot_distance", ctypes.c_float),
@@ -682,6 +685,7 @@ class bilbo_position_control_data_t(ctypes.Structure):
         ("output", bilbo_position_control_output_t),
         ("elapsed_time", ctypes.c_float),
         ("remaining_path_length", ctypes.c_float),
+        ("progress", ctypes.c_float),
     ]
 
 

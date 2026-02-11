@@ -82,6 +82,7 @@ from robots.bilbo.robot.experiment.experiment_actions import (
     # Converters (for custom actions)
     parse_time_ms,
     parse_control_mode,
+    normalize_path_points,
     normalize_waypoints,
 )
 
@@ -147,6 +148,7 @@ from robots.bilbo.robot.experiment.experiment_definitions import (
     # Position control helper functions
     move_to,
     turn_to,
+    set_path,
     set_waypoints,
     start_path,
     load_path,
@@ -156,6 +158,7 @@ from robots.bilbo.robot.experiment.experiment_definitions import (
     # Position control action params
     MoveToActionParams,
     TurnToActionParams,
+    SetPathActionParams,
     SetWaypointsActionParams,
     StartPathActionParams,
     LoadPathActionParams,
@@ -164,6 +167,7 @@ from robots.bilbo.robot.experiment.experiment_definitions import (
     FuncActionParams,
     SetFeedbackGainActionParams,
     ResetControlActionParams,
+    PathPointDef,
     WaypointDef,
 
     # File I/O
@@ -196,6 +200,7 @@ __all__ = [
     "get_action_info",
     "parse_time_ms",
     "parse_control_mode",
+    "normalize_path_points",
     "normalize_waypoints",
 
     # Trajectories
@@ -258,6 +263,7 @@ __all__ = [
     # Position control helper functions
     "move_to",
     "turn_to",
+    "set_path",
     "set_waypoints",
     "start_path",
     "load_path",
@@ -267,6 +273,7 @@ __all__ = [
     # Position control action params
     "MoveToActionParams",
     "TurnToActionParams",
+    "SetPathActionParams",
     "SetWaypointsActionParams",
     "StartPathActionParams",
     "LoadPathActionParams",
@@ -275,6 +282,7 @@ __all__ = [
     "FuncActionParams",
     "SetFeedbackGainActionParams",
     "ResetControlActionParams",
+    "PathPointDef",
     "WaypointDef",
 
     # File I/O

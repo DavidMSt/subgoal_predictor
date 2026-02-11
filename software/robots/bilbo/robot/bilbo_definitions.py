@@ -46,6 +46,7 @@ class BILBO_General_Information:
     type: str
     version: str
     color: list | None
+    simulation: bool = False
 
 
 @dataclasses.dataclass
@@ -202,25 +203,23 @@ class VelocityControl_Config:
 
 @dataclasses.dataclass
 class PositionControl_Config:
-    """Configuration for the position controller (carrot-chase path following).
+    """Configuration for the position controller (dense path following).
     Mirrors the on-robot bilbo_control_definitions.PositionControl_Config."""
     Ts: float = 0.01                        # [s] Update period
     kp_angular: float = 10.0                # [rad/s per rad] Proportional gain for angular control
     ki_angular: float = 0.3                 # [rad/s per rad*s] Integral gain for angular control
-    kp_linear: float = 2.0                  # [1/s] Proportional gain (fallback when decel_limit=0)
+    kp_linear: float = 2.0                  # [1/s] Proportional gain: speed = kp_linear * carrot_distance
     ki_linear: float = 0.0                  # [1/s^2] Integral gain for linear control
     kd_linear: float = 0.5                  # [-] Velocity damping: subtracts kd_linear * |current_v| from speed command
     max_speed: float = 0.4                  # [m/s] Maximum forward velocity
     max_turn_rate: float = 5.0              # [rad/s] Maximum yaw rate
-    speed_transition_time: float = 0.5      # [s] Time to smoothly transition between waypoint speeds
-    lookahead_base: float = 0.15            # [m] Minimum lookahead distance
-    lookahead_gain: float = 0.3             # [s] Lookahead = base + gain * |velocity|
-    lookahead_max: float = 0.5              # [m] Maximum lookahead distance
+    lookahead_base: float = 0.15            # [m] Base lookahead (used by move_to_point)
+    lookahead_min: float = 0.03             # [m] Minimum lookahead for path following
     arrival_tolerance: float = 0.05         # [m] Distance to consider "arrived"
-    arrival_dwell_time: float = 0.5         # [s] Hold time at STOP waypoint
+    arrival_dwell_time: float = 0.5         # [s] Hold time at STOP point / path end
     reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
     reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
-    corner_slowdown_distance: float = 0.5   # [m] Distance from corner to start slowing down
+    speed_curvature_power: float = 0.5     # [-] Exponent for spacing→speed mapping (1.0=linear, 0.5=sqrt)
     decel_limit: float = 0.0                # [m/s²] sqrt deceleration profile. 0 = disabled
 
 
@@ -323,28 +322,3 @@ class BILBO_Control_Inputs:
         self.position = BILBO_PositionInput(0, 0)
 
 
-# ======================================================================================================================
-# === OPTITRACK ========================================================================================================
-# ======================================================================================================================
-@dataclasses.dataclass
-class BILBO_OriginConfig:
-    id: str
-    points: list
-    origin: int
-    x_axis_end: int
-    y_axis_end: int
-    marker_size: float
-    offset_x: float = 0.0
-    offset_y: float = 0.0
-    offset_z: float = 0.0
-
-
-@dataclasses.dataclass(kw_only=True)
-class BILBO_LimboMarkerConfig:
-    id: str = 'limbo-marker'
-    points: list
-    x_start: int
-    x_end: int
-    y_start: int
-    y_end: int
-    limbo_direction: float = -np.pi / 2

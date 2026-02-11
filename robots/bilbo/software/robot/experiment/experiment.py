@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 # For backwards compatibility, import from parser
 from robot.experiment.experiment_parser import (
     parse_time_ms as _parse_time,
-    normalize_waypoints as _normalize_waypoints,
+    normalize_path_points as _normalize_path_points,
     get_registry as _get_action_registry,
 )
 
@@ -1411,9 +1411,10 @@ class TurnToAction(ExperimentAction):
 
 
 @dataclasses.dataclass(kw_only=True)
-class SetWaypointsAction(ExperimentAction):
-    """Set waypoints for path following."""
-    waypoints: list = dataclasses.field(default_factory=list)
+class SetPathAction(ExperimentAction):
+    """Set dense path points for path following."""
+    points: list = dataclasses.field(default_factory=list)
+    stop_indices: list = dataclasses.field(default_factory=list)
     clear_existing: bool = True
 
     def execute(self) -> bool:
@@ -1421,47 +1422,52 @@ class SetWaypointsAction(ExperimentAction):
         position_control = self.experiment.experiment_handler.control.position_control
 
         if self.clear_existing:
-            if not position_control.clear_waypoints():
-                self.logger.error("Failed to clear existing waypoints")
-                self._on_error("Failed to clear existing waypoints before adding new ones")
+            if not position_control.clear_path():
+                self.logger.error("Failed to clear existing path")
+                self._on_error("Failed to clear existing path before adding new points")
                 return True
 
-        # Normalize and add waypoints
-        from robot.control.bilbo_position_control import Waypoint, WaypointType
-        for i, wp_dict in enumerate(self.waypoints):
-            wp_type_str = wp_dict.get('type', 'PASS')
-            wp_type = WaypointType.STOP if str(wp_type_str).upper() == 'STOP' else WaypointType.PASS
-            wp = Waypoint(
-                x=wp_dict['x'],
-                y=wp_dict['y'],
-                type=wp_type,
-                weight=wp_dict.get('weight', 0.75)
-            )
-            if not position_control.add_waypoint(wp):
-                self.logger.error(f"Failed to add waypoint ({wp.x}, {wp.y})")
-                self._on_error(f"Failed to add waypoint {i+1}/{len(self.waypoints)} at ({wp.x:.2f}, {wp.y:.2f})")
+        # Add path points
+        for i, pt in enumerate(self.points):
+            x = pt.get('x', pt[0] if isinstance(pt, (list, tuple)) else 0.0)
+            y = pt.get('y', pt[1] if isinstance(pt, (list, tuple)) else 0.0)
+            if not position_control.add_path_point(x, y):
+                self.logger.error(f"Failed to add path point ({x}, {y})")
+                self._on_error(f"Failed to add path point {i+1}/{len(self.points)} at ({x:.3f}, {y:.3f})")
                 return True
 
-        self.logger.info(f"Set {len(self.waypoints)} waypoints")
+        # Add stop indices
+        for idx in self.stop_indices:
+            if not position_control.add_stop_index(idx):
+                self.logger.error(f"Failed to add stop index {idx}")
+                self._on_error(f"Failed to add stop index {idx}")
+                return True
+
+        self.logger.info(f"Set {len(self.points)} path points, {len(self.stop_indices)} stops")
         self._on_finished()
         return True
 
     @classmethod
-    def from_definition(cls, definition: ExperimentActionDefinition) -> "SetWaypointsAction":
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "SetPathAction":
         kwargs = cls._common_init_kwargs(definition)
-        waypoints = definition.parameters.get('waypoints', [])
-        # Normalize waypoints
-        waypoints = _normalize_waypoints(waypoints)
+        points = definition.parameters.get('points', definition.parameters.get('waypoints', []))
+        points = _normalize_path_points(points)
+        stop_indices = definition.parameters.get('stop_indices', [])
         return cls(
             **kwargs,
-            waypoints=waypoints,
+            points=points,
+            stop_indices=stop_indices,
             clear_existing=definition.parameters.get('clear_existing', True),
         )
 
 
+# Backwards-compatible alias
+SetWaypointsAction = SetPathAction
+
+
 @dataclasses.dataclass(kw_only=True)
 class StartPathAction(ExperimentAction):
-    """Start following the loaded waypoint path."""
+    """Start following the loaded dense path."""
     allow_reverse: bool = False
     timeout: float = 0.0
     max_speed: float = 0.0
@@ -1471,18 +1477,9 @@ class StartPathAction(ExperimentAction):
         self._on_started()
         position_control = self.experiment.experiment_handler.control.position_control
 
-        # Store waypoints before starting the path
+        # Store path info before starting
         self.data = {
-            'waypoints': [
-                {
-                    'x': wp.x,
-                    'y': wp.y,
-                    'type': wp.type.name,
-                    'weight': wp.weight,
-                    'speed': wp.speed
-                }
-                for wp in position_control.waypoints
-            ]
+            'path_point_count': position_control.path_point_count,
         }
 
         result = position_control.start_path(
@@ -1582,7 +1579,7 @@ class LoadPathAction(ExperimentAction):
             return True
 
         # Load path from file or dict
-        path_desc = self.path if isinstance(self.path, str) else f"path with {len(self.path.get('waypoints', []))} waypoints"
+        path_desc = self.path if isinstance(self.path, str) else f"path with {len(self.path.get('points', self.path.get('waypoints', [])))} points"
         if isinstance(self.path, str):
             result = position_control.load_path_from_file(
                 filepath=self.path,
@@ -1607,18 +1604,9 @@ class LoadPathAction(ExperimentAction):
             self._on_error(f"Failed to load {path_desc} - position control rejected the path")
             return True
 
-        # Store waypoints after loading the path
+        # Store path info after loading
         self.data = {
-            'waypoints': [
-                {
-                    'x': wp.x,
-                    'y': wp.y,
-                    'type': wp.type.name,
-                    'weight': wp.weight,
-                    'speed': wp.speed
-                }
-                for wp in position_control.waypoints
-            ]
+            'path_point_count': position_control.path_point_count,
         }
 
         if self.start and self.wait:
@@ -1734,9 +1722,8 @@ class WaitPositionEventAction(ExperimentAction):
             'turn_to_heading_started': position_control.events.turn_to_heading_started,
             'turn_to_heading_completed': position_control.events.turn_to_heading_completed,
             'turn_to_heading_timeout': position_control.events.turn_to_heading_timeout,
-            'waypoint_completed': position_control.events.waypoint_completed,
-            'waypoint_reached': position_control.events.waypoint_reached,
-            'waypoint_passed': position_control.events.waypoint_passed,
+            'stop_reached': position_control.events.stop_reached,
+            'stop_completed': position_control.events.stop_completed,
             'mode_changed': position_control.events.mode_changed,
         }
 
@@ -1791,7 +1778,8 @@ EXPERIMENT_ACTION_TYPE_MAPPING = {
     # Position control actions
     "move_to": MoveToAction,
     "turn_to": TurnToAction,
-    "set_waypoints": SetWaypointsAction,
+    "set_waypoints": SetWaypointsAction,  # legacy alias → SetPathAction
+    "set_path": SetPathAction,
     "start_path": StartPathAction,
     "load_path": LoadPathAction,
     "stop_path": StopPathAction,

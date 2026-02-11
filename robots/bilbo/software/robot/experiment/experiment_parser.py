@@ -105,39 +105,33 @@ def parse_heading(val: Any) -> float:
     return float(val)
 
 
-def normalize_waypoints(waypoints: list) -> list[dict]:
-    """Normalize waypoints to list of dicts with x, y, type, weight, speed."""
+def normalize_path_points(points: list) -> list[dict]:
+    """Normalize path points to list of dicts with x, y.
+
+    Supported formats:
+        - [x, y] - coordinate pair (list or tuple)
+        - {"x": x, "y": y} - dict with x, y keys
+        - {"x": x, "y": y, "type": "STOP", ...} - legacy waypoint dict (type/weight ignored)
+    """
     result = []
-    for wp in waypoints:
-        if isinstance(wp, dict):
+    for pt in points:
+        if isinstance(pt, dict):
             normalized = {
-                "x": wp.get("x", 0.0),
-                "y": wp.get("y", 0.0),
-                "type": wp.get("type", "PASS"),
-                "weight": wp.get("weight", 0.75),
-                "speed": wp.get("speed", 0.0),
+                "x": float(pt.get("x", 0.0)),
+                "y": float(pt.get("y", 0.0)),
             }
-        elif isinstance(wp, (list, tuple)):
-            if len(wp) < 2:
-                raise ValueError(f"Waypoint must have at least x, y: {wp}")
-            normalized = {"x": wp[0], "y": wp[1], "type": "PASS", "weight": 0.75, "speed": 0.0}
-            if len(wp) >= 3:
-                if isinstance(wp[2], str):
-                    normalized["type"] = wp[2].upper()
-                else:
-                    normalized["weight"] = wp[2]
-            if len(wp) >= 4:
-                if isinstance(wp[2], str):
-                    normalized["weight"] = wp[3]
-                else:
-                    normalized["type"] = wp[3].upper() if isinstance(wp[3], str) else "PASS"
-            if len(wp) >= 5:
-                # 5th element is speed
-                normalized["speed"] = float(wp[4])
+        elif isinstance(pt, (list, tuple)):
+            if len(pt) < 2:
+                raise ValueError(f"Path point must have at least x, y: {pt}")
+            normalized = {"x": float(pt[0]), "y": float(pt[1])}
         else:
-            raise ValueError(f"Invalid waypoint format: {wp}")
+            raise ValueError(f"Invalid path point format: {pt}")
         result.append(normalized)
     return result
+
+
+# Backwards-compatible alias
+normalize_waypoints = normalize_path_points
 
 
 # ======================================================================================================================
@@ -548,7 +542,7 @@ def _register_builtin_actions():
         EnableExternalInputAction, SetVelocityAction, ResetAction, RunTrajectoryAction,
         SetInputAction, WaitTimeAction, WaitTickAction, WaitUntilTickAction,
         WaitEventAction, ParallelAction, GroupAction, FuncAction, SetFeedbackGainAction,
-        ResetControlAction, MoveToAction, TurnToAction, SetWaypointsAction,
+        ResetControlAction, MoveToAction, TurnToAction, SetPathAction,
         StartPathAction, LoadPathAction, StopPathAction, WaitPositionEventAction
     )
 
@@ -822,16 +816,33 @@ def _register_builtin_actions():
     ))
 
     register_action(ActionEntry(
-        type_name="set_waypoints",
-        action_class=SetWaypointsAction,
+        type_name="set_path",
+        action_class=SetPathAction,
         parameters=[
-            ActionParameter("waypoints", list, default=[], converter=normalize_waypoints),
+            ActionParameter("points", list, default=[], converter=normalize_path_points),
+            ActionParameter("stop_indices", list, default=[]),
             ActionParameter("clear_existing", bool, default=True),
         ],
         shorthands=[
-            ShorthandRule("waypoints", value_key="waypoints", value_converter=normalize_waypoints),
+            ShorthandRule("points", value_key="points", value_converter=normalize_path_points),
         ],
-        description="Set waypoints for path following"
+        description="Set dense path points for path following"
+    ))
+
+    # Legacy alias: set_waypoints → set_path
+    register_action(ActionEntry(
+        type_name="set_waypoints",
+        action_class=SetPathAction,
+        parameters=[
+            ActionParameter("points", list, default=[], converter=normalize_path_points),
+            ActionParameter("waypoints", list, default=[], converter=normalize_path_points),
+            ActionParameter("stop_indices", list, default=[]),
+            ActionParameter("clear_existing", bool, default=True),
+        ],
+        shorthands=[
+            ShorthandRule("waypoints", value_key="points", value_converter=normalize_path_points),
+        ],
+        description="Set path points for path following (legacy alias for set_path)"
     ))
 
     register_action(ActionEntry(

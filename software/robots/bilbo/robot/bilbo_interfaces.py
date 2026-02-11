@@ -618,33 +618,11 @@ class BILBO_CLI_CommandSet(CommandSet):
             ]
         )
 
-        # Waypoint management commands
-        clear_waypoints_command = Command(
-            name='clearWp',
-            function=self.position_control.clear_waypoints,
-            description='Clear all waypoints',
-            arguments=[]
-        )
-
-        add_waypoint_command = Command(
-            name='addWp',
-            function=self.position_control.add_waypoint,
-            description='Add a waypoint (type: 0=PASS, 1=STOP)',
-            allow_positionals=True,
-            arguments=[
-                CommandArgument(name='x', type=float, description='X coordinate [m]'),
-                CommandArgument(name='y', type=float, description='Y coordinate [m]'),
-                CommandArgument(name='type', short_name='T', type=int, optional=True, default=0,
-                                description='Type: 0=PASS, 1=STOP'),
-                CommandArgument(name='weight', short_name='w', type=float, optional=True, default=0.75,
-                                description='Corner sharpness [0-1]'),
-            ]
-        )
-
-        list_waypoints_command = Command(
-            name='listWp',
-            function=self._print_waypoints,
-            description='List current waypoints',
+        # Path management commands
+        clear_path_command = Command(
+            name='clearPath',
+            function=self.position_control.clear_path,
+            description='Clear all path points',
             arguments=[]
         )
 
@@ -652,7 +630,7 @@ class BILBO_CLI_CommandSet(CommandSet):
         start_path_command = Command(
             name='start',
             function=self.position_control.start_path,
-            description='Start following waypoint path',
+            description='Start following loaded path',
             arguments=[
                 CommandArgument(name='allow_reverse', short_name='r', type=bool, optional=True, default=False,
                                 description='Allow reverse driving'),
@@ -713,13 +691,47 @@ class BILBO_CLI_CommandSet(CommandSet):
             ]
         )
 
+        # Plan and follow command
+        go_to_command = Command(
+            name='goTo',
+            function=self._plan_and_follow,
+            description='Plan path to target and follow it. Use --wp for waypoints: "x,y; x,y,weight; x,y,weight,STOP"',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='x', type=float, description='Target X coordinate [m]'),
+                CommandArgument(name='y', type=float, description='Target Y coordinate [m]'),
+                CommandArgument(name='wp', short_name='w', type=str, optional=True, default='',
+                                description='Waypoints: "x,y; x,y,weight; x,y,weight,STOP" (semicolon-separated)'),
+                CommandArgument(name='max_speed', short_name='s', type=float, optional=True, default=0.0,
+                                description='Max speed [m/s] (0=default)'),
+                CommandArgument(name='timeout', short_name='t', type=float, optional=True, default=0.0,
+                                description='Timeout [s] (0=none)'),
+                CommandArgument(name='allow_reverse', short_name='r', type=bool, optional=True, default=False,
+                                description='Allow reverse driving'),
+            ]
+        )
+
+        # Plan path (preview only) command
+        plan_path_command = Command(
+            name='planPath',
+            function=self._plan_path,
+            description='Plan path to target (preview only, does not drive). Use --wp for waypoints: "x,y; x,y,weight; x,y,weight,STOP"',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='x', type=float, description='Target X coordinate [m]'),
+                CommandArgument(name='y', type=float, description='Target Y coordinate [m]'),
+                CommandArgument(name='wp', short_name='w', type=str, optional=True, default='',
+                                description='Waypoints: "x,y; x,y,weight; x,y,weight,STOP" (semicolon-separated)'),
+            ]
+        )
+
         # Add all commands to navigation set
         navigation_command_set.addCommand(position_mode_command)
         navigation_command_set.addCommand(move_to_command)
         navigation_command_set.addCommand(turn_to_command)
-        navigation_command_set.addCommand(clear_waypoints_command)
-        navigation_command_set.addCommand(add_waypoint_command)
-        navigation_command_set.addCommand(list_waypoints_command)
+        navigation_command_set.addCommand(go_to_command)
+        navigation_command_set.addCommand(plan_path_command)
+        navigation_command_set.addCommand(clear_path_command)
         navigation_command_set.addCommand(start_path_command)
         navigation_command_set.addCommand(pause_path_command)
         navigation_command_set.addCommand(resume_path_command)
@@ -804,19 +816,6 @@ class BILBO_CLI_CommandSet(CommandSet):
         log_velocity_channel("Angular velocity (psidot)", cfg.psidot)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _print_waypoints(self):
-        """Print current waypoint list"""
-        waypoints = self.position_control.get_waypoints()
-        if not waypoints:
-            self.core.logger.info("No waypoints in queue")
-            return
-
-        self.core.logger.info(f"Waypoints ({len(waypoints)}):")
-        for i, wp in enumerate(waypoints):
-            type_name = "STOP" if wp.type.value == 1 else "PASS"
-            self.core.logger.info(f"  [{i}] ({wp.x:.3f}, {wp.y:.3f}) {type_name} w={wp.weight:.2f}")
-
-    # ------------------------------------------------------------------------------------------------------------------
     def _print_position_control_state(self):
         """Print current position control state"""
         state = self.position_control.get_state()
@@ -827,8 +826,8 @@ class BILBO_CLI_CommandSet(CommandSet):
         self.core.logger.info("Position Control State:")
         self.core.logger.info(f"  Mode: {state.get('mode_name', 'UNKNOWN')} ({state.get('mode', -1)})")
         self.core.logger.info(f"  Path State: {state.get('path_state', 0)}")
-        self.core.logger.info(f"  Waypoints: {state.get('waypoint_count', 0)}")
-        self.core.logger.info(f"  Current Index: {state.get('current_waypoint_index', 0)}")
+        self.core.logger.info(f"  Path Points: {state.get('path_point_count', 0)}")
+        self.core.logger.info(f"  Current Index: {state.get('current_index', 0)}")
         self.core.logger.info(f"  Is Busy: {state.get('is_busy', False)}")
 
         # Print data if available
@@ -836,9 +835,9 @@ class BILBO_CLI_CommandSet(CommandSet):
         if data:
             self.core.logger.info("  Telemetry:")
             self.core.logger.info(f"    Carrot: ({data.get('carrot_x', 0):.3f}, {data.get('carrot_y', 0):.3f})")
-            self.core.logger.info(f"    Cross-track error: {data.get('cross_track_error', 0):.3f} m")
             self.core.logger.info(f"    Heading error: {data.get('heading_error', 0):.3f} rad")
             self.core.logger.info(f"    Speed limit: {data.get('speed_limit', 0):.3f} m/s")
+            self.core.logger.info(f"    Progress: {data.get('progress', 0):.1f}")
             self.core.logger.info(f"    Elapsed time: {data.get('elapsed_time', 0):.2f} s")
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -854,3 +853,65 @@ class BILBO_CLI_CommandSet(CommandSet):
             self.core.logger.info(f"Path loaded from {file}" + (" and started" if start else ""))
         else:
             self.core.logger.error(f"Failed to load path from {file}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _plan_and_follow(self, x: float, y: float, wp: str = '',
+                         max_speed: float = 0.0,
+                         timeout: float = 0.0,
+                         allow_reverse: bool = False):
+        """Plan path to target and follow it"""
+        waypoints = self._parse_waypoints_string(wp) if wp else None
+        result = self.position_control.plan_and_follow(
+            target=(x, y),
+            waypoints=waypoints,
+            max_speed=max_speed,
+            timeout=timeout,
+            allow_reverse=allow_reverse,
+        )
+        if result:
+            wp_str = f" with {len(waypoints)} waypoints" if waypoints else ""
+            self.core.logger.info(f"Planning and following path to ({x:.2f}, {y:.2f}){wp_str}")
+        else:
+            self.core.logger.error(f"Failed to plan and follow path to ({x:.2f}, {y:.2f})")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _plan_path(self, x: float, y: float, wp: str = ''):
+        """Plan path to target (preview only, does not drive)"""
+        waypoints = self._parse_waypoints_string(wp) if wp else None
+        result = self.position_control.plan_path(target=(x, y), waypoints=waypoints)
+        if result:
+            wp_str = f" with {len(waypoints)} waypoints" if waypoints else ""
+            self.core.logger.info(f"Planned path to ({x:.2f}, {y:.2f}){wp_str}")
+        else:
+            self.core.logger.error(f"Failed to plan path to ({x:.2f}, {y:.2f})")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _parse_waypoints_string(wp_str: str) -> list[dict] | None:
+        """Parse waypoint string into list of dicts.
+        Format: "x,y; x,y,weight; x,y,weight,STOP" (semicolon-separated)
+        Each entry: x,y[,weight[,type]]  where type is PASS or STOP (default PASS)
+        """
+        if not wp_str or not wp_str.strip():
+            return None
+        waypoints = []
+        for entry in wp_str.split(';'):
+            entry = entry.strip()
+            if not entry:
+                continue
+            parts = [p.strip() for p in entry.split(',')]
+            if len(parts) < 2:
+                continue
+            wp = {'x': float(parts[0]), 'y': float(parts[1])}
+            if len(parts) >= 3:
+                # Check if third part is a type string or a weight
+                third = parts[2].strip().upper()
+                if third in ('PASS', 'STOP'):
+                    wp['type'] = third
+                else:
+                    wp['weight'] = float(parts[2])
+            if len(parts) >= 4:
+                wp['type'] = parts[3].strip().upper()
+            waypoints.append(wp)
+        return waypoints if waypoints else None
+

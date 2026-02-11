@@ -96,7 +96,7 @@ velocity_control:
       output_limit: 0.0
       enable_output_slew: false
       output_slew_rate: 0.0
-position_control: # Carrot-chase path following
+position_control: # Dense path following (pure pursuit)
   kp_angular: 8.0                     # [(rad/s)/rad] Heading error proportional gain
   ki_angular: 0.25                    # [(rad/s)/(rad*s)] Heading error integral gain
   kp_linear: 0.0                      # [1/s] Speed proportional gain (unused when decel_limit > 0)
@@ -104,12 +104,11 @@ position_control: # Carrot-chase path following
   kd_linear: 0.5                      # [-] Velocity damping factor
   max_speed: 0.6                      # [m/s] Maximum forward velocity
   max_turn_rate: 5.0                  # [rad/s] Maximum yaw rate
-  lookahead_base: 1                   # [m] Minimum lookahead distance
-  lookahead_gain: 0.0                 # [s] Speed-dependent lookahead (0 = fixed lookahead)
-  lookahead_max: 1                    # [m] Maximum lookahead distance
+  lookahead_base: 0.15                # [m] Base lookahead distance (scaled by speed for path following)
+  lookahead_min: 0.03                 # [m] Minimum lookahead distance for path following
+  speed_curvature_power: 0.5           # [-] Exponent for spacing→speed mapping (1.0=linear, 0.5=sqrt)
   arrival_tolerance: 0.05             # [m] Distance to consider arrived
   arrival_dwell_time: 0.5             # [s] Hold time at STOP waypoints
   reverse_enter_angle: 2.1            # [rad] Enter reverse mode (~120 deg)
   reverse_exit_angle: 1.05            # [rad] Exit reverse mode (~60 deg)
-  corner_slowdown_distance: 0.5       # [m] Start slowing this far from corners
   decel_limit: 0.6                    # [m/s^2] Sqrt deceleration profile (0 = use kp_linear instead)

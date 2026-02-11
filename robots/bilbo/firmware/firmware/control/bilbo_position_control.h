@@ -11,30 +11,30 @@
  *  This module provides three position control modes:
  *  1. TURN_TO_HEADING: Rotate in place to a target heading
  *  2. DRIVE_TO_POINT:  Drive to a single XY position
- *  3. FOLLOW_PATH:     Follow a sequence of waypoints using carrot-chase
+ *  3. FOLLOW_PATH:     Follow a dense pre-planned path using pure pursuit
  *
  *  PATH FOLLOWING ALGORITHM (FOLLOW_PATH mode)
  *  ===========================================
- *  Simple carrot-chase (pure pursuit) approach:
+ *  Dense path tracking with adaptive speed from sample spacing:
  *
- *  1. CARROT determines both DIRECTION and SPEED
- *     - Carrot moves along path segments (lines between waypoints)
- *     - Robot steers toward carrot point
- *     - Speed scales with carrot distance (closer = slower)
+ *  1. PATH is a dense array of (x,y) points (5-100mm spacing)
+ *     - Curvature is encoded in sample spacing (tight curves = closer points)
+ *     - Up to 1024 points, with up to 16 explicit STOP indices
  *
- *  2. WAYPOINT WEIGHTS control corner behavior
- *     - weight=1.0: Carrot stops at waypoint until robot arrives (sharp corner)
- *     - weight=0.0: Carrot can advance freely to next segment (smooth)
- *     - Corner angle modulates weight effect: straight paths don't slow down
+ *  2. SPEED derived from local inter-point spacing (power law)
+ *     - ratio = (spacing - MIN_SPACING) / (max_spacing - MIN_SPACING)
+ *     - v_target = max_speed * ratio^alpha  (alpha = speed_curvature_power)
+ *     - Boundaries: max_spacing → max_speed, MIN_SPACING (5mm) → 0
+ *     - Deceleration profile near STOP points and path end
  *
- *  3. REVERSE MODE always enabled
+ *  3. PURE PURSUIT with adaptive lookahead
+ *     - lookahead = v_target / kp_linear (clamped to lookahead_min)
+ *     - Carrot placed along path at lookahead distance ahead of robot
+ *     - Robot steers toward carrot, speed from spacing
+ *
+ *  4. REVERSE MODE (optional, per path command)
  *     - Robot drives backwards when target is behind it
  *     - Hysteresis prevents oscillation at switching boundary
- *
- *  WAYPOINT TYPES
- *  ==============
- *  - PASS: Smooth transition, corner cutting based on weight
- *  - STOP: Robot must stop at this waypoint (last waypoint is always STOP)
  *
  *  COORDINATE SYSTEM
  *  =================
@@ -52,8 +52,14 @@
 #include "bilbo_message.h"
 #include "firmware_addresses.h"
 
-// Maximum number of waypoints that can be stored in the path buffer
-#define BILBO_POSITION_CONTROL_MAX_WAYPOINTS 64
+// Maximum number of path points
+#define BILBO_POSITION_CONTROL_MAX_PATH_POINTS 1024
+
+// Maximum number of stop indices
+#define BILBO_POSITION_CONTROL_MAX_STOPS 16
+
+// Maximum number of points per UART batch
+#define BILBO_POSITION_CONTROL_BATCH_SIZE 10
 
 // ============================================================================
 // ENUMERATIONS
@@ -66,23 +72,7 @@ enum class bilbo_position_control_mode_t : uint8_t {
 	IDLE = 0,  // No active command, outputs zero
 	TURN_TO_HEADING = 1,  // Rotating in place to target heading
 	DRIVE_TO_POINT = 2,  // Driving to a single point
-	FOLLOW_PATH = 3   // Following waypoint path
-};
-
-/**
- * @brief Waypoint arrival behavior
- *
- * PASS: Robot smoothly transitions through this waypoint. The waypoint's
- *       weight parameter controls how tightly the robot follows the corner
- *       (weight=1 = sharp, weight=0 = smooth cut).
- *
- * STOP: Robot must come to a complete stop at this waypoint and optionally
- *       dwell for a specified time before proceeding. The last waypoint in
- *       a path is always treated as STOP regardless of this setting.
- */
-enum class bilbo_waypoint_type_t : uint8_t {
-	PASS = 0,  // Smooth transition, corner cutting allowed based on weight
-	STOP = 1   // Must stop at this waypoint
+	FOLLOW_PATH = 3   // Following dense path
 };
 
 /**
@@ -99,9 +89,9 @@ enum class bilbo_path_state_t : uint8_t {
  */
 enum class position_control_event_t : uint8_t {
 	PATH_STARTED = 0,   // Path execution started
-	WAYPOINT_PASSED = 1,   // Robot passed through a waypoint (carrot advanced)
-	WAYPOINT_REACHED = 2, // Robot entered waypoint's arrival tolerance (for STOP points)
-	WAYPOINT_COMPLETED = 3,   // Waypoint fully completed (dwell finished)
+	// 1 reserved (was WAYPOINT_PASSED)
+	WAYPOINT_REACHED = 2, // Robot within tolerance of STOP point
+	WAYPOINT_COMPLETED = 3,   // Dwell finished at STOP point
 	PATH_PAUSED = 4,   // Path execution paused
 	PATH_RESUMED = 5,   // Path execution resumed
 	PATH_FINISHED = 6,   // Path completed successfully
@@ -114,7 +104,7 @@ enum class position_control_event_t : uint8_t {
 	TURN_TO_HEADING_COMPLETED = 13, // Turn-to-heading completed
 	TURN_TO_HEADING_TIMEOUT = 14,   // Turn-to-heading timed out
 	MODE_CHANGED = 15,   // Position control mode changed
-	WAYPOINT_BUFFER_FULL = 16   // Waypoint buffer is full, add_waypoint failed
+	PATH_BUFFER_FULL = 16   // Path buffer is full
 };
 
 // ============================================================================
@@ -122,41 +112,38 @@ enum class position_control_event_t : uint8_t {
 // ============================================================================
 
 /**
- * @brief Single waypoint definition
- *
- * @param x      World X coordinate [m]
- * @param y      World Y coordinate [m]
- * @param type   PASS or STOP behavior
- * @param weight Corner sharpness factor [0-1]:
- *               - 1.0: Robot must pass close to this point (sharp corner)
- *               - 0.5: Moderate corner cutting allowed
- *               - 0.0: Maximum corner cutting (smooth wide arc)
- *               Only affects PASS waypoints; STOP waypoints always use weight=1.0
- * @param speed  Maximum speed for approaching this waypoint [m/s]:
- *               - 0.0: Use path's max_speed setting (default)
- *               - >0:  Override with this specific speed limit
- *               Speed transitions smoothly between waypoints.
- *               Corner angle slowdown still applies (takes minimum).
+ * @brief Single path point (dense path representation)
  */
-struct bilbo_waypoint_t {
-	float x;                        // [m] world X coordinate
-	float y;                        // [m] world Y coordinate
-	bilbo_waypoint_type_t type;     // waypoint semantics
-	float weight;                   // [0-1] corner sharpness (1=sharp, 0=smooth)
-	float speed;                    // [m/s] max speed to this waypoint (0 = use path default)
+struct path_point_t {
+	float x;  // [m] world X coordinate
+	float y;  // [m] world Y coordinate
+};
+
+/**
+ * @brief Batch of path points for UART transfer
+ *
+ * Allows writing up to BATCH_SIZE points at a specific offset in the path buffer.
+ * The last batch may have count < BATCH_SIZE.
+ */
+struct path_points_batch_t {
+	uint16_t start_index;  // write offset into _path_buffer
+	uint16_t count;        // number of valid points (1..BATCH_SIZE)
+	path_point_t points[BILBO_POSITION_CONTROL_BATCH_SIZE];
 };
 
 /**
  * @brief Command to start path execution
  *
- * @param allow_reverse  If non-zero, robot may drive backwards when more efficient
- * @param timeout        Maximum time for path execution [s], 0 = no timeout
  * @param max_speed      Speed override [m/s], 0 = use config default
+ * @param max_spacing    Maximum inter-point spacing [m], 0 = auto-detect from path
+ * @param timeout        Maximum time for path execution [s], 0 = no timeout
+ * @param allow_reverse  If non-zero, robot may drive backwards when more efficient
  */
 struct bilbo_path_start_cmd_t {
+	float max_speed = 0.0f;
+	float max_spacing = 0.0f;
+	float timeout = 0.0f;
 	uint8_t allow_reverse = 0;
-	float timeout = 0;
-	float max_speed = 0;
 };
 
 /**
@@ -224,38 +211,39 @@ struct bilbo_position_control_config_t {
 
 	float max_speed = 0.5f;   // [m/s] Maximum forward velocity
 	float max_turn_rate = 5.0f;     // [rad/s] Maximum yaw rate
-	float speed_transition_time = 0.5f;  // [s] Time to smoothly transition between waypoint speeds
 
 	// -------------------------------------------------------------------------
 	// LOOKAHEAD PARAMETERS
 	// -------------------------------------------------------------------------
 
-	float lookahead_base = 0.15f;   // [m] Minimum lookahead distance
-	float lookahead_gain = 0.3f;    // [s] Lookahead = base + gain * |velocity|
-	float lookahead_max = 0.5f;     // [m] Maximum lookahead distance
+	float lookahead_base = 0.15f;   // [m] Base lookahead distance (used by move_to_point)
+	float lookahead_min = 0.03f;    // [m] Minimum lookahead distance for path following
 
 	// -------------------------------------------------------------------------
 	// ARRIVAL AND DWELL
 	// -------------------------------------------------------------------------
 
 	float arrival_tolerance = 0.05f; // [m] Distance to consider "arrived"
-	float arrival_dwell_time = 0.5f; // [s] Time to hold at STOP waypoint
+	float arrival_dwell_time = 0.5f; // [s] Time to hold at STOP point / path end
 
 	// -------------------------------------------------------------------------
-	// REVERSE MODE (always enabled)
+	// REVERSE MODE
 	// -------------------------------------------------------------------------
 
 	float reverse_enter_angle = 2.1f;  // [rad] ~120 deg - enter reverse mode
 	float reverse_exit_angle = 1.05f;  // [rad] ~60 deg - exit reverse mode
 
 	// -------------------------------------------------------------------------
-	// CORNER HANDLING
+	// SPEED-FROM-CURVATURE (path following)
 	// -------------------------------------------------------------------------
 
-	float corner_slowdown_distance = 0.5f;  // [m] Distance from corner to start slowing down
+	float speed_curvature_power = 0.5f;  // [-] Exponent for spacing→speed mapping. 1.0 = linear, 0.5 = sqrt (gentler)
 
-	// SQRT DECELERATION PROFILE
-	float decel_limit = 0.0f;  // [m/s²] Max deceleration for sqrt profile. 0 = disabled (use linear kp*d)
+	// -------------------------------------------------------------------------
+	// DECELERATION
+	// -------------------------------------------------------------------------
+
+	float decel_limit = 0.0f;  // [m/s^2] Max deceleration for sqrt profile. 0 = disabled (use linear kp*d)
 };
 
 /**
@@ -266,12 +254,12 @@ struct bilbo_position_control_data_t {
 	bilbo_path_state_t path_state;
 
 	// Buffer status
-	uint16_t buffer_capacity;          // maximum waypoints the buffer can hold
-	uint16_t buffer_used;              // current number of waypoints in buffer
+	uint16_t buffer_capacity;          // maximum path points the buffer can hold
+	uint16_t buffer_used;              // current number of path points in buffer
 
 	// Path progress
-	uint16_t waypoint_count;           // total waypoints in path
-	uint16_t current_segment;         // current segment index (0 = start->wp[0])
+	uint16_t path_point_count;         // total path points in path
+	uint16_t current_index;            // current path index (floor of progress)
 
 	// Carrot (lookahead) position
 	float carrot_x;                    // [m] current carrot X
@@ -288,6 +276,9 @@ struct bilbo_position_control_data_t {
 	// Timing
 	float elapsed_time;                // [s] time since path started
 	float remaining_path_length;       // [m] approximate remaining distance
+
+	// Dense path progress
+	float progress;                    // floating-point index [0, N-1]
 };
 
 /**
@@ -297,7 +288,7 @@ struct position_control_event_data_t {
 	position_control_event_t event;
 	bilbo_position_control_data_t data;
 	uint32_t tick;
-	uint16_t waypoint_index;           // index of waypoint for waypoint events
+	uint16_t waypoint_index;           // index of path point for stop events
 	uint8_t command_id;                // command ID for single-point commands
 };
 
@@ -311,9 +302,8 @@ BILBO_MESSAGE_POSITION_CONTROL_EVENT> BILBO_Message_PositionControl_Event;
  * @brief Callback containers for position control events
  */
 struct bilbo_position_control_callbacks_t {
-	core_utils_CallbackContainer<4, uint16_t> waypoint_passed;    // arg: waypoint index
-	core_utils_CallbackContainer<4, uint16_t> waypoint_reached;   // arg: waypoint index
-	core_utils_CallbackContainer<4, uint16_t> waypoint_completed; // arg: waypoint index
+	core_utils_CallbackContainer<4, uint16_t> stop_reached;     // arg: path index
+	core_utils_CallbackContainer<4, uint16_t> stop_completed;   // arg: path index
 	core_utils_CallbackContainer<4, uint8_t> path_finished;       // arg: command id
 	core_utils_CallbackContainer<4, uint8_t> path_timeout;        // arg: command id
 	core_utils_CallbackContainer<4, uint8_t> path_aborted;        // arg: command id
@@ -326,8 +316,10 @@ struct bilbo_position_control_callbacks_t {
 
 class BILBO_PositionControl {
 public:
-	static constexpr uint16_t WAYPOINT_BUFFER_SIZE =
-			BILBO_POSITION_CONTROL_MAX_WAYPOINTS;
+	static constexpr uint16_t PATH_BUFFER_SIZE =
+			BILBO_POSITION_CONTROL_MAX_PATH_POINTS;
+	static constexpr uint8_t MAX_STOPS =
+			BILBO_POSITION_CONTROL_MAX_STOPS;
 
 	BILBO_PositionControl();
 
@@ -346,18 +338,17 @@ public:
 	bool move_to_point(const move_to_point_command_t &command);
 
 	// =========================================================================
-	// PATH FOLLOWING
+	// PATH MANAGEMENT
 	// =========================================================================
 
-	void clear_waypoints();
-	bool add_waypoint(const bilbo_waypoint_t &waypoint);
-	bool add_waypoint_xy(float x, float y, bilbo_waypoint_type_t type =
-			bilbo_waypoint_type_t::PASS, float weight = 0.75f, float speed = 0.0f);
-	uint16_t get_waypoint_count() const;
-	bilbo_waypoint_t get_current_waypoint() const;
+	void clear_path();
+	bool add_path_point(float x, float y);
+	bool add_path_points_batch(const path_points_batch_t &batch);
+	bool set_path(const path_point_t *pts, uint16_t count);
+	bool add_stop_index(uint16_t index);
+	uint16_t get_path_point_count() const;
 
-	bool start_path(const bilbo_path_start_cmd_t &command,
-			const bilbo_position_state_t &start_state);
+	bool start_path(const bilbo_path_start_cmd_t &command);
 	void pause_path();
 	void resume_path();
 	void abort_path();
@@ -405,33 +396,30 @@ private:
 	bilbo_path_start_cmd_t _active_path_command;
 
 	// =========================================================================
-	// WAYPOINT BUFFER
+	// PATH BUFFER
 	// =========================================================================
 
-	bilbo_waypoint_t _waypoint_buffer[WAYPOINT_BUFFER_SIZE];
-	uint16_t _waypoint_count = 0;
+	path_point_t _path_buffer[PATH_BUFFER_SIZE];     // 8 KB
+	float _cumul_dist[PATH_BUFFER_SIZE];             // 4 KB (precomputed at start)
+	uint16_t _stop_indices[MAX_STOPS];               // 32 B
+	uint16_t _path_count = 0;
+	uint8_t _stop_count = 0;
 
 	// =========================================================================
 	// PATH STATE
 	// =========================================================================
 
 	bilbo_path_state_t _path_state = bilbo_path_state_t::IDLE;
-	uint16_t _current_segment = 0;         // Index of segment (0 = start->wp[0])
 
-	// Start position (where robot was when path started)
-	float _start_x = 0.0f;
-	float _start_y = 0.0f;
+	float _progress = 0.0f;             // floating-point index [0, N-1]
+	float _path_max_speed = 0.0f;       // resolved max speed for this path
+	float _path_max_spacing = 0.0f;     // max inter-point spacing
+	float _path_total_length = 0.0f;    // total arc length
+	uint8_t _next_stop_ptr = 0;         // index into _stop_indices
 
-	// Carrot position (on current segment)
+	// Carrot position
 	float _carrot_x = 0.0f;
 	float _carrot_y = 0.0f;
-	float _carrot_t = 0.0f;    // Parameter [0,1] along current segment
-
-	// =========================================================================
-	// PATH GEOMETRY (cached)
-	// =========================================================================
-
-	float _segment_lengths[WAYPOINT_BUFFER_SIZE];
 
 	// =========================================================================
 	// CONTROL STATE
@@ -443,45 +431,23 @@ private:
 	float _elapsed_time = 0.0f;
 	bool _reverse_mode_active = false;
 
-	// Speed transition state (for per-waypoint speed limits)
-	float _current_speed_limit = 0.0f;    // [m/s] Current smoothed speed limit
-	float _target_speed_limit = 0.0f;     // [m/s] Target speed for current waypoint
-
-	// STOP waypoint event tracking (to send WAYPOINT_REACHED only once)
-	bool _waypoint_reached_sent = false;  // True if WAYPOINT_REACHED already sent for current waypoint
+	// STOP point event tracking
+	bool _stop_reached_sent = false;
 
 	// =========================================================================
 	// PRIVATE METHODS - PATH GEOMETRY
 	// =========================================================================
 
-	void _compute_segment_lengths();
-	void _get_segment_points(uint16_t segment_idx, float &ax, float &ay,
-			float &bx, float &by) const;
-	float _compute_corner_angle_at(uint16_t waypoint_idx) const;
+	void _compute_cumulative_distances();
 
 	// =========================================================================
-	// PRIVATE METHODS - CARROT ADVANCEMENT
+	// PRIVATE METHODS - PATH TRACKING HELPERS
 	// =========================================================================
 
-	void _advance_carrot(const bilbo_position_state_t &robot_state,
-			float lookahead);
-	float _project_robot_to_segment(const bilbo_position_state_t &robot_state,
-			uint16_t segment_idx) const;
-
-	// =========================================================================
-	// PRIVATE METHODS - CONTROL
-	// =========================================================================
-
-	bilbo_position_control_output_t _compute_control(
-			const bilbo_position_state_t &robot_state, float current_v);
-	float _compute_lookahead(float v) const;
-
-	// =========================================================================
-	// PRIVATE METHODS - ARRIVAL/COMPLETION
-	// =========================================================================
-
-	bool _check_final_arrival(const bilbo_position_state_t &robot_state);
-	void _check_intermediate_stop(const bilbo_position_state_t &robot_state);
+	float _project_onto_path(float robot_x, float robot_y, float last_progress) const;
+	float _advance_along_path(float from_progress, float distance_meters) const;
+	void _interpolate_path(float progress, float &out_x, float &out_y) const;
+	float _cumul_dist_at(float progress) const;
 
 	// =========================================================================
 	// PRIVATE METHODS - MODE TRANSITIONS
@@ -494,9 +460,8 @@ private:
 	// =========================================================================
 
 	void _on_path_started();
-	void _on_waypoint_passed(uint16_t waypoint_idx);
-	void _on_waypoint_reached(uint16_t waypoint_idx);
-	void _on_waypoint_completed(uint16_t waypoint_idx);
+	void _on_stop_reached(uint16_t path_idx);
+	void _on_stop_completed(uint16_t path_idx);
 	void _on_path_finished();
 	void _on_path_timeout();
 	void _on_path_aborted();

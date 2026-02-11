@@ -320,10 +320,25 @@ class Device:
         container = message.data.get('container', None)
         uid = message.data.get('event_uid', None)
         flags = message.data.get('flags', {})
-        data = message.data.get('data', None)
+
+        # For raw events (not using WifiEventData structure), fall back to message.event
+        # as both event_id and container, and wrap the payload for event subscribers
+        # so they always see {'event': ..., 'container': ..., 'data': ...} uniformly.
+        # Do NOT mutate message.data — callbacks receive the original message object.
+        event_set_data = message.data
+        if event_id is None and message.event:
+            event_id = message.event
+            container = message.event
+            event_set_data = {
+                'event': event_id,
+                'container': container,
+                'event_uid': event_id,
+                'flags': {},
+                'data': message.data,
+            }
 
         self.callbacks.event.call(message)
-        self.events.event.set(data=message.data, flags={'event': event_id, 'container': container, 'uid': uid, 'flags': flags})
+        self.events.event.set(data=event_set_data, flags={'event': event_id, 'container': container, 'uid': uid, 'flags': flags})
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleStreamMessage(self, message: JSON_Message):

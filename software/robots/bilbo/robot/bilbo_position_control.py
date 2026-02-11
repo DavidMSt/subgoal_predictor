@@ -5,10 +5,13 @@ Host-side interface to the position control subsystem on the robot.
 Receives events via WiFi and maintains a local representation of the controller state.
 """
 
+import base64
 import dataclasses
 import enum
 import json
 import os
+import struct
+import zlib
 
 import yaml
 
@@ -37,44 +40,17 @@ class PathState(enum.IntEnum):
     PAUSED = 2
 
 
-class WaypointType(enum.IntEnum):
-    """Waypoint arrival behavior"""
-    PASS = 0  # Smooth transition, corner cutting allowed
-    STOP = 1  # Must stop at this waypoint
-
-
 # =============================================================================
 # DATA CLASSES
 # =============================================================================
-
-@dataclasses.dataclass
-class Waypoint:
-    """A single waypoint in the path
-
-    Attributes:
-        x: World X coordinate [m]
-        y: World Y coordinate [m]
-        type: PASS (smooth transition) or STOP (must stop at waypoint)
-        weight: Corner sharpness [0-1], 1=sharp corner, 0=smooth cut
-        speed: Maximum speed when approaching this waypoint [m/s].
-               0 means use the path's default max_speed setting.
-               Speed transitions smoothly between waypoints (~0.5s).
-               Corner angle slowdown still applies (takes minimum).
-    """
-    x: float
-    y: float
-    type: WaypointType = WaypointType.PASS
-    weight: float = 0.75
-    speed: float = 0.0
-
 
 @dataclasses.dataclass
 class PositionControlState:
     """Current state of the position controller"""
     mode: PositionControlMode = PositionControlMode.IDLE
     path_state: PathState = PathState.IDLE
-    waypoint_count: int = 0
-    current_waypoint_index: int = 0
+    path_point_count: int = 0
+    current_index: int = 0
     is_busy: bool = False
 
 
@@ -101,8 +77,12 @@ class TurnToHeadingCommand:
 @dataclasses.dataclass
 class PathData:
     """Data for loaded/active path"""
-    waypoints: list[Waypoint] = dataclasses.field(default_factory=list)
+    path_point_count: int = 0
+    stop_indices: list[int] = dataclasses.field(default_factory=list)
+    path_points: list[tuple[float, float]] = dataclasses.field(default_factory=list)
+    waypoints: list[dict] = dataclasses.field(default_factory=list)
     max_speed: float = 0.0
+    max_spacing: float = 0.0
     allow_reverse: bool = False
     timeout: float = 0.0
 
@@ -123,13 +103,12 @@ class PositionControlEvents:
     path_aborted: Event
     path_timeout: Event
 
-    # Waypoint events - data contains waypoint info dict
-    waypoint_passed: Event = Event(copy_data_on_set=False)
-    waypoint_reached: Event = Event(copy_data_on_set=False)
-    waypoint_completed: Event = Event(copy_data_on_set=False)
+    # Stop events - data contains stop index info
+    stop_reached: Event = Event(copy_data_on_set=False)
+    stop_completed: Event = Event(copy_data_on_set=False)
 
     # Buffer events
-    waypoint_buffer_full: Event
+    path_buffer_full: Event
 
     # Single-point command events - data contains command info
     move_to_point_started: Event = Event(copy_data_on_set=False)
@@ -141,6 +120,10 @@ class PositionControlEvents:
 
     # Mode change
     mode_changed: Event = Event(flags=EventFlag('mode', PositionControlMode))
+
+    # Planning events - data contains PlannedPathData for visualization
+    path_planned: Event = Event(copy_data_on_set=False)
+    path_cleared: Event
 
     # State update (emitted on any event)
     state_updated: Event
@@ -154,12 +137,13 @@ class PositionControlCallbacks:
     path_finished: CallbackContainer
     path_timeout: CallbackContainer
     path_aborted: CallbackContainer
-    waypoint_completed: CallbackContainer
+    stop_completed: CallbackContainer
     move_to_point_started: CallbackContainer
     move_to_point_completed: CallbackContainer
     turn_to_heading_started: CallbackContainer
     turn_to_heading_completed: CallbackContainer
     mode_changed: CallbackContainer
+    path_planned: CallbackContainer
     state_updated: CallbackContainer
 
 
@@ -186,14 +170,13 @@ class BILBO_PositionControl:
 
         # Local state
         self._state = PositionControlState()
-        self._waypoints: list[Waypoint] = []
 
         # Track active commands for visualization
         self._current_move_to_point = MoveToPointCommand()
         self._current_turn_to_heading = TurnToHeadingCommand()
         self._current_path = PathData()
 
-        # Track top-level control mode for waypoint validation
+        # Track top-level control mode for validation
         self._top_level_control_mode = None
 
         # Subscribe to position_control events from robot
@@ -202,7 +185,7 @@ class BILBO_PositionControl:
             predicate=pred_flag_equals('container', 'position_control'),
         )
 
-        # Subscribe to top-level control mode changes to sync waypoint list
+        # Subscribe to top-level control mode changes to sync state
         self.core.events.control_mode_changed.on(
             callback=self._on_control_mode_change
         )
@@ -222,14 +205,14 @@ class BILBO_PositionControl:
         return self._state.path_state
 
     @property
-    def waypoint_count(self) -> int:
-        """Number of waypoints in queue"""
-        return self._state.waypoint_count
+    def path_point_count(self) -> int:
+        """Number of path points loaded"""
+        return self._state.path_point_count
 
     @property
-    def current_waypoint_index(self) -> int:
-        """Index of current target waypoint"""
-        return self._state.current_waypoint_index
+    def current_index(self) -> int:
+        """Current path index"""
+        return self._state.current_index
 
     @property
     def is_busy(self) -> bool:
@@ -254,139 +237,109 @@ class BILBO_PositionControl:
     @property
     def current_path(self) -> PathData | None:
         """Current path data, or None if no path is loaded"""
-        return self._current_path if self._current_path.waypoints else None
+        return self._current_path if self._current_path.path_point_count > 0 else None
 
     # =========================================================================
-    # WAYPOINT MANAGEMENT
+    # OBSTACLE FORWARDING (to robot firmware)
     # =========================================================================
 
-    def clear_waypoints(self) -> bool:
-        """Clear all waypoints on robot"""
+    def send_obstacles(self, obstacles: list[dict]):
+        """Send the full obstacle list to the robot. Each dict should have at minimum:
+        id, type, x, y, psi, width, height."""
+        self.device.executeFunction(
+            function_name='position_control_set_obstacles',
+            arguments={'obstacles': obstacles},
+        )
+        self.logger.debug(f"Sent {len(obstacles)} obstacles to robot")
+
+    # =========================================================================
+    # PATH MANAGEMENT
+    # =========================================================================
+
+    def clear_path(self) -> bool:
+        """Clear all path points on robot"""
         result = self.device.executeFunction(
-            function_name='position_control_clear_waypoints',
+            function_name='position_control_clear_path',
             arguments=None,
             return_type=bool,
             request_response=True
         )
         if result:
-            self._waypoints.clear()
-            self.logger.debug("Waypoints cleared")
+            self.logger.debug("Path cleared")
         return result or False
 
-    def add_waypoint(self, x: float, y: float,
-                     type: WaypointType = WaypointType.PASS,
-                     weight: float = 0.75,
-                     speed: float = 0.0) -> bool:
-        """Add a waypoint to the queue
-
-        Args:
-            x: World X coordinate [m]
-            y: World Y coordinate [m]
-            type: PASS (smooth transition) or STOP (must stop)
-            weight: Corner sharpness [0-1], 1=sharp, 0=smooth
-            speed: Max speed for this waypoint [m/s], 0=use path default
-        """
+    def add_path_point(self, x: float, y: float) -> bool:
+        """Add a path point"""
         from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 
-        # Check if in POSITION mode - waypoints can only be added in POSITION mode
+        # Check if in POSITION mode
         if self._top_level_control_mode != BILBO_Control_Mode.POSITION:
             self.logger.warning(
-                f"Cannot add waypoints when not in POSITION mode (current: "
+                f"Cannot add path points when not in POSITION mode (current: "
                 f"{self._top_level_control_mode.name if self._top_level_control_mode else 'None'})"
             )
             return False
 
-        if isinstance(type, int):
-            type = WaypointType(type)
-
         result = self.device.executeFunction(
-            function_name='position_control_add_waypoint',
-            arguments={'x': x, 'y': y, 'type': type.value, 'weight': weight, 'speed': speed},
+            function_name='position_control_add_path_point',
+            arguments={'x': x, 'y': y},
             return_type=bool,
             request_response=True
         )
-        if result:
-            self._waypoints.append(Waypoint(x=x, y=y, type=type, weight=weight, speed=speed))
-            self.logger.debug(f"Added waypoint ({x:.2f}, {y:.2f})" + (f" speed={speed:.2f}" if speed > 0 else ""))
         return result or False
 
-    def set_waypoints(self, waypoints: list[dict | Waypoint]) -> bool:
-        """
-        Set multiple waypoints at once (clears existing).
-
-        Args:
-            waypoints: List of waypoints as dicts {'x': float, 'y': float, 'type': int, 'weight': float, 'speed': float}
-                      or Waypoint objects
-        """
-        wp_list = []
-        for wp in waypoints:
-            if isinstance(wp, Waypoint):
-                wp_list.append({'x': wp.x, 'y': wp.y, 'type': wp.type.value, 'weight': wp.weight, 'speed': wp.speed})
-            else:
-                wp_list.append(wp)
-
+    def add_stop_index(self, index: int) -> bool:
+        """Mark a path point index as STOP"""
         result = self.device.executeFunction(
-            function_name='position_control_set_waypoints',
-            arguments={'waypoints': wp_list},
+            function_name='position_control_add_stop_index',
+            arguments={'index': int(index)},
             return_type=bool,
             request_response=True
         )
-        if result:
-            self._waypoints = [
-                Waypoint(x=wp['x'], y=wp['y'],
-                         type=WaypointType(wp.get('type', 0)),
-                         weight=wp.get('weight', 0.75),
-                         speed=wp.get('speed', 0.0))
-                for wp in wp_list
-            ]
-            self.logger.info(f"Set {len(wp_list)} waypoints")
         return result or False
 
-    def get_waypoints(self) -> list[Waypoint]:
-        """Get current waypoint list from robot"""
+    def get_path_point_count(self) -> int:
+        """Get current number of path points on robot"""
         result = self.device.executeFunction(
-            function_name='position_control_get_waypoints',
+            function_name='position_control_get_path_point_count',
             arguments=None,
-            return_type=list,
+            return_type=int,
             request_response=True
         )
-        if result:
-            self._waypoints = [
-                Waypoint(x=wp['x'], y=wp['y'],
-                         type=WaypointType(wp.get('type', 0)),
-                         weight=wp.get('weight', 0.75),
-                         speed=wp.get('speed', 0.0))
-                for wp in result
-            ]
-        return self._waypoints.copy()
+        if result is not None:
+            self._state.path_point_count = result
+        return self._state.path_point_count
 
     # =========================================================================
     # PATH FOLLOWING
     # =========================================================================
 
-    def start_path(self, allow_reverse: bool = False,
+    def start_path(self, max_speed: float = 0.0,
+                   max_spacing: float = 0.0,
                    timeout: float = 0.0,
-                   max_speed: float = 0.0) -> bool:
+                   allow_reverse: bool = False) -> bool:
         """
-        Start following the loaded waypoint path.
+        Start following the loaded dense path.
 
         Args:
-            allow_reverse: If True, robot may drive backwards when efficient
+            max_speed: Speed override [m/s] (0 = use config default)
+            max_spacing: Max inter-point spacing [m] (0 = auto-detect)
             timeout: Maximum time for path execution (0 = no timeout)
-            max_speed: Speed override (0 = use config default)
+            allow_reverse: If True, robot may drive backwards when efficient
         """
         result = self.device.executeFunction(
             function_name='position_control_start_path',
             arguments={
-                'allow_reverse': allow_reverse,
+                'max_speed': max_speed,
+                'max_spacing': max_spacing,
                 'timeout': timeout,
-                'max_speed': max_speed
+                'allow_reverse': allow_reverse
             },
             return_type=bool,
             request_response=True
         )
         if result:
-            self.logger.info(f"Started path with {len(self._waypoints)} waypoints")
+            self.logger.info(f"Started path")
         return result or False
 
     def pause_path(self) -> bool:
@@ -425,40 +378,80 @@ class BILBO_PositionControl:
             self.logger.info("Path aborted")
         return result or False
 
-    def load_path(self, path_data: dict, start: bool = False, clear_existing: bool = True) -> bool:
+    def load_path(self, path_data: 'dict | list[tuple[float, float]]',
+                  start: bool = False,
+                  clear_existing: bool = True,
+                  stop_indices: list[int] | None = None,
+                  max_speed: float | None = None,
+                  max_spacing: float | None = None,
+                  allow_reverse: bool | None = None,
+                  timeout: float | None = None) -> bool:
         """
-        Load waypoints from a path dictionary and send to robot.
+        Load a dense path and send to robot.
 
-        Path dict format:
-            {
-                "max_speed": 0.3,        # optional, m/s (0 = use default)
-                "allow_reverse": true,   # optional, default: true
-                "timeout": 30.0,         # optional, seconds (0 = no timeout)
-                "waypoints": [
-                    {"x": 1.0, "y": 0.0},
-                    {"x": 1.5, "y": -0.3, "type": "STOP", "weight": 0.9, "speed": 0.2}
-                ]
-            }
-
-        Waypoint fields:
-            - x, y: Required, position in world coordinates [m]
-            - type: Optional, "PASS" (default) or "STOP"
-            - weight: Optional [0-1], corner sharpness (default 0.75)
-            - speed: Optional [m/s], max speed for this waypoint (0 = use path default)
-                     Speed transitions smoothly between waypoints over ~0.5s
+        Accepts either:
+        - A list of (x, y) tuples
+        - A dict with path data and optional settings
 
         Args:
-            path_data: Dictionary containing waypoints and optional settings
+            path_data: Path as list of (x,y) tuples or dict with points and settings
             start: If True, automatically start the path after loading
-            clear_existing: If True, clear existing waypoints before loading
+            clear_existing: If True, clear existing path before loading
+            stop_indices: Stop indices (used when path_data is a list; for dicts,
+                can also be specified inside the dict)
+            max_speed: Override for max_speed
+            max_spacing: Override for max_spacing
+            allow_reverse: Override for allow_reverse
+            timeout: Override for timeout
 
         Returns:
             True if path was loaded (and started if requested) successfully
         """
+        # Normalize: convert list of tuples to dict format for WiFi transmission
+        if isinstance(path_data, list):
+            local_points = [(float(pt[0]), float(pt[1])) for pt in path_data]
+            wifi_data = {
+                'points': [{'x': p[0], 'y': p[1]} for p in local_points],
+            }
+            if stop_indices:
+                wifi_data['stop_indices'] = stop_indices
+            if max_speed is not None:
+                wifi_data['max_speed'] = max_speed
+            if max_spacing is not None:
+                wifi_data['max_spacing'] = max_spacing
+            if allow_reverse is not None:
+                wifi_data['allow_reverse'] = allow_reverse
+            if timeout is not None:
+                wifi_data['timeout'] = timeout
+        elif isinstance(path_data, dict):
+            wifi_data = dict(path_data)
+            # Apply overrides
+            if stop_indices is not None:
+                wifi_data['stop_indices'] = stop_indices
+            if max_speed is not None:
+                wifi_data['max_speed'] = max_speed
+            if max_spacing is not None:
+                wifi_data['max_spacing'] = max_spacing
+            if allow_reverse is not None:
+                wifi_data['allow_reverse'] = allow_reverse
+            if timeout is not None:
+                wifi_data['timeout'] = timeout
+            # Parse points for local storage
+            pts = wifi_data.get('points', wifi_data.get('waypoints', []))
+            local_points = []
+            for pt in pts:
+                if isinstance(pt, dict):
+                    local_points.append((float(pt['x']), float(pt['y'])))
+                else:
+                    local_points.append((float(pt[0]), float(pt[1])))
+        else:
+            self.logger.error(f"path_data must be a list or dict, got {type(path_data).__name__}")
+            return False
+
         result = self.device.executeFunction(
             function_name='position_control_load_path',
             arguments={
-                'path': path_data,
+                'path': wifi_data,
                 'start': start,
                 'clear_existing': clear_existing
             },
@@ -466,61 +459,29 @@ class BILBO_PositionControl:
             request_response=True
         )
         if result:
-            # Update local waypoint list from path_data
-            waypoints_data = path_data.get('waypoints', [])
-            self._waypoints = []
-            for wp_data in waypoints_data:
-                type_value = wp_data.get('type', 'PASS')
-                if isinstance(type_value, str):
-                    wp_type = WaypointType.STOP if type_value.upper() == 'STOP' else WaypointType.PASS
-                else:
-                    wp_type = WaypointType(int(type_value))
-                self._waypoints.append(Waypoint(
-                    x=wp_data['x'],
-                    y=wp_data['y'],
-                    type=wp_type,
-                    weight=wp_data.get('weight', 0.75),
-                    speed=wp_data.get('speed', 0.0)
-                ))
-            self.logger.info(f"Loaded path with {len(self._waypoints)} waypoints" +
+            eff_stop_indices = wifi_data.get('stop_indices', [])
+            self._current_path = PathData(
+                path_point_count=len(local_points),
+                stop_indices=[int(i) for i in eff_stop_indices],
+                path_points=local_points,
+                max_speed=float(wifi_data.get('max_speed', 0.0)),
+                max_spacing=float(wifi_data.get('max_spacing', 0.0)),
+                allow_reverse=bool(wifi_data.get('allow_reverse', False)),
+                timeout=float(wifi_data.get('timeout', 0.0)),
+            )
+            self._state.path_point_count = len(local_points)
+            self.logger.info(f"Loaded path with {len(local_points)} points" +
                              (" and started" if start else ""))
         return result or False
 
     def load_path_from_file(self, filepath: str, start: bool = False, clear_existing: bool = True) -> bool:
         """
-        Load waypoints from a JSON or YAML file and send to robot.
-
-        YAML format (simple, for manual definition):
-            max_speed: 0.3          # optional, m/s (0 = use default)
-            allow_reverse: true     # optional, default: true
-            timeout: 30.0           # optional, seconds (0 = no timeout)
-            waypoints:
-              - x: 1.0
-                y: 0.0
-              - x: 1.5
-                y: -0.3
-                type: STOP          # optional, default: PASS
-                weight: 0.9         # optional, default: 0.75
-                speed: 0.2          # optional, m/s (0 = use path default)
-
-        JSON format (for generated paths):
-            {
-                "max_speed": 0.3,
-                "allow_reverse": true,
-                "timeout": 30.0,
-                "waypoints": [
-                    {"x": 1.0, "y": 0.0},
-                    {"x": 1.5, "y": -0.3, "type": "STOP", "weight": 0.9, "speed": 0.2}
-                ]
-            }
-
-        Speed transitions smoothly between waypoints over ~0.5s.
-        Corner angle slowdown still applies (takes minimum of waypoint speed and corner limit).
+        Load path from a JSON or YAML file and send to robot.
 
         Args:
             filepath: Path to .json or .yaml/.yml file
             start: If True, automatically start the path after loading
-            clear_existing: If True, clear existing waypoints before loading
+            clear_existing: If True, clear existing path before loading
 
         Returns:
             True if path was loaded (and started if requested) successfully
@@ -553,6 +514,173 @@ class BILBO_PositionControl:
 
         # Delegate to load_path()
         return self.load_path(path_data=path_data, start=start, clear_existing=clear_existing)
+
+    # =========================================================================
+    # MOTION PLANNING + PATH FOLLOWING
+    # =========================================================================
+
+    def plan_and_follow(self,
+                        target: tuple[float, float],
+                        waypoints: list[dict | tuple] | None = None,
+                        obstacles: list[dict] | None = None,
+                        bounds: dict | tuple | None = None,
+                        stop_indices: list[int] | None = None,
+                        max_speed: float = 0.0,
+                        max_spacing: float = 0.0,
+                        timeout: float = 0.0,
+                        allow_reverse: bool = False,
+                        seed: int | None = None,
+                        blocking: bool = False) -> bool:
+        """
+        Plan a collision-free path from the robot's current position to target,
+        load it, and start following it. The motion planner runs on the robot.
+
+        Args:
+            target: (x, y) destination in world coordinates [m]
+            waypoints: Intermediate points with proximity weights.
+                Each entry is either:
+                - (x, y) or (x, y, weight) tuple
+                - {"x": ..., "y": ..., "weight": ...} dict
+            obstacles: List of obstacle dicts:
+                - {"type": "circle", "cx": ..., "cy": ..., "radius": ...}
+                - {"type": "box", "cx": ..., "cy": ..., "width": ..., "height": ...}
+            bounds: Workspace limits as dict or (x_min, x_max, y_min, y_max) tuple.
+            stop_indices: Path point indices where the robot should pause.
+            max_speed: Speed limit [m/s] (0 = use config default)
+            max_spacing: Max inter-point spacing [m] (0 = auto-detect)
+            timeout: Path timeout [s] (0 = no timeout)
+            allow_reverse: Allow reverse driving
+            seed: RNG seed for motion planner reproducibility
+            blocking: If True, block until path finished or timeout
+
+        Returns:
+            True if path was planned, loaded, and started successfully
+        """
+        # Normalize target
+        if isinstance(target, (list, tuple)):
+            target_arg = {'x': float(target[0]), 'y': float(target[1])}
+        elif isinstance(target, dict):
+            target_arg = target
+        else:
+            self.logger.error(f"Invalid target format: {target}")
+            return False
+
+        # Normalize bounds for transmission
+        bounds_arg = None
+        if bounds is not None:
+            if isinstance(bounds, (list, tuple)):
+                bounds_arg = {
+                    'x_min': float(bounds[0]), 'x_max': float(bounds[1]),
+                    'y_min': float(bounds[2]), 'y_max': float(bounds[3]),
+                }
+            elif isinstance(bounds, dict):
+                bounds_arg = bounds
+
+        arguments = {
+            'target': target_arg,
+            'waypoints': waypoints,
+            'obstacles': obstacles,
+            'bounds': bounds_arg,
+            'stop_indices': stop_indices,
+            'max_speed': max_speed,
+            'max_spacing': max_spacing,
+            'timeout': timeout,
+            'allow_reverse': allow_reverse,
+            'seed': seed,
+        }
+
+        self.logger.info(
+            f"Planning and following path to ({target_arg['x']:.2f}, {target_arg['y']:.2f})"
+        )
+
+        result = self.device.executeFunction(
+            function_name='position_control_plan_and_follow',
+            arguments=arguments,
+            return_type=bool,
+            request_response=True
+        )
+
+        if not result:
+            self.logger.error("plan_and_follow failed on robot")
+            return False
+
+        if not blocking:
+            return True
+
+        # Block until path finishes, times out, or is aborted
+        wait_timeout = timeout + 10.0 if timeout > 0 else 120.0
+        _, match = wait_for_events(
+            OR(self.events.path_finished, self.events.path_timeout, self.events.path_aborted),
+            timeout=wait_timeout,
+        )
+        if match is None:
+            self.logger.warning("plan_and_follow: wait expired")
+            return False
+        return match.caused_by(self.events.path_finished)
+
+    def plan_path(self,
+                  target: tuple[float, float],
+                  waypoints: list[dict | tuple] | None = None,
+                  obstacles: list[dict] | None = None,
+                  bounds: dict | tuple | None = None,
+                  seed: int | None = None) -> bool:
+        """
+        Plan a path from the robot's current position to target (preview only).
+        Does NOT load or start the path. The robot emits a path_planned WiFi event
+        with compressed path points, which is caught here and emitted as a local event.
+
+        Args:
+            target: (x, y) destination in world coordinates [m]
+            waypoints: Intermediate points with proximity weights.
+            obstacles: Extra obstacle dicts (merged with stored obstacles on robot).
+            bounds: Workspace limits as dict or (x_min, x_max, y_min, y_max) tuple.
+            seed: RNG seed for motion planner reproducibility
+
+        Returns:
+            True if path was planned successfully
+        """
+        # Normalize target
+        if isinstance(target, (list, tuple)):
+            target_arg = {'x': float(target[0]), 'y': float(target[1])}
+        elif isinstance(target, dict):
+            target_arg = target
+        else:
+            self.logger.error(f"Invalid target format: {target}")
+            return False
+
+        # Normalize bounds
+        bounds_arg = None
+        if bounds is not None:
+            if isinstance(bounds, (list, tuple)):
+                bounds_arg = {
+                    'x_min': float(bounds[0]), 'x_max': float(bounds[1]),
+                    'y_min': float(bounds[2]), 'y_max': float(bounds[3]),
+                }
+            elif isinstance(bounds, dict):
+                bounds_arg = bounds
+
+        self.logger.info(
+            f"Planning path to ({target_arg['x']:.2f}, {target_arg['y']:.2f}) (preview)"
+        )
+
+        result = self.device.executeFunction(
+            function_name='position_control_plan_path',
+            arguments={
+                'target': target_arg,
+                'waypoints': waypoints,
+                'obstacles': obstacles,
+                'bounds': bounds_arg,
+                'seed': seed,
+            },
+            return_type=bool,
+            request_response=True
+        )
+
+        if not result:
+            self.logger.error("plan_path failed on robot")
+            return False
+
+        return True
 
     # =========================================================================
     # SIMPLE COMMANDS
@@ -690,7 +818,7 @@ class BILBO_PositionControl:
         )
         if result:
             self._state = PositionControlState()
-            self._waypoints.clear()
+            self._current_path = PathData()
             self.logger.info("Position control reset")
         return result or False
 
@@ -715,16 +843,15 @@ class BILBO_PositionControl:
                 # Parse and store path data
                 path_data = self._parse_path_data(data)
                 self._current_path = path_data
-                self._waypoints = path_data.waypoints.copy()
+                self._state.path_point_count = path_data.path_point_count
                 self.events.path_loaded.set(data=path_data)
                 self.callbacks.path_loaded.call(path_data)
 
             case 'path_started':
                 # Parse and store path data
                 path_data = self._parse_path_data(data)
-                self._current_path = path_data
-                if path_data.waypoints:
-                    self._waypoints = path_data.waypoints.copy()
+                if path_data.path_point_count > 0:
+                    self._current_path = path_data
                 self.events.path_started.set(data=path_data)
                 self.callbacks.path_started.call(path_data)
 
@@ -735,45 +862,42 @@ class BILBO_PositionControl:
                 self.events.path_resumed.set()
 
             case 'path_finished':
-                self._waypoints.clear()
                 self._current_path = PathData()
                 self.events.path_finished.set()
                 self.callbacks.path_finished.call()
 
             case 'path_timeout':
-                self._waypoints.clear()
                 self._current_path = PathData()
                 self.events.path_timeout.set()
                 self.callbacks.path_timeout.call()
 
             case 'path_aborted':
-                self._waypoints.clear()
                 self._current_path = PathData()
                 self.events.path_aborted.set()
                 self.callbacks.path_aborted.call()
 
-            case 'waypoint_passed':
-                idx = data.get('waypoint_index', 0)
-                wp = self._parse_waypoint(data.get('waypoint'))
-                self.events.waypoint_passed.set(data={'index': idx, 'waypoint': wp})
+            case 'path_planned':
+                # Preview-only path from motion planner
+                path_data = self._parse_path_data(data)
+                self.events.path_planned.set(data=path_data)
+                self.callbacks.path_planned.call(path_data)
 
-            case 'waypoint_reached':
-                idx = data.get('waypoint_index', 0)
-                wp = self._parse_waypoint(data.get('waypoint'))
-                self.events.waypoint_reached.set(data={'index': idx, 'waypoint': wp})
+            case 'path_cleared':
+                self._current_path = PathData()
+                self.events.path_cleared.set()
 
-            case 'waypoint_completed':
-                idx = data.get('waypoint_index', 0)
-                wp = self._parse_waypoint(data.get('waypoint'))
-                next_wp = self._parse_waypoint(data.get('next_waypoint'))
-                if self._waypoints:
-                    self._waypoints.pop(0)
-                self.events.waypoint_completed.set(data={'index': idx, 'waypoint': wp, 'next_waypoint': next_wp})
-                self.callbacks.waypoint_completed.call(idx)
+            case 'stop_reached':
+                idx = data.get('stop_index', 0)
+                self.events.stop_reached.set(data={'index': idx})
 
-            case 'waypoint_buffer_full':
-                self.logger.warning("Waypoint buffer full on robot")
-                self.events.waypoint_buffer_full.set()
+            case 'stop_completed':
+                idx = data.get('stop_index', 0)
+                self.events.stop_completed.set(data={'index': idx})
+                self.callbacks.stop_completed.call(idx)
+
+            case 'path_buffer_full':
+                self.logger.warning("Path buffer full on robot")
+                self.events.path_buffer_full.set()
 
             case 'move_to_point_started':
                 # Parse and store command data
@@ -838,38 +962,37 @@ class BILBO_PositionControl:
         self.events.state_updated.set()
         self.callbacks.state_updated.call()
 
-    def _parse_waypoint(self, wp_data: dict | None) -> Waypoint | None:
-        """Parse waypoint from event data"""
-        if wp_data is None:
-            return None
-        type_value = wp_data.get('type', 0)
-        if isinstance(type_value, str):
-            wp_type = WaypointType.STOP if type_value.upper() == 'STOP' else WaypointType.PASS
-        else:
-            wp_type = WaypointType(int(type_value))
-        return Waypoint(
-            x=wp_data.get('x', 0.0),
-            y=wp_data.get('y', 0.0),
-            type=wp_type,
-            weight=wp_data.get('weight', 0.75),
-            speed=wp_data.get('speed', 0.0)
-        )
-
     def _parse_path_data(self, data: dict) -> PathData:
-        """Parse path data from event data"""
-        waypoints = []
-        for wp_data in data.get('waypoints', []):
-            wp = self._parse_waypoint(wp_data)
-            if wp:
-                waypoints.append(wp)
-
+        """Parse path data from event data, including compressed path points."""
         settings = data.get('settings', {})
+
+        # Decompress path points if present
+        path_points = []
+        compressed = data.get('path_points_compressed')
+        if compressed:
+            try:
+                path_points = self._decompress_path_points(compressed)
+            except Exception as e:
+                self.logger.warning(f"Failed to decompress path points: {e}")
+
         return PathData(
-            waypoints=waypoints,
+            path_point_count=data.get('path_point_count', 0),
+            stop_indices=data.get('stop_indices', []),
+            path_points=path_points,
+            waypoints=data.get('waypoints') or [],
             max_speed=settings.get('max_speed', 0.0),
+            max_spacing=settings.get('max_spacing', 0.0),
             allow_reverse=settings.get('allow_reverse', False),
             timeout=settings.get('timeout', 0.0)
         )
+
+    @staticmethod
+    def _decompress_path_points(compressed: str) -> list[tuple[float, float]]:
+        """Decompress base64+zlib compressed path points back to list of (x, y) tuples."""
+        raw = zlib.decompress(base64.b64decode(compressed))
+        n_floats = len(raw) // 4
+        values = struct.unpack(f'<{n_floats}f', raw)
+        return [(values[i], values[i + 1]) for i in range(0, n_floats, 2)]
 
     def _update_state_from_dict(self, data: dict):
         """Update local state from event/response data"""
@@ -877,15 +1000,15 @@ class BILBO_PositionControl:
             self._state.mode = PositionControlMode(data['mode'])
         if 'path_state' in data:
             self._state.path_state = PathState(data['path_state'])
-        if 'waypoint_count' in data:
-            self._state.waypoint_count = data['waypoint_count']
-        if 'current_waypoint_index' in data:
-            self._state.current_waypoint_index = data['current_waypoint_index']
+        if 'path_point_count' in data:
+            self._state.path_point_count = data['path_point_count']
+        if 'current_index' in data:
+            self._state.current_index = data['current_index']
         if 'is_busy' in data:
             self._state.is_busy = data['is_busy']
 
     def _on_control_mode_change(self, mode, *args, **kwargs):
-        """Handle top-level control mode changes to sync waypoint list"""
+        """Handle top-level control mode changes to sync state"""
         from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 
         # Track top-level control mode
@@ -893,19 +1016,12 @@ class BILBO_PositionControl:
 
         if mode == BILBO_Control_Mode.POSITION:
             # Entering POSITION mode: clear local state to sync with firmware
-            # (firmware clears waypoints when entering POSITION mode)
-            if self._waypoints:
-                self.logger.debug("Entering POSITION mode, clearing local waypoint list to sync with robot")
-            self._waypoints.clear()
             self._state = PositionControlState()
             self._current_path = PathData()
             self._current_move_to_point = MoveToPointCommand()
             self._current_turn_to_heading = TurnToHeadingCommand()
         else:
             # Leaving POSITION mode: clear state
-            if self._waypoints:
-                self.logger.debug(f"Control mode changed to {mode.name}, clearing local waypoint list")
-            self._waypoints.clear()
             self._state = PositionControlState()
             self._current_path = PathData()
             self._current_move_to_point = MoveToPointCommand()

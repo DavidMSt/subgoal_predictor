@@ -13,6 +13,7 @@ from robot.experiment.experiment_parser import (
     parse_experiment_dict,
     parse_time_ms,
     parse_control_mode,
+    normalize_path_points,
     normalize_waypoints,
 )
 
@@ -41,6 +42,7 @@ from robot.experiment.experiment import (
     ResetControlAction,
     MoveToAction,
     TurnToAction,
+    SetPathAction,
     SetWaypointsAction,
     StartPathAction,
     LoadPathAction,

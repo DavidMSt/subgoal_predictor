@@ -6,8 +6,16 @@ import math
 
 # === OWN PACKAGES =====================================================================================================
 from core.utils.delayed_executor import delayed_execution
-from hardware.control_board import RobotControl_Board
-from hardware.stm32.stm32 import resetSTM32
+from simulation.simulated_board import SimulatedBoard
+from simulation.simulated_communication import SimulatedCommunication
+
+try:
+    from hardware.control_board import RobotControl_Board
+    from hardware.stm32.stm32 import resetSTM32
+except ImportError:
+    RobotControl_Board = None
+    resetSTM32 = None
+
 from robot.bilbo_common import BILBO_Common
 from robot.core import MainProvider, set_main_provider
 from robot.experiment.experiment_handler import BILBO_ExperimentHandler
@@ -31,6 +39,7 @@ from core.utils.revisions import get_versions, is_ll_version_compatible
 import robot.lowlevel.stm32_addresses as stm32_addresses
 from core.utils.exit import register_exit_callback
 
+
 # === GLOBAL VARIABLES =================================================================================================
 setLoggerLevel('wifi', 'ERROR')
 setLoggerLevel('Sound', 'ERROR')
@@ -53,9 +62,9 @@ class BILBO(MainProvider):
     id: str
 
     common: BILBO_Common
-    board: RobotControl_Board
+    board: RobotControl_Board | SimulatedBoard
 
-    communication: BILBO_Communication
+    communication: BILBO_Communication | SimulatedCommunication
     control: BILBO_Control
     estimation: BILBO_Estimation
     drive: BILBO_Drive
@@ -78,22 +87,25 @@ class BILBO(MainProvider):
     _eventListener: SubscriberListener
 
     # === INIT =========================================================================================================
-    def __init__(self, reset_stm32: bool = False):
+    def __init__(self, reset_stm32: bool = False, simulation: bool = False):
         self.lock = SingletonLock(lock_file="/tmp/twipr.lock", timeout=10, override=True, override_timeout=5)
         self.lock.__enter__()
 
         self.logger = Logger("BILBO")
+        self.simulation = simulation
 
-        # param = os.sched_param(80)  # priority 1–99 (higher = higher priority)
-        # os.sched_setscheduler(0, os.SCHED_FIFO, param)
+        if self.simulation:
+            self.logger.important("=== SIMULATION MODE (Digital Twin) ===")
 
-        if reset_stm32:
-            self.logger.info(f"Reset STM32. This takes ~2 Seconds")
-            resetSTM32()
-            time.sleep(3)
+            self.board = SimulatedBoard()
+        else:
+            if reset_stm32:
+                self.logger.info(f"Reset STM32. This takes ~2 Seconds")
+                resetSTM32()
+                time.sleep(3)
 
-        # Set up the control board
-        self.board = RobotControl_Board()
+            # Set up the control board
+            self.board = RobotControl_Board()
 
         self.common = BILBO_Common(bilbo=self, board=self.board)
 
@@ -109,7 +121,10 @@ class BILBO(MainProvider):
         set_main_provider(self)
 
         # Start the communication module (WI-FI, Serial and SPI)
-        self.communication = BILBO_Communication(board=self.board, core=self.common)
+        if self.simulation:
+            self.communication = SimulatedCommunication(core=self.common)
+        else:
+            self.communication = BILBO_Communication(board=self.board, core=self.common)
 
         # Set up the individual modules
         self.estimation = BILBO_Estimation(common=self.common, comm=self.communication)
@@ -132,6 +147,7 @@ class BILBO(MainProvider):
                                                           interfaces=self.interfaces,
                                                           utilities=self.utilities,
                                                           control=self.control,
+                                                          estimation=self.estimation,
                                                           testbed=self.testbed_manager)
 
         self.logging = BILBO_Logging(common=self.common,

@@ -14,9 +14,9 @@ from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
 from extensions.cli.cli import CommandSet, CLI, Command, CommandArgument
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
-from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
-from extensions.simulation.src.objects.base_environment import BaseEnvironment
-from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Control_Mode, DEFAULT_BILBO_MODEL, \
+from simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
+from simulation.src.objects.base_environment import BaseEnvironment
+from simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Control_Mode, DEFAULT_BILBO_MODEL, \
     BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES, BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS
 from extensions.joystick.joystick_manager import JoystickManager, Joystick
 
@@ -289,6 +289,7 @@ class BILBO_InteractiveExample:
         wall4.setPosition(x=-1.5)
         wall4.setAngle(np.pi / 2)
         self.babylon_visualization.addObject(wall4)
+        self.babylon_widget.set_babylon(self.babylon_visualization)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _logRedirection(self, log_entry, log, logger, level):

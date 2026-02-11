@@ -58,21 +58,15 @@ class UDP_Socket:
 
         self.callbacks = UDP_Socket_Callbacks()
 
-        # self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
-        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-
-        # ← Add these two!
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        # (Linux only; allows truly simultaneous binds, but you MUST set it on *all* binds)
         if hasattr(socket, "SO_REUSEPORT"):
             self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
 
         self._socket.settimeout(0)
 
-        # set ip and port
-        # self._socket.bind((str(self.address), self.port)) # FOR WINDOWS
-        self._socket.bind(("", self.port))  # FOR RASPBERRY PI
+        self._socket.bind(("", self.port))
         self._thread = threading.Thread(target=self._thread_fun, daemon=True)
         register_exit_callback(self.close)
         self._exit = False

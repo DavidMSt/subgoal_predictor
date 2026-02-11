@@ -1,15 +1,140 @@
+import abc
 import dataclasses
 
-from robots.bilbo.testbed.tracker.bilbo_tracker import TrackedBILBO, TrackedLimboBar
+from robots.bilbo.definitions import BoxObstacle_Config, BoxObstacle_State
 from robots.bilbo.robot.bilbo import BILBO
+from robots.bilbo.robot.bilbo_data import BILBO_DynamicState
+from robots.bilbo.robot.bilbo_definitions import BILBO_Config
+from robots.bilbo.simulation.virtual_testbed import SimulatedBILBO
+from robots.bilbo.simulation.virtual_testbed import SimulatedBoxObstacle
+from robots.bilbo.testbed.tracker.tracked_objects import TrackedBILBO, TrackedLimboBar, TrackedBox
 
 
-@dataclasses.dataclass
-class BILBO_TestbedAgent:
+# ======================================================================================================================
+class TestbedBILBO:
     id: str
-    robot: BILBO
-    tracked_object: TrackedBILBO
+    state: BILBO_DynamicState
+    config: BILBO_Config | None
 
+
+class RealTestbedBILBO(TestbedBILBO):
+    tracked_object: TrackedBILBO
+    robot: BILBO
+
+    def __init__(self, id: str,
+                 robot: BILBO,
+                 config: BILBO_Config,
+                 tracked_object: TrackedBILBO):
+        self.id = id
+        self.robot = robot
+        self.config = config
+        self.tracked_object = tracked_object
+
+    @property
+    def state(self) -> BILBO_DynamicState:
+        state = BILBO_DynamicState(
+            x=self.tracked_object.state.x,
+            y=self.tracked_object.state.y,
+            v=self.robot.data.estimation.state.v,
+            theta=self.robot.data.estimation.state.theta,
+            theta_dot=self.robot.data.estimation.state.theta_dot,
+            psi=self.tracked_object.state.psi,
+            psi_dot=self.robot.data.estimation.state.psi_dot
+        )
+        return state
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+class VirtualTestbedBILBO(TestbedBILBO):
+    simulation_object: SimulatedBILBO
+
+    def __init__(self, id: str, config: None, simulation_object: SimulatedBILBO):
+        self.id = id
+        self.simulation_object = simulation_object
+        self.config = None
+
+    @property
+    def state(self) -> BILBO_DynamicState:
+        return self.simulation_object.get_state()
+
+
+# ======================================================================================================================
+class Obstacle(abc.ABC):
+    id: str
+    config: BoxObstacle_Config
+    state: BoxObstacle_State
+
+    @abc.abstractmethod
+    def to_dict(self) -> dict:
+        ...
+
+
+class BoxObstacle(Obstacle):
+
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'type': 'box',
+            'x': self.state.x,
+            'y': self.state.y,
+            'psi': self.state.psi,
+            'width': self.config.width,
+            'height': self.config.height
+        }
+
+
+class RealBoxObstacle(BoxObstacle):
+    tracked_object: TrackedBox
+
+    def __init__(self, id: str, config: BoxObstacle_Config, tracked_object: TrackedBox):
+        self.id = id
+        self.config = config
+        self.tracked_object = tracked_object
+
+    @property
+    def state(self) -> BoxObstacle_State:
+        return BoxObstacle_State(
+            x=self.tracked_object.state.x,
+            y=self.tracked_object.state.y,
+            psi=self.tracked_object.state.psi
+        )
+
+
+class VirtualTestbedBoxObstacle(BoxObstacle):
+    simulation_object: SimulatedBoxObstacle
+
+    def __init__(self, id: str, config: BoxObstacle_Config, simulation_object: SimulatedBoxObstacle):
+        self.id = id
+        self.config = config
+        self.simulation_object = simulation_object
+
+    @property
+    def state(self) -> BoxObstacle_State:
+        return BoxObstacle_State(
+            x=self.simulation_object.state.x,
+            y=self.simulation_object.state.y,
+            psi=self.simulation_object.state.psi
+        )
+
+
+# ======================================================================================================================
+# class WallObstacle(BoxObstacle):
+#     ...
+
+
+# ======================================================================================================================
+# @dataclasses.dataclass
+# class CircleObstacle_Config:
+#     x: float
+#     y: float
+#     radius: float
+
+
+# class CircleObstacle(Obstacle):
+#     ...
+
+
+# ======================================================================================================================
 
 # === LIMBO BAR ========================================================================================================
 @dataclasses.dataclass
@@ -34,7 +159,7 @@ class LimboBar:
     def reset(self):
         self.hit = False
 
-    def update(self, robot):
+    def update(self, robot: 'TestbedBILBO'):
 
         if self.tracked_object is not None:
             self.geometry.start_x = self.tracked_object.state.x
@@ -44,7 +169,7 @@ class LimboBar:
             return
         self.hit = self._check_collision(robot)
 
-    def _check_collision(self, robot) -> bool:
+    def _check_collision(self, robot: 'TestbedBILBO') -> bool:
         """
         Check collision between the robot and the limbo bar.
 
@@ -57,18 +182,18 @@ class LimboBar:
         """
         import math
 
-        # Robot state
-        px = robot.tracked_object.state.x
-        py = robot.tracked_object.state.y
-        theta = robot.tracked_object.state.theta  # pitch angle (forward tilt)
-        psi = robot.tracked_object.state.psi  # yaw angle (rotation around global z)
+        # Robot state (from TestbedBILBO.state — works for both real and simulated)
+        px = robot.state.x
+        py = robot.state.y
+        theta = robot.state.theta  # pitch angle (forward tilt)
+        psi = robot.state.psi  # yaw angle (rotation around global z)
 
-        # Robot dimensions
-        wheel_radius = robot.robot.config.model.wheel_diameter / 2
+        # Robot dimensions (from TestbedBILBO.config)
+        wheel_radius = robot.config.model.wheel_diameter / 2
         wheel_thickness = 0.02  # m
-        body_height = robot.robot.config.model.height
-        body_width = robot.robot.config.model.width  # robot y-axis (between wheels)
-        body_depth = robot.robot.config.model.depth  # robot x-axis (forward/backward)
+        body_height = robot.config.model.height
+        body_width = robot.config.model.width  # robot y-axis (between wheels)
+        body_depth = robot.config.model.depth  # robot x-axis (forward/backward)
 
         # Limbo bar geometry (height is in global frame, above ground)
         bar_z = self.geometry.height

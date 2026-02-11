@@ -40,6 +40,7 @@ class BILBO_General_Information:
     type: str
     version: str
     color: list | None
+    simulation: bool = False
 
 
 @dataclasses.dataclass

@@ -438,27 +438,21 @@ def make_report(
             num_sub_actions = len(sub_actions_data) if sub_actions_data else params.get('actions_count', len(def_actions))
             params_str = f"{num_sub_actions} actions"
 
-        # Extract waypoints for set_waypoints actions
+        # Extract path points for set_path/set_waypoints actions
         waypoints = None
-        if action_type == 'set_waypoints':
-            raw_waypoints = params.get('waypoints', [])
+        if action_type in ('set_path', 'set_waypoints'):
+            raw_points = params.get('points', params.get('waypoints', []))
             waypoints = []
-            for wp in raw_waypoints:
-                if isinstance(wp, dict):
+            for pt in raw_points:
+                if isinstance(pt, dict):
                     waypoints.append({
-                        'x': wp.get('x', 0),
-                        'y': wp.get('y', 0),
-                        'type': wp.get('type', 'PASS'),
-                        'weight': wp.get('weight', 0.75),
+                        'x': pt.get('x', 0),
+                        'y': pt.get('y', 0),
                     })
-                elif isinstance(wp, (list, tuple)) and len(wp) >= 2:
-                    wp_type = wp[2] if len(wp) > 2 and isinstance(wp[2], str) else 'PASS'
-                    wp_weight = wp[3] if len(wp) > 3 else (wp[2] if len(wp) > 2 and not isinstance(wp[2], str) else 0.75)
+                elif isinstance(pt, (list, tuple)) and len(pt) >= 2:
                     waypoints.append({
-                        'x': wp[0],
-                        'y': wp[1],
-                        'type': wp_type,
-                        'weight': wp_weight,
+                        'x': pt[0],
+                        'y': pt[1],
                     })
 
         actions_info.append({
@@ -533,6 +527,8 @@ def make_report(
             return 'turn_to'
         if 'input' in params:
             return 'set_input'
+        if 'points' in params:
+            return 'set_path'
         if 'waypoints' in params:
             return 'set_waypoints'
         if 'K' in params:
@@ -1426,9 +1422,9 @@ def _format_action_params(action_type: str, params: dict) -> str:
         if 'heading_deg' in params:
             return f"{params['heading_deg']:.1f} deg"
         return f"{params.get('heading', 0):.2f} rad"
-    elif action_type == 'set_waypoints':
-        waypoints = params.get('waypoints', [])
-        return f"{len(waypoints)} waypoints"
+    elif action_type in ('set_path', 'set_waypoints'):
+        points = params.get('points', params.get('waypoints', []))
+        return f"{len(points)} path points"
     elif action_type == 'start_path':
         parts = []
         if params.get('max_speed', 0) > 0:

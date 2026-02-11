@@ -4,7 +4,7 @@ import os
 import sys
 import time
 
-from robots.bilbo.testbed.testbed_objects import BILBO_TestbedAgent
+from core.utils.dataclass_utils import from_dict_auto
 
 # Get the directory of the current script
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -17,8 +17,6 @@ if top_level_module not in sys.path:
 
 # === CUSTOM MODULES ===================================================================================================
 from robots.bilbo.gui.bilbo_application_gui import BILBO_Application_GUI
-from robots.bilbo.settings import AUTOSTART_ROBOTS, AUTOSTOP_ROBOTS
-from robots.bilbo.testbed.tracker.bilbo_tracker import BILBO_Tracker
 # from extensions.cli.archive.cli_gui import CLI_GUI_Server
 from extensions.cli.cli import CommandSet, CLI, Command
 from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
@@ -28,7 +26,9 @@ from core.utils.logging_utils import setLoggerLevel, Logger
 from core.utils.loop import infinite_loop
 from core.utils.sound.sound import speak, SoundSystem
 from core.utils.files import get_absolute_path
-from robots.bilbo.testbed.testbed_manager import BILBO_TestbedManager, BILBO_TestbedManager_Settings
+from robots.bilbo.testbed.testbed_manager import TestbedManager, TestbedManagerSettings, TestbedSettings, \
+    TrackerSettings, TrackedObjects, ExtensionsSettings, RobotSettings
+from robots.bilbo.simulation.virtual_testbed import VirtualTestbed_Config
 from core.utils.callbacks import Callback
 from core.utils.network.network import getHostIP
 from robots.bilbo.robot.bilbo import BILBO
@@ -38,73 +38,52 @@ from core.utils.yaml_utils import load_yaml
 ENABLE_SPEECH_OUTPUT = True
 
 
-# ======================================================================================================================
-# Settings dataclasses for YAML parsing
-# ======================================================================================================================
-@dataclasses.dataclass
-class ExtensionsSettings:
-    display: bool = True
-    limbobar: bool = True
-    timecode: bool = False
-
-
-@dataclasses.dataclass
-class OptitrackSettings:
-    enabled: bool = True
-    server: str = 'palantir.lan'
-
-
-@dataclasses.dataclass
-class TestbedSettings:
-    type: str | None = None
-    size: dict | None = None
-
-
 @dataclasses.dataclass
 class MDNSSettings:
     enabled: bool = True
-    hostname: str = 'bilbolab'  # Will be accessible as bilbolab.local
-    use_port_80: bool = False  # If True, runs reverse proxy on port 80 (requires sudo)
+    hostname: str = 'bilbolab'
+    use_port_80: bool = False
 
 
 @dataclasses.dataclass
-class ApplicationSettingsYAML:
-    """Settings as loaded from application_settings.yaml"""
-    extensions: ExtensionsSettings = dataclasses.field(default_factory=ExtensionsSettings)
-    optitrack: OptitrackSettings = dataclasses.field(default_factory=OptitrackSettings)
+class ApplicationSettings:
+    """Settings as loaded from application_settings.yaml. Top-level keys map 1:1 to the YAML."""
     testbed: TestbedSettings = dataclasses.field(default_factory=TestbedSettings)
+    robots: RobotSettings = dataclasses.field(default_factory=RobotSettings)
+    extensions: ExtensionsSettings = dataclasses.field(default_factory=ExtensionsSettings)
+    simulation: VirtualTestbed_Config = dataclasses.field(default_factory=VirtualTestbed_Config)
+    tracker: TrackerSettings = dataclasses.field(default_factory=TrackerSettings)
+    tracked_objects: TrackedObjects = dataclasses.field(default_factory=TrackedObjects)
     mdns: MDNSSettings = dataclasses.field(default_factory=MDNSSettings)
 
+    @property
+    def testbed_manager_settings(self) -> TestbedManagerSettings:
+        return TestbedManagerSettings(
+            testbed=self.testbed,
+            robots=self.robots,
+            tracker=self.tracker,
+            tracked_objects=self.tracked_objects,
+            extensions=self.extensions,
+            simulation=self.simulation,
+        )
 
-def load_application_settings(path: str | None = None) -> ApplicationSettingsYAML:
+
+def load_application_settings(path: str | None = None) -> ApplicationSettings:
     """Load application settings from YAML file."""
     if path is None:
         path = get_absolute_path('application_settings.yaml')
 
     yaml_data = load_yaml(path)
+    return from_dict_auto(ApplicationSettings, yaml_data)
 
-    # Parse nested dataclasses
-    extensions = ExtensionsSettings(**yaml_data.get('extensions', {})) if yaml_data.get(
-        'extensions') else ExtensionsSettings()
-    optitrack = OptitrackSettings(**yaml_data.get('optitrack', {})) if yaml_data.get(
-        'optitrack') else OptitrackSettings()
-    testbed = TestbedSettings(**yaml_data.get('testbed', {})) if yaml_data.get('testbed') else TestbedSettings()
-    mdns = MDNSSettings(**yaml_data.get('mdns', {})) if yaml_data.get('mdns') else MDNSSettings()
-
-    return ApplicationSettingsYAML(
-        extensions=extensions,
-        optitrack=optitrack,
-        testbed=testbed,
-        mdns=mdns
-    )
 
 
 # ======================================================================================================================
 class BILBO_Application:
-    manager: BILBO_TestbedManager
+    manager: TestbedManager
     soundsystem: SoundSystem
 
-    def __init__(self, settings: ApplicationSettingsYAML):
+    def __init__(self, settings: ApplicationSettings):
 
         self.settings = settings
 
@@ -118,23 +97,8 @@ class BILBO_Application:
             self.logger.error("No valid IP address for the server")
             exit_program()
 
-        # Convert testbed size from list to tuple if provided
-        testbed_size = settings.testbed.size if settings.testbed.size else None
 
-        testbed_settings = BILBO_TestbedManager_Settings(
-            testbed_type=settings.testbed.type,
-            testbed_size=testbed_size,
-            optitrack_server=settings.optitrack.server,
-            use_optitrack=settings.optitrack.enabled,
-            use_limbobar=settings.extensions.limbobar,
-            use_display=settings.extensions.display,
-            use_timecode=settings.extensions.timecode,
-        )
-
-        self.manager = BILBO_TestbedManager(testbed_settings)
-        self.manager.events.new_robot.on(self._newRobot_callback)
-        self.manager.events.robot_disconnected.on(self._robotDisconnected_callback)
-        # self.manager.robot_manager.callbacks.stream.register(self.gui.sendRawStream)
+        self.manager = TestbedManager(settings=settings.testbed_manager_settings)
 
         # CLI
         self.cli = CLI(id='bilbo_app_cli')
@@ -148,7 +112,7 @@ class BILBO_Application:
                                          host=self.manager.robot_manager.host,
                                          testbed_manager=self.manager,
                                          cli=self.cli,
-                                         joystick_control=self.manager.joystick_control,
+                                         joystick_control=None,
                                          enable_mdns=settings.mdns.enabled,
                                          mdns_hostname=settings.mdns.hostname,
                                          mdns_use_port_80=settings.mdns.use_port_80)
@@ -165,7 +129,7 @@ class BILBO_Application:
         self.manager.init()
 
         self.cli.root.addChild(self.manager.robot_manager.cli)
-        self.cli.root.addChild(self.manager.joystick_control.cli_command_set)
+        self.cli.root.addChild(self.manager.cli)
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
@@ -182,25 +146,6 @@ class BILBO_Application:
         time.sleep(2)
         global ENABLE_SPEECH_OUTPUT
         ENABLE_SPEECH_OUTPUT = False
-
-    # ==================================================================================================================
-    def _newRobot_callback(self, bilbo: BILBO_TestbedAgent, *args, **kwargs):
-        # Set GUI reference on experiment handler for file picker functionality
-        bilbo.robot.experiment_handler.set_gui(self.gui.gui)
-
-        # Wait until the first sample is received
-        if not bilbo.robot.core.initialized:
-            bilbo.robot.core.events.initialized.on(callback=Callback(function=self.gui.addRobot,
-                                                                     inputs={'robot': bilbo.robot},
-                                                                     discard_inputs=True),
-                                                   once=True,
-                                                   discard_data=True)
-        else:
-            self.gui.addRobot(bilbo.robot)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _robotDisconnected_callback(self, bilbo, *args, **kwargs):
-        self.gui.removeRobot(bilbo)
 
 
 # ======================================================================================================================

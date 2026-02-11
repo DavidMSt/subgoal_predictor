@@ -193,9 +193,9 @@ core_utils_RegisterEntry<bool, void> reg_position_clear_path(&register_map,
 		REG_ADDRESS_F_POSITION_CLEAR_PATH, &twipr_firmware.control,
 		&BILBO_Control::position_clear_path);
 
-core_utils_RegisterEntry<bool, bilbo_waypoint_t> reg_position_add_waypoint(
-		&register_map, REG_ADDRESS_F_POSITION_ADD_WAYPOINT,
-		&twipr_firmware.control, &BILBO_Control::position_add_waypoint);
+core_utils_RegisterEntry<bool, path_point_t> reg_position_add_path_point(
+		&register_map, REG_ADDRESS_F_POSITION_ADD_PATH_POINT,
+		&twipr_firmware.control, &BILBO_Control::position_add_path_point);
 
 core_utils_RegisterEntry<bool, bilbo_path_start_cmd_t> reg_position_start_path(
 		&register_map, REG_ADDRESS_F_POSITION_START_PATH,
@@ -221,9 +221,17 @@ core_utils_RegisterEntry<bilbo_position_control_data_t, void> reg_position_data(
 		&register_map, REG_ADDRESS_R_POSITION_DATA, &twipr_firmware.control,
 		&BILBO_Control::position_get_data);
 
-core_utils_RegisterEntry<uint16_t, void> reg_position_waypoint_count(&register_map,
-		REG_ADDRESS_R_POSITION_WAYPOINT_COUNT, &twipr_firmware.control,
-		&BILBO_Control::position_get_waypoint_count);
+core_utils_RegisterEntry<uint16_t, void> reg_position_path_point_count(&register_map,
+		REG_ADDRESS_R_POSITION_PATH_POINT_COUNT, &twipr_firmware.control,
+		&BILBO_Control::position_get_path_point_count);
+
+core_utils_RegisterEntry<bool, uint16_t> reg_position_add_stop_index(&register_map,
+		REG_ADDRESS_F_POSITION_ADD_STOP_INDEX, &twipr_firmware.control,
+		&BILBO_Control::position_add_stop_index);
+
+core_utils_RegisterEntry<bool, path_points_batch_t> reg_position_add_path_batch(
+		&register_map, REG_ADDRESS_F_POSITION_ADD_PATH_BATCH,
+		&twipr_firmware.control, &BILBO_Control::position_add_path_points_batch);
 
 core_utils_RegisterEntry<bool, turn_to_heading_command_t> reg_position_turn_to_heading(
 		&register_map, REG_ADDRESS_F_POSITION_TURN_TO_HEADING,

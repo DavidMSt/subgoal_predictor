@@ -82,12 +82,15 @@ class BILBO_Core:
         # self.device.events.stream.on(self._handleStream, input_data=True)
         self.device.callbacks.stream.register(self._handleStream)
 
-        self.file_handler = RemoteFileClient(
-            host=device.address,
-            username=BILBO_USER_NAME,
-            password=BILBO_PASSWORD
-        )
-        self.file_handler.connect()
+        if not robot.config.general.simulation:
+            self.file_handler = RemoteFileClient(
+                host=device.address,
+                username=BILBO_USER_NAME,
+                password=BILBO_PASSWORD
+            )
+            self.file_handler.connect()
+        else:
+            self.file_handler = None
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_robot(self):

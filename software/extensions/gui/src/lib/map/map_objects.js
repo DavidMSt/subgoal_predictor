@@ -511,7 +511,7 @@ export class Point
             color: [255 / 255, 134 / 255, 125 / 255, 1], // RGBA 0..1
             border_width: 1,                   // in px
             border_color: [0, 0, 0, 1],        // RGBA 0..1
-            shape: 'circle',                   // 'circle' | 'square' | 'triangle'
+            shape: 'circle',                   // 'circle' | 'square' | 'triangle' | 'diamond'
             highlight: false,                  // draw highlight ring
             highlight_margin_px: 4,            // ring gap (px) around point
             show_name: false,
@@ -588,6 +588,12 @@ export class Point
             p.moveTo(x, y + (2 / 3) * r);       // bottom
             p.lineTo(x - h / 2, y - (1 / 3) * r); // top-left
             p.lineTo(x + h / 2, y - (1 / 3) * r); // top-right
+            p.closePath();
+        } else if (shape === 'diamond') {
+            p.moveTo(x, y + r);       // bottom
+            p.lineTo(x - r, y);       // left
+            p.lineTo(x, y - r);       // top
+            p.lineTo(x + r, y);       // right
             p.closePath();
         } else {
             // circle (default)
@@ -968,6 +974,7 @@ export class Rectangle extends MapObject {
             y: 0,
             width: 1,
             height: 1,
+            psi: 0,         // rotation angle in radians (counter-clockwise)
         };
 
         this.config = {...this.config, ...default_config, ...(payload.config || {})};
@@ -1023,23 +1030,24 @@ export class Rectangle extends MapObject {
         const y = +this.data.y || 0;
         const w = Math.max(0, +this.data.width || 0);
         const h = Math.max(0, +this.data.height || 0);
-
-        const left = x - w / 2;
-        const top = y - h / 2;
+        const psi = +this.data.psi || 0;
 
         const dimIf = (css) => this.effectiveDim ? setOpacity(css, DIM_OPACITY, true) : css;
 
         ctx.save();
+        // translate to center, rotate, then draw centered at origin
+        ctx.translate(x, y);
+        if (psi) ctx.rotate(psi);
         // fill
         ctx.fillStyle = dimIf(getColor(this.config.color));
-        ctx.fillRect(left, top, w, h);
+        ctx.fillRect(-w / 2, -h / 2, w, h);
 
         // border (pixel-accurate)
         const bwWorld = this._worldBorderWidth(map);
         if (bwWorld > 0) {
             ctx.lineWidth = bwWorld;
             ctx.strokeStyle = dimIf(getColor(this.config.border_color));
-            ctx.strokeRect(left, top, w, h);
+            ctx.strokeRect(-w / 2, -h / 2, w, h);
         }
         ctx.restore();
 
@@ -1060,6 +1068,7 @@ export class Rectangle extends MapObject {
             type: 'Rectangle',
             name: this.config?.name ?? this.id,
             center: {x: this.data.x, y: this.data.y},
+            psi: this.data.psi,
             size_m: {width: this.data.width, height: this.data.height},
             fill: this.config.color,
             border: {

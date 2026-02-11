@@ -319,7 +319,7 @@ class Point(MapObject):
             "color": [255 / 255, 134 / 255, 125 / 255, 1],  # RGBA 0..1
             "border_width": 1,  # in px
             "border_color": [0, 0, 0, 1],  # RGBA 0..1
-            "shape": "circle",  # 'circle' | 'square' | 'triangle'
+            "shape": "circle",  # 'circle' | 'square' | 'triangle' | 'diamond'
         }
 
         default_data = {
@@ -453,6 +453,7 @@ class Rectangle(MapObject):
             'y': 0,
             'width': 1,
             'height': 1,  # meters (world units)
+            'psi': 0,  # rotation angle in radians (counter-clockwise)
         }
 
         self.config = update_dict(self.config, default_config, kwargs)

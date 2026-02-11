@@ -305,8 +305,9 @@ def getLocalIP_RPi():
         return network_information['local_ip']
     elif network_information['usb_ip'] is not None:
         return network_information['usb_ip']
-    else:
-        return None
+
+    # Fallback: use psutil-based lookup (works on Mac/Linux)
+    return getHostIP(priorities=['local', 'enterprise'])
 
 
 def get_current_user():
@@ -376,8 +377,8 @@ def getNetworkInformation():
         ssid = None
 
     try:
-        # Get the list of IP addresses
-        ip_string = subprocess.check_output(['hostname', '-I']).decode()
+        # Get the list of IP addresses (hostname -I is Linux-only)
+        ip_string = subprocess.check_output(['hostname', '-I'], stderr=subprocess.DEVNULL).decode()
         ips = re.findall(r'[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}', ip_string)
 
         # Separate IPs into local and USB IPs

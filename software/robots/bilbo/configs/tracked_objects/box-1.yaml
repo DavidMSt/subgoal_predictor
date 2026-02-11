@@ -1,0 +1,5 @@
+id: box-1
+points: [ 1, 2, 3, 4, 5 ]
+origin: 1
+x_axis_end: 2
+y_axis_end: 3
