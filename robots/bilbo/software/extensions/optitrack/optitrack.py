@@ -4,13 +4,12 @@ import time
 from collections import deque
 
 import numpy
-import qmt
 
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.events import event_definition, Event
 from core.utils.logging_utils import Logger
 from core.utils.orientation.orientation_3d import transform_vector_from_a_to_b_frame
-from extensions.optitrack.lib.natnetclient_modified import NatNetClient
+from extensions.optitrack.lib.natnetclient import NatNetClient
 
 
 # ======================================================================================================================
@@ -61,6 +60,14 @@ class OptiTrack_Events:
 
 # ======================================================================================================================
 class OptiTrack:
+    """
+    Universal OptiTrack client that works with both NatNet 3.x (Motive 2) and 4.x (Motive 3+)
+
+    Automatically detects the NatNet version and uses the appropriate method for marker extraction:
+    - NatNet 3.x: Calculates marker positions from rigid body pose + marker offsets (with y-up→z-up conversion)
+    - NatNet 4.x: Uses marker positions directly from frame data (no conversion needed)
+    """
+
     callbacks: OptiTrack_Callbacks
     events: OptiTrack_Events
     natnetclient: NatNetClient
@@ -71,7 +78,6 @@ class OptiTrack:
     first_data_frame_received: bool
 
     running: bool
-
     max_sample_rate: int
 
     # internal: frame queue & processing thread
@@ -81,15 +87,26 @@ class OptiTrack:
     _min_dt: float
     _last_emit_t: float
 
-    _last_received_time: float = 0
+    # NatNet version tracking
+    _natnet_major_version: int
+    _natnet_uses_direct_markers: bool
 
     # ------------------------------------------------------------------------------------------------------------------
-    def __init__(self, server_address, max_sample_rate=30):
+    def __init__(self, server_address, max_sample_rate=30, multicast_address="239.255.42.99",
+                 local_address="0.0.0.0", use_multicast=True):
         """
         server_address: IP/hostname of the OptiTrack streaming server
         max_sample_rate: Hz, upper bound for how often samples are emitted to your callbacks/events
+        multicast_address: Multicast address for data streaming (default: 239.255.42.99)
+        local_address: Local IP address to bind to (default: 0.0.0.0)
+        use_multicast: Whether to use multicast (True) or unicast (False) (default: True)
         """
-        self.natnetclient = NatNetClient(server_address)
+        self.natnetclient = NatNetClient(
+            server_address=server_address,
+            multicast_address=multicast_address,
+            local_address=local_address,
+            use_multicast=use_multicast
+        )
         # Make the NatNet callbacks as light as possible
         self.natnetclient.mocap_data_callback = self._natnet_mocap_data_callback
         self.natnetclient.description_message_callback = self._natnet_description_callback
@@ -98,7 +115,7 @@ class OptiTrack:
         self._min_dt = 1.0 / max(1, self.max_sample_rate)
         self._last_emit_t = 0.0
 
-        self.logger = Logger("Optitrack")
+        self.logger = Logger("OptiTrack")
         self.logger.setLevel('INFO')
 
         self.rigid_bodies = {}
@@ -114,6 +131,10 @@ class OptiTrack:
         self._queue_lock = threading.Lock()
         self._processor_thread = None
 
+        # NatNet version tracking
+        self._natnet_major_version = 0
+        self._natnet_uses_direct_markers = False
+
     # === METHODS ======================================================================================================
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -126,15 +147,15 @@ class OptiTrack:
         self.running = True
         self._processor_thread = threading.Thread(target=self._processing_loop, name="OptiTrackProcessor", daemon=True)
         self._processor_thread.start()
-
+        self.logger.info("Starting OptiTrack client")
         try:
             self.natnetclient.run()
         except Exception as e:
-            self.logger.error("Error while starting NatNetClient. Please make sure that Motive is running")
+            self.logger.warning("Error while starting NatNetClient. Please make sure that Motive is running")
             self.running = False
             return False
 
-        self.logger.info("Start Optitrack")
+
         return True
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -153,6 +174,23 @@ class OptiTrack:
 
     # === PRIVATE METHODS ==============================================================================================
     def _natnet_description_callback(self, data):
+        """
+        Process model definitions from NatNet.
+        Detect NatNet version and configure marker extraction method accordingly.
+        """
+        # Detect NatNet version from client
+        self._natnet_major_version = self.natnetclient.major
+        # NatNet 4.0+ sends marker positions directly in frame data
+        self._natnet_uses_direct_markers = self._natnet_major_version >= 4
+
+        self.logger.info(f"NatNet version detected: {self._natnet_major_version}.{self.natnetclient.minor}")
+        if self._natnet_uses_direct_markers:
+            self.logger.info("Using direct marker positions from frame data (NatNet 4.x behavior)")
+        else:
+            self.logger.info("Using calculated marker positions from rigid body pose + offsets (NatNet 3.x behavior)")
+            if self._natnet_major_version == 3:
+                self.logger.info("Applying y-up → z-up coordinate conversion for marker offsets")
+
         # Rigid Bodies
         for name, rigid_body_data in data.get("rigid_bodies", {}).items():
             rigid_body_id = rigid_body_data["id"]
@@ -160,24 +198,31 @@ class OptiTrack:
             markers: dict[int, MarkerDescription] = {}
 
             for marker_id, marker_description in rigid_body_data.get("markers", {}).items():
-                marker_offset_y_up = marker_description["offset"]
+                marker_offset_raw = marker_description["offset"]
 
-                # Adjust to z-up convention (keep existing behavior)
-                marker_offset = [0.0] * 3
-                marker_offset[0] = -marker_offset_y_up[0]
-                marker_offset[1] = -marker_offset_y_up[2]
-                marker_offset[2] = marker_offset_y_up[1]
+                # For NatNet 3.x: Apply y-up → z-up conversion
+                # (marker offsets are sent in y-up even though streaming data is z-up)
+                if self._natnet_major_version == 3:
+                    marker_offset = [0.0] * 3
+                    marker_offset[0] = -marker_offset_raw[0]
+                    marker_offset[1] = -marker_offset_raw[2]
+                    marker_offset[2] = marker_offset_raw[1]
+                else:
+                    # For NatNet 4.x+: Use directly (already in z-up)
+                    marker_offset = marker_offset_raw
 
                 # Store offset as numpy array once to avoid per-frame asarray allocations
                 marker_offset_np = numpy.asarray(marker_offset, dtype=float)
 
                 marker_size = None
                 label = self._encode_marker_label(asset_id=rigid_body_id, marker_index=marker_id)
-                marker_desc = MarkerDescription(id=marker_id,
-                                                offset=marker_offset_np,
-                                                size=marker_size,
-                                                name='',
-                                                label=label)
+                marker_desc = MarkerDescription(
+                    id=marker_id,
+                    offset=marker_offset_np,
+                    size=marker_size,
+                    name='',
+                    label=label
+                )
                 markers[marker_id] = marker_desc
 
             rigid_body_description = RigidBodyDescription(
@@ -188,10 +233,6 @@ class OptiTrack:
             )
 
             self.rigid_bodies[rigid_body_data["name"]] = rigid_body_description
-
-        # Marker Sets (not used here)
-        # for name, marker_set_data in data.get('marker_sets', {}).items():
-        #     ...
 
         self.description_received = True
 
@@ -204,9 +245,6 @@ class OptiTrack:
         SUPER LIGHT callback: just stash the latest frame and return immediately.
         Heavy work is done in _processing_loop at a controlled rate.
         """
-        duration = time.monotonic() - self._last_received_time
-        self._last_received_time = time.monotonic()
-        # self.logger.important(f"Frequency: {1 / duration:.1f} Hz")
         if not self.description_received:
             return
         with self._queue_lock:
@@ -221,7 +259,7 @@ class OptiTrack:
         """
         # Wait until we have descriptions
         while self.running and not self.description_received:
-            time.sleep(0.1)
+            time.sleep(0.001)
 
         while self.running:
             frame = None
@@ -245,7 +283,7 @@ class OptiTrack:
             if not self.first_data_frame_received:
                 self._extract_initial_mocap_information(data)
                 self.first_data_frame_received = True
-                self.logger.info("Optitrack running!")
+                self.logger.info("OptiTrack running!")
                 self.logger.info(f"Rigid bodies: {[body.name for body in self.rigid_bodies.values()]}")
 
             # Build sample (heavy part moved from NatNet thread to here)
@@ -257,13 +295,13 @@ class OptiTrack:
                     callback(sample)
                 except Exception as e:
                     self.logger.error(f"Error in user sample callback: {e}")
+
             self.events.sample.set(data=sample)
 
             self._last_emit_t = now
 
     # ------------------------------------------------------------------------------------------------------------------
     def _build_sample(self, data) -> dict[str, RigidBodySample]:
-
         sample: dict[str, RigidBodySample] = {}
 
         rigid_bodies_local = self.rigid_bodies
@@ -294,7 +332,6 @@ class OptiTrack:
             orientation = numpy.asarray([ow, ox, oy, oz], dtype=float)
 
             tracking_valid = bool(rbd.get('tracking_valid', True))
-            # marker_error = rbd.get('marker_error', None) # not used, keep if needed later
 
             # Marker set for this RB (if any)
             msd = data_marker_sets.get(rigid_body_description.name)
@@ -302,25 +339,30 @@ class OptiTrack:
             markers: dict[int, numpy.ndarray] = {}
             markers_raw: dict[int, numpy.ndarray | None] = {}
 
-            # Compute solved marker positions from RB pose
-            for marker_id, marker_desc in rigid_body_description.markers.items():
-                # Raw marker (if present)
-                if msd:
-                    # OptiTrack marker indices match marker_id; guard with .get for safety
-                    raw = msd.get(marker_id)
-                    marker_position_raw = numpy.asarray(list(raw), dtype=float) if raw is not None else None
-                else:
-                    marker_position_raw = None
+            if self._natnet_uses_direct_markers and msd:
+                # NatNet 4.x: Use marker positions directly from frame data
+                for marker_idx, marker_pos in msd.items():
+                    markers[marker_idx] = numpy.asarray(marker_pos, dtype=float)
+                    markers_raw[marker_idx] = None  # Not used in this mode
+            else:
+                # NatNet 3.x: Calculate marker positions from rigid body pose + offsets
+                for marker_id, marker_desc in rigid_body_description.markers.items():
+                    # Raw marker (if present)
+                    if msd:
+                        raw = msd.get(marker_id)
+                        marker_position_raw = numpy.asarray(list(raw), dtype=float) if raw is not None else None
+                    else:
+                        marker_position_raw = None
 
-                # Solved position from pose + offset
-                marker_position_solved = self._calculate_rigid_body_marker(
-                    rigid_body_position=position,
-                    rigid_body_orientation=orientation,
-                    marker_offset=marker_desc.offset  # already numpy array
-                )
+                    # Solved position from pose + offset
+                    marker_position_solved = self._calculate_rigid_body_marker(
+                        rigid_body_position=position,
+                        rigid_body_orientation=orientation,
+                        marker_offset=marker_desc.offset  # already numpy array
+                    )
 
-                markers[marker_id] = marker_position_solved
-                markers_raw[marker_id] = marker_position_raw
+                    markers[marker_id] = marker_position_solved
+                    markers_raw[marker_id] = marker_position_raw
 
             rigid_body_sample = RigidBodySample(
                 name=rigid_body_name,
@@ -384,7 +426,6 @@ class OptiTrack:
     @staticmethod
     def _calculate_rigid_body_marker(rigid_body_position, rigid_body_orientation, marker_offset):
         # marker_offset is already a numpy array (no per-call conversion)
-        # NOTE: previous code computed qmt.qinv(...) but never used the inverse; removed for efficiency.
         vector_rotated = transform_vector_from_a_to_b_frame(
             vector_in_a_frame=marker_offset,
             orientation_from_b_to_a=rigid_body_orientation
@@ -393,7 +434,7 @@ class OptiTrack:
 
 
 if __name__ == '__main__':
-    optitrack = OptiTrack(server_address='palantir.lan', max_sample_rate=1000)
+    optitrack = OptiTrack(server_address='palantir.lan', max_sample_rate=100)
     optitrack.init()
     ok = optitrack.start()
 
