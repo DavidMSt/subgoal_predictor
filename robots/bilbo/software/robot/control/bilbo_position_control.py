@@ -83,53 +83,6 @@ class PathState(enum.IntEnum):
 
 
 # =============================================================================
-# OBSTACLE DATA CLASSES
-# =============================================================================
-
-@dataclasses.dataclass
-class CircularObstacle:
-    """A circular obstacle defined by center and radius."""
-    id: str = ''
-    cx: float = 0.0
-    cy: float = 0.0
-    radius: float = 0.0
-
-    def to_dict(self) -> dict:
-        return {'id': self.id, 'type': 'circle', 'cx': self.cx, 'cy': self.cy, 'radius': self.radius}
-
-
-@dataclasses.dataclass
-class RectangularObstacle:
-    """An axis-aligned rectangular obstacle defined by center and dimensions."""
-    id: str = ''
-    cx: float = 0.0
-    cy: float = 0.0
-    width: float = 0.0
-    height: float = 0.0
-
-    def to_dict(self) -> dict:
-        return {'id': self.id, 'type': 'box', 'cx': self.cx, 'cy': self.cy,
-                'width': self.width, 'height': self.height}
-
-
-PositionControlObstacle = CircularObstacle | RectangularObstacle
-
-
-def obstacle_from_dict(data: dict) -> PositionControlObstacle:
-    """Create an obstacle from a dictionary."""
-    obs_type = data.get('type', 'circle')
-    obs_id = data.get('id', '')
-    if obs_type == 'circle':
-        return CircularObstacle(id=obs_id, cx=float(data['cx']), cy=float(data['cy']),
-                                radius=float(data['radius']))
-    elif obs_type in ('box', 'rectangle', 'rect'):
-        return RectangularObstacle(id=obs_id, cx=float(data['cx']), cy=float(data['cy']),
-                                   width=float(data['width']), height=float(data['height']))
-    else:
-        raise ValueError(f"Unknown obstacle type: {obs_type}")
-
-
-# =============================================================================
 # DATA CLASSES
 # =============================================================================
 
@@ -342,9 +295,9 @@ class BILBO_PositionControl:
         self._current_path_settings: dict = {}
         self._current_path_waypoints: list[dict] | None = None
 
-        # Obstacle list (persistent, used by plan_and_follow / plan_path)
-        self._obstacles: list[PositionControlObstacle] = []
-        self._obstacle_id_counter: int = 0
+
+        # Testbed manager reference (set after construction via set_testbed_manager)
+        self.testbed_manager = None
 
         # Register for position control events from STM32
         self.communication.serial.callbacks.event.register(
@@ -450,58 +403,59 @@ class BILBO_PositionControl:
         return self._config
 
     # =========================================================================
-    # OBSTACLE MANAGEMENT
+    # TESTBED MANAGER
     # =========================================================================
 
-    @property
-    def obstacles(self) -> list[PositionControlObstacle]:
-        """Current obstacle list."""
-        return list(self._obstacles)
+    def set_testbed_manager(self, testbed_manager):
+        """Set the testbed manager reference (called after construction)."""
+        self.testbed_manager = testbed_manager
 
-    def add_obstacle(self, obstacle: PositionControlObstacle | dict) -> str:
-        """Add an obstacle and return its id. Accepts dataclass or dict."""
-        if isinstance(obstacle, dict):
-            obstacle = obstacle_from_dict(obstacle)
-        if not obstacle.id:
-            self._obstacle_id_counter += 1
-            obstacle.id = f"obs_{self._obstacle_id_counter}"
-        self._obstacles.append(obstacle)
-        self.logger.info(f"Added obstacle '{obstacle.id}' ({type(obstacle).__name__})")
-        return obstacle.id
-
-    def remove_obstacle(self, obstacle_id: str) -> bool:
-        """Remove an obstacle by id."""
-        for i, obs in enumerate(self._obstacles):
-            if obs.id == obstacle_id:
-                self._obstacles.pop(i)
-                self.logger.info(f"Removed obstacle '{obstacle_id}'")
-                return True
-        self.logger.warning(f"Obstacle '{obstacle_id}' not found")
-        return False
-
-    def clear_obstacles(self):
-        """Remove all obstacles."""
-        count = len(self._obstacles)
-        self._obstacles.clear()
-        self.logger.info(f"Cleared {count} obstacles")
-
-    def get_obstacles_as_dicts(self) -> list[dict]:
-        """Get all obstacles as list of dicts (for WiFi/serialization)."""
-        return [obs.to_dict() for obs in self._obstacles]
+    _OBSTACLE_PADDING = 0.1  # [m] safety padding added to testbed obstacles
 
     def _get_planner_obstacles(self, extra_obstacles: list[dict] | None = None) -> list[Obstacle]:
-        """Merge stored obstacles with optional per-call extras into planner format."""
+        """Collect obstacles from testbed manager (with padding) and merge with optional per-call extras."""
+        from robot.testbed.obstacles import CircleObstacle as TestbedCircle, BoxObstacle as TestbedBox
+        pad = self._OBSTACLE_PADDING
         result = []
-        # Convert stored obstacles
-        for obs in self._obstacles:
-            if isinstance(obs, CircularObstacle):
-                result.append(CircleObstacle(cx=obs.cx, cy=obs.cy, radius=obs.radius))
-            elif isinstance(obs, RectangularObstacle):
-                result.append(BoxObstacle(cx=obs.cx, cy=obs.cy, width=obs.width, height=obs.height))
-        # Add per-call extras
+        # Convert testbed manager obstacles to planner format with padding
+        if self.testbed_manager is not None:
+            for obs in self.testbed_manager.obstacles:
+                if isinstance(obs, TestbedCircle):
+                    result.append(CircleObstacle(cx=obs.x, cy=obs.y, radius=obs.radius + pad))
+                elif isinstance(obs, TestbedBox):
+                    result.append(BoxObstacle(cx=obs.x, cy=obs.y,
+                                              width=obs.width + 2 * pad, height=obs.height + 2 * pad))
+        # Add per-call extras (no padding — caller controls sizing)
         if extra_obstacles:
             result.extend(self._parse_planner_obstacles(extra_obstacles))
         return result
+
+    def _get_testbed_bounds(self) -> Bounds | None:
+        """Get workspace bounds from testbed manager config, if available."""
+        if self.testbed_manager is None or self.testbed_manager.testbed_config is None:
+            return None
+        size = self.testbed_manager.testbed_config.size
+        return Bounds(x_min=size.x_min, x_max=size.x_max, y_min=size.y_min, y_max=size.y_max)
+
+    def _log_planner_inputs(self, start, target, waypoints, obstacles, bounds):
+        """Debug-log all inputs passed to the motion planner."""
+        self.logger.debug(f"--- Planner inputs ---")
+        self.logger.debug(f"  start:  ({start[0]:.3f}, {start[1]:.3f})")
+        self.logger.debug(f"  target: ({target[0]:.3f}, {target[1]:.3f})")
+        if bounds is not None:
+            self.logger.debug(f"  bounds: x=[{bounds.x_min:.3f}, {bounds.x_max:.3f}] "
+                              f"y=[{bounds.y_min:.3f}, {bounds.y_max:.3f}]")
+        else:
+            self.logger.debug(f"  bounds: None (planner will infer)")
+        for i, wp in enumerate(waypoints or []):
+            self.logger.debug(f"  waypoint[{i}]: ({wp.x:.3f}, {wp.y:.3f}) weight={wp.weight:.2f}")
+        for i, obs in enumerate(obstacles or []):
+            if isinstance(obs, CircleObstacle):
+                self.logger.debug(f"  obstacle[{i}]: circle cx={obs.cx:.3f} cy={obs.cy:.3f} r={obs.radius:.3f}")
+            elif isinstance(obs, BoxObstacle):
+                self.logger.debug(f"  obstacle[{i}]: box cx={obs.cx:.3f} cy={obs.cy:.3f} "
+                                  f"w={obs.width:.3f} h={obs.height:.3f}")
+        self.logger.debug(f"--- end planner inputs ---")
 
     # =========================================================================
     # PATH MANAGEMENT
@@ -1033,6 +987,13 @@ class BILBO_PositionControl:
         Returns:
             True if path was planned, loaded, and started successfully
         """
+        if self._top_level_control_mode != BILBO_Control_Mode.POSITION:
+            self.logger.warning(
+                f"Cannot plan path: not in POSITION mode (current: "
+                f"{self._top_level_control_mode.name if self._top_level_control_mode else 'None'})"
+            )
+            return False
+
         # Get start position
         if start is None:
             start = self._get_current_position()
@@ -1046,8 +1007,8 @@ class BILBO_PositionControl:
         # Merge stored obstacles with per-call extras
         planner_obstacles = self._get_planner_obstacles(obstacles)
 
-        # Parse bounds
-        planner_bounds = self._parse_planner_bounds(bounds)
+        # Parse bounds (explicit > testbed > None → planner infers)
+        planner_bounds = self._parse_planner_bounds(bounds) if bounds is not None else self._get_testbed_bounds()
 
         # Run motion planner
         try:
@@ -1056,6 +1017,7 @@ class BILBO_PositionControl:
                 f"({target[0]:.2f}, {target[1]:.2f}), "
                 f"{len(planner_waypoints)} waypoints, {len(planner_obstacles)} obstacles"
             )
+            self._log_planner_inputs(start, target, planner_waypoints, planner_obstacles, planner_bounds)
             dense_points = _plan_path(
                 start=start,
                 end=target,
@@ -1146,7 +1108,9 @@ class BILBO_PositionControl:
 
         planner_waypoints = self._parse_planner_waypoints(waypoints)
         planner_obstacles = self._get_planner_obstacles(obstacles)
-        planner_bounds = self._parse_planner_bounds(bounds)
+        planner_bounds = self._parse_planner_bounds(bounds) if bounds is not None else self._get_testbed_bounds()
+
+        self._log_planner_inputs(start, target, planner_waypoints, planner_obstacles, planner_bounds)
 
         try:
             return _plan_path(
@@ -1447,6 +1411,14 @@ class BILBO_PositionControl:
 
         self.logger.info(f"Turn to heading completed ({math.degrees(heading):.1f} deg)")
         return True
+
+    # =========================================================================
+    # STOP PATH
+    # =========================================================================
+
+    def stop_path(self) -> bool:
+        """Stop and clear the current path."""
+        return self.reset()
 
     # =========================================================================
     # RESET
@@ -1876,35 +1848,6 @@ class BILBO_PositionControl:
             description='Get number of path points on STM32'
         )
 
-        # Obstacle management
-        self.communication.wifi.newCommand(
-            identifier='position_control_add_obstacle',
-            function=self._wifi_add_obstacle,
-            arguments=['obstacle'],
-            description='Add an obstacle (circle or rectangle dict)'
-        )
-
-        self.communication.wifi.newCommand(
-            identifier='position_control_remove_obstacle',
-            function=self._wifi_remove_obstacle,
-            arguments=['obstacle_id'],
-            description='Remove an obstacle by id'
-        )
-
-        self.communication.wifi.newCommand(
-            identifier='position_control_clear_obstacles',
-            function=self.clear_obstacles,
-            arguments=[],
-            description='Remove all obstacles'
-        )
-
-        self.communication.wifi.newCommand(
-            identifier='position_control_get_obstacles',
-            function=self.get_obstacles_as_dicts,
-            arguments=[],
-            description='Get all obstacles as list of dicts'
-        )
-
         # Path control
         self.communication.wifi.newCommand(
             identifier='position_control_start_path',
@@ -1948,6 +1891,13 @@ class BILBO_PositionControl:
             function=self.abort_path,
             arguments=[],
             description='Abort path execution'
+        )
+
+        self.communication.wifi.newCommand(
+            identifier='position_control_stop_path',
+            function=self.stop_path,
+            arguments=[],
+            description='Stop and clear the current path'
         )
 
         # Motion planning + follow
@@ -2037,14 +1987,6 @@ class BILBO_PositionControl:
         """Add stop index from WiFi command"""
         return self.add_stop_index(index=int(index))
 
-    def _wifi_add_obstacle(self, obstacle: dict) -> str:
-        """Add obstacle from WiFi command"""
-        return self.add_obstacle(obstacle)
-
-    def _wifi_remove_obstacle(self, obstacle_id: str) -> bool:
-        """Remove obstacle from WiFi command"""
-        return self.remove_obstacle(obstacle_id)
-
     def _wifi_start_path(self, max_speed: float = 0.0, max_spacing: float = 0.0,
                          timeout: float = 0.0, allow_reverse: bool = False) -> bool:
         """Start path from WiFi command"""
@@ -2079,6 +2021,13 @@ class BILBO_PositionControl:
 
     def _wifi_plan_path(self, target, waypoints=None, obstacles=None, bounds=None, seed=None) -> bool:
         """Plan path from WiFi command. Plans, emits preview event, and loads onto STM32 (without starting)."""
+        if self._top_level_control_mode != BILBO_Control_Mode.POSITION:
+            self.logger.warning(
+                f"Cannot plan path: not in POSITION mode (current: "
+                f"{self._top_level_control_mode.name if self._top_level_control_mode else 'None'})"
+            )
+            return False
+
         if isinstance(target, dict):
             target = (float(target['x']), float(target['y']))
         elif isinstance(target, (list, tuple)):

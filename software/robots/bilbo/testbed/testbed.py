@@ -16,6 +16,7 @@ class TestbedSize:
 @dataclasses.dataclass
 class TestbedConfig:
     size: TestbedSize
+    id: str | None = None
 
 
 @event_definition
@@ -93,7 +94,7 @@ class Testbed:
         """Get testbed configuration as dict for sending to robots."""
         if self.config is None:
             return {}
-        return {
+        config = {
             'size': {
                 'x_min': self.config.size.x_min,
                 'x_max': self.config.size.x_max,
@@ -102,6 +103,9 @@ class Testbed:
             },
             'obstacles': [obs.to_dict() for obs in self.obstacles.values()]
         }
+        if self.config.id is not None:
+            config['id'] = self.config.id
+        return config
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_data(self) -> dict:

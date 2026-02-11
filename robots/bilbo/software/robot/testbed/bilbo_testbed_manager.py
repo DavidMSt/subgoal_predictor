@@ -81,21 +81,22 @@ class BILBO_TestbedManager:
     def add_obstacle(self, type: str, config: dict | None):
         if config is None:
             config = {}
+        # Extract id separately; strip 'id' and 'type' before unpacking into dataclass
+        obs_id = config.get('id')
+        kwargs = {k: v for k, v in config.items() if k not in ('id', 'type')}
         match type:
             case 'circle':
-                id = config.get('id', generate_uuid(prefix='circle_'))
-                if id in [obstacle.id for obstacle in self.obstacles]:
-                    self.logger.error(f"Obstacle with ID '{id}' already exists")
+                obs_id = obs_id or generate_uuid(prefix='circle_')
+                if obs_id in [obstacle.id for obstacle in self.obstacles]:
+                    self.logger.error(f"Obstacle with ID '{obs_id}' already exists")
                     return
-                circle = CircleObstacle(id=id, **config)
-                self.obstacles.append(circle)
+                self.obstacles.append(CircleObstacle(id=obs_id, **kwargs))
             case 'box':
-                id = config.get('id', generate_uuid(prefix='box_'))
-                if id in [obstacle.id for obstacle in self.obstacles]:
-                    self.logger.error(f"Obstacle with ID '{id}' already exists")
+                obs_id = obs_id or generate_uuid(prefix='box_')
+                if obs_id in [obstacle.id for obstacle in self.obstacles]:
+                    self.logger.error(f"Obstacle with ID '{obs_id}' already exists")
                     return
-                box = BoxObstacle(id=id, **config)
-                self.obstacles.append(box)
+                self.obstacles.append(BoxObstacle(id=obs_id, **kwargs))
             case _:
                 raise ValueError(f"Unknown obstacle type '{type}'")
 
@@ -115,6 +116,22 @@ class BILBO_TestbedManager:
         obstacle = next((obstacle for obstacle in self.obstacles if obstacle.id == obstacle_id), None)
         if obstacle is not None:
             obstacle.set_state(x, y, psi)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def update_obstacle_states(self, states: dict):
+        """Batch-update obstacle positions.
+
+        Args:
+            states: Mapping of obstacle_id to state dict, e.g.
+                    {'box1': {'x': 1.0, 'y': 2.0, 'psi': 0.5}, ...}
+                    The 'psi' key is optional per entry.
+        """
+        obstacle_map = {obs.id: obs for obs in self.obstacles}
+        for obstacle_id, state in states.items():
+            obs = obstacle_map.get(obstacle_id)
+            if obs is not None:
+                obs.set_state(x=float(state['x']), y=float(state['y']),
+                              psi=float(state['psi']) if 'psi' in state else None)
 
     # === PRIVATE METHODS ==============================================================================================
     def _load_testbed_control_config(self, testbed_id: str):
@@ -166,3 +183,8 @@ class BILBO_TestbedManager:
                                            function=self.set_obstacle_state,
                                            arguments=['obstacle_id', 'x', 'y', 'psi'],
                                            description='Sets the state of an obstacle')
+
+        self.communication.wifi.newCommand(identifier='update_obstacle_states',
+                                           function=self.update_obstacle_states,
+                                           arguments=['states'],
+                                           description='Batch-update obstacle states: {id: {x, y, psi}, ...}')

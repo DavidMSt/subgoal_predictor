@@ -141,6 +141,7 @@ class BILBO(MainProvider):
 
         self.testbed_manager = BILBO_TestbedManager(common=self.common, communication=self.communication,
                                                     control=self.control)
+        self.control.position_control.set_testbed_manager(self.testbed_manager)
 
         self.experiment_handler = BILBO_ExperimentHandler(common=self.common,
                                                           communication=self.communication,

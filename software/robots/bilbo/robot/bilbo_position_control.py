@@ -240,19 +240,6 @@ class BILBO_PositionControl:
         return self._current_path if self._current_path.path_point_count > 0 else None
 
     # =========================================================================
-    # OBSTACLE FORWARDING (to robot firmware)
-    # =========================================================================
-
-    def send_obstacles(self, obstacles: list[dict]):
-        """Send the full obstacle list to the robot. Each dict should have at minimum:
-        id, type, x, y, psi, width, height."""
-        self.device.executeFunction(
-            function_name='position_control_set_obstacles',
-            arguments={'obstacles': obstacles},
-        )
-        self.logger.debug(f"Sent {len(obstacles)} obstacles to robot")
-
-    # =========================================================================
     # PATH MANAGEMENT
     # =========================================================================
 
@@ -376,6 +363,18 @@ class BILBO_PositionControl:
         )
         if result:
             self.logger.info("Path aborted")
+        return result or False
+
+    def stop_path(self) -> bool:
+        """Stop and clear the current path (abort if running, then clear)"""
+        result = self.device.executeFunction(
+            function_name='position_control_stop_path',
+            arguments=None,
+            return_type=bool,
+            request_response=True
+        )
+        if result:
+            self.logger.info("Path stopped and cleared")
         return result or False
 
     def load_path(self, path_data: 'dict | list[tuple[float, float]]',

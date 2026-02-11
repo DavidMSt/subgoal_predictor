@@ -662,6 +662,13 @@ class BILBO_CLI_CommandSet(CommandSet):
             arguments=[]
         )
 
+        stop_path_command = Command(
+            name='stop',
+            function=self.position_control.stop_path,
+            description='Stop and clear the current path',
+            arguments=[]
+        )
+
         # State commands
         get_state_command = Command(
             name='state',
@@ -736,6 +743,7 @@ class BILBO_CLI_CommandSet(CommandSet):
         navigation_command_set.addCommand(pause_path_command)
         navigation_command_set.addCommand(resume_path_command)
         navigation_command_set.addCommand(abort_path_command)
+        navigation_command_set.addCommand(stop_path_command)
         navigation_command_set.addCommand(get_state_command)
         navigation_command_set.addCommand(reset_command)
         navigation_command_set.addCommand(load_path_command)

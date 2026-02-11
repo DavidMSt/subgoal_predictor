@@ -1,8 +1,11 @@
 import dataclasses
 import os
+import threading
+import time
 
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.events import Event, event_definition, EventFlag
+from core.utils.exit import register_exit_callback
 from core.utils.logging_utils import Logger
 from core.utils.sound.sound import speak
 from extensions.cli.cli import CommandSet, Command, CommandArgument
@@ -170,8 +173,12 @@ class TestbedManager:
         else:
             self.extensions = None
 
-        self.testbed = Testbed()
+        self.testbed = Testbed(config=self._build_testbed_config())
         self.cli = self._build_cli()
+
+        self._running = False
+        self._obstacle_sync_thread: threading.Thread | None = None
+        register_exit_callback(self.close)
 
     # === METHODS ======================================================================================================
     def init(self):
@@ -194,6 +201,16 @@ class TestbedManager:
             self.timecode_server.start()
         if self.extensions is not None:
             self.extensions.start()
+
+        self._running = True
+        self._obstacle_sync_thread = threading.Thread(target=self._obstacle_sync_loop, daemon=True)
+        self._obstacle_sync_thread.start()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def close(self):
+        self._running = False
+        if self._obstacle_sync_thread is not None:
+            self._obstacle_sync_thread.join(timeout=2)
 
     # ------------------------------------------------------------------------------------------------------------------
     def emergency_stop(self):
@@ -229,6 +246,7 @@ class TestbedManager:
             self.timecode_server.add_target(robot.device.address)
 
         self._send_testbed_config_to_robot(robot)
+        self._sync_obstacles_to_robot(robot)
 
         self.testbed.add_bilbo(testbed_bilbo)
         self.events.new_bilbo.set(testbed_bilbo)
@@ -463,15 +481,66 @@ class TestbedManager:
         self.logger.info(f"Updated obstacle '{id}' to ({x:.2f}, {y:.2f})")
 
     # === OBSTACLE SYNCING =============================================================================================
+    def _sync_obstacles_to_robot(self, robot: BILBO):
+        """Send the current obstacle list to a single robot via its TestbedManager."""
+        device = robot.device
+        device.executeFunction('clear_obstacles', arguments={})
+        for obs in self.testbed.obstacles.values():
+            d = obs.to_dict()
+            obs_type = d.pop('type', 'box')
+            device.executeFunction('add_obstacle',
+                                   arguments={'type': obs_type, 'config': d})
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _sync_obstacles_to_robots(self):
-        """Send the current obstacle list to all connected robots."""
-        obstacles_data = [obs.to_dict() for obs in self.testbed.obstacles.values()]
+        """Send the current obstacle list to all connected robots via their TestbedManager."""
         for bilbo_id, testbed_bilbo in self.testbed.bilbos.items():
-            from robots.bilbo.testbed.objects import RealTestbedBILBO
             if isinstance(testbed_bilbo, RealTestbedBILBO):
-                testbed_bilbo.robot.position_control.send_obstacles(obstacles_data)
+                self._sync_obstacles_to_robot(testbed_bilbo.robot)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _sync_obstacle_states_to_robots(self):
+        """Send current obstacle positions to all connected robots."""
+        if not self.testbed.obstacles:
+            return
+        states = {}
+        for obs_id, obs in self.testbed.obstacles.items():
+            s = obs.state
+            states[obs_id] = {'x': s.x, 'y': s.y, 'psi': s.psi}
+        for bilbo_id, testbed_bilbo in self.testbed.bilbos.items():
+            if isinstance(testbed_bilbo, RealTestbedBILBO):
+                testbed_bilbo.robot.device.executeFunction(
+                    'update_obstacle_states', arguments={'states': states})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _obstacle_sync_loop(self):
+        """Background thread: push obstacle states to robots at a fixed rate."""
+        interval = 1.0 / 5  # 5 Hz
+        while self._running:
+            try:
+                self._sync_obstacle_states_to_robots()
+            except Exception as e:
+                self.logger.warning(f"Obstacle state sync error: {e}")
+            time.sleep(interval)
 
     # === PRIVATE METHODS ==============================================================================================
+    def _build_testbed_config(self) -> TestbedConfig | None:
+        """Convert testbed settings (from application YAML) into a TestbedConfig."""
+        ts = self.settings.testbed
+        if ts is None or ts.size is None:
+            return None
+        from robots.bilbo.testbed.testbed import TestbedSize
+        return TestbedConfig(
+            id=ts.id,
+            size=TestbedSize(
+                x_min=ts.size['x'][0],
+                x_max=ts.size['x'][1],
+                y_min=ts.size['y'][0],
+                y_max=ts.size['y'][1],
+            )
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _send_testbed_config_to_robot(self, robot: BILBO):
         """Send the testbed config (size + obstacles) to a robot."""
         config = self.testbed.get_config()
