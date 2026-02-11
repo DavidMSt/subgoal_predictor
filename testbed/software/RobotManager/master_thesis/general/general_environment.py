@@ -119,7 +119,6 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
             # Remove self from neighbors
             nearby_agents.pop(agent.agent_id, None) # don't pop anymore
             lwr_cont.neighbors = nearby_agents
-            # print(agent.agent_id, lwr_cont.neighbors.keys())
 
             # Update nearby task containers
             lwr_cont.state.tasks = filter_by_range(

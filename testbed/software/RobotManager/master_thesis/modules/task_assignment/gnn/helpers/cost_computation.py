@@ -30,10 +30,10 @@ def squared_cost_matrix_from_tensors(
     return torch.cdist(agent_positions, task_positions).pow(2)
 
 
-def squared_cost_dict_from_containers(
+def squared_cost_from_containers(
     agent_cont: FRODOAgentContainer,
     task_cont_dict: dict[str, TaskContainer],
-) -> dict[str, torch.Tensor]:
+) -> torch.Tensor:
     """
     Compute cost matrix from agent and task containers.
 
@@ -42,7 +42,6 @@ def squared_cost_dict_from_containers(
     Args:
         agents: List of agent containers
         tasks: List of task containers
-        device: Torch device to place tensor on
 
     Returns:
         Cost matrix of shape (N_r, N_g)
@@ -59,6 +58,5 @@ def squared_cost_dict_from_containers(
     )
 
     cost_vector = squared_cost_matrix_from_tensors(agent_position, task_positions).squeeze() # make 1d
-    task_ids = task_cont_dict.keys()
 
-    return dict(zip(task_ids, cost_vector.tolist()))
+    return cost_vector
