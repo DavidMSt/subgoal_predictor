@@ -80,7 +80,7 @@ class TAAgentModule():
 
         # communication related things
         self.comm_func = comm_func
-        self.agent_cont.comm_buffer["task_costs"] = {}
+        self.agent_cont.comm_buffer["edge_embeddings"] = {}
         self.agent_cont.comm_buffer["assigned_task"] = {}
 
     def perform_task_assignment(self) -> TaskContainer | None:

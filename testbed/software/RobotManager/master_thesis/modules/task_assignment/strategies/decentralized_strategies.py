@@ -46,11 +46,10 @@ class DecentralizedStrategyABC(BaseStrategy):
             task_containers=task_containers,
             visible_agent_containers=visible_agent_containers or {},
             logger=logger,
-            comm_func = comm_func
         )
 
     @abstractmethod
-    def run(self, comm_func, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
+    def run(self, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
         """Strategy-specific implementation.
 
         Args:
@@ -91,8 +90,22 @@ class DGNNGAStrategy(DecentralizedStrategyABC):
         # move model to the specified device
         self.model.to(device=self.device)
 
-    def run(self, comm_func: Callable, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
+    def run(self, agent_container: FRODOAgentContainer, task_containers: dict[str, TaskContainer], visible_agent_containers: dict[str, FRODOAgentContainer], logger: Logger | None = None) -> TaskContainer | None:
         """Run per-agent GNN inference (decentralized neural network)."""
+
+        def decentralized_comm(Message_sender: torch.Tensor, **kwargs):
+            # write messages into each visible container
+            for vis_agent_container in visible_agent_containers.values():
+                vis_agent_container.comm_buffer['edge_embeddings'][agent_container.agent_id] = Message_sender
+            
+            # wait for incoming messages from each visible agent
+            self._wait_comm_received(agent_cont=agent_container, visible_agent_conts= visible_agent_containers, logger= logger)
+
+            Messages_sum = agent_container.comm_buffer['edge_embeddings'].values()
+            print(Messages_sum)
+            print(type(Messages_sum))
+
+            # H_edges = 1/ len(visible_agent_containers) * 
 
         L = 5
         
@@ -100,19 +113,16 @@ class DGNNGAStrategy(DecentralizedStrategyABC):
         cost_vec = squared_cost_from_containers(agent_cont = agent_container, 
                                                         task_cont_dict= task_containers).to(self.device)
 
+        print(cost_vec.shape)
 
-        # =========================
-        # Encoder Module
-        # =========================
+        assignment_matrix = self.model(c = cost_vec, comm_func = decentralized_comm)
+
+  
         
-        cost_embeddings = self.model.encoder(cost_vec) # encode the cost into embedding using encoder module
-
+        
         exit()
 
-        # =========================
-        # GNN Module
-        # =========================
-
+   
         
         # # communicate with others
         # for visible_agent_cont in visible_agent_containers.values():
@@ -124,13 +134,9 @@ class DGNNGAStrategy(DecentralizedStrategyABC):
         # # piece together all costs for the known tasks
         # cost_matrix = self._create_cost_mat(cost_vec_dict, agent_container)
 
-        for i in range(L):
-            ...
-
-        pred_assignment = ...
 
         # clear TA related dicts from an agents comm buffer
-        agent_container.comm_buffer['task_costs'].clear()
+        agent_container.comm_buffer['edge_embeddings'].clear()
         agent_container.comm_buffer['assigned_task'].clear()
 
     @staticmethod
