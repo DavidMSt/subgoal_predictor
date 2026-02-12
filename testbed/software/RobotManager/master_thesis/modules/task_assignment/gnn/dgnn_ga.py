@@ -31,28 +31,28 @@ class MLPModule(nn.Module):
 class GNNModule(nn.Module):
     """Container for GNN MLPs used in message passing steps."""
 
-    def __init__(self, F: int) -> None:
+    def __init__(self, hidden_dim: int) -> None:
         super().__init__()
         # Agent Assignment Convolution (AAC) - Eq. 4-7
-        self.ac1 = MLPModule(2 * F, F)  # message: goal || edge -> message
-        self.ac2 = MLPModule(2 * F, F)  # update: agent || aggregated -> agent
-        self.ac3 = MLPModule(2 * F, F)  # edge info: agent || edge -> edge_info
+        self.ac1 = MLPModule(2 * hidden_dim, hidden_dim)  # message: goal || edge -> message
+        self.ac2 = MLPModule(2 * hidden_dim, hidden_dim)  # update: agent || aggregated -> agent
+        self.ac3 = MLPModule(2 * hidden_dim, hidden_dim)  # edge info: agent || edge -> edge_info
 
         # Agent Communication Convolution (ACC) - Eq. 8-9
-        self.fmap = MLPModule(F, F)  # transform edge info for communication
+        self.fmap = MLPModule(hidden_dim, hidden_dim)  # transform edge info for communication
 
         # Goal Assignment Convolution (GAC) - Eq. 10
-        self.gc = MLPModule(2 * F, F)  # update: goal || edge_info -> goal
+        self.gc = MLPModule(2 * hidden_dim, hidden_dim)  # update: goal || edge_info -> goal
 
         # Assignment Edge Update (AEU) - Eq. 11
-        self.eu = MLPModule(3 * F, F)  # update: edge || agent || goal -> edge
+        self.eu = MLPModule(3 * hidden_dim, hidden_dim)  # update: edge || agent || goal -> edge
 
     def forward(self, 
                 h_e: torch.Tensor, 
                 h_r: torch.Tensor, 
                 h_g: torch.Tensor, 
                 edge_indices_rr: torch.Tensor, 
-                comm_func: Callable):
+                comm_func: Callable | None):
         
         N_r = h_r.shape[-2]
         
@@ -60,7 +60,7 @@ class GNNModule(nn.Module):
         h_r, H_edges = self.agent_assignment_convolution(h_g, h_e, h_r, N_r=N_r)
 
         # Step 2: Agent Communication Convolution (ACC), Eq. 8-9
-        H_edges = self.agent_commnunication_convolution(H_edges, edge_indices_rr=edge_indices_rr, comm_func= comm_func)
+        H_edges = self.agent_communication_convolution(H_edges, edge_indices_rr=edge_indices_rr, comm_func= comm_func)
 
         # Step 3: Goal Assignment Convolution (GAC), Eq. 10
         h_g = self.goal_assignment_convolution(h_g, H_edges)
@@ -84,7 +84,7 @@ class GNNModule(nn.Module):
 
         return h_r, H_edges
 
-    def agent_commnunication_convolution(self, H_edges: torch.Tensor, edge_indices_rr: None | torch.Tensor = None, comm_func: Callable | None = None)-> torch.Tensor:
+    def agent_communication_convolution(self, H_edges: torch.Tensor, edge_indices_rr: None | torch.Tensor = None, comm_func: Callable | None = None)-> torch.Tensor:
         
         # Select the function which does agent-agent communication
         if comm_func is None: # fallback to "simulated" communication
@@ -114,7 +114,7 @@ class GNNModule(nn.Module):
 
         return h_e
     
-    def _centralized_comm(self, Message_sender: torch.Tensor, edge_indices_rr: None |torch.Tensor, *args, **kwargs)-> torch.Tensor:
+    def _centralized_comm(self, Message_sender: torch.Tensor, edge_indices_rr: torch.Tensor, *args, **kwargs)-> torch.Tensor:
         """
         Default communication function, treats the GNN in central way, no actual communication between decentralized agents
 
@@ -124,12 +124,7 @@ class GNNModule(nn.Module):
         Returns:
             torch.Tensor: _description_
         """
-        Batchsize, N_r, N_g, F = Message_sender.shape
-
-        # Using default for comm density (edges should only be explictly defined in centralized training)
-        if edge_indices_rr is None: # full connectivity among agents
-            edge_indices_rr = self._create_edge_indices_tensor(N_r, Message_sender.device)
-
+        Batchsize, N_r, N_g, hidden_dim = Message_sender.shape
         # unpack into source and destination tensors
         rr_src, rr_dst = edge_indices_rr
 
@@ -137,7 +132,7 @@ class GNNModule(nn.Module):
         Message_sender = Message_sender[:, rr_src]
 
         # compute the updated edges
-        H_edges_new = torch.zeros(Batchsize, N_r, N_g, F, device=Message_sender.device)
+        H_edges_new = torch.zeros(Batchsize, N_r, N_g, hidden_dim, device=Message_sender.device)
 
         # Scatter per batch element
         for b in range(Batchsize):
@@ -164,24 +159,24 @@ class DGNN_GA(nn.Module):
         pred = model(cost.unsqueeze(0)).squeeze(0)
     """
 
-    def __init__(self, F: int, T: int):
+    def __init__(self, hidden_dim: int, T: int):
         """
         Args:
-            F: Hidden dimension size
+            hidden_dim: Hidden dimension size
             T: Number of message passing rounds (communication rounds)
         """
         super().__init__()
-        self.F = F
+        self.hidden_dim = hidden_dim
         self.T = T
 
-        # Encoder: scalar cost -> F-dimensional embedding
-        self.encoder = MLPModule(1, F, hidden_dim=F)
+        # Encoder: scalar cost -> hidden_dim-dimensional embedding
+        self.encoder = MLPModule(1, hidden_dim, hidden_dim=hidden_dim)
 
         # GNN message passing MLPs
-        self.gnn = GNNModule(F)
+        self.gnn = GNNModule(hidden_dim)
 
-        # Decoder: F-dimensional embedding -> assignment score
-        self.decoder = MLPModule(F, 1, hidden_dim=F)
+        # Decoder: hidden_dim-dimensional embedding -> assignment score
+        self.decoder = MLPModule(hidden_dim, 1, hidden_dim=hidden_dim)
 
     def forward(self, 
                 c: torch.Tensor, 
@@ -206,20 +201,19 @@ class DGNN_GA(nn.Module):
             c = c.unsqueeze(0)
 
         B, N_r, N_g = c.shape
-        # device = c.device
-        F = self.F
+        hidden_dim = self.hidden_dim
         T = self.T
 
         # Normalize costs per sample to [0, 1]
         c_max = c.amax(dim=(-2, -1), keepdim=True)
         c = c / (c_max + 1e-8)
 
-        # Encoder: [B, N_r, N_g] -> [B, N_r, N_g, F]
+        # Encoder: [B, N_r, N_g] -> [B, N_r, N_g, hidden_dim]
         h_e = self.encoder(c.unsqueeze(-1))
 
-        # # Initialize node embeddings as zero vectors
-        h_r = torch.zeros(B, N_r, F, device=c.device)
-        h_g = torch.zeros(B, N_g, F, device=c.device)
+        # Initialize node embeddings as zero vectors
+        h_r = torch.zeros(B, N_r, hidden_dim, device=c.device)
+        h_g = torch.zeros(B, N_g, hidden_dim, device=c.device)
 
         # Robot-to-robot connectivity (default: fully connected)
         if edge_indices_rr is None:

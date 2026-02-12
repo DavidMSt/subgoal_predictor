@@ -59,7 +59,7 @@ class DGNNGA_StrategyCent(CentralizedStrategyABC):
         super().__init__()
         self.device = torch.device(device)
         checkpoint = torch.load(checkpoint_path, weights_only=True)
-        self.model = DGNN_GA(F=checkpoint['hidden_dim'], T=checkpoint['comm_rounds'])
+        self.model = DGNN_GA(hidden_dim=checkpoint['hidden_dim'], T=checkpoint['comm_rounds'])
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.model.to(self.device)
 

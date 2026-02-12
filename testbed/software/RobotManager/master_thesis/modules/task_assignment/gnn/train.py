@@ -120,7 +120,7 @@ def setup_training(cfg: TrainConfig)-> tuple[dict, dict, torch.nn.Module, torch.
     set_seeds(cfg.seed)
 
     # model setup
-    model = DGNN_GA(F = cfg.hidden_dim, T = cfg.comm_rounds)
+    model = DGNN_GA(hidden_dim = cfg.hidden_dim, T = cfg.comm_rounds)
     model.to(device = cfg.device)
     model.train(True)
     optimizer = torch.optim.Adam(params=model.parameters(), lr = cfg.lr)
@@ -224,7 +224,7 @@ def load_checkpoint(checkpoint_path: str) -> TrainingCheckpoint:
 def load_model_from_checkpoint(checkpoint_path: str) -> DGNN_GA:
     """Load a trained model from checkpoint (uses stored hyperparams)."""
     checkpoint = load_checkpoint(checkpoint_path)
-    model = DGNN_GA(F=checkpoint['hidden_dim'], T=checkpoint['comm_rounds'])
+    model = DGNN_GA(hidden_dim=checkpoint['hidden_dim'], T=checkpoint['comm_rounds'])
     model.load_state_dict(checkpoint['model_state_dict'])
     return model
 

@@ -82,7 +82,7 @@ class DGNNGAStrategy(DecentralizedStrategyABC):
         checkpoint = torch.load(checkpoint_path, weights_only=True)
 
         # create model instance
-        self.model = DGNN_GA(F=checkpoint['hidden_dim'], T=checkpoint['comm_rounds'])
+        self.model = DGNN_GA(hidden_dim=checkpoint['hidden_dim'], T=checkpoint['comm_rounds'])
 
         # apply loaded weights
         self.model.load_state_dict(checkpoint['model_state_dict'])
