@@ -1,7 +1,8 @@
 from enum import Enum
 from master_thesis.modules.task_assignment.strategies.centralized_strategies import (
-    HungarianStrategyCent, 
-    RandomStrategyCent
+    HungarianStrategyCent,
+    RandomStrategyCent,
+    DGNNGA_StrategyCent
 )
 from master_thesis.modules.task_assignment.strategies.decentralized_strategies import (
     GreedyNearestStrategy,
@@ -15,6 +16,7 @@ class StrategyType(Enum):
     # Centralized
     HUNGARIAN = 'hungarian'
     RANDOM = 'random'
+    DGNNGA_CENT = 'dgnnga_cent'
     
     # Decentralized
     GREEDY_NEAREST = 'greedy_nearest'
@@ -28,6 +30,7 @@ class StrategyRegistry:
     _CENTRALIZED = {
         StrategyType.HUNGARIAN: HungarianStrategyCent,
         StrategyType.RANDOM: RandomStrategyCent,
+        StrategyType.DGNNGA_CENT: DGNNGA_StrategyCent,
     }
     
     _DECENTRALIZED = {

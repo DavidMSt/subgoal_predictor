@@ -337,7 +337,7 @@ def dgnn_ga_example():
         Ts=0.1,
         limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
     )
-    
+
     start_ag1, start_ag2 = (3.0,3.0,3.0), (0.0,0.0,0.0)
     sim.new_agent('vfrodo0', start_config= start_ag1, agent_class= FRODOUniversalAgent)
     sim.new_agent('vfrodo1', start_config= start_ag2, agent_class= FRODOUniversalAgent)
@@ -351,6 +351,32 @@ def dgnn_ga_example():
     result_decent = sim.start_ta(strategy=StrategyType.DGNNGA)
     print(result_decent)
 
+def dgnn_ga_centralized_example():
+    import numpy as np
+    from master_thesis.universal.universal_agent import FRODOUniversalAgent
+
+    env_size = 10
+    sim = FRODO_Universal_Simulation(
+        Ts=0.1,
+        limits=((-env_size//2, env_size//2), (-env_size//2, env_size//2)),
+    )
+
+    sim.new_agent('vfrodo0', start_config=(3.0, 3.0, 0.0), agent_class=FRODOUniversalAgent)
+    sim.new_agent('vfrodo1', start_config=(0.0, 0.0, 0.0), agent_class=FRODOUniversalAgent)
+
+    sim.new_task('task0', -1.0, 2.0, np.pi/2)
+    sim.new_task('task1', 4.0, 4.0, -np.pi)
+
+    sim.init()
+
+    # Centralized DGNN-GA: full cost matrix → GNN forward pass → Hungarian conflict resolution
+    result = sim.start_ta(strategy=StrategyType.DGNNGA_CENT)
+    print('DGNN-GA centralized result:', result)
+
+    # Compare with Hungarian
+    result_hungarian = sim.start_ta(strategy=StrategyType.HUNGARIAN)
+    print('Hungarian result:', result_hungarian)
+
 
 
 if __name__ == "__main__":
@@ -358,4 +384,5 @@ if __name__ == "__main__":
 #    general_example()
     # central_ta_example()
     # local_ta_example()
-    dgnn_ga_example()
+    # dgnn_ga_example()
+    dgnn_ga_centralized_example()

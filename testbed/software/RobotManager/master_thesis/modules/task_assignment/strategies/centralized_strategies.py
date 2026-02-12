@@ -1,10 +1,12 @@
 from scipy.optimize import linear_sum_assignment
 from abc import ABC, abstractmethod
 import numpy as np
+import torch
 from core.utils.logging_utils import Logger
 
-from master_thesis.modules.task_assignment.strategies.base_strategy import BaseStrategy 
-
+from master_thesis.modules.task_assignment.strategies.base_strategy import BaseStrategy
+from master_thesis.modules.task_assignment.gnn.dgnn_ga import DGNN_GA
+from master_thesis.modules.task_assignment.gnn.helpers.cost_computation import squared_cost_matrix_from_tensors
 
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
@@ -49,6 +51,41 @@ class CentralizedStrategyABC(BaseStrategy):
     @abstractmethod
     def run(self, result_cont: SimTAResultContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAResultContainer:
         ...
+
+class DGNNGA_StrategyCent(CentralizedStrategyABC):
+    name: str = 'DGNNGA_Cent'
+
+    def __init__(self, checkpoint_path: str = 'master_thesis/modules/task_assignment/gnn/checkpoints/dgnn_ga_N5-10_L5_F64_20251010_f90.pt', device: str = 'cpu'):
+        super().__init__()
+        self.device = torch.device(device)
+        checkpoint = torch.load(checkpoint_path, weights_only=True)
+        self.model = DGNN_GA(F=checkpoint['hidden_dim'], T=checkpoint['comm_rounds'])
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.to(self.device)
+
+    def run(self, result_cont: SimTAResultContainer, agent_containers: dict[str, FRODOAgentContainer], task_containers: dict[str, TaskContainer], logger: Logger | None = None) -> SimTAResultContainer:
+        """Centralized DGNN-GA assignment: GNN forward pass + Hungarian conflict resolution."""
+        agent_positions = torch.tensor(
+            [[ac.x, ac.y] for ac in agent_containers.values()], dtype=torch.float32
+        )
+        task_positions = torch.tensor(
+            [[tc.x, tc.y] for tc in task_containers.values()], dtype=torch.float32
+        )
+        cost_matrix = squared_cost_matrix_from_tensors(agent_positions, task_positions)
+
+        with torch.no_grad():
+            scores = self.model(cost_matrix.to(self.device)).squeeze(0).cpu().numpy()
+
+        # Conflict resolution: Hungarian on negative scores for one-to-one matching
+        row_ind, col_ind = linear_sum_assignment(-scores)
+
+        agent_ids = list(agent_containers.keys())
+        task_ids = list(task_containers.keys())
+
+        result_cont.matches = [(agent_ids[i], task_ids[j]) for i, j in zip(row_ind, col_ind)]
+        result_cont.scores = scores
+        return result_cont
+
 
 class RandomStrategyCent(CentralizedStrategyABC):
     name: str = 'RandomStrategyCent'
