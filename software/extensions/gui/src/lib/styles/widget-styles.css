@@ -2710,6 +2710,344 @@
     font-size: 0.8em;
 }
 
+/* === CAMERA ======================================================================================================= */
+.cameraWidget {
+    position: relative;
+    background: #111;
+    overflow: hidden;
+    border-radius: 6px;
+}
+
+/* ── Compact pop-out button (hidden by default, shown in compact mode) ──── */
+.cameraWidget__compactBtn {
+    display: none;
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 6;
+    background: rgba(10, 10, 10, 0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    font-size: 1.1em;
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s ease, background 0.2s ease;
+    pointer-events: none;
+}
+
+.cameraWidget__compactBtn:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* ── Compact mode ──────────────────────────────────────────────────────────── */
+.cameraWidget--compact .cameraWidget__toolbar {
+    display: none !important;
+}
+
+.cameraWidget--compact .cameraWidget__media {
+    object-fit: cover;
+}
+
+.cameraWidget--compact .cameraWidget__statusText {
+    font-size: 1.2em;
+}
+
+.cameraWidget--compact .cameraWidget__compactBtn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.cameraWidget--compact:hover .cameraWidget__compactBtn {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* ── Video area (fills entire widget) ────────────────────────────────────── */
+.cameraWidget__videoContainer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+.cameraWidget__media {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center;
+    display: block;
+}
+
+.cameraWidget__statusText {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.85em;
+    text-align: center;
+    pointer-events: none;
+    z-index: 1;
+}
+
+/* ── Toolbar (slides in on hover) ────────────────────────────────────────── */
+.cameraWidget__toolbar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px;
+    background: rgba(10, 10, 10, 0.55);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 0 0 10px 10px;
+    z-index: 5;
+    opacity: 0;
+    transform: translateY(-100%);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    pointer-events: none;
+}
+
+.cameraWidget:hover .cameraWidget__toolbar {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+
+.cameraWidget__select {
+    flex: 1;
+    min-width: 0;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 0.8em;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.2s ease;
+}
+
+.cameraWidget__select:hover {
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+.cameraWidget__select:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.cameraWidget__button {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #fff;
+    font-size: 0.8em;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 6px;
+    flex-shrink: 0;
+    transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.cameraWidget__button:hover {
+    background: rgba(255, 255, 255, 0.2);
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+/* ── Floating pop-out panel ───────────────────────────────────────────────── */
+.cameraWidget__float {
+    position: fixed;
+    z-index: 900;
+    background: transparent;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 6px 32px rgba(0, 0, 0, 0.35);
+    min-width: 200px;
+    min-height: 150px;
+    user-select: none;
+}
+
+.cameraWidget__floatMedia {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: center;
+    display: block;
+    transition: opacity 0.15s ease;
+}
+
+/* ── Hover controls (invisible until hover) ──────────────────────────────── */
+.cameraWidget__floatHover {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.cameraWidget__float:hover .cameraWidget__floatHover {
+    opacity: 1;
+    /* stays pointer-events: none — only the bars inside capture clicks */
+}
+
+.cameraWidget__floatBar {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: rgba(10, 10, 10, 0.55);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    pointer-events: auto;
+}
+
+.cameraWidget__floatBar--top {
+    top: 0;
+    justify-content: flex-end;
+    border-radius: 10px 10px 0 0;
+}
+
+.cameraWidget__floatBar--bottom {
+    bottom: 0;
+    border-radius: 0 0 10px 10px;
+}
+
+.cameraWidget__floatSelect {
+    flex: 1;
+    min-width: 0;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 5px;
+    padding: 2px 6px;
+    font-size: 0.7em;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+}
+
+.cameraWidget__floatSelect:hover {
+    border-color: rgba(255, 255, 255, 0.4);
+}
+
+.cameraWidget__floatBtn {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: #fff;
+    font-size: 0.8em;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 6px;
+    transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.cameraWidget__floatBtn:hover {
+    background: rgba(220, 50, 50, 0.6);
+    border-color: rgba(220, 50, 50, 0.8);
+}
+
+.cameraWidget__floatLabel {
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.75em;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.cameraWidget__floatSlider {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1;
+    height: 4px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+}
+
+.cameraWidget__floatSlider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    border: none;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    cursor: pointer;
+    transition: transform 0.15s ease;
+}
+
+.cameraWidget__floatSlider::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+}
+
+.cameraWidget__floatSlider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: #fff;
+    border-radius: 50%;
+    border: none;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+    cursor: pointer;
+}
+
+/* ── Crop overlay ─────────────────────────────────────────────────────────── */
+.cameraWidget__cropOverlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    cursor: crosshair;
+    z-index: 10;
+}
+
+.cameraWidget__cropSelection {
+    position: absolute;
+    border: 2px dashed rgba(255, 255, 255, 0.85);
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+}
+
 /* ------------------------------------------------------------------------------------------------------------------ */
 /* ───────────────────────────────────────────────────────────────────────────
    CheckboxWidget (mirrors TextInputWidget layout + new styling options)

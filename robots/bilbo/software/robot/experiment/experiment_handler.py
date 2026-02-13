@@ -150,6 +150,7 @@ class BILBO_ExperimentHandler:
         self._internal_events = BILBO_ExperimentHandler.InternalEvents()
         self.action_event = Event(flags=EventFlag('id', str))
         self.markers = {}
+        self._active_dilc_experiment = None
 
         self.common.callbacks.end_of_step.register(self._end_of_step_callback)
 
@@ -227,6 +228,26 @@ class BILBO_ExperimentHandler:
                 )
             ],
             description="Stop the currently running experiment"
+        )
+
+        self.communication.wifi.newCommand(
+            identifier='set_dilc_auto_start_trials',
+            function=self._set_dilc_auto_start_trials,
+            arguments=[
+                CommandArgument(name='value', type=bool, optional=False,
+                                description="Enable or disable auto-start of trials")
+            ],
+            description="Set DILC auto_start_trials during experiment",
+        )
+
+        self.communication.wifi.newCommand(
+            identifier='set_dilc_auto_accept_trials',
+            function=self._set_dilc_auto_accept_trials,
+            arguments=[
+                CommandArgument(name='value', type=bool, optional=False,
+                                description="Enable or disable auto-accept of trials")
+            ],
+            description="Set DILC auto_accept_trials during experiment",
         )
 
     # === METHODS ======================================================================================================
@@ -326,7 +347,11 @@ class BILBO_ExperimentHandler:
             experiment_handler=self,
             settings=settings,
         )
-        return experiment.run()
+        self._active_dilc_experiment = experiment
+        try:
+            return experiment.run()
+        finally:
+            self._active_dilc_experiment = None
 
     # ------------------------------------------------------------------------------------------------------------------
     def stop_current_experiment(self, reason: str = "External stop request") -> bool:
@@ -359,6 +384,8 @@ class BILBO_ExperimentHandler:
         """
         BLOCKING!
         """
+
+        self.control.disable_external_input()
 
         if self.trajectory_status == BILBO_ExperimentHandler_TrajectoryStatus.RUNNING:
             self.logger.warning(f"Trajectory {trajectory.id} is already running. Aborting.")
@@ -412,6 +439,7 @@ class BILBO_ExperimentHandler:
                 return None
 
             self.utilities.beep(1000, 250, 1)
+            time.sleep(0.01)
             start_tick = data.get('tick')
 
             if start_tick is None:
@@ -505,7 +533,7 @@ class BILBO_ExperimentHandler:
 
         finally:
             # Always re-enable external input, no matter which return path or exception happens.
-            self.control.enable_external_input = True
+            self.control.enable_external_input()
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_action_event(self, event: str):
@@ -556,6 +584,24 @@ class BILBO_ExperimentHandler:
         return sample
 
     # === EXTERNAL METHODS =============================================================================================
+    def _set_dilc_auto_start_trials(self, value: bool) -> bool:
+        """WiFi handler: set auto_start_trials on the active DILC experiment."""
+        if self._active_dilc_experiment is None:
+            self.logger.warning("No active DILC experiment — cannot set auto_start_trials")
+            return False
+        self._active_dilc_experiment.set_auto_start_trials(value)
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_dilc_auto_accept_trials(self, value: bool) -> bool:
+        """WiFi handler: set auto_accept_trials on the active DILC experiment."""
+        if self._active_dilc_experiment is None:
+            self.logger.warning("No active DILC experiment — cannot set auto_accept_trials")
+            return False
+        self._active_dilc_experiment.set_auto_accept_trials(value)
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _run_dilc_experiment_external(self, settings: dict) -> bool:
         """Handle WiFi command to start a DILC experiment (non-blocking)."""
         if self.status != BILBO_ExperimentHandler_Status.IDLE:
@@ -724,9 +770,6 @@ class BILBO_ExperimentHandler:
             self.logger.warning("Failed to start trajectory on STM32. Aborting.")
             return False
 
-        # We successfully started the trajectory on the STM32. We are now disabling external control inputs
-        self.control.enable_external_input = False
-
         # TODO: Set the mode?
         return True
 
@@ -832,6 +875,7 @@ class BILBO_ExperimentHandler:
         })
 
         self.active_experiment = None
+        self.status = BILBO_ExperimentHandler_Status.IDLE
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_experiment_error(self, data: dict | str | None = None, *args, **kwargs):

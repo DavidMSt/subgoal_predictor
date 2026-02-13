@@ -106,9 +106,27 @@ position_control: # Dense path following (pure pursuit)
   max_turn_rate: 5.0                  # [rad/s] Maximum yaw rate
   lookahead_base: 0.15                # [m] Base lookahead distance (scaled by speed for path following)
   lookahead_min: 0.03                 # [m] Minimum lookahead distance for path following
-  speed_curvature_power: 0.5           # [-] Exponent for spacing→speed mapping (1.0=linear, 0.5=sqrt)
   arrival_tolerance: 0.05             # [m] Distance to consider arrived
-  arrival_dwell_time: 0.5             # [s] Hold time at STOP waypoints
+  arrival_dwell_time: 0.5             # [s] Hold time at path end
+  stop_dwell_time: 1.0                # [s] Hold time at STOP waypoints
   reverse_enter_angle: 2.1            # [rad] Enter reverse mode (~120 deg)
   reverse_exit_angle: 1.05            # [rad] Exit reverse mode (~60 deg)
   decel_limit: 0.6                    # [m/s^2] Sqrt deceleration profile (0 = use kp_linear instead)
+  curvature_gain: 2.0                 # [-] Curvature→speed: v = max_speed / (1 + gain * κ). Higher = slower in curves.
+  curvature_lookahead: 0.3            # [m] How far ahead to estimate curvature from path points
+planning:
+  method: rrt
+  smoothing: 1.0
+  safety_margin: 0.15
+  clearance_weight: 0.0
+  clearance_threshold: 0.5
+  rrt:
+    rrt_star: true
+    step_size: 0.10
+    goal_bias: 0.10
+    rewire_radius: 0.30
+  prm:
+    n_samples: 800
+    k_neighbors: 15
+    connection_radius: 0.6
+    seed: 42

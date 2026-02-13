@@ -18,6 +18,9 @@
 /* Global Firmware Instance */
 TWIPR_Firmware twipr_firmware;
 
+/* DMA-accessible buffer for receiving path points via SPI */
+_RAM_D2 path_point_t path_rx_buffer[BILBO_POSITION_CONTROL_MAX_PATH_POINTS];
+
 /* Set the global tick */
 uint32_t tick_global = 0;
 
@@ -413,6 +416,8 @@ HAL_StatusTypeDef TWIPR_Firmware::init() {
 			CM4_SAMPLE_NOTIFICATION_PORT, CM4_SAMPLE_NOTIFICATION_PIN),
 			.sequence_rx_buffer = this->sequencer.rx_buffer,
 			.len_sequence_buffer = TWIPR_SEQUENCE_BUFFER_SIZE,
+			.path_rx_buffer = (uint8_t*) path_rx_buffer,
+			.len_path_buffer = BILBO_POSITION_CONTROL_MAX_PATH_POINTS,
 			.reset_uart_exti = CM4_UART_RESET_EXTI, .modbus_huart =
 			BOARD_RS485_UART, .modbus_gpio_port =
 			BOARD_RS485_UART_EN_GPIOx, .modbus_gpio_pin =
@@ -434,6 +439,11 @@ HAL_StatusTypeDef TWIPR_Firmware::init() {
 			&this->estimation, .drive = &this->drive, .Ts =
 	BILBO_CONTROL_TASK_TIME, };
 	this->control.init(bilbo_control_config);
+
+	// Set up SPI path receive: give control the DMA buffer pointer and register callback
+	this->control.spi_path_rx_buffer = path_rx_buffer;
+	this->comm.callbacks.path_received.registerFunction(&this->control,
+			&BILBO_Control::position_spi_path_received);
 
 	// Register callback for immediate LED update on mode change
 //	this->control.callbacks.mode_change.registerFunction(this,

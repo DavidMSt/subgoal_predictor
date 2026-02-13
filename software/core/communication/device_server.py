@@ -222,7 +222,10 @@ class Device:
                         f"Got response for function \"{function_name}\"! Response time: {response_time:.0f} ms")
 
                 data = request.event.get_data()
-                success = data.get('success', None)
+                if data is not None:
+                    success = data.get('success', None)
+                else:
+                    success = False
                 self._readRequests.pop(request.id)
 
                 if return_type is None:

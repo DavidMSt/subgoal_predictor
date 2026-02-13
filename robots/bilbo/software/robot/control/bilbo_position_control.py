@@ -16,14 +16,11 @@ import base64
 import ctypes
 import dataclasses
 import enum
-import json
 import math
-import os
 import struct
+import time
 import zlib
 from typing import Any
-
-import yaml
 
 from core.communication.wifi.bilbolab_wifi_interface import (
     wifi_event_definition, WifiEventContainer, WifiEvent, WifiEventFlag,
@@ -35,7 +32,7 @@ from core.utils.events import event_definition, Event, EventFlag, wait_for_event
 from core.utils.logging_utils import Logger
 from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
-from robot.control.bilbo_control_definitions import PositionControl_Config, BILBO_Control_Mode
+from robot.control.bilbo_control_definitions import PositionControl_Config, PlanningConfig, BILBO_Control_Mode
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
 from robot.lowlevel.stm32_addresses import TWIPR_AddressTables, TWIPR_PositionControlAddresses
 from robot.lowlevel.stm32_control import (
@@ -45,21 +42,22 @@ from robot.lowlevel.stm32_control import (
     bilbo_position_control_data,
     bilbo_position_control_data_t,
     path_point_t,
-    path_points_batch_t,
-    BATCH_SIZE,
     bilbo_path_start_cmd_t,
     turn_to_heading_command_t,
     move_to_point_command_t,
     bilbo_position_control_config_t,
 )
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample
-from robot.control.motion_planning import (
+from core.utils.control.lib_control.motion_planning import (
     plan_path as _plan_path,
+    plan_path_mp as _plan_path_mp,
     Waypoint as PlannerWaypoint,
     CircleObstacle,
     BoxObstacle,
     Bounds,
     Obstacle,
+    PRMRoadmap,
+    PRMConfig as PlannerPRMConfig,
 )
 
 
@@ -101,10 +99,12 @@ def position_control_config_to_ctypes(config: PositionControl_Config) -> bilbo_p
         lookahead_min=config.lookahead_min,
         arrival_tolerance=config.arrival_tolerance,
         arrival_dwell_time=config.arrival_dwell_time,
+        stop_dwell_time=config.stop_dwell_time,
         reverse_enter_angle=config.reverse_enter_angle,
         reverse_exit_angle=config.reverse_exit_angle,
-        speed_curvature_power=config.speed_curvature_power,
         decel_limit=config.decel_limit,
+        curvature_gain=config.curvature_gain,
+        curvature_lookahead=config.curvature_lookahead,
     )
 
 
@@ -166,7 +166,7 @@ class PositionControlEvents:
     # Stop events (dense path uses stop indices instead of waypoints)
     stop_reached: Event = Event(flags=EventFlag('index', int))
     stop_completed: Event = Event(flags=EventFlag('index', int))
-    path_buffer_full: Event  # STM32 buffer is full, add_path_point failed
+    path_buffer_full: Event  # STM32 buffer is full
 
     # Single-point command events
     move_to_point_started: Event
@@ -235,7 +235,8 @@ class PositionControlWifiEvents(WifiEventContainer):
     turn_to_heading_completed: WifiEvent = _PC_WIFI_EVENT
     turn_to_heading_timeout: WifiEvent = _PC_WIFI_EVENT
 
-    # Planning (preview only, no load/start)
+    # Planning
+    path_planning_started: WifiEvent = _PC_WIFI_EVENT
     path_planned: WifiEvent = _PC_WIFI_EVENT
     path_cleared: WifiEvent = _PC_WIFI_EVENT
 
@@ -278,6 +279,8 @@ class BILBO_PositionControl:
         self._current_index: int = 0
         self._data = PositionControlData()
         self._config = PositionControl_Config()
+        self._planning_config = PlanningConfig()
+        self._prm_roadmap: PRMRoadmap | None = None
 
         # Track top-level control mode for validation
         self._top_level_control_mode = None
@@ -402,6 +405,33 @@ class BILBO_PositionControl:
         """Get current configuration"""
         return self._config
 
+    def set_planning_config(self, config: PlanningConfig):
+        """Set planning config (Python-only, not sent to firmware)."""
+        self._planning_config = config
+        self._prm_roadmap = None  # invalidate — will rebuild on next PRM query
+        self.logger.info(f"Planning config set: method={config.method}, smoothing={config.smoothing}")
+
+    def build_prm_map(self):
+        """Build (or rebuild) the PRM roadmap in a separate process (non-blocking for GIL)."""
+        obstacles = self._get_planner_obstacles()
+        bounds = self._get_testbed_bounds()
+        if bounds is None:
+            self.logger.warning("Cannot build PRM: no testbed bounds")
+            return
+        cfg = self._planning_config
+        prm_cfg = PlannerPRMConfig(
+            n_samples=cfg.prm.n_samples,
+            k_neighbors=cfg.prm.k_neighbors,
+            connection_radius=cfg.prm.connection_radius,
+            clearance_weight=cfg.clearance_weight,
+            clearance_threshold=cfg.clearance_threshold,
+            seed=cfg.prm.seed,
+        )
+        self._prm_roadmap = PRMRoadmap(obstacles, bounds, prm_cfg)
+        self._prm_roadmap.build_mp()
+        self.logger.info(f"PRM roadmap built: {self._prm_roadmap.node_count} nodes, "
+                         f"{self._prm_roadmap.edge_count} edges")
+
     # =========================================================================
     # TESTBED MANAGER
     # =========================================================================
@@ -410,27 +440,21 @@ class BILBO_PositionControl:
         """Set the testbed manager reference (called after construction)."""
         self.testbed_manager = testbed_manager
 
-    _OBSTACLE_PADDING = 0.1  # [m] safety padding added to testbed obstacles
-
     def _get_planner_obstacles(self, extra_obstacles: list[dict] | None = None) -> list[Obstacle]:
-        """Collect obstacles from testbed manager (with padding) and merge with optional per-call extras."""
+        """Collect obstacles from testbed manager (inflated by safety_margin) and merge with optional per-call extras."""
         from robot.testbed.obstacles import CircleObstacle as TestbedCircle, BoxObstacle as TestbedBox
-        pad = self._OBSTACLE_PADDING
+        pad = self._planning_config.safety_margin
         result = []
         # Convert testbed manager obstacles to planner format with padding.
-        # The planner uses axis-aligned boxes, so rotated boxes are converted
-        # to their axis-aligned bounding box.
         if self.testbed_manager is not None:
             for obs in self.testbed_manager.obstacles:
                 if isinstance(obs, TestbedCircle):
                     result.append(CircleObstacle(cx=obs.x, cy=obs.y, radius=obs.radius + pad))
                 elif isinstance(obs, TestbedBox):
-                    c = math.cos(obs.psi)
-                    s = math.sin(obs.psi)
-                    aabb_w = abs(obs.width * c) + abs(obs.height * s)
-                    aabb_h = abs(obs.width * s) + abs(obs.height * c)
                     result.append(BoxObstacle(cx=obs.x, cy=obs.y,
-                                              width=aabb_w + 2 * pad, height=aabb_h + 2 * pad))
+                                              width=obs.width + 2 * pad,
+                                              height=obs.height + 2 * pad,
+                                              psi=obs.psi))
         # Add per-call extras (no padding — caller controls sizing)
         if extra_obstacles:
             result.extend(self._parse_planner_obstacles(extra_obstacles))
@@ -461,6 +485,17 @@ class BILBO_PositionControl:
             elif isinstance(obs, BoxObstacle):
                 self.logger.debug(f"  obstacle[{i}]: box cx={obs.cx:.3f} cy={obs.cy:.3f} "
                                   f"w={obs.width:.3f} h={obs.height:.3f}")
+        cfg = self._planning_config
+        self.logger.debug(f"  method: {cfg.method}")
+        self.logger.debug(f"  smoothing: {cfg.smoothing:.2f}")
+        if cfg.method == 'rrt':
+            self.logger.debug(f"  rrt_star: {cfg.rrt.rrt_star}, max_iterations: {cfg.rrt.max_iterations}")
+            self.logger.debug(f"  step_size: {cfg.rrt.step_size}, goal_bias: {cfg.rrt.goal_bias}, rewire_radius: {cfg.rrt.rewire_radius}")
+        else:
+            self.logger.debug(f"  prm n_samples: {cfg.prm.n_samples}, k_neighbors: {cfg.prm.k_neighbors}")
+        self.logger.debug(f"  safety_margin: {cfg.safety_margin}")
+        if cfg.clearance_weight > 0:
+            self.logger.debug(f"  clearance_weight: {cfg.clearance_weight}, clearance_threshold: {cfg.clearance_threshold}")
         self.logger.debug(f"--- end planner inputs ---")
 
     # =========================================================================
@@ -490,79 +525,6 @@ class BILBO_PositionControl:
             )
         else:
             self.logger.error("Failed to clear path on STM32")
-
-        return result or False
-
-    def add_path_point(self, x: float, y: float) -> bool:
-        """Add a single path point to the STM32 buffer"""
-        if self._top_level_control_mode != BILBO_Control_Mode.POSITION:
-            self.logger.warning(
-                f"Cannot add path points when not in POSITION mode (current: "
-                f"{self._top_level_control_mode.name if self._top_level_control_mode else 'None'})"
-            )
-            return False
-
-        if self.is_busy:
-            self.logger.warning("Cannot add path point while busy")
-            return False
-
-        point = path_point_t(x=x, y=y)
-        result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.ADD_PATH_POINT,
-            input_type=path_point_t,
-            output_type=ctypes.c_bool,
-            data=point
-        )
-
-        if result:
-            self._path_point_count += 1
-        else:
-            self.logger.error("Failed to add path point to STM32")
-
-        return result or False
-
-    def add_path_points_batch(self, points: list[tuple[float, float]], start_index: int) -> bool:
-        """Add a batch of path points to the STM32 buffer.
-
-        Args:
-            points: List of (x, y) tuples, max BATCH_SIZE (10) per call
-            start_index: Write offset into the firmware path buffer
-        """
-        count = len(points)
-        if count == 0 or count > BATCH_SIZE:
-            self.logger.error(f"Batch size must be 1..{BATCH_SIZE}, got {count}")
-            return False
-
-        if self._top_level_control_mode != BILBO_Control_Mode.POSITION:
-            self.logger.warning("Cannot add path points when not in POSITION mode")
-            return False
-
-        if self.is_busy:
-            self.logger.warning("Cannot add path points while busy")
-            return False
-
-        batch = path_points_batch_t()
-        batch.start_index = start_index
-        batch.count = count
-        for i, (x, y) in enumerate(points):
-            batch.points[i].x = x
-            batch.points[i].y = y
-
-        result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.ADD_PATH_BATCH,
-            input_type=path_points_batch_t,
-            output_type=ctypes.c_bool,
-            data=batch
-        )
-
-        if result:
-            end = start_index + count
-            if end > self._path_point_count:
-                self._path_point_count = end
-        else:
-            self.logger.error(f"Failed to add path batch at index {start_index}")
 
         return result or False
 
@@ -602,6 +564,47 @@ class BILBO_PositionControl:
         if result is not None:
             self._path_point_count = result
         return self._path_point_count
+
+    @staticmethod
+    def _path_points_to_bytes(points: list[tuple[float, float]]) -> bytes:
+        """Convert a list of (x, y) tuples to a flat byte array of path_point_t structs."""
+        ArrayType = path_point_t * len(points)
+        c_array = ArrayType()
+        for i, (x, y) in enumerate(points):
+            c_array[i].x = x
+            c_array[i].y = y
+        return bytes(c_array)
+
+    def upload_path_spi(self, points: list[tuple[float, float]]) -> bool:
+        """Upload path points to STM32 via SPI bulk transfer.
+
+        Sends all points in a single SPI DMA transfer, then verifies the
+        firmware received the correct count by reading back the path point
+        count register over UART.
+
+        Args:
+            points: List of (x, y) tuples to upload.
+
+        Returns:
+            True if the firmware confirmed receiving the correct number of points.
+        """
+        path_bytes = self._path_points_to_bytes(points)
+        self.communication.spi.sendPathData(len(points), path_bytes)
+
+        # Wait for firmware to process the DMA transfer
+        time.sleep(0.05)
+
+        # Verify by reading back the path point count via UART
+        fw_count = self.get_path_point_count()
+        if fw_count != len(points):
+            self.logger.error(
+                f"SPI path upload verification failed: sent {len(points)} points, "
+                f"firmware reports {fw_count}"
+            )
+            return False
+
+        self._path_point_count = fw_count
+        return True
 
     # =========================================================================
     # PATH FOLLOWING
@@ -656,48 +659,6 @@ class BILBO_PositionControl:
             self.logger.info(f"Started path with {self._path_point_count} points")
         else:
             self.logger.error("Failed to start path on STM32")
-
-        return result or False
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def pause_path(self) -> bool:
-        """Pause path execution (can be resumed)"""
-        if not self.is_path_running:
-            self.logger.warning("Cannot pause: not running")
-            return False
-
-        result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.PAUSE_PATH,
-            input_type=None,
-            output_type=ctypes.c_bool,
-        )
-
-        if result:
-            self.logger.info("Path paused")
-        else:
-            self.logger.error("Failed to pause path")
-
-        return result or False
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def resume_path(self) -> bool:
-        """Resume paused path execution"""
-        if self._path_state != PathState.PAUSED:
-            self.logger.warning("Cannot resume: not paused")
-            return False
-
-        result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.RESUME_PATH,
-            input_type=None,
-            output_type=ctypes.c_bool,
-        )
-
-        if result:
-            self.logger.info("Path resumed")
-        else:
-            self.logger.error("Failed to resume path")
 
         return result or False
 
@@ -835,15 +796,15 @@ class BILBO_PositionControl:
             if not self.clear_path():
                 self.logger.error("Failed to clear existing path")
                 return False
+            time.sleep(0.005)  # yield GIL
 
-        # Send path points in batches of BATCH_SIZE
+        # Upload all path points via SPI (single bulk transfer)
         total = len(parsed_points)
-        self.logger.info(f"Loading {total} path points ({(total + BATCH_SIZE - 1) // BATCH_SIZE} batches)")
-        for batch_start in range(0, total, BATCH_SIZE):
-            batch_points = parsed_points[batch_start:batch_start + BATCH_SIZE]
-            if not self.add_path_points_batch(batch_points, start_index=batch_start):
-                self.logger.error(f"Failed to add path batch at index {batch_start}")
-                return False
+        self.logger.info(f"Loading {total} path points via SPI")
+        if not self.upload_path_spi(parsed_points):
+            self.logger.error("SPI path upload failed")
+            return False
+        time.sleep(0.005)  # yield GIL
 
         # Add stop indices
         for idx in effective_stop_indices:
@@ -853,6 +814,7 @@ class BILBO_PositionControl:
                 return False
 
         self.logger.info(f"Loaded path: {total} points, {len(effective_stop_indices)} stops")
+        time.sleep(0.005)  # yield GIL
 
         # Store path data for visualization
         self._current_path_points = parsed_points
@@ -888,69 +850,49 @@ class BILBO_PositionControl:
 
         return True
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def load_path_from_file(self, filepath: str,
-                            start: bool = False,
-                            clear_existing: bool = True,
-                            max_speed: float | None = None,
-                            max_spacing: float | None = None,
-                            allow_reverse: bool | None = None,
-                            timeout: float | None = None) -> bool:
-        """
-        Load path from a JSON or YAML file.
-
-        Args:
-            filepath: Path to .json or .yaml/.yml file
-            start: If True, automatically start the path after loading
-            clear_existing: If True, clear existing path before loading
-            max_speed: Override for max_speed (None = use file value or default 0)
-            max_spacing: Override for max_spacing (None = use file value or default 0)
-            allow_reverse: Override for allow_reverse (None = use file value or default False)
-            timeout: Override for timeout (None = use file value or default 0)
-
-        Returns:
-            True if path was loaded (and started if requested) successfully
-        """
-        # Check file exists
-        if not os.path.isfile(filepath):
-            self.logger.error(f"Path file not found: {filepath}")
-            return False
-
-        # Determine file type
-        _, ext = os.path.splitext(filepath)
-        ext = ext.lower()
-
-        if ext not in ['.json', '.yaml', '.yml']:
-            self.logger.error(f"Unsupported file type: {ext}. Use .json, .yaml, or .yml")
-            return False
-
-        # Load and parse file
-        try:
-            with open(filepath, 'r') as f:
-                if ext == '.json':
-                    path_data = json.load(f)
-                else:
-                    path_data = yaml.safe_load(f)
-        except Exception as e:
-            self.logger.error(f"Failed to parse path file: {e}")
-            return False
-
-        self.logger.info(f"Loading path from {os.path.basename(filepath)}")
-
-        # Delegate to load_path()
-        return self.load_path(
-            path_data=path_data,
-            start=start,
-            clear_existing=clear_existing,
-            max_speed=max_speed,
-            max_spacing=max_spacing,
-            allow_reverse=allow_reverse,
-            timeout=timeout
-        )
-
     # =========================================================================
     # MOTION PLANNING + PATH FOLLOWING
     # =========================================================================
+
+    def _run_planner(self, start, target, waypoints, obstacles, bounds, seed):
+        """Dispatch to RRT or PRM based on config.method."""
+        if self._planning_config.method == 'prm':
+            return self._plan_prm(start, target, waypoints, bounds)
+        return self._plan_rrt(start, target, waypoints, obstacles, bounds, seed)
+
+    def _plan_rrt(self, start, target, waypoints, obstacles, bounds, seed):
+        """Plan using RRT/RRT* (existing behavior, extracted)."""
+        cfg = self._planning_config
+        return _plan_path_mp(
+            timeout=10.0,
+            start=start,
+            end=target,
+            waypoints=waypoints or None,
+            obstacles=obstacles or None,
+            bounds=bounds,
+            seed=seed,
+            smoothing=cfg.smoothing,
+            rrt_star=cfg.rrt.rrt_star,
+            max_iterations=cfg.rrt.max_iterations,
+            clearance_weight=cfg.clearance_weight,
+            clearance_threshold=cfg.clearance_threshold,
+            step_size=cfg.rrt.step_size,
+            goal_bias=cfg.rrt.goal_bias,
+            rewire_radius=cfg.rrt.rewire_radius,
+        )
+
+    def _plan_prm(self, start, target, waypoints, bounds):
+        """Plan using PRM. Roadmap must be built beforehand via build_prm_map()."""
+        if self._prm_roadmap is None or not self._prm_roadmap.is_built():
+            self.logger.error("PRM roadmap not built. Call build_prm_map() first.")
+            raise RuntimeError("PRM roadmap not built. Call build_prm_map() first.")
+        cfg = self._planning_config
+        return self._prm_roadmap.query(
+            start=start,
+            end=target,
+            waypoints=waypoints or None,
+            smoothing=cfg.smoothing,
+        )
 
     def plan_and_follow(self,
                         target: tuple[float, float],
@@ -1016,6 +958,16 @@ class BILBO_PositionControl:
         # Parse bounds (explicit > testbed > None → planner infers)
         planner_bounds = self._parse_planner_bounds(bounds) if bounds is not None else self._get_testbed_bounds()
 
+        # Notify host that planning has started
+        self.wifi_events.path_planning_started.send(
+            data=self._common_event_data(
+                start={'x': start[0], 'y': start[1]},
+                target={'x': target[0], 'y': target[1]},
+                waypoints=[{'x': wp.x, 'y': wp.y, 'weight': wp.weight} for wp in planner_waypoints],
+            ),
+            flags=self._WIFI_FLAGS,
+        )
+
         # Run motion planner
         try:
             self.logger.info(
@@ -1024,15 +976,9 @@ class BILBO_PositionControl:
                 f"{len(planner_waypoints)} waypoints, {len(planner_obstacles)} obstacles"
             )
             self._log_planner_inputs(start, target, planner_waypoints, planner_obstacles, planner_bounds)
-            dense_points = _plan_path(
-                start=start,
-                end=target,
-                waypoints=planner_waypoints if planner_waypoints else None,
-                obstacles=planner_obstacles if planner_obstacles else None,
-                bounds=planner_bounds,
-                seed=seed,
-            )
-        except (ValueError, RuntimeError) as e:
+            dense_points = self._run_planner(
+                start, target, planner_waypoints, planner_obstacles, planner_bounds, seed)
+        except (ValueError, RuntimeError, TimeoutError) as e:
             self.logger.error(f"Motion planning failed: {e}")
             return False
 
@@ -1041,6 +987,7 @@ class BILBO_PositionControl:
             return False
 
         self.logger.info(f"Motion planner produced {len(dense_points)} dense path points")
+        time.sleep(0.005)  # yield GIL
 
         # Compute stop indices from STOP waypoints if none were explicitly provided
         if stop_indices is None:
@@ -1118,16 +1065,19 @@ class BILBO_PositionControl:
 
         self._log_planner_inputs(start, target, planner_waypoints, planner_obstacles, planner_bounds)
 
+        self.wifi_events.path_planning_started.send(
+            data=self._common_event_data(
+                start={'x': start[0], 'y': start[1]},
+                target={'x': target[0], 'y': target[1]},
+                waypoints=[{'x': wp.x, 'y': wp.y, 'weight': wp.weight} for wp in planner_waypoints],
+            ),
+            flags=self._WIFI_FLAGS,
+        )
+
         try:
-            return _plan_path(
-                start=start,
-                end=target,
-                waypoints=planner_waypoints if planner_waypoints else None,
-                obstacles=planner_obstacles if planner_obstacles else None,
-                bounds=planner_bounds,
-                seed=seed,
-            )
-        except (ValueError, RuntimeError) as e:
+            return self._run_planner(
+                start, target, planner_waypoints, planner_obstacles, planner_bounds, seed)
+        except (ValueError, RuntimeError, TimeoutError) as e:
             self.logger.error(f"Motion planning failed: {e}")
             return None
 
@@ -1144,21 +1094,29 @@ class BILBO_PositionControl:
     # ------------------------------------------------------------------------------------------------------------------
     @staticmethod
     def _parse_planner_waypoints(waypoints: list[dict | tuple] | None) -> list[PlannerWaypoint]:
-        """Convert user waypoint input to PlannerWaypoint list."""
+        """Convert user waypoint input to PlannerWaypoint list.
+
+        Supports stop flag via:
+        - dict: {'x': ..., 'y': ..., 'type': 'STOP'} or {'stop': True}
+        - tuple/list: (x, y, weight, 'STOP')
+        """
         if not waypoints:
             return []
         result = []
         for wp in waypoints:
             if isinstance(wp, dict):
+                stop = (wp.get('type', 'PASS').upper() == 'STOP') or wp.get('stop', False)
                 result.append(PlannerWaypoint(
                     x=float(wp['x']),
                     y=float(wp['y']),
-                    weight=float(wp.get('weight', 0.5))
+                    weight=float(wp.get('weight', 0.5)),
+                    stop=stop,
                 ))
             elif isinstance(wp, (list, tuple)):
                 x, y = float(wp[0]), float(wp[1])
                 weight = float(wp[2]) if len(wp) > 2 else 0.5
-                result.append(PlannerWaypoint(x=x, y=y, weight=weight))
+                stop = len(wp) >= 4 and str(wp[3]).upper() == 'STOP'
+                result.append(PlannerWaypoint(x=x, y=y, weight=weight, stop=stop))
             else:
                 raise ValueError(f"Invalid waypoint format: {wp}")
         return result
@@ -1417,14 +1375,6 @@ class BILBO_PositionControl:
 
         self.logger.info(f"Turn to heading completed ({math.degrees(heading):.1f} deg)")
         return True
-
-    # =========================================================================
-    # STOP PATH
-    # =========================================================================
-
-    def stop_path(self) -> bool:
-        """Stop and clear the current path."""
-        return self.reset()
 
     # =========================================================================
     # RESET
@@ -1834,13 +1784,6 @@ class BILBO_PositionControl:
         )
 
         self.communication.wifi.newCommand(
-            identifier='position_control_add_path_point',
-            function=self._wifi_add_path_point,
-            arguments=['x', 'y'],
-            description='Add a path point'
-        )
-
-        self.communication.wifi.newCommand(
             identifier='position_control_add_stop_index',
             function=self._wifi_add_stop_index,
             arguments=['index'],
@@ -1875,21 +1818,8 @@ class BILBO_PositionControl:
                 CommandArgument(name='start', type=bool, optional=True, default=False),
                 CommandArgument(name='clear_existing', type=bool, optional=True, default=True),
             ],
-            description='Load a path from dict (with optional start)'
-        )
-
-        self.communication.wifi.newCommand(
-            identifier='position_control_pause_path',
-            function=self.pause_path,
-            arguments=[],
-            description='Pause path execution'
-        )
-
-        self.communication.wifi.newCommand(
-            identifier='position_control_resume_path',
-            function=self.resume_path,
-            arguments=[],
-            description='Resume paused path'
+            description='Load a path from dict (with optional start)',
+            execute_in_thread=True
         )
 
         self.communication.wifi.newCommand(
@@ -1897,13 +1827,6 @@ class BILBO_PositionControl:
             function=self.abort_path,
             arguments=[],
             description='Abort path execution'
-        )
-
-        self.communication.wifi.newCommand(
-            identifier='position_control_stop_path',
-            function=self.stop_path,
-            arguments=[],
-            description='Stop and clear the current path'
         )
 
         # Motion planning + follow
@@ -1922,7 +1845,8 @@ class BILBO_PositionControl:
                 CommandArgument(name='allow_reverse', type=bool, optional=True, default=False),
                 CommandArgument(name='seed', type=int, optional=True, default=None),
             ],
-            description='Plan path from current position to target and follow it'
+            description='Plan path from current position to target and follow it',
+            execute_in_thread=True
         )
 
         self.communication.wifi.newCommand(
@@ -1935,7 +1859,16 @@ class BILBO_PositionControl:
                 CommandArgument(name='bounds', type=dict, optional=True, default=None),
                 CommandArgument(name='seed', type=int, optional=True, default=None),
             ],
-            description='Plan path from current position to target (preview only, no load/start)'
+            description='Plan path from current position to target (preview only, no load/start)',
+            execute_in_thread=True
+        )
+
+        self.communication.wifi.newCommand(
+            identifier='position_control_build_prm',
+            function=self._wifi_build_prm,
+            arguments=[],
+            description='Build PRM roadmap from current testbed obstacles',
+            execute_in_thread=True
         )
 
         # Simple commands
@@ -1984,10 +1917,6 @@ class BILBO_PositionControl:
         except Exception as e:
             self.logger.error(f"Failed to parse config: {e}")
             return False
-
-    def _wifi_add_path_point(self, x: float, y: float) -> bool:
-        """Add path point from WiFi command"""
-        return self.add_path_point(x=x, y=y)
 
     def _wifi_add_stop_index(self, index: int) -> bool:
         """Add stop index from WiFi command"""
@@ -2092,6 +2021,15 @@ class BILBO_PositionControl:
     def _wifi_turn_to(self, heading: float, max_angular_speed: float = 0.0, timeout: float = 0.0) -> bool:
         """Turn to heading from WiFi command"""
         return self.turn_to_heading(heading=heading, max_angular_speed=max_angular_speed, timeout=timeout)
+
+    def _wifi_build_prm(self) -> bool:
+        """Build PRM roadmap from WiFi command."""
+        try:
+            self.build_prm_map()
+            return True
+        except Exception as e:
+            self.logger.error(f"PRM build failed: {e}")
+            return False
 
     # =========================================================================
     # WIFI EVENT EMISSION

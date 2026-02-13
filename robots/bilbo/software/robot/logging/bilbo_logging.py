@@ -305,7 +305,7 @@ class BILBO_Logging(LoggingProvider):
                     batch = self._samples_queue.get_nowait()
                     sample_batch += 1
                     if sample_batch > 1:
-                        if sample_batch >= 3:
+                        if sample_batch >= 6:
                             self.logger.warning(f"Working on sample batch {sample_batch}")
                         else:
                             self.logger.debug(f"Working on sample batch {sample_batch}")
@@ -317,7 +317,7 @@ class BILBO_Logging(LoggingProvider):
 
                 # Check for tick mismatch (indicates buffering/lag)
                 if ll_tick != self.tick:
-                    self.logger.warning(
+                    self.logger.debug(
                         f"Sample tick sync: adjusting HL tick from {self.tick} to {ll_tick} "
                         f"(batch {sample_batch}, queue_size={self._samples_queue.qsize()})"
                     )
@@ -404,6 +404,9 @@ class BILBO_Logging(LoggingProvider):
             sample_indexes = slice(int(start / 10), int(end / 10))
             ll_start = start if add_intermediate_samples else None
             ll_end = end if add_intermediate_samples else None
+
+        # Flush H5 data to disk so the reader process sees all samples
+        self.flush()
 
         # Get file paths
         hl_filename = self._h5_logger_sample.filename

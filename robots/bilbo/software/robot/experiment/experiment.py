@@ -47,7 +47,6 @@ if TYPE_CHECKING:
 # For backwards compatibility, import from parser
 from robot.experiment.experiment_parser import (
     parse_time_ms as _parse_time,
-    normalize_path_points as _normalize_path_points,
     get_registry as _get_action_registry,
 )
 
@@ -160,6 +159,9 @@ class ExperimentActionDefinition:
 
     meta: dict[str, Any] | None = None  # optional metadata for reports/analysis (e.g., label_layer)
 
+    wait_before: Any | None = None  # wait before executing (supports "2s", "500ms", float, int ms)
+    wait_after: Any | None = None   # wait after executing (supports "2s", "500ms", float, int ms)
+
     # action-specific stuff (parameters for the concrete action class)
     parameters: dict[str, Any] = dataclasses.field(default_factory=dict)
 
@@ -196,7 +198,7 @@ class ExperimentActionDefinition:
         action_type = d["type"]
 
         # Reserved fields that should not go into parameters
-        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "label", "meta", "parameters", "actions"}
+        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "label", "meta", "parameters", "actions", "wait_before", "wait_after"}
 
         # If 'parameters' is explicitly provided, use it; otherwise collect non-reserved fields
         if "parameters" in d:
@@ -270,7 +272,7 @@ class ExperimentActionDefinition:
             if d.get("label") is not None:
                 outer_group["label"] = d["label"]
             # Carry over scheduling fields
-            for field in ("tick", "after", "time", "delay", "timeout"):
+            for field in ("tick", "after", "time", "delay", "timeout", "wait_before", "wait_after"):
                 if d.get(field) is not None:
                     outer_group[field] = d[field]
 
@@ -301,6 +303,8 @@ class ExperimentActionDefinition:
             timeout=d.get("timeout"),
             label=d.get("label"),
             meta=d.get("meta"),
+            wait_before=d.get("wait_before"),
+            wait_after=d.get("wait_after"),
             parameters=parameters,
             sub_actions=sub_actions,
         )
@@ -325,6 +329,10 @@ class ExperimentActionDefinition:
             dict_out["label"] = self.label
         if self.meta is not None:
             dict_out["meta"] = self.meta
+        if self.wait_before is not None:
+            dict_out["wait_before"] = self.wait_before
+        if self.wait_after is not None:
+            dict_out["wait_after"] = self.wait_after
         if self.parameters:
             dict_out["parameters"] = self.parameters
         if self.sub_actions:
@@ -362,6 +370,10 @@ class ExperimentAction(abc.ABC):
     label: str | None = None  # Human-readable label for display
     meta: dict[str, Any] | None = None  # Optional metadata for reports/analysis
 
+    # Wait before/after the action (milliseconds, 0 = no wait)
+    wait_before_ms: int = 0
+    wait_after_ms: int = 0
+
     data: dict | Any | None = None  # Data collected by the action
 
     experiment: Experiment | None = None
@@ -372,6 +384,7 @@ class ExperimentAction(abc.ABC):
     _end_tick: int | None = None
     _status: ExperimentActionStatus = ExperimentActionStatus.PENDING
     _error_message: str | None = None
+    _wait_after_complete: bool = False
 
     # ------------------------------------------------------------------------------------------------------------------
     def __post_init__(self):
@@ -388,6 +401,7 @@ class ExperimentAction(abc.ABC):
         self._end_tick = None
         self._status = ExperimentActionStatus.PENDING
         self._error_message = None
+        self._wait_after_complete = False
 
     # ------------------------------------------------------------------------------------------------------------------
     @abc.abstractmethod
@@ -395,6 +409,27 @@ class ExperimentAction(abc.ABC):
         """
         Executes the action. This is not blocking. Returns True if immediately finished, False otherwise.
         """
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def run(self) -> bool:
+        """Execute this action, honoring wait_before_ms and wait_after_ms.
+
+        If either wait is > 0, execution is deferred to a background thread
+        and this method returns False (async). Otherwise delegates to execute().
+        """
+        if self.wait_before_ms <= 0 and self.wait_after_ms <= 0:
+            return self.execute()
+
+        # Need thread wrapping - action becomes async
+        thread = threading.Thread(target=self._run_with_waits, daemon=True)
+        thread.start()
+        return False
+
+    def _run_with_waits(self):
+        """Execute the action with wait_before delay. wait_after is handled in _on_finished."""
+        if self.wait_before_ms > 0:
+            precise_sleep(self.wait_before_ms / 1000.0)
+        self.execute()
 
     # ------------------------------------------------------------------------------------------------------------------
     @classmethod
@@ -408,6 +443,14 @@ class ExperimentAction(abc.ABC):
         Common kwargs derived from the ExperimentActionDefinition that every action
         should receive. Subclasses are expected to expand these with their own parameters.
         """
+        wait_before_ms = 0
+        if definition.wait_before is not None:
+            wait_before_ms = _parse_time(definition.wait_before)
+
+        wait_after_ms = 0
+        if definition.wait_after is not None:
+            wait_after_ms = _parse_time(definition.wait_after)
+
         return {
             "id": definition.id,
             "tick": definition.tick,
@@ -416,6 +459,8 @@ class ExperimentAction(abc.ABC):
             "timeout": definition.timeout,
             "label": definition.label,
             "meta": definition.meta,
+            "wait_before_ms": wait_before_ms,
+            "wait_after_ms": wait_after_ms,
         }
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -426,7 +471,8 @@ class ExperimentAction(abc.ABC):
         Subclasses can override this to customize parameter extraction.
         """
         # Base class fields to exclude
-        base_fields = {'id', 'tick', 'after', 'time', 'timeout', 'label', 'data', 'experiment'}
+        base_fields = {'id', 'tick', 'after', 'time', 'timeout', 'label', 'data', 'experiment',
+                       'wait_before_ms', 'wait_after_ms', 'meta'}
 
         params = {}
         for field in dataclasses.fields(self):
@@ -442,12 +488,24 @@ class ExperimentAction(abc.ABC):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_finished(self):
+        # If wait_after is configured and hasn't been done yet, delay the actual finish
+        if self.wait_after_ms > 0 and not self._wait_after_complete:
+            self._wait_after_complete = True
+            thread = threading.Thread(target=self._finish_after_wait, daemon=True)
+            thread.start()
+            return
+
         if self.experiment:
             self._end_tick = self.experiment.tick
         if self._status == ExperimentActionStatus.RUNNING:
             self._status = ExperimentActionStatus.FINISHED
         self.callbacks.finished.call()
         self.events.finished.set(data=self.data)
+
+    def _finish_after_wait(self):
+        """Sleep for wait_after_ms then actually finish the action."""
+        precise_sleep(self.wait_after_ms / 1000.0)
+        self._on_finished()
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_started(self):
@@ -957,7 +1015,7 @@ class ParallelAction(ExperimentAction):
                 callback=lambda data=None, _action=sub_action, **kw: self._sub_action_error(_action, data),
                 once=True
             )
-            sub_action.execute()
+            sub_action.run()
 
         return False  # Async - wait for all sub-actions
 
@@ -1076,7 +1134,7 @@ class GroupAction(ExperimentAction):
             callback=lambda data=None, **kw: self._sub_action_error(current_action, data),
             once=True
         )
-        current_action.execute()
+        current_action.run()
         # The callback fires when the action calls _on_finished(), whether sync or async
 
     def _sub_action_finished(self):
@@ -1411,270 +1469,6 @@ class TurnToAction(ExperimentAction):
 
 
 @dataclasses.dataclass(kw_only=True)
-class SetPathAction(ExperimentAction):
-    """Set dense path points for path following."""
-    points: list = dataclasses.field(default_factory=list)
-    stop_indices: list = dataclasses.field(default_factory=list)
-    clear_existing: bool = True
-
-    def execute(self) -> bool:
-        self._on_started()
-        position_control = self.experiment.experiment_handler.control.position_control
-
-        if self.clear_existing:
-            if not position_control.clear_path():
-                self.logger.error("Failed to clear existing path")
-                self._on_error("Failed to clear existing path before adding new points")
-                return True
-
-        # Add path points
-        for i, pt in enumerate(self.points):
-            x = pt.get('x', pt[0] if isinstance(pt, (list, tuple)) else 0.0)
-            y = pt.get('y', pt[1] if isinstance(pt, (list, tuple)) else 0.0)
-            if not position_control.add_path_point(x, y):
-                self.logger.error(f"Failed to add path point ({x}, {y})")
-                self._on_error(f"Failed to add path point {i+1}/{len(self.points)} at ({x:.3f}, {y:.3f})")
-                return True
-
-        # Add stop indices
-        for idx in self.stop_indices:
-            if not position_control.add_stop_index(idx):
-                self.logger.error(f"Failed to add stop index {idx}")
-                self._on_error(f"Failed to add stop index {idx}")
-                return True
-
-        self.logger.info(f"Set {len(self.points)} path points, {len(self.stop_indices)} stops")
-        self._on_finished()
-        return True
-
-    @classmethod
-    def from_definition(cls, definition: ExperimentActionDefinition) -> "SetPathAction":
-        kwargs = cls._common_init_kwargs(definition)
-        points = definition.parameters.get('points', definition.parameters.get('waypoints', []))
-        points = _normalize_path_points(points)
-        stop_indices = definition.parameters.get('stop_indices', [])
-        return cls(
-            **kwargs,
-            points=points,
-            stop_indices=stop_indices,
-            clear_existing=definition.parameters.get('clear_existing', True),
-        )
-
-
-# Backwards-compatible alias
-SetWaypointsAction = SetPathAction
-
-
-@dataclasses.dataclass(kw_only=True)
-class StartPathAction(ExperimentAction):
-    """Start following the loaded dense path."""
-    allow_reverse: bool = False
-    timeout: float = 0.0
-    max_speed: float = 0.0
-    wait: bool = True
-
-    def execute(self) -> bool:
-        self._on_started()
-        position_control = self.experiment.experiment_handler.control.position_control
-
-        # Store path info before starting
-        self.data = {
-            'path_point_count': position_control.path_point_count,
-        }
-
-        result = position_control.start_path(
-            allow_reverse=self.allow_reverse,
-            timeout=self.timeout,
-            max_speed=self.max_speed
-        )
-        if not result:
-            self.logger.error("Failed to start path")
-            self._on_error("Failed to start path - position control rejected the command")
-            return True
-
-        if self.wait:
-            thread = threading.Thread(target=self._wait_for_completion, daemon=True)
-            thread.start()
-            return False
-        else:
-            self._on_finished()
-            return True
-
-    def _wait_for_completion(self):
-        position_control = self.experiment.experiment_handler.control.position_control
-        control = self.experiment.experiment_handler.control
-
-        while True:
-            data, trace = wait_for_events(
-                OR(position_control.events.path_finished,
-                   position_control.events.path_timeout,
-                   position_control.events.path_aborted,
-                   control.events.mode_change),
-                timeout=self.timeout if self.timeout > 0 else None
-            )
-
-            # Check which event caused the wait to end
-            if trace is TIMEOUT:
-                timeout_str = f"{self.timeout:.1f}s" if self.timeout > 0 else "unlimited"
-                self.logger.warning("StartPathAction: wait timed out (no event received)")
-                self._on_error(f"Path wait timed out after {timeout_str} - no completion event received")
-                return
-            elif trace.caused_by(position_control.events.path_finished):
-                self.logger.info("StartPathAction: path finished successfully")
-                self._on_finished()
-                return
-            elif trace.caused_by(position_control.events.path_timeout):
-                self.logger.warning("StartPathAction: path timed out")
-                self._on_error(f"Path following timed out (position control timeout)")
-                return
-            elif trace.caused_by(position_control.events.path_aborted):
-                self.logger.warning("StartPathAction: path aborted")
-                self._on_error("Path was aborted externally")
-                return
-            elif trace.caused_by(control.events.mode_change):
-                # Only treat as interruption if mode changed away from POSITION
-                mode_name = _get_mode_name_from_trace(trace, control, control.events.mode_change)
-                if mode_name == 'POSITION':
-                    continue  # Still in POSITION mode, keep waiting
-                self.logger.warning(f"StartPathAction: path interrupted by control mode change to {mode_name}")
-                self._on_error(f"Path interrupted by control mode change to {mode_name}")
-                return
-            else:
-                self.logger.warning("StartPathAction: unknown event triggered wait end")
-                self._on_error("Path following ended unexpectedly (unknown event)")
-                return
-
-
-    @classmethod
-    def from_definition(cls, definition: ExperimentActionDefinition) -> "StartPathAction":
-        kwargs = cls._common_init_kwargs(definition)
-        # timeout in parameters is the path execution timeout, override base timeout
-        kwargs['timeout'] = definition.parameters.get('timeout', 0.0)
-        return cls(
-            **kwargs,
-            allow_reverse=definition.parameters.get('allow_reverse', False),
-            max_speed=definition.parameters.get('max_speed', 0.0),
-            wait=definition.parameters.get('wait', True),
-        )
-
-
-@dataclasses.dataclass(kw_only=True)
-class LoadPathAction(ExperimentAction):
-    """Load and optionally start a path from dict or file."""
-    path: dict | str | None = None
-    start: bool = False
-    clear_existing: bool = True
-    allow_reverse: bool | None = None
-    path_timeout: float | None = None  # Renamed to avoid conflict with action timeout
-    max_speed: float | None = None
-    wait: bool = True
-
-    def execute(self) -> bool:
-        self._on_started()
-        position_control = self.experiment.experiment_handler.control.position_control
-
-        if self.path is None:
-            self.logger.error("LoadPathAction: no path specified")
-            self._on_error("No path specified for LoadPathAction")
-            return True
-
-        # Load path from file or dict
-        path_desc = self.path if isinstance(self.path, str) else f"path with {len(self.path.get('points', self.path.get('waypoints', [])))} points"
-        if isinstance(self.path, str):
-            result = position_control.load_path_from_file(
-                filepath=self.path,
-                start=self.start,
-                clear_existing=self.clear_existing,
-                allow_reverse=self.allow_reverse,
-                timeout=self.path_timeout,
-                max_speed=self.max_speed
-            )
-        else:
-            result = position_control.load_path(
-                path_data=self.path,
-                start=self.start,
-                clear_existing=self.clear_existing,
-                allow_reverse=self.allow_reverse,
-                timeout=self.path_timeout,
-                max_speed=self.max_speed
-            )
-
-        if not result:
-            self.logger.error("Failed to load path")
-            self._on_error(f"Failed to load {path_desc} - position control rejected the path")
-            return True
-
-        # Store path info after loading
-        self.data = {
-            'path_point_count': position_control.path_point_count,
-        }
-
-        if self.start and self.wait:
-            thread = threading.Thread(target=self._wait_for_completion, daemon=True)
-            thread.start()
-            return False
-        else:
-            self._on_finished()
-            return True
-
-    def _wait_for_completion(self):
-        position_control = self.experiment.experiment_handler.control.position_control
-        control = self.experiment.experiment_handler.control
-        effective_timeout = self.path_timeout if self.path_timeout and self.path_timeout > 0 else None
-        data, trace = wait_for_events(
-            OR(position_control.events.path_finished,
-               position_control.events.path_timeout,
-               position_control.events.path_aborted,
-               control.events.mode_change,  # BILBO control mode change (BALANCING, OFF, etc.)
-               position_control.events.mode_changed),  # Position control internal mode change
-            timeout=effective_timeout
-        )
-
-        # Check which event caused the wait to end
-        if trace is TIMEOUT:
-            timeout_str = f"{effective_timeout:.1f}s" if effective_timeout else "unlimited"
-            self.logger.warning("LoadPathAction: wait timed out (no event received)")
-            self._on_error(f"Path wait timed out after {timeout_str} - no completion event")
-        elif trace.caused_by(position_control.events.path_finished):
-            self.logger.info("LoadPathAction: path finished successfully")
-            self._on_finished()
-        elif trace.caused_by(position_control.events.path_timeout):
-            self.logger.warning("LoadPathAction: path timed out")
-            self._on_error("Path following timed out (position control timeout)")
-        elif trace.caused_by(position_control.events.path_aborted):
-            self.logger.warning("LoadPathAction: path aborted")
-            self._on_error("Path was aborted externally")
-        elif trace.caused_by(control.events.mode_change):
-            # Control mode changed (e.g., POSITION -> BALANCING or OFF)
-            mode_name = _get_mode_name_from_trace(trace, control, control.events.mode_change)
-            self.logger.warning(f"LoadPathAction: path interrupted by control mode change to {mode_name}")
-            self._on_error(f"Path interrupted by control mode change to {mode_name}")
-        elif trace.caused_by(position_control.events.mode_changed):
-            # Position control internal mode changed (could be due to control mode change)
-            mode_name = _get_mode_name_from_trace(trace, control, control.events.mode_change)
-            self.logger.warning(f"LoadPathAction: path interrupted by mode change to {mode_name}")
-            self._on_error(f"Path interrupted by control mode change to {mode_name}")
-        else:
-            # Unknown event - treat as error
-            self.logger.warning("LoadPathAction: unknown event triggered wait end")
-            self._on_error("Path following ended unexpectedly (unknown event)")
-
-    @classmethod
-    def from_definition(cls, definition: ExperimentActionDefinition) -> "LoadPathAction":
-        kwargs = cls._common_init_kwargs(definition)
-        return cls(
-            **kwargs,
-            path=definition.parameters.get('path'),
-            start=definition.parameters.get('start', False),
-            clear_existing=definition.parameters.get('clear_existing', True),
-            allow_reverse=definition.parameters.get('allow_reverse'),
-            path_timeout=definition.parameters.get('timeout'),
-            max_speed=definition.parameters.get('max_speed'),
-            wait=definition.parameters.get('wait', True),
-        )
-
-
-@dataclasses.dataclass(kw_only=True)
 class StopPathAction(ExperimentAction):
     """Stop/abort the current path."""
 
@@ -1691,6 +1485,152 @@ class StopPathAction(ExperimentAction):
     def from_definition(cls, definition: ExperimentActionDefinition) -> "StopPathAction":
         kwargs = cls._common_init_kwargs(definition)
         return cls(**kwargs)
+
+
+@dataclasses.dataclass(kw_only=True)
+class FollowPathAction(ExperimentAction):
+    """Plan and follow a path to a target point using the motion planner.
+
+    Uses position_control.plan_and_follow() to compute a collision-free path
+    from the current position to the target, optionally passing through waypoints,
+    then loads and follows the planned path.
+    """
+    target_x: float = 0.0
+    target_y: float = 0.0
+    waypoints: list = dataclasses.field(default_factory=list)
+    max_speed: float = 0.0
+    timeout: float = 0.0
+    allow_reverse: bool = False
+    seed: int | None = None
+    wait: bool = True
+
+    def execute(self) -> bool:
+        self._on_started()
+
+        # Run planning + SPI upload + optional wait in a background thread
+        # to avoid blocking the main loop (plan_and_follow does heavy RRT
+        # computation and SPI transfer that would cause GIL lockups).
+        thread = threading.Thread(target=self._execute_threaded, daemon=True)
+        thread.start()
+        return False
+
+    def _execute_threaded(self):
+        position_control = self.experiment.experiment_handler.control.position_control
+
+        # Convert waypoint dicts to the format expected by plan_and_follow
+        waypoints = []
+        stop_indices = []
+        for i, wp in enumerate(self.waypoints):
+            if isinstance(wp, (list, tuple)):
+                entry = {"x": wp[0], "y": wp[1]}
+                if len(wp) > 2:
+                    entry["weight"] = wp[2]
+                if len(wp) > 3:
+                    entry["stop"] = wp[3]
+            else:
+                entry = dict(wp)
+            # Default weight = 0.9
+            if "weight" not in entry:
+                entry["weight"] = 0.9
+            stop = entry.pop("stop", False)
+            waypoints.append(entry)
+            if stop:
+                stop_indices.append(i)
+
+        target = (self.target_x, self.target_y)
+        target_str = f"({self.target_x:.2f}, {self.target_y:.2f})"
+        wp_str = f" via {len(waypoints)} waypoints" if waypoints else ""
+        self.logger.info(f"Planning path to {target_str}{wp_str}")
+
+        result = position_control.plan_and_follow(
+            target=target,
+            waypoints=waypoints if waypoints else None,
+            stop_indices=stop_indices if stop_indices else None,
+            max_speed=self.max_speed,
+            timeout=self.timeout,
+            allow_reverse=self.allow_reverse,
+            seed=self.seed,
+            blocking=False,
+        )
+
+        if not result:
+            self.logger.error(f"Failed to plan/start path to {target_str}")
+            self._on_error(f"Failed to plan and follow path to {target_str} - position control rejected command")
+            return
+
+        if self.wait:
+            self._wait_for_completion()
+        else:
+            self._on_finished()
+
+    def _wait_for_completion(self):
+        position_control = self.experiment.experiment_handler.control.position_control
+        control = self.experiment.experiment_handler.control
+        target_str = f"({self.target_x:.2f}, {self.target_y:.2f})"
+
+        while True:
+            data, trace = wait_for_events(
+                OR(position_control.events.path_finished,
+                   position_control.events.path_timeout,
+                   position_control.events.path_aborted,
+                   control.events.mode_change),
+                timeout=self.timeout if self.timeout > 0 else None
+            )
+
+            if trace is TIMEOUT:
+                timeout_str = f"{self.timeout:.1f}s" if self.timeout > 0 else "unlimited"
+                self.logger.warning("FollowPathAction: wait timed out (no event received)")
+                self._on_error(f"Path to {target_str} timed out after {timeout_str} - no completion event")
+                return
+            elif trace.caused_by(position_control.events.path_finished):
+                self.logger.info(f"FollowPathAction: path to {target_str} finished successfully")
+                self._on_finished()
+                return
+            elif trace.caused_by(position_control.events.path_timeout):
+                self.logger.warning("FollowPathAction: path timed out")
+                self._on_error(f"Path to {target_str} timed out (position control timeout)")
+                return
+            elif trace.caused_by(position_control.events.path_aborted):
+                self.logger.warning("FollowPathAction: path aborted")
+                self._on_error(f"Path to {target_str} was aborted")
+                return
+            elif trace.caused_by(control.events.mode_change):
+                mode_name = _get_mode_name_from_trace(trace, control, control.events.mode_change)
+                if mode_name == 'POSITION':
+                    continue
+                self.logger.warning(f"FollowPathAction: path interrupted by control mode change to {mode_name}")
+                self._on_error(f"Path to {target_str} interrupted by control mode change to {mode_name}")
+                return
+            else:
+                self.logger.warning("FollowPathAction: unknown event triggered wait end")
+                self._on_error(f"Path to {target_str} ended unexpectedly (unknown event)")
+                return
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> "FollowPathAction":
+        kwargs = cls._common_init_kwargs(definition)
+        # Parse target from 'target' dict/list or from top-level x/y
+        target = definition.parameters.get('target')
+        if isinstance(target, dict):
+            target_x = target.get('x', 0.0)
+            target_y = target.get('y', 0.0)
+        elif isinstance(target, (list, tuple)):
+            target_x = target[0]
+            target_y = target[1] if len(target) > 1 else 0.0
+        else:
+            target_x = definition.parameters.get('x', 0.0)
+            target_y = definition.parameters.get('y', 0.0)
+        kwargs['timeout'] = definition.parameters.get('timeout', 0.0)
+        return cls(
+            **kwargs,
+            target_x=target_x,
+            target_y=target_y,
+            waypoints=definition.parameters.get('waypoints', []),
+            max_speed=definition.parameters.get('max_speed', 0.0),
+            allow_reverse=definition.parameters.get('allow_reverse', False),
+            seed=definition.parameters.get('seed'),
+            wait=definition.parameters.get('wait', True),
+        )
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -1778,11 +1718,8 @@ EXPERIMENT_ACTION_TYPE_MAPPING = {
     # Position control actions
     "move_to": MoveToAction,
     "turn_to": TurnToAction,
-    "set_waypoints": SetWaypointsAction,  # legacy alias → SetPathAction
-    "set_path": SetPathAction,
-    "start_path": StartPathAction,
-    "load_path": LoadPathAction,
     "stop_path": StopPathAction,
+    "follow_path": FollowPathAction,
     "wait_position_event": WaitPositionEventAction,
 }
 
@@ -2344,7 +2281,7 @@ class Experiment:
         ))
 
         action_container.status = ExperimentActionStatus.RUNNING
-        result = action_container.action.execute()
+        result = action_container.action.run()
         action_container.started = True
         action_container.start_tick = self.tick
 

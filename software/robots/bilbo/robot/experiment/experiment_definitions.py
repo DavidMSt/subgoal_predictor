@@ -11,7 +11,7 @@ which are then sent to the robot for execution.
 For action parsing and validation, see experiment_actions.py which provides:
 - ActionRegistry with all available action types
 - ExperimentParser for file/dict parsing with validation
-- Introspection of available actions, parameters, and shorthands
+- Introspection of available actions and parameters
 """
 from __future__ import annotations
 
@@ -56,14 +56,8 @@ class ExperimentActionStatus(enum.StrEnum):
 # Import parsing utilities from experiment_actions
 from robots.bilbo.robot.experiment.experiment_actions import (
     parse_time_ms as _parse_time,
-    normalize_path_points as _normalize_path_points,
     get_registry as _get_action_registry,
 )
-
-
-def _expand_shorthand(d: dict | str) -> dict:
-    """Expand shorthand action definitions to full format using the action registry."""
-    return _get_action_registry().expand_shorthand(d)
 
 
 _VAR_PATTERN = re.compile(r'\$\{(\w+)\}')
@@ -99,17 +93,17 @@ def _substitute_variables(obj: Any, variables: dict[str, Any]) -> Any:
 # ======================================================================================================================
 
 @dataclasses.dataclass
-class BILBO_InputTrajectoryStep:
+class InputTrajectoryStep:
     step: int
     left: float
     right: float
 
 
 @dataclasses.dataclass
-class BILBO_InputTrajectory:
+class InputTrajectory:
     name: str  # Name of the trajectory
     id: int  # Numeric ID of the trajectory
-    inputs: list[BILBO_InputTrajectoryStep]
+    inputs: list[InputTrajectoryStep]
     dt: float = BILBO_CONTROL_DT  # Time step
 
     @property
@@ -125,13 +119,21 @@ class BILBO_InputTrajectory:
         return trajectory_inputs_to_vector(self.inputs, single_input=single_input)
 
     @classmethod
-    def from_vector(cls, vector: np.ndarray, name: str, id: int, dt: float = None) -> BILBO_InputTrajectory:
+    def from_vector(cls, vector: np.ndarray, name: str, id: int, dt: float = None) -> InputTrajectory:
         from robots.bilbo.robot.experiment.experiment_helpers import generate_trajectory_inputs
         return cls(name=name, id=id, inputs=generate_trajectory_inputs(vector), dt=dt or BILBO_CONTROL_DT)
 
+    def to_file_data(self, id: str = '', description: str = '') -> InputTrajectoryFileData:
+        """Wrap this trajectory in an InputTrajectoryFileData for file I/O."""
+        return InputTrajectoryFileData(
+            id=id or self.name,
+            description=description,
+            trajectory=self,
+        )
+
 
 @dataclasses.dataclass
-class BILBO_StateTrajectory:
+class StateTrajectory:
     states: list[BILBO_DynamicState]
     dt: float = BILBO_CONTROL_DT  # Time step
 
@@ -145,9 +147,9 @@ class BILBO_StateTrajectory:
 
 
 @dataclasses.dataclass
-class BILBO_TrajectoryData:
-    input_trajectory: BILBO_InputTrajectory
-    state_trajectory: BILBO_StateTrajectory
+class TrajectoryData:
+    input_trajectory: InputTrajectory
+    state_trajectory: StateTrajectory
 
     @property
     def length(self) -> int:
@@ -159,7 +161,7 @@ class BILBO_TrajectoryData:
 
 
 @dataclasses.dataclass
-class BILBO_OutputTrajectory:
+class OutputTrajectory:
     output_name: str
     output: list[float]
     dt: float = BILBO_CONTROL_DT
@@ -171,6 +173,19 @@ class BILBO_OutputTrajectory:
     @property
     def time_vector(self) -> np.ndarray:
         return np.arange(0, self.length) * self.dt
+
+    def to_array(self) -> np.ndarray:
+        return np.asarray(self.output)
+
+    def to_file_data(self, id: str = '', description: str = '') -> OutputTrajectoryFileData:
+        """Wrap this trajectory in an OutputTrajectoryFileData for file I/O."""
+        return OutputTrajectoryFileData(
+            id=id or self.output_name,
+            description=description,
+            output_name=self.output_name,
+            output=self.output,
+            dt=self.dt,
+        )
 
 
 # ======================================================================================================================
@@ -194,7 +209,7 @@ ALLOWED_ACTIONS: list[str] = [
     "set_velocity", "enable_external_input", "reset", "parallel", "group",
     "loop", "func", "set_feedback_gain", "reset_control",
     # Position control actions
-    "move_to", "turn_to", "set_path", "set_waypoints", "start_path", "load_path", "stop_path",
+    "move_to", "turn_to", "follow_path", "stop_path",
     "wait_position_event"
 ]
 
@@ -286,7 +301,7 @@ class WaitEventActionParams:
 @dataclasses.dataclass
 class RunTrajectoryActionParams:
     """Parameters for run_trajectory action."""
-    input_trajectory: BILBO_InputTrajectory | dict | str | None = None
+    input_trajectory: InputTrajectory | dict | str | None = None
 
 
 @dataclasses.dataclass
@@ -370,53 +385,30 @@ class TurnToActionParams:
 
 
 @dataclasses.dataclass
-class PathPointDef:
-    """A single path point definition."""
-    x: float
-    y: float
-
-
-# Backwards-compatible alias
-WaypointDef = PathPointDef
-
-
-@dataclasses.dataclass
-class SetPathActionParams:
-    """Parameters for set_path action."""
-    points: list[dict | PathPointDef] = dataclasses.field(default_factory=list)
-    stop_indices: list[int] = dataclasses.field(default_factory=list)
-    clear_existing: bool = True
-
-
-# Backwards-compatible alias
-SetWaypointsActionParams = SetPathActionParams
-
-
-@dataclasses.dataclass
-class StartPathActionParams:
-    """Parameters for start_path action."""
-    allow_reverse: bool = False
-    timeout: float = 0.0  # 0 = no timeout
-    max_speed: float = 0.0  # 0 = use default
-    wait: bool = True  # If True, wait for path completion before continuing
-
-
-@dataclasses.dataclass
-class LoadPathActionParams:
-    """Parameters for load_path action."""
-    path: dict | str | None = None  # Path dict or file path
-    start: bool = False  # If True, start path after loading
-    clear_existing: bool = True
-    allow_reverse: bool | None = None  # Override for allow_reverse
-    timeout: float | None = None  # Override for timeout
-    max_speed: float | None = None  # Override for max_speed
-    wait: bool = True  # If True and start=True, wait for path completion
-
-
-@dataclasses.dataclass
 class StopPathActionParams:
     """Parameters for stop_path action (abort current path)."""
     pass
+
+
+@dataclasses.dataclass
+class FollowPathWaypointDef:
+    """A waypoint for the follow_path action."""
+    x: float
+    y: float
+    weight: float = 0.9  # Proximity weight for the planner (0-1)
+    stop: bool = False  # If True, robot stops at this waypoint
+
+
+@dataclasses.dataclass
+class FollowPathActionParams:
+    """Parameters for follow_path action (plan and follow a path to a target)."""
+    target: dict | list | tuple = dataclasses.field(default_factory=lambda: {"x": 0.0, "y": 0.0})
+    waypoints: list[dict | FollowPathWaypointDef] = dataclasses.field(default_factory=list)
+    max_speed: float = 0.0  # 0 = use default
+    timeout: float = 0.0  # 0 = no timeout
+    allow_reverse: bool = False
+    seed: int | None = None
+    wait: bool = True
 
 
 @dataclasses.dataclass
@@ -451,11 +443,8 @@ ACTION_PARAMS_MAPPING: dict[str, type] = {
     # Position control actions
     "move_to": MoveToActionParams,
     "turn_to": TurnToActionParams,
-    "set_path": SetPathActionParams,
-    "set_waypoints": SetWaypointsActionParams,  # legacy alias
-    "start_path": StartPathActionParams,
-    "load_path": LoadPathActionParams,
     "stop_path": StopPathActionParams,
+    "follow_path": FollowPathActionParams,
     "wait_position_event": WaitPositionEventActionParams,
 }
 
@@ -485,9 +474,13 @@ class ExperimentActionDefinition:
           id: my_group
           label: "Velocity test sequence"
           actions:
-            - set_mode: VELOCITY
-            - set_velocity: [0.5, 0]
-            - wait: 2s
+            - type: set_mode
+              mode: VELOCITY
+            - type: set_velocity
+              forward: 0.5
+              turn: 0
+            - type: wait_time
+              time_ms: 2000
     """
     id: str
     type: str
@@ -504,6 +497,9 @@ class ExperimentActionDefinition:
     label: str | None = None  # Human-readable label for display in reports
 
     meta: dict[str, Any] | None = None  # Optional metadata for reports/analysis (e.g., label_layer)
+
+    wait_before: Any | None = None  # Wait before executing (supports "2s", "500ms", float, int ms)
+    wait_after: Any | None = None   # Wait after executing (supports "2s", "500ms", float, int ms)
 
     # Action-specific parameters
     parameters: dict[str, Any] = dataclasses.field(default_factory=dict)
@@ -544,7 +540,7 @@ class ExperimentActionDefinition:
         action_type = d["type"]
 
         # Reserved fields that should not go into parameters
-        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "label", "meta", "parameters", "actions"}
+        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "label", "meta", "parameters", "actions", "wait_before", "wait_after"}
 
         # If 'parameters' is explicitly provided, use it; otherwise collect non-reserved fields
         if "parameters" in d:
@@ -618,7 +614,7 @@ class ExperimentActionDefinition:
             if d.get("label") is not None:
                 outer_group["label"] = d["label"]
             # Carry over scheduling fields
-            for field in ("tick", "after", "time", "delay", "timeout"):
+            for field in ("tick", "after", "time", "delay", "timeout", "wait_before", "wait_after"):
                 if d.get(field) is not None:
                     outer_group[field] = d[field]
 
@@ -632,10 +628,8 @@ class ExperimentActionDefinition:
             if actions_list:
                 sub_actions = {}
                 for i, sub_def in enumerate(actions_list):
-                    # Expand shorthand for sub-actions
-                    expanded_sub = _expand_shorthand(sub_def)
                     # Recursively parse sub-action
-                    sub_action = cls.from_dict(expanded_sub, index=i, parent_id=action_id)
+                    sub_action = cls.from_dict(sub_def, index=i, parent_id=action_id)
                     sub_actions[sub_action.id] = sub_action
 
         return cls(
@@ -648,6 +642,8 @@ class ExperimentActionDefinition:
             timeout=d.get("timeout"),
             label=d.get("label"),
             meta=d.get("meta"),
+            wait_before=d.get("wait_before"),
+            wait_after=d.get("wait_after"),
             parameters=parameters,
             sub_actions=sub_actions,
         )
@@ -672,6 +668,10 @@ class ExperimentActionDefinition:
             dict_out["label"] = self.label
         if self.meta is not None:
             dict_out["meta"] = self.meta
+        if self.wait_before is not None:
+            dict_out["wait_before"] = self.wait_before
+        if self.wait_after is not None:
+            dict_out["wait_after"] = self.wait_after
         if self.parameters:
             dict_out["parameters"] = self.parameters
         if self.sub_actions:
@@ -715,11 +715,16 @@ class ExperimentDefinition:
         description: Test balancing control
         timeout: 30.0
         actions:
-          - speak: "Starting test"
-          - wait: 1s
-          - mode: BALANCING
-          - wait: 10s
-          - mode: OFF
+          - type: speak
+            text: "Starting test"
+          - type: wait_time
+            time_ms: 1000
+          - type: set_mode
+            mode: BALANCING
+          - type: wait_time
+            time_ms: 10000
+          - type: set_mode
+            mode: OFF
     """
     id: str
     description: str
@@ -733,7 +738,6 @@ class ExperimentDefinition:
 
         Supports list-based actions format with:
         - Auto-generated IDs (action_0, action_1, etc.)
-        - Shorthand syntax for common actions (wait, mode, speak, beep, etc.)
         - Implicit sequential chaining (actions run after the previous one by default)
         - Delay field for relative timing
         - Parallel action groups
@@ -750,9 +754,9 @@ class ExperimentDefinition:
         if not isinstance(raw_actions, list):
             raise TypeError("'actions' must be a list")
 
-        # Parse actions with shorthand expansion and auto-ID generation
+        # Parse actions with auto-ID generation
         actions = [
-            ExperimentActionDefinition.from_dict(_expand_shorthand(a), index=i)
+            ExperimentActionDefinition.from_dict(a, index=i)
             for i, a in enumerate(raw_actions)
         ]
 
@@ -918,24 +922,53 @@ class ExperimentData:
 
 
 # ======================================================================================================================
-# FILE I/O
+# TRAJECTORY FILE I/O
 # ======================================================================================================================
 
 INPUT_TRAJECTORY_FILE_EXTENSION = '.bitrj'
+OUTPUT_TRAJECTORY_FILE_EXTENSION = '.botrj'
 
 
 @dataclasses.dataclass
-class BILBO_InputFileData:
+class InputTrajectoryFileData:
     id: str
     description: str
-    trajectory: BILBO_InputTrajectory
+    trajectory: InputTrajectory
 
     @property
     def length(self) -> int:
         return self.trajectory.length
 
+    def to_trajectory(self) -> InputTrajectory:
+        """Extract the InputTrajectory."""
+        return self.trajectory
 
-def write_input_file(file_name, folder, data: BILBO_InputFileData):
+
+@dataclasses.dataclass
+class OutputTrajectoryFileData:
+    id: str
+    description: str
+    output_name: str          # e.g. "theta"
+    output: list[float]       # the trajectory values
+    dt: float = BILBO_CONTROL_DT
+
+    @property
+    def length(self) -> int:
+        return len(self.output)
+
+    def to_array(self) -> np.ndarray:
+        return np.asarray(self.output)
+
+    def to_trajectory(self) -> OutputTrajectory:
+        """Extract an OutputTrajectory (drops id/description metadata)."""
+        return OutputTrajectory(
+            output_name=self.output_name,
+            output=self.output,
+            dt=self.dt,
+        )
+
+
+def write_input_file(file_name, folder, data: InputTrajectoryFileData):
     data_dict = dataclasses.asdict(data)
     file_path = f"{folder}/{file_name}{INPUT_TRAJECTORY_FILE_EXTENSION}"
     try:
@@ -944,17 +977,28 @@ def write_input_file(file_name, folder, data: BILBO_InputFileData):
         print(f"Error writing input file: {e}")
 
 
-def read_input_file(file) -> BILBO_InputFileData | None:
+def read_input_file(file) -> InputTrajectoryFileData | None:
     if not file_exists(file):
         raise FileNotFoundError(f"Input file not found: {file}")
 
     try:
         data_dict = readJSON(file)
-        data = from_dict_auto(BILBO_InputFileData, data_dict)
+        data = from_dict_auto(InputTrajectoryFileData, data_dict)
         return data
     except Exception as e:
         print(f"Error reading input file: {e}")
         return None
+
+
+def write_output_file(file_path: str, data: OutputTrajectoryFileData):
+    writeJSON(file_path, dataclasses.asdict(data))
+
+
+def read_output_file(file_path: str) -> OutputTrajectoryFileData:
+    if not file_exists(file_path):
+        raise FileNotFoundError(f"Output trajectory file not found: {file_path}")
+    data_dict = readJSON(file_path)
+    return from_dict_auto(OutputTrajectoryFileData, data_dict)
 
 
 # ======================================================================================================================
@@ -1062,10 +1106,10 @@ def set_input(input: list[float], normalized: bool = False, **scheduling) -> Exp
     )
 
 
-def run_trajectory(trajectory: BILBO_InputTrajectory | dict | str, **scheduling) -> ExperimentActionDefinition:
+def run_trajectory(trajectory: InputTrajectory | dict | str, **scheduling) -> ExperimentActionDefinition:
     """Create a run_trajectory action."""
     # Convert trajectory to dict if it's a dataclass
-    if isinstance(trajectory, BILBO_InputTrajectory):
+    if isinstance(trajectory, InputTrajectory):
         trajectory = dataclasses.asdict(trajectory)
     return ExperimentActionDefinition(
         id=scheduling.get("id", "run_trajectory"),
@@ -1129,9 +1173,7 @@ def parallel(actions: list[ExperimentActionDefinition | dict], **scheduling) -> 
         if isinstance(a, ExperimentActionDefinition):
             sub_action = a
         else:
-            # Parse dict to ExperimentActionDefinition
-            expanded = _expand_shorthand(a)
-            sub_action = ExperimentActionDefinition.from_dict(expanded, index=i, parent_id=parent_id)
+            sub_action = ExperimentActionDefinition.from_dict(a, index=i, parent_id=parent_id)
         sub_actions_dict[sub_action.id] = sub_action
     return ExperimentActionDefinition(
         id=parent_id,
@@ -1162,9 +1204,7 @@ def group(actions: list[ExperimentActionDefinition | dict], **scheduling) -> Exp
         if isinstance(a, ExperimentActionDefinition):
             sub_action = a
         else:
-            # Parse dict to ExperimentActionDefinition
-            expanded = _expand_shorthand(a)
-            sub_action = ExperimentActionDefinition.from_dict(expanded, index=i, parent_id=parent_id)
+            sub_action = ExperimentActionDefinition.from_dict(a, index=i, parent_id=parent_id)
         sub_actions_dict[sub_action.id] = sub_action
     return ExperimentActionDefinition(
         id=parent_id,
@@ -1220,7 +1260,7 @@ def loop(actions: list[ExperimentActionDefinition | dict], count: int | None = N
         loop_dict["range"] = loop_range
 
     # Carry over scheduling fields
-    for field in ("tick", "after", "time", "delay", "timeout", "label"):
+    for field in ("tick", "after", "time", "delay", "timeout", "label", "wait_before", "wait_after"):
         if scheduling.get(field) is not None:
             loop_dict[field] = scheduling[field]
 
@@ -1375,86 +1415,46 @@ def turn_to(heading: float = 0.0, heading_deg: float | None = None,
     )
 
 
-def set_path(points: list[dict | list | tuple], stop_indices: list[int] | None = None,
-             clear_existing: bool = True, **scheduling) -> ExperimentActionDefinition:
-    """Create a set_path action to load dense path points.
+def follow_path(target: dict | list | tuple, waypoints: list[dict | list | tuple] | None = None,
+                max_speed: float = 0.0, timeout: float = 0.0, allow_reverse: bool = False,
+                seed: int | None = None, wait: bool = True,
+                **scheduling) -> ExperimentActionDefinition:
+    """Create a follow_path action to plan and follow a path to a target point.
+
+    Uses the motion planner (RRT) to compute a collision-free path from the current
+    position to the target, optionally passing through intermediate waypoints,
+    then loads and follows the planned path.
 
     Args:
-        points: List of path points. Each can be:
-            - [x, y] - coordinate pair
-            - {"x": x, "y": y} - dict
-        stop_indices: List of point indices where the robot should stop
-        clear_existing: If True, clear existing path first
-    """
-    params = {"points": _normalize_path_points(points), "clear_existing": clear_existing}
-    if stop_indices:
-        params["stop_indices"] = stop_indices
-    return ExperimentActionDefinition(
-        id=scheduling.get("id", "set_path"),
-        type="set_path",
-        tick=scheduling.get("tick"),
-        after=scheduling.get("after"),
-        time=scheduling.get("time"),
-        delay=scheduling.get("delay"),
-        timeout=scheduling.get("timeout"),
-        parameters=params
-    )
-
-
-# Backwards-compatible alias
-def set_waypoints(waypoints: list[dict | list | tuple], clear_existing: bool = True,
-                  **scheduling) -> ExperimentActionDefinition:
-    """Legacy alias for set_path."""
-    return set_path(waypoints, clear_existing=clear_existing, **scheduling)
-
-
-def start_path(allow_reverse: bool = False, timeout: float = 0.0, max_speed: float = 0.0,
-               wait: bool = True, **scheduling) -> ExperimentActionDefinition:
-    """Create a start_path action to start following the loaded path.
-
-    Args:
-        allow_reverse: If True, robot may drive backwards when efficient
-        timeout: Maximum time for path execution (0 = no timeout)
-        max_speed: Speed override (0 = use config default)
+        target: Target position as {"x": ..., "y": ...}, [x, y], or (x, y)
+        waypoints: Optional intermediate waypoints, each as:
+            - {"x": ..., "y": ..., "weight": 0.9, "stop": False}
+            - [x, y] or [x, y, weight] or [x, y, weight, stop]
+            weight controls how closely the path must pass the waypoint (default 0.9).
+            stop=True makes the robot pause at this waypoint.
+        max_speed: Speed limit [m/s] (0 = use default)
+        timeout: Path execution timeout [s] (0 = no timeout)
+        allow_reverse: If True, robot may drive backwards
+        seed: Random seed for planner reproducibility
         wait: If True, wait for path completion before continuing
     """
+    # Normalize target to dict
+    if isinstance(target, (list, tuple)):
+        target = {"x": target[0], "y": target[1] if len(target) > 1 else 0.0}
+    params = {
+        "target": target,
+        "max_speed": max_speed,
+        "timeout": timeout,
+        "allow_reverse": allow_reverse,
+        "wait": wait,
+    }
+    if waypoints:
+        params["waypoints"] = waypoints
+    if seed is not None:
+        params["seed"] = seed
     return ExperimentActionDefinition(
-        id=scheduling.get("id", "start_path"),
-        type="start_path",
-        tick=scheduling.get("tick"),
-        after=scheduling.get("after"),
-        time=scheduling.get("time"),
-        delay=scheduling.get("delay"),
-        timeout=scheduling.get("timeout"),
-        parameters={"allow_reverse": allow_reverse, "timeout": timeout, "max_speed": max_speed, "wait": wait}
-    )
-
-
-def load_path(path: dict | str, start: bool = False, clear_existing: bool = True,
-              allow_reverse: bool | None = None, timeout: float | None = None,
-              max_speed: float | None = None, wait: bool = True,
-              **scheduling) -> ExperimentActionDefinition:
-    """Create a load_path action to load a path from a dict or file.
-
-    Args:
-        path: Path dict or file path (YAML/JSON)
-        start: If True, automatically start path after loading
-        clear_existing: If True, clear existing path before loading
-        allow_reverse: Override for allow_reverse setting
-        timeout: Override for timeout setting
-        max_speed: Override for max_speed setting
-        wait: If True and start=True, wait for path completion
-    """
-    params = {"path": path, "start": start, "clear_existing": clear_existing, "wait": wait}
-    if allow_reverse is not None:
-        params["allow_reverse"] = allow_reverse
-    if timeout is not None:
-        params["timeout"] = timeout
-    if max_speed is not None:
-        params["max_speed"] = max_speed
-    return ExperimentActionDefinition(
-        id=scheduling.get("id", "load_path"),
-        type="load_path",
+        id=scheduling.get("id", "follow_path"),
+        type="follow_path",
         tick=scheduling.get("tick"),
         after=scheduling.get("after"),
         time=scheduling.get("time"),
@@ -1564,7 +1564,7 @@ class ExperimentBuilder:
     def set_input(self, input: list[float], normalized: bool = False) -> "ExperimentBuilder":
         return self.add(set_input(input, normalized, id=self._next_id("set_input")))
 
-    def run_trajectory(self, trajectory: BILBO_InputTrajectory | dict | str) -> "ExperimentBuilder":
+    def run_trajectory(self, trajectory: InputTrajectory | dict | str) -> "ExperimentBuilder":
         return self.add(run_trajectory(trajectory, id=self._next_id("run_trajectory")))
 
     def set_marker(self, marker_id: str, marker_value: str) -> "ExperimentBuilder":
@@ -1628,24 +1628,13 @@ class ExperimentBuilder:
         return self.add(turn_to(heading, heading_deg, max_angular_speed, timeout, wait,
                                id=self._next_id("turn_to")))
 
-    def set_path(self, points: list[dict | list | tuple], stop_indices: list[int] | None = None,
-                 clear_existing: bool = True) -> "ExperimentBuilder":
-        return self.add(set_path(points, stop_indices, clear_existing, id=self._next_id("set_path")))
-
-    def set_waypoints(self, waypoints: list[dict | list | tuple],
-                      clear_existing: bool = True) -> "ExperimentBuilder":
-        """Legacy alias for set_path."""
-        return self.set_path(waypoints, clear_existing=clear_existing)
-
-    def start_path(self, allow_reverse: bool = False, timeout: float = 0.0, max_speed: float = 0.0,
-                   wait: bool = True) -> "ExperimentBuilder":
-        return self.add(start_path(allow_reverse, timeout, max_speed, wait, id=self._next_id("start_path")))
-
-    def load_path(self, path: dict | str, start: bool = False, clear_existing: bool = True,
-                  allow_reverse: bool | None = None, timeout: float | None = None,
-                  max_speed: float | None = None, wait: bool = True) -> "ExperimentBuilder":
-        return self.add(load_path(path, start, clear_existing, allow_reverse, timeout, max_speed, wait,
-                                 id=self._next_id("load_path")))
+    def follow_path(self, target: dict | list | tuple,
+                    waypoints: list[dict | list | tuple] | None = None,
+                    max_speed: float = 0.0, timeout: float = 0.0,
+                    allow_reverse: bool = False, seed: int | None = None,
+                    wait: bool = True) -> "ExperimentBuilder":
+        return self.add(follow_path(target, waypoints, max_speed, timeout, allow_reverse,
+                                    seed, wait, id=self._next_id("follow_path")))
 
     def stop_path(self) -> "ExperimentBuilder":
         return self.add(stop_path(id=self._next_id("stop_path")))

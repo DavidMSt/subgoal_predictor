@@ -156,12 +156,14 @@ class BILBO_Common:
 
     # ------------------------------------------------------------------------------------------------------------------
     def setResumeEvent(self, data):
+        self.logger.info("Set resume event")
         self.interaction_events.resume.set(data=data)
 
     def setRepeatEvent(self, data):
         self.interaction_events.repeat.set(data=data)
 
     def setAbortEvent(self, data):
+        self.logger.warning("Set abort event")
         self.interaction_events.abort.set(data=data)
 
     # ------------------------------------------------------------------------------------------------------------------

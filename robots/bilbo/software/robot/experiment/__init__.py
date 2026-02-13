@@ -3,7 +3,6 @@
 # Parser components
 from robot.experiment.experiment_parser import (
     ActionParameter,
-    ShorthandRule,
     ActionEntry,
     ActionRegistry,
     ExperimentParser,
@@ -42,10 +41,6 @@ from robot.experiment.experiment import (
     ResetControlAction,
     MoveToAction,
     TurnToAction,
-    SetPathAction,
-    SetWaypointsAction,
-    StartPathAction,
-    LoadPathAction,
     StopPathAction,
     WaitPositionEventAction,
     EXPERIMENT_ACTION_TYPE_MAPPING,

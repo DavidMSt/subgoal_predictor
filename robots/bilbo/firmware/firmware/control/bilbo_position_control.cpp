@@ -10,13 +10,13 @@
  *  Key design principles:
  *
  *  1. DENSE PRE-PLANNED PATH
- *     - Path is a dense array of (x,y) points (5-100mm spacing)
- *     - Curvature encoded in sample spacing: tight curves = close points
+ *     - Path is a dense array of (x,y) points (~15mm uniform spacing)
  *     - Up to 1024 points with up to 16 explicit STOP indices
  *
- *  2. SPEED FROM LOCAL SPACING
- *     - v_target = max_speed * (local_spacing / max_spacing)
- *     - Constant index-rate through array = variable speed matching curvature
+ *  2. SPEED FROM PATH CURVATURE
+ *     - Curvature estimated from upcoming path points (Menger curvature)
+ *     - v_target = max_speed / (1 + curvature_gain * κ_max)
+ *     - Low-pass filtered for smooth transitions
  *     - Deceleration near STOP points and path end
  *
  *  3. ADAPTIVE LOOKAHEAD (pure pursuit)
@@ -130,6 +130,7 @@ void BILBO_PositionControl::clear_path() {
 	_path_max_speed = 0.0f;
 	_path_max_spacing = 0.0f;
 	_path_total_length = 0.0f;
+	_v_target_smooth = 0.0f;
 }
 
 bool BILBO_PositionControl::add_path_point(float x, float y) {
@@ -185,6 +186,15 @@ bool BILBO_PositionControl::add_stop_index(uint16_t index) {
 
 uint16_t BILBO_PositionControl::get_path_point_count() const {
 	return _path_count;
+}
+
+void BILBO_PositionControl::spiPathReceived(const path_point_t *spi_buffer, uint16_t count) {
+	clear_path();
+	if (count > PATH_BUFFER_SIZE) {
+		count = PATH_BUFFER_SIZE;
+	}
+	set_path(spi_buffer, count);
+	send_info("SPI path received: %d points", count);
 }
 
 // ============================================================================
@@ -386,6 +396,90 @@ void BILBO_PositionControl::_compute_cumulative_distances() {
 }
 
 // ============================================================================
+// CURVATURE ESTIMATION
+// ============================================================================
+
+/**
+ * Estimate the maximum path curvature in a lookahead window ahead of the
+ * given progress position.
+ *
+ * Uses the Menger curvature formula on triplets of path points:
+ *   κ = 2|cross(B-A, C-A)| / (|B-A| * |C-B| * |C-A|)
+ *
+ * A stride of ~50mm (in point indices) is used for noise rejection.
+ * The maximum curvature over the window is returned so the robot slows
+ * down before entering the tightest part of an upcoming curve.
+ *
+ * Returns 0.0 if the path is too short for curvature estimation.
+ */
+float BILBO_PositionControl::_estimate_curvature_ahead(
+		float at_progress, float lookahead_dist) const {
+
+	if (_path_count < 3) return 0.0f;
+
+	uint16_t start_idx = (uint16_t)at_progress;
+	if (start_idx >= _path_count - 1) start_idx = _path_count - 2;
+
+	// Find end index based on lookahead distance
+	float start_arc = _cumul_dist[start_idx];
+	float end_arc = start_arc + lookahead_dist;
+
+	uint16_t end_idx = start_idx;
+	while (end_idx < _path_count - 1 && _cumul_dist[end_idx] < end_arc) {
+		end_idx++;
+	}
+
+	// Compute stride: ~50mm chord for robust curvature estimation
+	// Adapts to actual path spacing
+	float avg_spacing = (_path_count > 1)
+		? (_path_total_length / (float)(_path_count - 1))
+		: 0.015f;
+	uint16_t stride = (uint16_t)(0.05f / fmaxf(avg_spacing, 0.001f));
+	if (stride < 1) stride = 1;
+	if (stride > 15) stride = 15;
+
+	// Need at least 2*stride points for a single curvature measurement
+	if (end_idx < start_idx + 2 * stride) {
+		// Not enough lookahead — use a single measurement at current position
+		if (start_idx + 2 * stride < _path_count) {
+			end_idx = start_idx + 2 * stride;
+		} else {
+			return 0.0f;
+		}
+	}
+
+	float max_kappa = 0.0f;
+
+	for (uint16_t i = start_idx; i + 2 * stride <= end_idx && i + 2 * stride < _path_count; i++) {
+		float ax = _path_buffer[i].x;
+		float ay = _path_buffer[i].y;
+		float bx = _path_buffer[i + stride].x;
+		float by = _path_buffer[i + stride].y;
+		float cx = _path_buffer[i + 2 * stride].x;
+		float cy = _path_buffer[i + 2 * stride].y;
+
+		// Vectors AB and AC
+		float abx = bx - ax, aby = by - ay;
+		float bcx = cx - bx, bcy = cy - by;
+		float acx = cx - ax, acy = cy - ay;
+
+		// Menger curvature: κ = 2|cross(AB, AC)| / (|AB| * |BC| * |AC|)
+		float cross_mag = fabsf(abx * acy - aby * acx);
+		float ab_len = sqrtf(abx * abx + aby * aby);
+		float bc_len = sqrtf(bcx * bcx + bcy * bcy);
+		float ac_len = sqrtf(acx * acx + acy * acy);
+
+		float denom = ab_len * bc_len * ac_len;
+		if (denom > 1e-10f) {
+			float kappa = 2.0f * cross_mag / denom;
+			if (kappa > max_kappa) max_kappa = kappa;
+		}
+	}
+
+	return max_kappa;
+}
+
+// ============================================================================
 // PATH TRACKING HELPERS
 // ============================================================================
 
@@ -564,31 +658,21 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_follow_path(
 	_progress = _project_onto_path(current_state.x, current_state.y, _progress);
 
 	// -----------------------------------------------------------------
-	// 3. LOCAL SPACING at robot position
+	// 3-4. TARGET SPEED from path curvature
+	//      Estimate curvature from upcoming path points using Menger
+	//      curvature formula, then map to speed:
+	//        v = max_speed / (1 + curvature_gain * κ_max)
+	//      Low-pass filter the result for smooth transitions.
 	// -----------------------------------------------------------------
-	uint16_t seg_idx = (uint16_t)_progress;
-	if (seg_idx >= _path_count - 1) {
-		seg_idx = _path_count - 2;
-	}
-	float spacing = _cumul_dist[seg_idx + 1] - _cumul_dist[seg_idx];
+	float kappa = _estimate_curvature_ahead(_progress, config.curvature_lookahead);
+	float v_target_raw = _path_max_speed / (1.0f + config.curvature_gain * kappa);
+	v_target_raw = _clamp(v_target_raw, 0.0f, _path_max_speed);
 
-	// -----------------------------------------------------------------
-	// 4. TARGET SPEED from spacing (power-law with offset)
-	//    ratio = (spacing - MIN_SPACING) / (max_spacing - MIN_SPACING)
-	//    v_target = max_speed * ratio^alpha
-	//    Boundaries: max_spacing → max_speed, MIN_SPACING → 0
-	// -----------------------------------------------------------------
-	static constexpr float PATH_MIN_SPACING = 0.005f;  // [m] matches planner SAMPLE_DS_MIN
-
-	float v_target;
-	float denom = _path_max_spacing - PATH_MIN_SPACING;
-	if (denom > EPSILON) {
-		float ratio = (spacing - PATH_MIN_SPACING) / denom;
-		ratio = _clamp(ratio, 0.0f, 1.0f);
-		v_target = _path_max_speed * powf(ratio, config.speed_curvature_power);
-	} else {
-		v_target = _path_max_speed;
-	}
+	// Exponential smoothing (time constant ~100ms for gentle transitions)
+	static constexpr float SPEED_SMOOTH_TAU = 0.1f;  // [s]
+	float alpha_smooth = config.Ts / (config.Ts + SPEED_SMOOTH_TAU);
+	_v_target_smooth = alpha_smooth * v_target_raw + (1.0f - alpha_smooth) * _v_target_smooth;
+	float v_target = _v_target_smooth;
 
 	// -----------------------------------------------------------------
 	// 5. STOP DECELERATION
@@ -814,9 +898,9 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_follow_path(
 		output.v_cmd = 0.0f;
 		output.psi_dot_cmd = 0.0f;
 		_arrival_timer += config.Ts;
-		if (_arrival_timer >= config.arrival_dwell_time) {
+		if (_arrival_timer >= config.stop_dwell_time) {
 			send_info("STOP COMPLETED: stop[%d] idx=%d, dwell=%.2fs",
-			          _next_stop_ptr, current_stop_idx, config.arrival_dwell_time);
+			          _next_stop_ptr, current_stop_idx, config.stop_dwell_time);
 			_on_stop_completed(current_stop_idx);
 			_next_stop_ptr++;
 			_arrival_timer = 0.0f;
@@ -830,10 +914,18 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_follow_path(
 	}
 
 	// -----------------------------------------------------------------
-	// 12. FINAL APPROACH — when at path end but outside tolerance,
-	//     override with move_to_point-like drive toward last point
+	// 12. FINAL APPROACH — when near path end or STOP waypoint but
+	//     outside tolerance, override with move_to_point-like drive.
+	//     Allows reverse to recover from overshoot without oscillation.
 	// -----------------------------------------------------------------
-	if (_progress >= (float)(_path_count - 1) - 0.5f && !near_end) {
+
+	// 12a. Path endpoint — activate within stopping distance
+	float stopping_dist_end = (config.decel_limit > EPSILON)
+		? (_path_max_speed * _path_max_speed) / (2.0f * config.decel_limit)
+		: 0.5f;
+	bool approaching_end = (d_to_end < stopping_dist_end) || (d_to_end < 0.0f);
+
+	if (approaching_end && !near_end) {
 		float dx_last = _path_buffer[_path_count - 1].x - current_state.x;
 		float dy_last = _path_buffer[_path_count - 1].y - current_state.y;
 		float dist_last = sqrtf(dx_last * dx_last + dy_last * dy_last);
@@ -864,6 +956,58 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_follow_path(
 		                       -config.max_turn_rate, config.max_turn_rate);
 		float fade_last = _clamp(dist_last / (2.0f * config.arrival_tolerance), 0.0f, 1.0f);
 		output.psi_dot_cmd = w_last * fade_last;
+	}
+
+	// 12b. STOP waypoint approach — move_to_point-like drive toward stop.
+	//      Activates within stopping distance (v_max²/(2*a)) so the sqrt
+	//      decel profile has full room to brake smoothly.  Allows reverse
+	//      to recover from overshoot without oscillation.
+	if (_next_stop_ptr < _stop_count && !near_stop) {
+		uint16_t stop_idx = _stop_indices[_next_stop_ptr];
+		float stop_x = _path_buffer[stop_idx].x;
+		float stop_y = _path_buffer[stop_idx].y;
+		float dx_stop = stop_x - current_state.x;
+		float dy_stop = stop_y - current_state.y;
+		float dist_stop = sqrtf(dx_stop * dx_stop + dy_stop * dy_stop);
+
+		// Stopping distance from max speed: d = v²/(2a)
+		float stopping_dist = (config.decel_limit > EPSILON)
+			? (_path_max_speed * _path_max_speed) / (2.0f * config.decel_limit)
+			: 0.5f;  // fallback 50cm
+
+		// Activate when arc-length to stop < stopping distance, or past the stop
+		float arc_to_stop = _cumul_dist[stop_idx] - robot_arc;
+		bool approaching_stop = (arc_to_stop < stopping_dist) || (arc_to_stop < 0.0f);
+
+		if (approaching_stop) {
+			float angle_to_stop = atan2f(dy_stop, dx_stop);
+			float he_stop = _normalize_angle(angle_to_stop - current_state.psi);
+
+			// Speed: sqrt decel toward stop point (based on Euclidean distance)
+			float v_stop;
+			if (config.decel_limit > EPSILON) {
+				v_stop = sqrtf(2.0f * config.decel_limit * dist_stop);
+			} else {
+				v_stop = config.kp_linear * dist_stop;
+			}
+			v_stop = fmaxf(0.0f, v_stop - config.kd_linear * fabsf(current_v));
+			v_stop = fminf(v_stop, _path_max_speed);
+
+			// Allow reverse if overshot
+			bool reverse_stop = fabsf(he_stop) > config.reverse_enter_angle;
+			if (reverse_stop) {
+				he_stop = _normalize_angle(he_stop + M_PI);
+				output.v_cmd = -v_stop * fmaxf(0.0f, cosf(he_stop));
+			} else {
+				output.v_cmd = v_stop * fmaxf(0.0f, cosf(he_stop));
+			}
+
+			// Angular with fade near target
+			float w_stop = _clamp(config.kp_angular * he_stop,
+			                       -config.max_turn_rate, config.max_turn_rate);
+			float fade_stop = _clamp(dist_stop / (2.0f * config.arrival_tolerance), 0.0f, 1.0f);
+			output.psi_dot_cmd = w_stop * fade_stop;
+		}
 	}
 
 	// Update telemetry

@@ -9,6 +9,18 @@ from core.utils.yaml_utils import write_yaml, load_yaml
 from robot.paths import CONTROL_PATH, SOFTWARE_PATH
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge *override* into a copy of *base*. Nested dicts are
+    merged rather than replaced; all other values are overwritten."""
+    merged = base.copy()
+    for key, value in override.items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
 def load_config_from_file(file: str):
     file = str(Path(file).expanduser())
     yaml_data = load_yaml(file)
@@ -21,6 +33,15 @@ def load_config_by_name(name: str):
     file = f"{CONTROL_PATH}{name}"
     if not file_exists(file):
         raise FileNotFoundError(f"Config file '{name}' not found in '{CONTROL_PATH}'")
+
+    # Non-default configs are treated as partial overrides on top of default.yaml
+    if name != 'default.yaml':
+        default_file = f"{CONTROL_PATH}default.yaml"
+        if file_exists(default_file):
+            base_data = load_yaml(str(Path(default_file).expanduser()))
+            override_data = load_yaml(str(Path(file).expanduser()))
+            merged = _deep_merge(base_data, override_data)
+            return from_dict_auto(BILBO_ControlConfig, merged)
 
     return load_config_from_file(file)
 

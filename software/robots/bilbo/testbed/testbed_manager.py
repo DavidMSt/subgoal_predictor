@@ -59,9 +59,9 @@ class TrackerSettings:
 class TrackedObjects:
     origin: Origin_OptiTrack_Config | None | str = None
     limbo_bar: LimboMarker_OptiTrack_Config | None | str = None
-    boxes: list[BoxObstacle_OptiTrack_Config | str] = dataclasses.field(default_factory=list)
-    walls: list[WallObstacle_OptiTrack_Config | str] = dataclasses.field(default_factory=list)
-    robots: list[BILBO_Config | str] = dataclasses.field(default_factory=list)
+    boxes: list[BoxObstacle_OptiTrack_Config | str] | None = dataclasses.field(default_factory=list)
+    walls: list[WallObstacle_OptiTrack_Config | str] | None = dataclasses.field(default_factory=list)
+    robots: list[BILBO_Config | str] | None = dataclasses.field(default_factory=list)
 
     def __post_init__(self):
         if isinstance(self.origin, str):

@@ -46,6 +46,7 @@ extern core_utils_RegisterMap<256> register_map;
  */
 typedef struct twipr_communication_callbacks_t {
     core_utils_CallbackContainer<5, uint16_t> trajectory_received; ///< Callback container for new trajectory events.
+    core_utils_CallbackContainer<5, uint16_t> path_received;       ///< Callback container for path data received via SPI.
 } twipr_communication_callbacks_t;
 
 // Global logging functions for debugging and informational messages.
@@ -69,6 +70,8 @@ typedef struct twipr_communication_config_t {
     core_utils_GPIO sample_notification_gpio; ///< GPIO used for sample notifications.
     twipr_sequence_input_t *sequence_rx_buffer; ///< Buffer for receiving sequence inputs over SPI.
     uint16_t len_sequence_buffer;           ///< Length of the sequence buffer.
+    uint8_t *path_rx_buffer;                ///< Buffer for receiving path points over SPI.
+    uint16_t len_path_buffer;               ///< Max number of path points the buffer can hold.
     uint16_t reset_uart_exti;               ///< External interrupt line used for UART reset.
     UART_HandleTypeDef *modbus_huart;
     GPIO_TypeDef* modbus_gpio_port;
@@ -233,6 +236,7 @@ private:
 
     // Private callback handlers for SPI messages.
     void _spi_rxTrajectory_callback(uint16_t len);
+    void _spi_rxPath_callback(uint16_t len);
     void _spi_txSamples_callback();
 
     /**

@@ -74,7 +74,7 @@ class BILBO_Serial_Communication:
     # ------------------------------------------------------------------------------------------------------------------
     def readTick(self):
         tick = self.interface.read(module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-                                   address=addresses.TWIPR_GeneralAddresses.ADDRESS_FIRMWARE_TICK,
+                                   address=addresses.TWIPR_SystemAddresses.FIRMWARE_TICK,
                                    type=ctypes.c_uint32)
 
         return tick
@@ -82,7 +82,7 @@ class BILBO_Serial_Communication:
     # ------------------------------------------------------------------------------------------------------------------
     def readFirmwareRevision(self):
         revision = self.interface.read(module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-                                       address=addresses.TWIPR_GeneralAddresses.ADDRESS_FIRMWARE_REVISION,
+                                       address=addresses.TWIPR_SystemAddresses.FIRMWARE_REVISION,
                                        type=twipr_firmware_revision)
 
         return revision
@@ -90,7 +90,7 @@ class BILBO_Serial_Communication:
     # ------------------------------------------------------------------------------------------------------------------
     def debug(self, state):
         self.interface.function(module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-                                address=addresses.TWIPR_GeneralAddresses.ADDRESS_FIRMWARE_DEBUG,
+                                address=addresses.TWIPR_SystemAddresses.FIRMWARE_DEBUGFUNCTION,
                                 data=state,
                                 input_type=ctypes.c_uint8)
 

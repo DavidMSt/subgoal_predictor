@@ -25,11 +25,13 @@ Where:
 """
 import dataclasses
 import enum
+import os
 import time
 from datetime import datetime
 from typing import Any
 
 import numpy as np
+import multiprocessing as mp
 
 from core.communication.wifi.bilbolab_wifi_interface import (
     wifi_event_definition, WifiEventContainer, WifiEvent, WifiEventFlag,
@@ -39,7 +41,8 @@ from core.utils.control.lib_control.il.q_filter import FIR_Design_Params, design
 from core.utils.control.lib_control.lifted_systems import vec2liftedMatrix
 from core.utils.data import generate_time_vector_by_length, generate_random_input
 from core.utils.events import event_definition, Event, wait_for_events, OR, TIMEOUT
-from core.utils.logging_utils import Logger
+from core.utils.json_utils import writeJSON
+from core.utils.logging_utils import Logger, enable_redirection, disable_redirection
 from core.utils.sound.sound import speak, playSound
 from core.utils.time import wait_until
 from robot.bilbo_common import BILBO_Common
@@ -50,6 +53,8 @@ from robot.control.bilbo_control_definitions import BILBO_ControlConfig, BILBO_C
 from robot.estimation.bilbo_estimation import BILBO_Estimation
 from robot.experiment import BILBO_InputTrajectory, BILBO_ExperimentHandler
 from robot.interfaces.bilbo_interfaces import BILBO_Interfaces
+from robot.core import get_logging_provider
+from robot.lowlevel.stm32_general import MAX_STEPS_TRAJECTORY
 from robot.utilities.buzzer import beep
 
 
@@ -78,12 +83,32 @@ class DILC_Experiment_Meta_Settings:
             pose before each trial. Set to False for manual positioning.
         check_if_robot_is_static: If True, waits for the robot to be stationary before
             starting a trial. Prevents trajectory injection while the robot is swaying.
-        require_accept_of_trial: If True, the user must accept each trial result before
-            the ILC/IML update is applied. Allows repeating bad trials.
+        auto_start_trials: If True, trials start automatically after the robot is
+            prepared (no resume needed). If False, user must send resume to start each trial.
+        auto_accept_trials: If True, trial results are accepted automatically (no
+            resume/revert needed). If False, user must accept, repeat, or abort each trial.
     """
     automatic_initial_conditions_reset: bool = True
     check_if_robot_is_static: bool = True
-    require_accept_of_trial: bool = True
+    auto_start_trials: bool = False
+    auto_accept_trials: bool = False
+
+
+@dataclasses.dataclass
+class DILC_U0_Params:
+    """Parameters for random initial input trajectory generation.
+
+    When u0 is not explicitly provided, these parameters control how
+    the random initial input is generated via generate_random_input().
+
+    Attributes:
+        f_cutoff: Butterworth cutoff frequency [Hz].
+        sigma: Signal amplitude/scaling.
+        bias: Constant offset added to the signal.
+    """
+    f_cutoff: float = 1.5
+    sigma: float = 0.2
+    bias: float = -0.03
 
 
 @dataclasses.dataclass
@@ -101,6 +126,7 @@ class DILC_Experiment_Settings:
         initial_conditions: Starting pose for each trial.
         input_lowpass: FIR low-pass filter parameters for the ILC input update (Q_ilc).
         model_lowpass: FIR low-pass filter parameters for the IML model update (Q_iml).
+        u0_params: Parameters for random u0 generation (used when u0 is None).
     """
     id: str
     description: str
@@ -111,6 +137,7 @@ class DILC_Experiment_Settings:
     input_lowpass: FIR_Design_Params
     model_lowpass: FIR_Design_Params
     meta: DILC_Experiment_Meta_Settings = dataclasses.field(default_factory=DILC_Experiment_Meta_Settings)
+    u0_params: DILC_U0_Params = dataclasses.field(default_factory=DILC_U0_Params)
     u0: np.ndarray | None = None
     m0: np.ndarray | None = None
 
@@ -148,6 +175,8 @@ class DILC_Trial_Data:
     L_ilc: np.ndarray
     L_iml: np.ndarray
 
+    samples: list[dict] | None = None
+
 
 class TrialResult(enum.Enum):
     """Outcome of a single trial execution."""
@@ -173,6 +202,7 @@ class DILC_Results_Meta:
     robot_config: BILBO_Config
     control_config: BILBO_ControlConfig
     settings: DILC_Experiment_Settings
+    logs: list[dict] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -281,6 +311,9 @@ class DILC_WifiEvents(WifiEventContainer):
     trial_finished: WifiEvent = _DILC_WIFI_EVENT
     trial_error: WifiEvent = _DILC_WIFI_EVENT
 
+    # Settings changes (during experiment)
+    meta_settings_changed: WifiEvent = _DILC_WIFI_EVENT
+
 
 # === DILC Experiment ==============================================================================================
 
@@ -350,15 +383,26 @@ class DILC_Experiment:
 
         self.trials = []
 
+        # Runtime-mutable meta settings (initialized from settings in initialize())
+        self._auto_start_trials: bool = settings.meta.auto_start_trials
+        self._auto_accept_trials: bool = settings.meta.auto_accept_trials
+
         self.logger = Logger(f"DILC Experiment {self.settings.id}", "DEBUG")
         self.events = DILC_Experiment_Events()
         self.callbacks = DILC_Experiment_Callbacks()
+
+        # Log capture
+        self._logs: list[dict] = []
+        self._log_capture_enabled = False
 
         # WiFi events — registered on the interface, sent to the host GUI
         self.wifi_events = DILC_WifiEvents(
             wifi=communication.wifi.wifi,
             id='dilc_experiment',
         )
+
+        self.common.interaction_events.abort.on(self.abort, once=True)
+
 
     # === PUBLIC METHODS ===========================================================================================
 
@@ -374,19 +418,34 @@ class DILC_Experiment:
         Emits: ``experiment_initialized``
         """
         self.N = len(self.settings.reference)
+
+        # Validate trajectory length: STM32 requires a multiple of 10
+        if self.N % 10 != 0:
+            raise ValueError(
+                f"Reference trajectory length N={self.N} is not a multiple of 10. "
+                f"The STM32 sequencer requires trajectory lengths that are multiples of 10."
+            )
+
+        # Validate trajectory length: must fit in STM32 buffer
+        if self.N > MAX_STEPS_TRAJECTORY:
+            raise ValueError(
+                f"Reference trajectory length N={self.N} exceeds MAX_STEPS_TRAJECTORY={MAX_STEPS_TRAJECTORY}. "
+                f"Maximum duration: {MAX_STEPS_TRAJECTORY * self.settings.Ts:.2f}s."
+            )
+
         self.t_vector = generate_time_vector_by_length(num_samples=self.N, dt=self.settings.Ts)
         self.logger.info(f"Trajectory length: N={self.N} samples ({self.N * self.settings.Ts:.2f}s)")
 
         # --- Initial input trajectory u_0 ---
         if self.settings.u0 is None:
-            f_cutoff = 2
-            sigma_I = 0.5
+            u0p = self.settings.u0_params
             self.logger.info(f"No initial input u0 provided. Generating random trajectory "
-                             f"(f_cutoff={f_cutoff} Hz, sigma={sigma_I})")
+                             f"(f_cutoff={u0p.f_cutoff} Hz, sigma={u0p.sigma}, bias={u0p.bias})")
             self._u = generate_random_input(
                 t_vector=self.t_vector,
-                f_cutoff=f_cutoff,
-                sigma_I=sigma_I,
+                f_cutoff=u0p.f_cutoff,
+                sigma_I=u0p.sigma,
+                bias=u0p.bias
             )
         else:
             self.logger.info("Using provided initial input trajectory u0")
@@ -458,13 +517,16 @@ class DILC_Experiment:
             return None
 
         # --- Start ---
+        self._start_log_capture()
         self.state = DILC_Experiment_State.RUNNING
         self.logger.info("=" * 60)
         self.logger.info(f"Starting DILC experiment '{self.settings.id}'")
         self.logger.info(f"  Trials: {self.settings.J}")
         self.logger.info(f"  Trajectory length: {self.N} samples ({self.N * self.settings.Ts:.2f}s)")
         self.logger.info(f"  Auto initial conditions: {self.settings.meta.automatic_initial_conditions_reset}")
-        self.logger.info(f"  Require trial acceptance: {self.settings.meta.require_accept_of_trial}")
+        self.logger.info(f"  Auto start trials: {self._auto_start_trials}")
+        self.logger.info(f"  Auto accept trials: {self._auto_accept_trials}")
+        self.logger.info(f"  u0: {self._u}")
         self.logger.info("=" * 60)
 
         self.events.experiment_started.set(data={
@@ -477,7 +539,6 @@ class DILC_Experiment:
             'N': self.N,
             'duration_s': self.N * self.settings.Ts,
             'auto_initial_conditions': self.settings.meta.automatic_initial_conditions_reset,
-            'require_accept': self.settings.meta.require_accept_of_trial,
         }, flags=self._WIFI_FLAGS)
         speak(f"Starting DILC experiment with {self.settings.J} trials")
 
@@ -504,6 +565,7 @@ class DILC_Experiment:
                 # Trial failed. Stop the experiment and return partial results.
                 self.state = DILC_Experiment_State.ERROR
                 self._finished = True
+                self._stop_log_capture()
                 error_msg = f"Experiment stopped: trial {self.j + 1} failed"
                 self.logger.error(error_msg)
                 self.events.experiment_error.set(data={
@@ -512,18 +574,21 @@ class DILC_Experiment:
                     'completed_trials': len(self.trials),
                 })
                 self.callbacks.experiment_error.call()
+                results = self._build_results()
+                results_filepath = self._save_results_to_file(results)
                 self.wifi_events.experiment_error.send(data={
                     **self._wifi_data,
                     'message': error_msg,
+                    'results_filepath': results_filepath,
                 }, flags=self._WIFI_FLAGS)
-                speak("Experiment failed")
                 beep(frequency='low', repeats=3)
-                return self._build_results()
+                return results
 
         # --- Post-loop: completed or aborted ---
         if self._abort_requested:
             self.state = DILC_Experiment_State.ERROR
             self._finished = True
+            self._stop_log_capture()
             self.logger.warning(f"Experiment aborted after {len(self.trials)} of {self.settings.J} trials")
             self.events.experiment_error.set(data={
                 'message': 'Experiment aborted by user',
@@ -531,17 +596,21 @@ class DILC_Experiment:
                 'completed_trials': len(self.trials),
             })
             self.callbacks.experiment_error.call()
+            results = self._build_results()
+            results_filepath = self._save_results_to_file(results)
             self.wifi_events.experiment_error.send(data={
                 **self._wifi_data,
                 'message': 'Experiment aborted by user',
+                'results_filepath': results_filepath,
             }, flags=self._WIFI_FLAGS)
-            speak("Experiment aborted")
-            return self._build_results()
+            return results
 
         # All trials completed successfully
         self.state = DILC_Experiment_State.FINISHED
         self._finished = True
+        self._stop_log_capture()
         results = self._build_results()
+        results_filepath = self._save_results_to_file(results)
 
         self.logger.info("=" * 60)
         self.logger.info(f"DILC experiment '{self.settings.id}' completed successfully")
@@ -563,8 +632,8 @@ class DILC_Experiment:
             'final_e_norm_iml': float(self.trials[-1].e_norm_iml) if self.trials else None,
             'error_norms_ilc': [float(t.e_norm_ilc) for t in self.trials],
             'error_norms_iml': [float(t.e_norm_iml) for t in self.trials],
+            'results_filepath': results_filepath,
         }, flags=self._WIFI_FLAGS)
-        speak("Experiment finished successfully")
         beep(frequency='high', repeats=3)
 
         return results
@@ -625,7 +694,7 @@ class DILC_Experiment:
             input_trajectory = BILBO_InputTrajectory.from_vector(
                 vector=self._u,
                 name=f"Trial {self.j + 1}",
-                id=self.j,
+                id=self.j + 1,
             )
 
             self.logger.info(f"Trajectory loaded: {input_trajectory.length} steps, "
@@ -641,46 +710,50 @@ class DILC_Experiment:
                 'u_max': float(self._u.max()),
             }, flags=self._WIFI_FLAGS)
 
-            # --- Step 3: Wait for user to start the trial ---
-            self.logger.info("Waiting for user to start the trial... (Resume / Abort)")
+            # --- Step 3: Wait for user to start the trial (unless auto-start) ---
+            if self._auto_start_trials:
+                self.logger.info("Auto-starting trial (auto_start_trials=True)")
+            else:
+                self.logger.info("Waiting for user to start the trial... (Resume / Abort)")
 
-            data, trace = wait_for_events(
-                OR(
-                    self.common.interaction_events.resume,
-                    self.common.interaction_events.abort,
-                ),
-                timeout=60,
-            )
+                data, trace = wait_for_events(
+                    OR(
+                        self.common.interaction_events.resume,
+                        self.common.interaction_events.abort,
+                    ),
+                    timeout=60,
+                )
 
-            if data is TIMEOUT:
-                self.logger.warning("Timed out waiting for user to start (60s)")
-                self.events.trial_error.set(data={
-                    'trial_index': self.j,
-                    'message': 'Timeout waiting for user to start trial',
-                })
-                self.callbacks.trial_error.call()
-                self.wifi_events.trial_error.send(data={
-                    **self._wifi_data,
-                    'message': 'Timeout waiting for user to start trial',
-                }, flags=self._WIFI_FLAGS)
-                return TrialResult.ERROR
+                if data is TIMEOUT:
+                    self.logger.warning("Timed out waiting for user to start (60s)")
+                    self.events.trial_error.set(data={
+                        'trial_index': self.j,
+                        'message': 'Timeout waiting for user to start trial',
+                    })
+                    self.callbacks.trial_error.call()
+                    self.wifi_events.trial_error.send(data={
+                        **self._wifi_data,
+                        'message': 'Timeout waiting for user to start trial',
+                    }, flags=self._WIFI_FLAGS)
+                    return TrialResult.ERROR
 
-            if trace.caused_by(self.common.interaction_events.abort):
-                self.logger.warning("User aborted before trajectory start")
-                self.events.trial_error.set(data={
-                    'trial_index': self.j,
-                    'message': 'User aborted',
-                })
-                self.callbacks.trial_error.call()
-                self.wifi_events.trial_error.send(data={
-                    **self._wifi_data,
-                    'message': 'User aborted',
-                }, flags=self._WIFI_FLAGS)
-                return TrialResult.ERROR
+                if trace.caused_by(self.common.interaction_events.abort):
+                    self.logger.warning("User aborted before trajectory start")
+                    self.events.trial_error.set(data={
+                        'trial_index': self.j,
+                        'message': 'User aborted',
+                    })
+                    self.callbacks.trial_error.call()
+                    self.wifi_events.trial_error.send(data={
+                        **self._wifi_data,
+                        'message': 'User aborted',
+                    }, flags=self._WIFI_FLAGS)
+                    return TrialResult.ERROR
 
             # --- Step 4: Execute the trajectory ---
             self.logger.info("Starting trajectory execution...")
             self.interfaces.disable_external_input()
+            self.control.disable_external_input()
 
             self.events.trajectory_started.set(data={
                 'trajectory': input_trajectory,
@@ -717,10 +790,74 @@ class DILC_Experiment:
                 }, flags=self._WIFI_FLAGS)
                 return TrialResult.ERROR
 
+            # --- Step 4b: Collect full samples for offline analysis ---
+            # Retrieve all logged samples for the trajectory tick range.
+            # These are stored in the trial data and saved to file, but NOT
+            # sent over WiFi (too large).
+            trial_samples = None
+            try:
+                lp = get_logging_provider()
+                start_tick = trajectory_data.meta.start_tick
+                end_tick = trajectory_data.meta.end_tick
+                # Align to multiples of 10 (required by the logging system)
+                start_tick_aligned = (start_tick // 10) * 10
+                end_tick_aligned = ((end_tick + 9) // 10) * 10
+                current_tick = lp.get_tick()
+                self.logger.debug(f"Requesting samples: ticks {start_tick_aligned}..{end_tick_aligned}, "
+                                  f"current logging tick: {current_tick}")
+
+                # Use async callback to avoid GIL contention from pickle
+                # deserialization of the (large) result blocking the main loop.
+                import threading
+                samples_ready = threading.Event()
+                samples_container = [None]
+
+                def _on_samples(data):
+                    samples_container[0] = data
+                    samples_ready.set()
+
+                lp.get_data(
+                    start=start_tick_aligned,
+                    end=end_tick_aligned,
+                    add_intermediate_samples=True,
+                    callback=_on_samples,
+                )
+                samples_ready.wait(timeout=10.0)
+                trial_samples = samples_container[0]
+
+                if trial_samples is not None:
+                    self.logger.info(f"Collected {len(trial_samples)} samples "
+                                     f"(ticks {start_tick_aligned}..{end_tick_aligned})")
+                else:
+                    self.logger.warning(f"Failed to retrieve samples from logging provider "
+                                        f"(ticks {start_tick_aligned}..{end_tick_aligned}, "
+                                        f"current tick: {current_tick})")
+            except Exception as e:
+                self.logger.warning(f"Could not collect trial samples: {e}")
+
             # --- Step 5: Extract and evaluate results ---
             theta_trajectory = np.asarray([
                 state.theta for state in trajectory_data.data.state_trajectory.states
             ])
+
+            # Handle length mismatch between recorded output and reference
+            n_out = len(theta_trajectory)
+            if n_out != self.N:
+                self.logger.warning(
+                    f"Output trajectory length ({n_out}) differs from expected N={self.N}. "
+                    f"Delta: {n_out - self.N} samples."
+                )
+                if n_out > self.N:
+                    # More samples than expected — truncate to N
+                    theta_trajectory = theta_trajectory[:self.N]
+                else:
+                    # Fewer samples than expected — pad with last value
+                    pad_value = theta_trajectory[-1] if n_out > 0 else 0.0
+                    theta_trajectory = np.pad(
+                        theta_trajectory, (0, self.N - n_out),
+                        mode='constant', constant_values=pad_value,
+                    )
+
             tracking_error = self.settings.reference - theta_trajectory
             error_norm = np.linalg.norm(tracking_error)
             max_abs_error = float(np.max(np.abs(tracking_error)))
@@ -742,12 +879,18 @@ class DILC_Experiment:
                 **self._wifi_data,
                 'error_norm': float(error_norm),
                 'max_abs_error': max_abs_error,
+                'reference': self.settings.reference,
+                'theta': theta_trajectory,
+                'error': tracking_error,
+                'u': self._u,
+                't': self.t_vector,
             }, flags=self._WIFI_FLAGS)
 
-            # --- Step 6: Wait for user acceptance (if enabled) ---
-            if self.settings.meta.require_accept_of_trial:
+            # --- Step 6: Wait for user acceptance (unless auto-accept) ---
+            if self._auto_accept_trials:
+                self.logger.info(f"Auto-accepting trial {self.j + 1} (error norm: {error_norm:.6f})")
+            else:
                 self.logger.info("Waiting for user to review... (Accept / Repeat / Abort)")
-                speak(f"Trial {self.j + 1} finished. Error norm: {error_norm:.4f}")
 
                 data, trace = wait_for_events(
                     OR(
@@ -832,7 +975,7 @@ class DILC_Experiment:
                 index=self.j,
                 t=self.t_vector,
                 u=self._u.copy(),
-                y=trajectory_data.data.state_trajectory.states,
+                y=theta_trajectory.copy(),
                 m=self._m.copy(),
                 e_ilc=error_ilc,
                 e_iml=error_iml,
@@ -842,6 +985,7 @@ class DILC_Experiment:
                 m_p1=mp1,
                 L_ilc=L_ilc,
                 L_iml=L_iml,
+                samples=trial_samples,
             )
             self.trials.append(trial_data)
 
@@ -858,8 +1002,18 @@ class DILC_Experiment:
                 'e_norm_iml': e_norm_iml,
                 'input_change_norm': input_change_norm,
                 'model_change_norm': model_change_norm,
+                't': self.t_vector,
+                'u': trial_data.u,
+                'theta': trial_data.y,
+                'm': trial_data.m,
+                'e_ilc': error_ilc,
+                'e_iml': error_iml,
+                'u_p1': up1,
+                'm_p1': mp1,
+                'reference': self.settings.reference,
             }, flags=self._WIFI_FLAGS)
 
+            speak(f"Trial {self.j + 1} finished.")
             self.j += 1
             return TrialResult.FINISHED
 
@@ -879,6 +1033,8 @@ class DILC_Experiment:
         finally:
             # Always re-enable external inputs after a trial attempt
             self.interfaces.enable_external_input()
+            self.control.enable_external_input()
+
 
     # ----------------------------------------------------------------------------------------------------------
     def prepare_trial(self) -> bool:
@@ -906,6 +1062,10 @@ class DILC_Experiment:
 
         # Navigate to initial conditions (if enabled)
         if self.settings.meta.automatic_initial_conditions_reset:
+
+            self.control.set_mode(BILBO_Control_Mode.POSITION)
+            time.sleep(1)
+
             ic = self.settings.initial_conditions
             self.logger.info(f"Navigating to initial conditions: "
                              f"x={ic.x:.3f}m, y={ic.y:.3f}m, psi={np.rad2deg(ic.psi):.1f}deg")
@@ -922,17 +1082,36 @@ class DILC_Experiment:
                 return False
             self.logger.info("Reached initial position")
 
+            time.sleep(0.5)
+
             # Turn to the desired heading
             result = self.control.position_control.turn_to_heading(
                 heading=ic.psi,
-                max_angular_speed=np.deg2rad(60),
+                max_angular_speed=np.deg2rad(100),
                 blocking=True,
-                timeout=5,
+                timeout=10,
             )
             if not result:
                 self.logger.error("Failed to reach initial heading")
                 return False
             self.logger.info("Reached initial heading")
+
+            self.control.set_mode(BILBO_Control_Mode.BALANCING)
+            time.sleep(0.1)
+            self.control.set_mode(BILBO_Control_Mode.POSITION)
+            time.sleep(0.25)
+            # Make a tiny last pass to the desired position. Turning can lead to position errors
+            result = self.control.position_control.move_to_point(
+                x=ic.x,
+                y=ic.y,
+                blocking=True,
+                timeout=10,
+            )
+            if not result:
+                self.logger.error("Failed to reach final position")
+                return False
+            self.logger.info("Reached initial conditions")
+
         else:
             self.logger.info("Skipping automatic positioning (disabled in meta settings)")
 
@@ -944,7 +1123,7 @@ class DILC_Experiment:
             self.logger.info("Waiting for robot to become static...")
             result = wait_until(
                 lambda: self.estimation.static,
-                timeout_s=5,
+                timeout_s=10,
                 poll_period_s=0.25,
             )
             if not result:
@@ -952,6 +1131,8 @@ class DILC_Experiment:
                 return False
             self.logger.info("Robot is static and ready")
 
+
+        self.control.set_mode(BILBO_Control_Mode.BALANCING)
         ic = self.settings.initial_conditions
         self.events.trial_prepared.set(data={
             'trial_index': self.j,
@@ -968,15 +1149,39 @@ class DILC_Experiment:
         return True
 
     # ----------------------------------------------------------------------------------------------------------
-    def abort(self):
+    def abort(self, *args, **kwargs):
         """Request experiment abortion from an external caller (e.g., GUI).
 
-        Takes effect after the current operation completes. If the experiment
-        is blocked waiting for user input, it will stop at the next loop iteration.
-        For immediate abort during a wait phase, use the interaction abort event instead.
+        Sets the abort flag, fires the interaction abort event (to unblock any
+        wait_for_events calls), and switches to BALANCING mode to immediately
+        interrupt position control moves.
         """
         self._abort_requested = True
-        self.logger.warning("Abort requested — experiment will stop after current operation")
+        self.logger.warning("Abort requested — interrupting experiment")
+        # Switch to BALANCING to cancel any active position control moves
+        self.control.set_mode(BILBO_Control_Mode.BALANCING)
+        # Fire the interaction abort event to unblock wait_for_events calls
+        self.common.interaction_events.abort.set()
+
+    # ----------------------------------------------------------------------------------------------------------
+    def set_auto_start_trials(self, value: bool):
+        """Enable or disable automatic trial start (no resume needed after preparation).
+
+        Can be called during the experiment to change behavior mid-run.
+        """
+        self._auto_start_trials = bool(value)
+        self.logger.info(f"auto_start_trials set to {self._auto_start_trials}")
+        self._send_meta_settings_changed()
+
+    # ----------------------------------------------------------------------------------------------------------
+    def set_auto_accept_trials(self, value: bool):
+        """Enable or disable automatic trial acceptance (no resume/revert after trial).
+
+        Can be called during the experiment to change behavior mid-run.
+        """
+        self._auto_accept_trials = bool(value)
+        self.logger.info(f"auto_accept_trials set to {self._auto_accept_trials}")
+        self._send_meta_settings_changed()
 
     # === PRIVATE METHODS ==========================================================================================
 
@@ -989,7 +1194,43 @@ class DILC_Experiment:
             'trial_index': self.j,
             'total_trials': self.settings.J,
             'completed_trials': len(self.trials),
+            'auto_start_trials': self._auto_start_trials,
+            'auto_accept_trials': self._auto_accept_trials,
         }
+
+    # ----------------------------------------------------------------------------------------------------------
+    def _send_meta_settings_changed(self):
+        """Send a WiFi event notifying the host that meta settings changed."""
+        self.wifi_events.meta_settings_changed.send(data={
+            **self._wifi_data,
+        }, flags=self._WIFI_FLAGS)
+
+    # ----------------------------------------------------------------------------------------------------------
+    def _log_capture_callback(self, log_entry: str, log: str, logger: Logger, level: int):
+        """Callback for capturing logs during the experiment."""
+        lp = get_logging_provider()
+        self._logs.append({
+            'entry': log_entry.strip(),
+            'message': log,
+            'logger': logger.name,
+            'level': level,
+            'tick': lp.get_tick() if lp else 0,
+        })
+
+    # ----------------------------------------------------------------------------------------------------------
+    def _start_log_capture(self):
+        """Enable log redirection to capture logs during experiment."""
+        if not self._log_capture_enabled:
+            self._logs = []
+            enable_redirection(self._log_capture_callback, redirect_all=False)
+            self._log_capture_enabled = True
+
+    # ----------------------------------------------------------------------------------------------------------
+    def _stop_log_capture(self):
+        """Disable log redirection."""
+        if self._log_capture_enabled:
+            disable_redirection(self._log_capture_callback)
+            self._log_capture_enabled = False
 
     # ----------------------------------------------------------------------------------------------------------
     def _build_results(self) -> DILC_Results:
@@ -1000,12 +1241,62 @@ class DILC_Experiment:
             robot_config=self.common.config,
             control_config=self.control.get_control_config(),
             settings=self.settings,
+            logs=self._logs,
         )
         return DILC_Results(
             meta=meta,
             state=self.state,
             trials=self.trials,
         )
+
+    # ----------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _save_results_worker(results: 'DILC_Results', filepath: str) -> None:
+        """Subprocess target: serialize and write results (releases GIL)."""
+        import dataclasses as dc
+        from core.utils.json_utils import writeJSON
+        results_dict = dc.asdict(results)
+        writeJSON(filepath, results_dict)
+
+    def _save_results_to_file(self, results: DILC_Results) -> str | None:
+        """Save experiment results to a JSON file on the robot.
+
+        Serialization runs in a subprocess so the GIL is not blocked.
+
+        Args:
+            results: The complete experiment results to save.
+
+        Returns:
+            The file path if saved successfully, None otherwise.
+        """
+        experiments_dir = os.path.expanduser("~/robot/experiments")
+        os.makedirs(experiments_dir, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"dilc_{self.settings.id}_{timestamp}.json"
+        filepath = os.path.join(experiments_dir, filename)
+
+        try:
+            proc = mp.Process(
+                target=self._save_results_worker,
+                args=(results, filepath),
+                daemon=True,
+            )
+            proc.start()
+            self.logger.info(f"Saving DILC results to {filepath} ...")
+            proc.join(timeout=60)
+            if proc.is_alive():
+                self.logger.error("DILC results save timed out (60s), killing")
+                proc.kill()
+                return None
+            if proc.exitcode != 0:
+                self.logger.error(f"DILC results save failed (exit code {proc.exitcode})")
+                return None
+            self.logger.info(f"Saved DILC results to {filepath}")
+            return filepath
+        except Exception as e:
+            self.logger.error(f"Failed to save DILC results: {e}")
+            return None
 
     # ----------------------------------------------------------------------------------------------------------
     def _build_q_filter(self, params: FIR_Design_Params, label: str) -> np.ndarray:
@@ -1032,7 +1323,7 @@ class DILC_Experiment:
         # Normalize DC gain to unity so the filter doesn't attenuate constant signals
         ones = np.ones(self.N)
         dc_gain = (ones @ (Q @ ones)) / (ones @ ones)
-        if dc_gain != 0:
+        if abs(dc_gain) > 1e-12:
             Q = Q / dc_gain
 
         self.logger.info(f"Built {label} Q-filter: fc={params.fc} Hz, L={params.L}, window='{params.window}'")

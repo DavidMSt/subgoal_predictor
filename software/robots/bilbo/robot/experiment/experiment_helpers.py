@@ -8,6 +8,7 @@ import yaml
 from scipy.fft import rfftfreq, rfft
 from scipy.signal import find_peaks
 
+from core.utils.control.lib_control.il.ilc import BILBO_BUMPED_REFERENCE_TRAJECTORY
 from core.utils.data import generate_time_vector, generate_random_input, generate_time_vector_by_length
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.files import file_exists, get_absolute_path
@@ -15,8 +16,9 @@ from core.utils.json_utils import readJSON
 from core.utils.plotting.map_plot import MapPlot
 from core.utils.plotting.plot import quick_plot
 from robots.bilbo.robot.bilbo_definitions import BILBO_CONTROL_DT, MAX_STEPS_TRAJECTORY
+from robots.bilbo.robot.experiment import OutputTrajectory
 from robots.bilbo.robot.experiment.experiment_definitions import (
-    BILBO_InputTrajectory, BILBO_InputFileData, BILBO_InputTrajectoryStep,
+    InputTrajectory, InputTrajectoryFileData, InputTrajectoryStep,
     ExperimentData, ExperimentActionData, ExperimentActionStatus,
 )
 
@@ -26,7 +28,7 @@ if TYPE_CHECKING:
 
 
 # === TRAJECTORY =======================================================================================================
-def generate_trajectory_inputs(inputs: list | np.ndarray) -> list[BILBO_InputTrajectoryStep]:
+def generate_trajectory_inputs(inputs: list | np.ndarray) -> list[InputTrajectoryStep]:
     trajectory_inputs = []
 
     if isinstance(inputs, np.ndarray):
@@ -40,7 +42,7 @@ def generate_trajectory_inputs(inputs: list | np.ndarray) -> list[BILBO_InputTra
             left = float(inp) / 2
             right = float(inp) / 2
 
-        trajectory_inputs.append(BILBO_InputTrajectoryStep(
+        trajectory_inputs.append(InputTrajectoryStep(
             step=i,
             left=left,
             right=right,
@@ -48,7 +50,7 @@ def generate_trajectory_inputs(inputs: list | np.ndarray) -> list[BILBO_InputTra
     return trajectory_inputs
 
 
-def trajectory_inputs_to_list(trajectory_inputs: list[BILBO_InputTrajectoryStep], single_input: bool = False) -> list:
+def trajectory_inputs_to_list(trajectory_inputs: list[InputTrajectoryStep], single_input: bool = False) -> list:
     out = []
     for inp in trajectory_inputs:
         if not single_input:
@@ -59,12 +61,12 @@ def trajectory_inputs_to_list(trajectory_inputs: list[BILBO_InputTrajectoryStep]
     return out
 
 
-def trajectory_inputs_to_vector(trajectory_inputs: list[BILBO_InputTrajectoryStep],
+def trajectory_inputs_to_vector(trajectory_inputs: list[InputTrajectoryStep],
                                 single_input: bool = False) -> np.ndarray:
     return np.array(trajectory_inputs_to_list(trajectory_inputs, single_input=single_input))
 
 
-def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain) -> BILBO_InputTrajectory | None:
+def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain, bias=0.0) -> InputTrajectory | None:
     """
     Generates a random test trajectory for simulation or testing purposes. The function creates a time
     vector based on the specified duration and generates random inputs filtered by a cutoff frequency
@@ -76,9 +78,10 @@ def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain) -> 
         time_s: Maximum time duration of the trajectory in seconds.
         frequency: Cutoff frequency for filtering random inputs.
         gain: Scaling factor for random input signal amplitude.
+        bias: Constant offset added to the signal. Positive values bias the robot forward.
 
     Returns:
-        BILBO_InputTrajectory | None: The trajectory object containing the generated data or None
+        InputTrajectory | None: The trajectory object containing the generated data or None
         if the trajectory exceeds the maximum allowed steps.
     """
     t_vector = generate_time_vector(start=0, end=time_s, dt=BILBO_CONTROL_DT)
@@ -87,10 +90,10 @@ def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain) -> 
         print(f"Trajectory too long: {len(t_vector)} > {MAX_STEPS_TRAJECTORY} steps")
         return None
 
-    trajectory_input = generate_random_input(t_vector=t_vector, f_cutoff=frequency, sigma_I=gain)
+    trajectory_input = generate_random_input(t_vector=t_vector, f_cutoff=frequency, sigma_I=gain, bias=bias)
     trajectory_inputs = generate_trajectory_inputs(trajectory_input)
 
-    trajectory = BILBO_InputTrajectory(
+    trajectory = InputTrajectory(
         id=trajectory_id,
         name='test',
         dt=BILBO_CONTROL_DT,
@@ -101,7 +104,7 @@ def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain) -> 
 
 
 # === PLOTTING =========================================================================================================
-def plot_input_trajectory(trajectory: BILBO_InputTrajectory):
+def plot_input_trajectory(trajectory: InputTrajectory):
     ...
 
 
@@ -121,7 +124,7 @@ class BILBO_InputAnalytics:
     is_2d: bool
 
 
-def generateInputTrajectoryAnalytics(input_trajectory: BILBO_InputTrajectory,
+def generateInputTrajectoryAnalytics(input_trajectory: InputTrajectory,
                                      num_dominant: int = 5) -> BILBO_InputAnalytics:
     steps = input_trajectory.length
     time_vector = input_trajectory.time_vector
@@ -369,7 +372,7 @@ def make_report(
         # Extract parameters - handle both formats:
         # 1. Full format: {'type': 'set_velocity', 'parameters': {'forward': 0.5}}
         # 2. Shorthand format: {'type': 'set_velocity', 'forward': 0.5}
-        reserved_fields = {'id', 'type', 'tick', 'after', 'time', 'delay', 'timeout', 'label', 'meta', 'parameters', 'actions'}
+        reserved_fields = {'id', 'type', 'tick', 'after', 'time', 'delay', 'timeout', 'label', 'meta', 'parameters', 'actions', 'wait_before', 'wait_after'}
         if 'parameters' in action_def:
             params = action_def['parameters']
         else:
@@ -1462,11 +1465,42 @@ def _format_action_params(action_type: str, params: dict) -> str:
 
 
 if __name__ == '__main__':
-    data = read_experiment_data(
-        '/Users/lehmann/Desktop/velocity_group_test_2026-02-05_20-06-22.json'
+    import os
+    from robots.bilbo.settings import get_settings
+    from robots.bilbo.robot.experiment.experiment_definitions import (
+        write_output_file, OUTPUT_TRAJECTORY_FILE_EXTENSION,
     )
 
-    make_report(data)
+    settings = get_settings()
+    reference_dir = (settings.get('paths') or {}).get('reference_trajectories')
+    if reference_dir is None:
+        raise RuntimeError("No 'paths.reference_trajectories' configured in settings.yaml")
+    os.makedirs(reference_dir, exist_ok=True)
+
+    y = BILBO_BUMPED_REFERENCE_TRAJECTORY + 0.04414553
+
+    trajectory = OutputTrajectory(
+        output_name='theta',
+        output=y.tolist(),
+        dt=0.01,
+    )
+
+    file_data = trajectory.to_file_data(
+        id='bumped_reference',
+        description='Bumped reference trajectory for DILC theta tracking',
+    )
+
+    filepath = os.path.join(reference_dir, f"bumped_reference{OUTPUT_TRAJECTORY_FILE_EXTENSION}")
+    write_output_file(filepath, file_data)
+    print(f"Saved reference trajectory to: {filepath}")
+
+
+
+    # data = read_experiment_data(
+    #     '/Users/lehmann/Desktop/velocity_group_test_2026-02-05_20-06-22.json'
+    # )
+    #
+    # make_report(data)
 
 
     # x = [sample.estimation.state.x for sample in data.samples]

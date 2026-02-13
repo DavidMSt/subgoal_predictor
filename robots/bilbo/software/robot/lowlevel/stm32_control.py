@@ -626,10 +626,12 @@ class bilbo_position_control_config_t(ctypes.Structure):
         ("lookahead_min", ctypes.c_float),
         ("arrival_tolerance", ctypes.c_float),
         ("arrival_dwell_time", ctypes.c_float),
+        ("stop_dwell_time", ctypes.c_float),
         ("reverse_enter_angle", ctypes.c_float),
         ("reverse_exit_angle", ctypes.c_float),
-        ("speed_curvature_power", ctypes.c_float),
         ("decel_limit", ctypes.c_float),
+        ("curvature_gain", ctypes.c_float),
+        ("curvature_lookahead", ctypes.c_float),
     ]
 
 

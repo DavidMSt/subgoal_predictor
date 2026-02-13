@@ -19,7 +19,6 @@ from core.utils.events import event_definition, Event, pred_flag_contains, Subsc
 from core.utils.exit import register_exit_callback
 from robots.bilbo.robot.experiment.bilbo_experiment import BILBO_ExperimentHandler
 from robots.bilbo.robot.bilbo_utilities import BILBO_Utilities
-from robots.bilbo.robot.experiment.examples import dilc_example
 
 # ======================================================================================================================
 
@@ -483,7 +482,7 @@ class BILBO_CLI_CommandSet(CommandSet):
         ])
 
         # --- EXPERIMENT SET ---
-        test_trajectory_command = Command(name='traj',
+        test_trajectory_command = Command(name='random_traj',
                                           allow_positionals=True,
                                           function=self.experiments.run_random_trajectory,
                                           execute_in_thread=True,
@@ -507,11 +506,10 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                               default=0.1),
                                           ])
 
-        # Host-only experiment command: uses native file picker, saves to local directory
         test_experiment_command = Command(
             name='exp',
-            function=self.experiments.run_experiment_from_file,
-            description='Run experiment from file (HOST-ONLY). Opens native file picker if no file specified.',
+            function=self._run_experiment,
+            description='Run experiment from file. Opens native file picker if no file specified.',
             allow_positionals=True,
             execute_in_thread=True,
             arguments=[
@@ -529,26 +527,25 @@ class BILBO_CLI_CommandSet(CommandSet):
                                 default=None)
             ])
 
-        # Client experiment command: uses browser file picker, downloads result
-        client_experiment_command = Command(
-            name='exp-client',
-            function=self.experiments.run_experiment_from_client,
-            description='Run experiment from browser (CLIENT mode). Opens browser file picker, downloads result.',
-            execute_in_thread=True,
-            arguments=[])
-
         test_trajectory_experiment_command = Command(name='tte',
                                                      function=self.experiments.test_trajectory_experiment,
                                                      execute_in_thread=True,
                                                      )
 
-        dilc_example_command = Command(name='dilc',
-                                       function=Callback(
-                                           function=dilc_example,
-                                           inputs={'bilbo': self.core.get_robot()}
-                                       ),
-                                       execute_in_thread=True
-                                       )
+        dilc_command = Command(
+            name='dilc',
+            function=self._run_dilc,
+            description='Run a DILC experiment from a YAML config file. Opens native file picker if no file specified.',
+            allow_positionals=True,
+            execute_in_thread=True,
+            arguments=[
+                CommandArgument(name='file',
+                                short_name='f',
+                                type=str,
+                                description='Path to DILC experiment YAML file. Opens native picker if not specified.',
+                                optional=True,
+                                default=None),
+            ])
 
         plot_last_experiment_command = Command(name='plot',
                                                function=self.experiments.plot_last_experiment)
@@ -570,9 +567,8 @@ class BILBO_CLI_CommandSet(CommandSet):
                                             commands=[test_trajectory_command,
                                                       plot_last_experiment_command,
                                                       test_trajectory_experiment_command,
-                                                      dilc_example_command,
+                                                      dilc_command,
                                                       test_experiment_command,
-                                                      client_experiment_command,
                                                       stop_experiment_command])
 
         navigation_command_set = CommandSet(name='nav')
@@ -641,31 +637,10 @@ class BILBO_CLI_CommandSet(CommandSet):
             ]
         )
 
-        pause_path_command = Command(
-            name='pause',
-            function=self.position_control.pause_path,
-            description='Pause path execution',
-            arguments=[]
-        )
-
-        resume_path_command = Command(
-            name='resume',
-            function=self.position_control.resume_path,
-            description='Resume paused path',
-            arguments=[]
-        )
-
         abort_path_command = Command(
             name='abort',
             function=self.position_control.abort_path,
             description='Abort path execution',
-            arguments=[]
-        )
-
-        stop_path_command = Command(
-            name='stop',
-            function=self.position_control.stop_path,
-            description='Stop and clear the current path',
             arguments=[]
         )
 
@@ -682,20 +657,6 @@ class BILBO_CLI_CommandSet(CommandSet):
             function=self.position_control.reset,
             description='Reset position control',
             arguments=[]
-        )
-
-        # Load path commands
-        load_path_command = Command(
-            name='loadPath',
-            function=self._load_path_from_file,
-            description='Load path from YAML/JSON file',
-            allow_positionals=True,
-            arguments=[
-                CommandArgument(name='file', short_name='f', type=str,
-                                description='Path to .yaml/.yml/.json file'),
-                CommandArgument(name='start', short_name='s', type=bool, optional=True, default=False,
-                                description='Start path immediately after loading'),
-            ]
         )
 
         # Plan and follow command
@@ -732,21 +693,26 @@ class BILBO_CLI_CommandSet(CommandSet):
             ]
         )
 
+        # Build PRM roadmap command
+        build_prm_command = Command(
+            name='buildPRM',
+            function=self._build_prm,
+            description='Build PRM roadmap from current testbed obstacles (required before PRM planning)',
+            arguments=[]
+        )
+
         # Add all commands to navigation set
         navigation_command_set.addCommand(position_mode_command)
         navigation_command_set.addCommand(move_to_command)
         navigation_command_set.addCommand(turn_to_command)
         navigation_command_set.addCommand(go_to_command)
         navigation_command_set.addCommand(plan_path_command)
+        navigation_command_set.addCommand(build_prm_command)
         navigation_command_set.addCommand(clear_path_command)
         navigation_command_set.addCommand(start_path_command)
-        navigation_command_set.addCommand(pause_path_command)
-        navigation_command_set.addCommand(resume_path_command)
         navigation_command_set.addCommand(abort_path_command)
-        navigation_command_set.addCommand(stop_path_command)
         navigation_command_set.addCommand(get_state_command)
         navigation_command_set.addCommand(reset_command)
-        navigation_command_set.addCommand(load_path_command)
 
         super().__init__(name=f"{self.core.id}", commands=[beep_command,
                                                            speak_command,
@@ -854,15 +820,6 @@ class BILBO_CLI_CommandSet(CommandSet):
         self.interfaces.set_external_input_enabled(bool(enabled))
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _load_path_from_file(self, file: str, start: bool = False):
-        """Load path from file and optionally start execution"""
-        result = self.position_control.load_path_from_file(filepath=file, start=start)
-        if result:
-            self.core.logger.info(f"Path loaded from {file}" + (" and started" if start else ""))
-        else:
-            self.core.logger.error(f"Failed to load path from {file}")
-
-    # ------------------------------------------------------------------------------------------------------------------
     def _plan_and_follow(self, x: float, y: float, wp: str = '',
                          max_speed: float = 0.0,
                          timeout: float = 0.0,
@@ -894,6 +851,11 @@ class BILBO_CLI_CommandSet(CommandSet):
             self.core.logger.error(f"Failed to plan path to ({x:.2f}, {y:.2f})")
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _build_prm(self):
+        """Build PRM roadmap from current testbed obstacles"""
+        self.position_control.build_prm()
+
+    # ------------------------------------------------------------------------------------------------------------------
     @staticmethod
     def _parse_waypoints_string(wp_str: str) -> list[dict] | None:
         """Parse waypoint string into list of dicts.
@@ -922,4 +884,43 @@ class BILBO_CLI_CommandSet(CommandSet):
                 wp['type'] = parts[3].strip().upper()
             waypoints.append(wp)
         return waypoints if waypoints else None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _run_dilc(self, file: str | None = None):
+        """CLI handler for DILC command. Opens file picker if no file given."""
+        if not file:
+            self.core.logger.info("No file specified, opening native file picker...")
+            try:
+                from core.utils.filepicker import pick_file
+                file = pick_file(
+                    title='Select DILC Experiment File',
+                    allowed_extensions=['yaml', 'yml']
+                )
+            except Exception as e:
+                self.core.logger.error(f"File picker failed: {e}. Use -f <path> to specify a file.")
+                return
+            if not file:
+                self.core.logger.info("File selection cancelled.")
+                return
+        self.experiments.run_dilc_from_file(file)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _run_experiment(self, file: str | None = None, output: str | None = None):
+        """CLI handler for experiment command. Opens file picker if no file given."""
+        if not file:
+            self.core.logger.info("No file specified, opening native file picker...")
+            try:
+                from core.utils.filepicker import pick_file
+                file = pick_file(
+                    title='Select Experiment File',
+                    allowed_extensions=['yaml', 'yml', 'json']
+                )
+            except Exception as e:
+                self.core.logger.error(f"File picker failed: {e}. Use -f <path> to specify a file.")
+                return
+            if not file:
+                self.core.logger.info("File selection cancelled.")
+                return
+        self.experiments.run_experiment_from_file(file, output=output)
+
 

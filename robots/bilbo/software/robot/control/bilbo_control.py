@@ -89,6 +89,8 @@ class BILBO_Control:
     status: BILBO_Control_Status = BILBO_Control_Status.NORMAL
     _config: BILBO_ControlConfig | None = None
 
+    external_input_enabled: bool = True
+
     # Number of consecutive sample-batch mismatches before syncing mode from firmware.
     # The callback fires once per batch at ~10 Hz, so 3 batches ≈ 300 ms.
     _MODE_MISMATCH_THRESHOLD: int = 3
@@ -163,7 +165,8 @@ class BILBO_Control:
                 self._set_lowlevel_external_input(0, 0)
 
             case BILBO_Control_Mode.BALANCING:
-                self._set_lowlevel_external_input(self.inputs.external.left, self.inputs.external.right)
+                if self.external_input_enabled:
+                    self._set_lowlevel_external_input(self.inputs.external.left, self.inputs.external.right)
 
             case BILBO_Control_Mode.VELOCITY:
                 self._set_lowlevel_velocity_command(self.inputs.velocity.forward, self.inputs.velocity.turn)
@@ -177,6 +180,13 @@ class BILBO_Control:
 
         self.callbacks.update.call()
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def enable_external_input(self):
+        self.external_input_enabled = True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def disable_external_input(self):
+        self.external_input_enabled = False
     # ------------------------------------------------------------------------------------------------------------------
     def set_mode(self, mode: BILBO_Control_Mode | int, *, wait_for_change: bool = True) -> bool:
         if isinstance(mode, int):
@@ -595,14 +605,9 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def _lowlevel_mode_change_event(self, mode_ll: BILBO_Control_Mode, *args, **kwargs):
         self.logger.debug(f"LL Mode changed to {mode_ll}")
-        match mode_ll:
-            case BILBO_Control_Mode.OFF:
-                if self.mode != mode_ll:
-                    self.logger.info("LL Mode changed to OFF! Change control mode to OFF now")
-                    self.set_mode(BILBO_Control_Mode.OFF, wait_for_change=False)
-            case _:
-                if mode_ll != self.mode:
-                    self.logger.warning(f"LL Mode \"{mode_ll}\" is not the same as the current mode: \"{self.mode}\"")
+        if mode_ll != self.mode:
+            self.logger.info(f"LL Mode changed to {mode_ll.name}, local mode is {self.mode.name}. Syncing to firmware mode.")
+            self.set_mode(mode_ll, wait_for_change=False)
 
         self.events.lowlevel_mode_change.set(mode_ll, flags={'mode': mode_ll})
 
@@ -646,6 +651,8 @@ class BILBO_Control:
 
         result = self._set_lowlevel_position_control_config(config.position_control)
         if not result: return False
+
+        self.position_control.set_planning_config(config.planning)
 
         result = self._set_lowlevel_tic_config(config.balancing_control.tic)
         if not result: return False

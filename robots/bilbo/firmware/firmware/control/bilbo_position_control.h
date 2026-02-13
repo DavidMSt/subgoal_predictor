@@ -15,22 +15,21 @@
  *
  *  PATH FOLLOWING ALGORITHM (FOLLOW_PATH mode)
  *  ===========================================
- *  Dense path tracking with adaptive speed from sample spacing:
+ *  Dense path tracking with curvature-based speed:
  *
- *  1. PATH is a dense array of (x,y) points (5-100mm spacing)
- *     - Curvature is encoded in sample spacing (tight curves = closer points)
+ *  1. PATH is a dense array of (x,y) points (~15mm uniform spacing)
  *     - Up to 1024 points, with up to 16 explicit STOP indices
  *
- *  2. SPEED derived from local inter-point spacing (power law)
- *     - ratio = (spacing - MIN_SPACING) / (max_spacing - MIN_SPACING)
- *     - v_target = max_speed * ratio^alpha  (alpha = speed_curvature_power)
- *     - Boundaries: max_spacing → max_speed, MIN_SPACING (5mm) → 0
+ *  2. SPEED derived from path curvature (estimated from upcoming points)
+ *     - κ = max Menger curvature in lookahead window
+ *     - v_target = max_speed / (1 + curvature_gain * κ)
+ *     - Low-pass filtered for smooth transitions
  *     - Deceleration profile near STOP points and path end
  *
  *  3. PURE PURSUIT with adaptive lookahead
  *     - lookahead = v_target / kp_linear (clamped to lookahead_min)
  *     - Carrot placed along path at lookahead distance ahead of robot
- *     - Robot steers toward carrot, speed from spacing
+ *     - Robot steers toward carrot
  *
  *  4. REVERSE MODE (optional, per path command)
  *     - Robot drives backwards when target is behind it
@@ -224,7 +223,8 @@ struct bilbo_position_control_config_t {
 	// -------------------------------------------------------------------------
 
 	float arrival_tolerance = 0.05f; // [m] Distance to consider "arrived"
-	float arrival_dwell_time = 0.5f; // [s] Time to hold at STOP point / path end
+	float arrival_dwell_time = 0.5f; // [s] Time to hold at path end
+	float stop_dwell_time = 1.0f;   // [s] Time to hold at STOP waypoints (separate from path end)
 
 	// -------------------------------------------------------------------------
 	// REVERSE MODE
@@ -234,16 +234,17 @@ struct bilbo_position_control_config_t {
 	float reverse_exit_angle = 1.05f;  // [rad] ~60 deg - exit reverse mode
 
 	// -------------------------------------------------------------------------
-	// SPEED-FROM-CURVATURE (path following)
-	// -------------------------------------------------------------------------
-
-	float speed_curvature_power = 0.5f;  // [-] Exponent for spacing→speed mapping. 1.0 = linear, 0.5 = sqrt (gentler)
-
-	// -------------------------------------------------------------------------
 	// DECELERATION
 	// -------------------------------------------------------------------------
 
 	float decel_limit = 0.0f;  // [m/s^2] Max deceleration for sqrt profile. 0 = disabled (use linear kp*d)
+
+	// -------------------------------------------------------------------------
+	// CURVATURE-BASED SPEED (path following)
+	// -------------------------------------------------------------------------
+
+	float curvature_gain = 2.0f;       // [-] Curvature sensitivity: v = max_speed / (1 + gain * κ). Higher = slower in curves.
+	float curvature_lookahead = 0.3f;  // [m] How far ahead to estimate curvature (0 = use current segment only)
 };
 
 /**
@@ -348,6 +349,16 @@ public:
 	bool add_stop_index(uint16_t index);
 	uint16_t get_path_point_count() const;
 
+	/**
+	 * @brief Handle path data received via SPI DMA.
+	 *
+	 * Clears the existing path and copies data from the SPI receive buffer.
+	 *
+	 * @param spi_buffer Pointer to the SPI receive buffer containing path_point_t data.
+	 * @param count Number of path points received.
+	 */
+	void spiPathReceived(const path_point_t *spi_buffer, uint16_t count);
+
 	bool start_path(const bilbo_path_start_cmd_t &command);
 	void pause_path();
 	void resume_path();
@@ -434,6 +445,9 @@ private:
 	// STOP point event tracking
 	bool _stop_reached_sent = false;
 
+	// Smoothed speed target (low-pass filtered to avoid step changes)
+	float _v_target_smooth = 0.0f;
+
 	// =========================================================================
 	// PRIVATE METHODS - PATH GEOMETRY
 	// =========================================================================
@@ -448,6 +462,7 @@ private:
 	float _advance_along_path(float from_progress, float distance_meters) const;
 	void _interpolate_path(float progress, float &out_x, float &out_y) const;
 	float _cumul_dist_at(float progress) const;
+	float _estimate_curvature_ahead(float at_progress, float lookahead_dist) const;
 
 	// =========================================================================
 	// PRIVATE METHODS - MODE TRANSITIONS

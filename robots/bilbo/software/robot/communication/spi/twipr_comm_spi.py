@@ -25,6 +25,7 @@ class BILBO_SPI_Callbacks:
 class BILBO_SPI_Command_Type:
     READ_SAMPLE = 1
     SEND_TRAJECTORY = 2
+    SEND_PATH = 3
 
 
 # ======================================================================================================================
@@ -69,11 +70,17 @@ class BILBO_SPI_Interface:
     def close(self, *args, **kwargs):
         ...
 
-    def sendTrajectoryData(self, trajectory_length, trajectory_data_bytes: (bytes, bytearray)):
+    def sendTrajectoryData(self, trajectory_length, trajectory_data_bytes: bytes | bytearray):
         with self.lock:
             self._sendCommand(BILBO_SPI_Command_Type.SEND_TRAJECTORY, trajectory_length)
             precise_sleep(0.005)
             self.interface.send(trajectory_data_bytes)
+
+    def sendPathData(self, path_length: int, path_data_bytes: bytes | bytearray):
+        with self.lock:
+            self._sendCommand(BILBO_SPI_Command_Type.SEND_PATH, path_length)
+            precise_sleep(0.005)
+            self.interface.send(path_data_bytes)
 
     # === PRIVATE METHODS ==============================================================================================
     def _configureSampleGPIO(self):
@@ -88,7 +95,7 @@ class BILBO_SPI_Interface:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _sendCommand(self, command: int, length: int):
-        assert (command in [BILBO_SPI_Command_Type.READ_SAMPLE, BILBO_SPI_Command_Type.SEND_TRAJECTORY])
+        assert (command in [BILBO_SPI_Command_Type.READ_SAMPLE, BILBO_SPI_Command_Type.SEND_TRAJECTORY, BILBO_SPI_Command_Type.SEND_PATH])
 
         data = bytearray(4)
 

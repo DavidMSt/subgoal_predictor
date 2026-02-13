@@ -106,11 +106,13 @@ class PositionControl_Config:
     lookahead_base: float = 0.15            # [m] Base lookahead (used by move_to_point)
     lookahead_min: float = 0.03             # [m] Minimum lookahead for path following
     arrival_tolerance: float = 0.05         # [m] Distance to consider "arrived"
-    arrival_dwell_time: float = 0.5         # [s] Hold time at STOP point / path end
+    arrival_dwell_time: float = 0.5         # [s] Hold time at path end
+    stop_dwell_time: float = 1.0            # [s] Hold time at STOP waypoints (separate from path end)
     reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
     reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
-    speed_curvature_power: float = 0.5     # [-] Exponent for spacing→speed mapping (1.0=linear, 0.5=sqrt)
     decel_limit: float = 0.0               # [m/s²] sqrt deceleration profile. 0 = disabled (linear kp*d)
+    curvature_gain: float = 2.0            # [-] Curvature sensitivity: v = max_speed / (1 + gain * κ). Higher = slower in curves.
+    curvature_lookahead: float = 0.3       # [m] How far ahead to estimate curvature (firmware-side)
 
 
 @dataclasses.dataclass
@@ -164,6 +166,34 @@ class ExternalInputsConfig:
 
 
 @dataclasses.dataclass
+class RRTConfig:
+    rrt_star: bool = True
+    max_iterations: int | None = None
+    step_size: float = 0.10
+    goal_bias: float = 0.10
+    rewire_radius: float = 0.30
+
+
+@dataclasses.dataclass
+class PRMConfig:
+    n_samples: int = 800
+    k_neighbors: int = 15
+    connection_radius: float = 0.6
+    seed: int | None = 42
+
+
+@dataclasses.dataclass
+class PlanningConfig:
+    method: str = 'rrt'               # 'rrt' or 'prm'
+    smoothing: float = 1.0
+    safety_margin: float = 0.15
+    clearance_weight: float = 0.0
+    clearance_threshold: float = 0.5
+    rrt: RRTConfig = dataclasses.field(default_factory=RRTConfig)
+    prm: PRMConfig = dataclasses.field(default_factory=PRMConfig)
+
+
+@dataclasses.dataclass
 class BILBO_ControlConfig:
     name: str = ''
     description: str = ''
@@ -173,6 +203,7 @@ class BILBO_ControlConfig:
         default_factory=TWIPR_Balancing_Control_Config)
     velocity_control: VelocityControl_Config = dataclasses.field(default_factory=VelocityControl_Config)
     position_control: PositionControl_Config = dataclasses.field(default_factory=PositionControl_Config)
+    planning: PlanningConfig = dataclasses.field(default_factory=PlanningConfig)
 
 
 class BILBO_Control_Status(enum.IntEnum):

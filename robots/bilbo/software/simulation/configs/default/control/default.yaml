@@ -104,9 +104,24 @@ position_control: # Dense path following (pure pursuit)
   max_turn_rate: 5.0
   lookahead_base: 0.15
   lookahead_min: 0.03
-  speed_curvature_power: 0.5
   arrival_tolerance: 0.05
   arrival_dwell_time: 0.5
   reverse_enter_angle: 2.1
   reverse_exit_angle: 1.05
   decel_limit: 0.6
+planning:
+  method: rrt
+  smoothing: 1.0
+  safety_margin: 0.15
+  clearance_weight: 0.0
+  clearance_threshold: 0.5
+  rrt:
+    rrt_star: true
+    step_size: 0.10
+    goal_bias: 0.10
+    rewire_radius: 0.30
+  prm:
+    n_samples: 800
+    k_neighbors: 15
+    connection_radius: 0.6
+    seed: 42

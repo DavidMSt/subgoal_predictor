@@ -4,7 +4,7 @@ from robot.bilbo import BILBO
 
 
 def main():
-    bilbo = BILBO(reset_stm32=False)
+    bilbo = BILBO()
     bilbo.init()
     bilbo.start()
 

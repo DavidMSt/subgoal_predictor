@@ -8,7 +8,7 @@ to the robot for execution.
 Unlike the robot-side parser, this module:
 - Does not create action instances (those are created on the robot)
 - Focuses on validation and dict creation
-- Provides introspection of available actions, parameters, and shorthands
+- Provides introspection of available actions and parameters
 
 Usage:
     # Parse and validate an experiment file
@@ -192,49 +192,6 @@ class ActionParameter:
 
 
 # ======================================================================================================================
-# Shorthand Rule Definition
-# ======================================================================================================================
-
-@dataclasses.dataclass
-class ShorthandRule:
-    """Defines a shorthand expansion rule.
-
-    Shorthands allow concise YAML syntax like:
-        - beep
-        - wait: 2s
-        - mode: BALANCING
-
-    Attributes:
-        key: The shorthand key (e.g., "wait", "mode", "beep")
-        expansion: Either a dict template or a callable that returns a dict
-        string_shorthand: If True, this can be used as a bare string (e.g., "beep")
-        value_key: If set, the shorthand value goes into this parameter
-        value_converter: Optional converter for the shorthand value
-    """
-    key: str
-    expansion: dict | Callable[[Any], dict] | None = None
-    string_shorthand: bool = False
-    value_key: str | None = None
-    value_converter: Callable[[Any], Any] | None = None
-
-    def expand(self, value: Any = None) -> dict:
-        """Expand the shorthand into a full action dict."""
-        if callable(self.expansion):
-            return self.expansion(value)
-
-        if self.expansion is not None:
-            result = dict(self.expansion)
-            if self.value_key and value is not None:
-                if self.value_converter:
-                    value = self.value_converter(value)
-                result[self.value_key] = value
-            return result
-
-        # Default: just set the type
-        return {"type": self.key}
-
-
-# ======================================================================================================================
 # Action Entry Definition
 # ======================================================================================================================
 
@@ -244,19 +201,16 @@ class ActionEntry:
 
     This class holds all the metadata needed for:
     1. Parsing the action from YAML/dict
-    2. Expanding shorthands
-    3. Validating parameters
-    4. Generating documentation
+    2. Validating parameters
+    3. Generating documentation
 
     Attributes:
         type_name: The action type identifier (e.g., "beep", "set_mode")
         parameters: List of ActionParameter definitions
-        shorthands: List of ShorthandRule definitions
         description: Human-readable description of the action
     """
     type_name: str
     parameters: list[ActionParameter] = dataclasses.field(default_factory=list)
-    shorthands: list[ShorthandRule] = dataclasses.field(default_factory=list)
     description: str = ""
 
     def validate_parameters(self, raw_params: dict) -> tuple[bool, dict, list[str]]:
@@ -314,13 +268,11 @@ class ActionRegistry:
     """Registry of all available action types.
 
     This is a singleton that holds all ActionEntry definitions and provides
-    methods for parsing, validation, and introspection.
+    methods for validation and introspection.
     """
 
     def __init__(self):
         self._entries: dict[str, ActionEntry] = {}
-        self._shorthands: dict[str, tuple[ActionEntry, ShorthandRule]] = {}
-        self._string_shorthands: dict[str, tuple[ActionEntry, ShorthandRule]] = {}
         self.logger = Logger("ActionRegistry", "INFO")
 
     def register(self, entry: ActionEntry) -> None:
@@ -330,12 +282,6 @@ class ActionRegistry:
 
         self._entries[entry.type_name] = entry
 
-        # Register shorthands
-        for shorthand in entry.shorthands:
-            self._shorthands[shorthand.key] = (entry, shorthand)
-            if shorthand.string_shorthand:
-                self._string_shorthands[shorthand.key] = (entry, shorthand)
-
     def get_entry(self, type_name: str) -> ActionEntry | None:
         """Get an action entry by type name."""
         return self._entries.get(type_name)
@@ -343,41 +289,6 @@ class ActionRegistry:
     def has_type(self, type_name: str) -> bool:
         """Check if a type is registered."""
         return type_name in self._entries
-
-    def expand_shorthand(self, data: dict | str) -> dict:
-        """Expand shorthand syntax to full action dict.
-
-        Args:
-            data: Either a string shorthand (e.g., "beep") or a dict
-
-        Returns:
-            Full action dict with 'type' key
-        """
-        # Handle string shorthand
-        if isinstance(data, str):
-            if data in self._string_shorthands:
-                entry, rule = self._string_shorthands[data]
-                result = rule.expand()
-                result.setdefault("type", entry.type_name)
-                return result
-            raise ValueError(f"Unknown string shorthand: {data}")
-
-        # Already has type - no expansion needed
-        if "type" in data:
-            return data
-
-        # Check for shorthand keys
-        expanded = dict(data)
-        for key in list(expanded.keys()):
-            if key in self._shorthands:
-                entry, rule = self._shorthands[key]
-                value = expanded.pop(key)
-                expansion = rule.expand(value)
-                expansion.update(expanded)  # Preserve other fields
-                expansion.setdefault("type", entry.type_name)
-                return expansion
-
-        return expanded
 
     def validate_action(self, action_type: str, parameters: dict) -> tuple[bool, dict, list[str]]:
         """Validate action parameters.
@@ -395,11 +306,6 @@ class ActionRegistry:
     def type_names(self) -> list[str]:
         """Get list of all registered type names."""
         return list(self._entries.keys())
-
-    @property
-    def shorthand_keys(self) -> list[str]:
-        """Get list of all registered shorthand keys."""
-        return list(self._shorthands.keys())
 
     def get_action_info(self, type_name: str) -> dict | None:
         """Get information about an action type for documentation/introspection."""
@@ -420,14 +326,6 @@ class ActionRegistry:
                     "aliases": p.aliases,
                 }
                 for p in entry.parameters
-            ],
-            "shorthands": [
-                {
-                    "key": s.key,
-                    "string_shorthand": s.string_shorthand,
-                    "value_key": s.value_key,
-                }
-                for s in entry.shorthands
             ],
         }
 
@@ -542,11 +440,11 @@ class ExperimentParser:
             "actions": parsed_actions,
         }
 
-    def parse_action(self, data: dict | str, index: int = 0) -> tuple[dict, list[str]]:
+    def parse_action(self, data: dict, index: int = 0) -> tuple[dict, list[str]]:
         """Parse a single action definition.
 
         Args:
-            data: Raw action data (dict or string shorthand)
+            data: Raw action data dict (must contain 'type' field)
             index: Action index for auto-generating IDs
 
         Returns:
@@ -554,11 +452,12 @@ class ExperimentParser:
         """
         errors = []
 
-        # Expand shorthands
-        try:
-            expanded = self.registry.expand_shorthand(data)
-        except ValueError as e:
-            return {"type": "unknown", "id": f"action_{index}"}, [str(e)]
+        if not isinstance(data, dict):
+            return {"type": "unknown", "id": f"action_{index}"}, [
+                f"Action at index {index} must be a dict, got {type(data).__name__}"
+            ]
+
+        expanded = data
 
         if "type" not in expanded:
             return expanded, [f"Action at index {index} missing required field 'type'"]
@@ -571,7 +470,7 @@ class ExperimentParser:
             errors.append(f"Unknown action type: {action_type}")
 
         # Reserved fields that should not go into parameters
-        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "parameters"}
+        reserved_fields = {"id", "type", "tick", "after", "time", "delay", "timeout", "parameters", "wait_before", "wait_after"}
 
         # Collect parameters
         if "parameters" in expanded:
@@ -600,6 +499,14 @@ class ExperimentParser:
         for field in ["tick", "after", "time", "delay", "timeout"]:
             if field in expanded:
                 result[field] = expanded[field]
+
+        # Add wait_before/wait_after (convert to milliseconds for validation)
+        for field in ["wait_before", "wait_after"]:
+            if field in expanded:
+                try:
+                    result[field] = parse_time_ms(expanded[field])
+                except (ValueError, TypeError) as e:
+                    errors.append(f"Invalid {field} value: {expanded[field]} ({e})")
 
         if parameters:
             result["parameters"] = parameters
@@ -659,9 +566,6 @@ def _register_builtin_actions():
             ActionParameter("time_ms", int, default=250),
             ActionParameter("repeats", int, default=1),
         ],
-        shorthands=[
-            ShorthandRule("beep", string_shorthand=True, value_key="frequency"),
-        ],
         description="Play a beep sound"
     ))
 
@@ -669,9 +573,6 @@ def _register_builtin_actions():
         type_name="set_mode",
         parameters=[
             ActionParameter("mode", str, converter=parse_control_mode, required=True),
-        ],
-        shorthands=[
-            ShorthandRule("mode", value_key="mode"),
         ],
         description="Set the control mode"
     ))
@@ -688,9 +589,6 @@ def _register_builtin_actions():
         type_name="speak",
         parameters=[
             ActionParameter("text", str, default=""),
-        ],
-        shorthands=[
-            ShorthandRule("speak", value_key="text"),
         ],
         description="Speak text using TTS"
     ))
@@ -718,13 +616,6 @@ def _register_builtin_actions():
             ActionParameter("forward", float, default=0.0),
             ActionParameter("turn", float, default=0.0),
             ActionParameter("normalized", bool, default=False),
-        ],
-        shorthands=[
-            ShorthandRule("velocity", expansion=lambda v: {
-                "type": "set_velocity",
-                "forward": v[0] if isinstance(v, list) and len(v) >= 1 else 0.0,
-                "turn": v[1] if isinstance(v, list) and len(v) >= 2 else 0.0,
-            }),
         ],
         description="Set velocity command"
     ))
@@ -759,9 +650,6 @@ def _register_builtin_actions():
         parameters=[
             ActionParameter("time_ms", int, default=0, converter=parse_time_ms),
         ],
-        shorthands=[
-            ShorthandRule("wait", value_key="time_ms", value_converter=parse_time_ms),
-        ],
         description="Wait for a specified time"
     ))
 
@@ -769,9 +657,6 @@ def _register_builtin_actions():
         type_name="wait_ticks",
         parameters=[
             ActionParameter("ticks", int, default=0),
-        ],
-        shorthands=[
-            ShorthandRule("wait_ticks", value_key="ticks"),
         ],
         description="Wait for a number of ticks"
     ))
@@ -800,9 +685,6 @@ def _register_builtin_actions():
         parameters=[
             ActionParameter("sub_actions", list, default=[], aliases=["actions"]),
         ],
-        shorthands=[
-            ShorthandRule("parallel", value_key="actions"),
-        ],
         description="Execute multiple actions in parallel"
     ))
 
@@ -810,9 +692,6 @@ def _register_builtin_actions():
         type_name="group",
         parameters=[
             ActionParameter("sub_actions", list, default=[], aliases=["actions"]),
-        ],
-        shorthands=[
-            ShorthandRule("group", value_key="actions"),
         ],
         description="Execute multiple actions sequentially as a named group"
     ))
@@ -825,12 +704,6 @@ def _register_builtin_actions():
             ActionParameter("variable", str, default=None),
             ActionParameter("values", list, default=None),
             ActionParameter("range", list, default=None),
-        ],
-        shorthands=[
-            ShorthandRule("loop", expansion=lambda v: {
-                "type": "loop",
-                "count": v if isinstance(v, int) else None,
-            }),
         ],
         description="Repeat a block of actions N times or over a list of values"
     ))
@@ -870,13 +743,6 @@ def _register_builtin_actions():
             ActionParameter("timeout", float, default=0.0),
             ActionParameter("wait", bool, default=True),
         ],
-        shorthands=[
-            ShorthandRule("move_to", expansion=lambda v: {
-                "type": "move_to",
-                "x": v[0] if isinstance(v, list) and len(v) >= 1 else (v.get("x", 0.0) if isinstance(v, dict) else 0.0),
-                "y": v[1] if isinstance(v, list) and len(v) >= 2 else (v.get("y", 0.0) if isinstance(v, dict) else 0.0),
-            }),
-        ],
         description="Move to a position"
     ))
 
@@ -888,78 +754,27 @@ def _register_builtin_actions():
             ActionParameter("timeout", float, default=0.0),
             ActionParameter("wait", bool, default=True),
         ],
-        shorthands=[
-            ShorthandRule("turn_to", expansion=lambda v: {
-                "type": "turn_to",
-                "heading": v if isinstance(v, (int, float)) else (v.get("heading", 0.0) if isinstance(v, dict) else 0.0),
-            }),
-        ],
         description="Turn to a heading"
-    ))
-
-    register_action(ActionEntry(
-        type_name="set_path",
-        parameters=[
-            ActionParameter("points", list, default=[], converter=normalize_path_points),
-            ActionParameter("stop_indices", list, default=[]),
-            ActionParameter("clear_existing", bool, default=True),
-        ],
-        shorthands=[
-            ShorthandRule("points", value_key="points", value_converter=normalize_path_points),
-        ],
-        description="Set dense path points for path following"
-    ))
-
-    # Legacy alias: set_waypoints → set_path
-    register_action(ActionEntry(
-        type_name="set_waypoints",
-        parameters=[
-            ActionParameter("points", list, default=[], converter=normalize_path_points),
-            ActionParameter("waypoints", list, default=[], converter=normalize_path_points),
-            ActionParameter("stop_indices", list, default=[]),
-            ActionParameter("clear_existing", bool, default=True),
-        ],
-        shorthands=[
-            ShorthandRule("waypoints", value_key="points", value_converter=normalize_path_points),
-        ],
-        description="Set path points for path following (legacy alias for set_path)"
-    ))
-
-    register_action(ActionEntry(
-        type_name="start_path",
-        parameters=[
-            ActionParameter("allow_reverse", bool, default=False),
-            ActionParameter("timeout", float, default=0.0),
-            ActionParameter("max_speed", float, default=0.0),
-            ActionParameter("wait", bool, default=True),
-        ],
-        description="Start following the loaded path"
-    ))
-
-    register_action(ActionEntry(
-        type_name="load_path",
-        parameters=[
-            ActionParameter("path"),
-            ActionParameter("start", bool, default=False),
-            ActionParameter("clear_existing", bool, default=True),
-            ActionParameter("allow_reverse", bool, default=None),
-            ActionParameter("path_timeout", float, default=None, aliases=["timeout"]),
-            ActionParameter("max_speed", float, default=None),
-            ActionParameter("wait", bool, default=True),
-        ],
-        shorthands=[
-            ShorthandRule("path", value_key="path"),
-        ],
-        description="Load a path from file or dict"
     ))
 
     register_action(ActionEntry(
         type_name="stop_path",
         parameters=[],
-        shorthands=[
-            ShorthandRule("stop_path", string_shorthand=True),
-        ],
         description="Stop/abort the current path"
+    ))
+
+    register_action(ActionEntry(
+        type_name="follow_path",
+        parameters=[
+            ActionParameter("target", required=True),
+            ActionParameter("waypoints", list, default=[]),
+            ActionParameter("max_speed", float, default=0.0),
+            ActionParameter("timeout", float, default=0.0),
+            ActionParameter("allow_reverse", bool, default=False),
+            ActionParameter("seed", int, default=None),
+            ActionParameter("wait", bool, default=True),
+        ],
+        description="Plan and follow a path to a target point"
     ))
 
     register_action(ActionEntry(

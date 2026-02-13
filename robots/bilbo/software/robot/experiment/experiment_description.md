@@ -36,9 +36,11 @@ Actions can be scheduled in several ways. If no scheduling is specified, actions
 
 ```yaml
 actions:
-  - mode: BALANCING    # Runs at tick 0 (first action)
-  - beep               # Runs after mode change completes
-  - wait: 2s           # Runs after beep completes
+  - type: set_mode       # Runs at tick 0 (first action)
+    mode: BALANCING
+  - type: beep           # Runs after mode change completes
+  - type: wait_time      # Runs after beep completes
+    time_ms: 2000
 ```
 
 ### Explicit Scheduling Options
@@ -51,6 +53,17 @@ Each action supports these scheduling fields (use at most one):
 | `time` | float | Absolute time in seconds since experiment start |
 | `after` | string | ID of action that must finish first |
 | `delay` | float | Delay in seconds before this action (creates implicit wait) |
+
+Additionally, every action supports optional `wait_before` and `wait_after` fields:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `wait_before` | time | `0` | Wait before executing the action |
+| `wait_after` | time | `0` | Wait after the action completes |
+
+Time values support: `"2s"`, `"500ms"`, `2.0` (float = seconds), `2000` (int = milliseconds).
+
+These waits run on background threads and never block the main control loop. `wait_before` delays the start of the action, `wait_after` delays signaling completion (so the next sequential action waits). They can be combined with any action type.
 
 **Examples:**
 
@@ -72,9 +85,18 @@ actions:
     after: start_balancing  # Runs after start_balancing finishes
 
   # Delay before action
-  - mode: BALANCING
+  - type: set_mode
+    mode: BALANCING
   - delay: 1.5        # Wait 1.5s after previous action
     type: beep        # Then beep
+
+  # wait_before / wait_after
+  - type: set_mode
+    mode: VELOCITY
+    wait_before: 1s    # Wait 1 second, then set mode
+    wait_after: 500ms  # After mode is set, wait 500ms before next action
+  - type: set_velocity
+    forward: 0.3
 ```
 
 ### Action IDs
@@ -100,184 +122,19 @@ actions:
     id: velocity_phase
     label: "Velocity Test"
     actions:
-      - mode: VELOCITY
-      - velocity: [0.3, 0.0]
-      - wait: 3s
+      - type: set_mode
+        mode: VELOCITY
+      - type: set_velocity
+        forward: 0.3
+        turn: 0.0
+      - type: wait_time
+        time_ms: 3000
 ```
 
 - `label` is optional on any action
 - Labels cause the action to appear as a colored phase bar overlaid on all plots in the experiment report
 - Most useful on `group` actions to visually mark experiment phases in reports
 - Only actions with a `label` AND that span multiple ticks get phase highlighting
-
----
-
-## Shorthand Syntax
-
-Common actions have shorthand forms for cleaner YAML files.
-
-### Mode Control
-
-```yaml
-# Shorthand
-- mode: BALANCING
-- mode: VELOCITY
-- mode: OFF
-
-# Equivalent full form
-- type: set_mode
-  mode: BALANCING
-```
-
-**Available modes:**
-- `OFF` - Motors disabled
-- `DIRECT` - Raw torque passthrough
-- `BALANCING` - State feedback (pitch/roll stabilization)
-- `VELOCITY` - Forward velocity + yaw rate commands
-- `POSITION` - XY position + heading (requires OptiTrack)
-
-### Wait/Delay
-
-```yaml
-# Time-based wait (shorthand)
-- wait: 2s           # Wait 2 seconds
-- wait: 500ms        # Wait 500 milliseconds
-- wait: 1000         # Wait 1000 milliseconds (integer = ms)
-
-# Equivalent full form
-- type: wait_time
-  time_ms: 2000
-
-# Tick-based wait (shorthand)
-- wait_ticks: 100    # Wait 100 ticks
-
-# Equivalent full form
-- type: wait_ticks
-  ticks: 100
-```
-
-### Audio Feedback
-
-```yaml
-# Beep (shorthand)
-- beep               # Default beep (1000 Hz, 250ms)
-- beep: 800          # Custom frequency (800 Hz)
-
-# Equivalent full form
-- type: beep
-  frequency: 1000
-  time_ms: 250
-  repeats: 1
-
-# Speak (shorthand)
-- speak: "Hello world"
-
-# Equivalent full form
-- type: speak
-  text: "Hello world"
-```
-
-### Velocity Control
-
-```yaml
-# Shorthand: [forward_velocity, turn_rate]
-- velocity: [0.5, 0.1]
-
-# Equivalent full form
-- type: set_velocity
-  forward: 0.5
-  turn: 0.1
-  normalized: false
-```
-
-### Parallel Execution
-
-```yaml
-# Run multiple actions simultaneously
-- parallel:
-    - speak: "Starting"
-    - beep: 500
-    - wait: 1s
-
-# All sub-actions start together
-# Parent action finishes when ALL sub-actions complete
-```
-
-### Group Execution
-
-```yaml
-# Run multiple actions sequentially as a named group
-- type: group
-  id: my_phase
-  label: "My Phase"
-  actions:
-    - set_mode: "VELOCITY"
-    - velocity: [0.3, 0.0]
-    - wait: 2s
-
-# Sub-actions run one after another
-# Group tracks start_tick and end_tick for data extraction
-```
-
-### Loop (Repeat Actions)
-
-```yaml
-# Repeat 5 times
-- type: loop
-  count: 5
-  actions:
-    - beep
-    - wait: 500ms
-
-# Iterate over values with substitution
-- type: loop
-  variable: speed
-  values: [0.2, 0.4, 0.6]
-  actions:
-    - type: set_velocity
-      forward: "${speed}"
-    - wait: 3s
-
-# Range-based iteration
-- type: loop
-  variable: i
-  range: [0, 3]
-  actions:
-    - type: group
-      id: "trial_${i}"
-      label: "Trial ${i}"
-      actions:
-        - beep
-        - wait: 1s
-```
-
-### Position Control
-
-```yaml
-# Move to position (shorthand)
-- move_to: [1.0, 0.5]                    # [x, y] coordinates
-- move_to: {x: 1.0, y: 0.5, max_speed: 0.3}
-
-# Turn to heading (shorthand)
-- turn_to: 1.57                          # radians
-- turn_to: {heading_deg: 90}             # degrees
-
-# Set waypoints (shorthand)
-- waypoints:
-    - [0.5, 0.0]                         # [x, y]
-    - [1.0, 0.5, "STOP"]                 # [x, y, type]
-    - [1.5, 0.0, 0.9]                    # [x, y, weight]
-    - [2.0, 0.5, "STOP", 0.8]            # [x, y, type, weight]
-    - [2.5, 0.0, "PASS", 0.75, 0.2]      # [x, y, type, weight, speed]
-    - {x: 3.0, y: 0.0, type: PASS, weight: 0.75, speed: 0.3}  # full dict
-
-# Load path from file (shorthand)
-- path: "waypoints.yaml"
-- path: {waypoints: [...], start: true}
-
-# Stop path (shorthand)
-- stop_path:
-```
 
 ---
 
@@ -560,7 +417,7 @@ Executes multiple actions simultaneously.
 |-----------|------|---------|-------------|
 | `actions` | list | [] | List of actions to run in parallel |
 
-Sub-actions support all shorthand syntax. The parallel action completes when ALL sub-actions finish.
+The parallel action completes when ALL sub-actions finish.
 
 ---
 
@@ -573,10 +430,12 @@ Executes multiple actions sequentially as a named group. Groups are useful for o
   id: velocity_test
   label: "Velocity Test"
   actions:
-    - set_mode: "VELOCITY"
+    - type: set_mode
+      mode: VELOCITY
     - type: set_velocity
       forward: 0.5
-    - wait: 3s
+    - type: wait_time
+      time_ms: 3000
 ```
 
 | Parameter | Type | Default | Description |
@@ -601,14 +460,6 @@ print(f"Start time: {velocity_group.start_time}")  # seconds
 print(f"End time: {velocity_group.end_time}")      # seconds
 ```
 
-**Shorthand:**
-```yaml
-- group:
-    - set_mode: "VELOCITY"
-    - velocity: [0.3, 0.0]
-    - wait: 2s
-```
-
 ---
 
 ### `loop` - Repeat Actions
@@ -622,8 +473,9 @@ Supports three iteration modes:
 - type: loop
   count: 5
   actions:
-    - beep
-    - wait: 500ms
+    - type: beep
+    - type: wait_time
+      time_ms: 500
 ```
 
 **2. Iterate over explicit values:**
@@ -634,7 +486,8 @@ Supports three iteration modes:
   actions:
     - type: set_velocity
       forward: "${speed}"
-    - wait: 3s
+    - type: wait_time
+      time_ms: 3000
 ```
 
 **3. Range-based iteration:**
@@ -649,7 +502,8 @@ Supports three iteration modes:
       actions:
         - type: set_velocity
           forward: 0.5
-        - wait: 2s
+        - type: wait_time
+          time_ms: 2000
 ```
 
 | Parameter | Type | Default | Description |
@@ -687,16 +541,8 @@ Loops can be nested. Inner loop variables are substituted correctly alongside ou
         - type: set_velocity
           forward: "${speed}"
           turn: "${direction}"
-        - wait: 2s
-```
-
-**Shorthand:**
-```yaml
-# Simple repeat shorthand
-- loop: 5
-  actions:
-    - beep
-    - wait: 500ms
+        - type: wait_time
+          time_ms: 2000
 ```
 
 ---
@@ -726,12 +572,6 @@ Moves the robot to a target position using position control.
 | `timeout` | float | 0.0 | Command timeout [s] (0 = no timeout) |
 | `wait` | bool | true | If true, wait for completion before continuing |
 
-**Shorthand:**
-```yaml
-- move_to: [1.0, 0.5]                           # [x, y]
-- move_to: {x: 1.0, y: 0.5, max_speed: 0.3}     # with options
-```
-
 ---
 
 ### `turn_to` - Turn to Heading
@@ -753,13 +593,6 @@ Rotates the robot in place to face a target heading.
 | `max_angular_speed` | float | 0.0 | Maximum turn rate [rad/s] (0 = use default) |
 | `timeout` | float | 0.0 | Command timeout [s] (0 = no timeout) |
 | `wait` | bool | true | If true, wait for completion before continuing |
-
-**Shorthand:**
-```yaml
-- turn_to: 1.57                                 # heading in radians
-- turn_to: {heading_deg: 90}                    # heading in degrees
-- turn_to: {heading_deg: 90, max_angular_speed: 2.0}
-```
 
 ---
 
@@ -818,15 +651,6 @@ Sets waypoints for path following. Must be in POSITION mode.
 - Speed transitions smoothly between waypoints over ~0.5 seconds
 - Corner angle slowdown still applies (takes minimum of waypoint speed and corner-based limit)
 - Useful for slowing down at precise positioning points or speeding up on straight segments
-
-**Shorthand:**
-```yaml
-- waypoints:
-    - [0.5, 0.0]
-    - [1.0, 0.5, "STOP"]
-    - [1.5, 0.0, 0.9]
-    - [2.0, 0.0, "PASS", 0.75, 0.2]  # with speed limit
-```
 
 ---
 
@@ -902,19 +726,6 @@ waypoints:
 
 **Per-waypoint speed:** Each waypoint can have its own `speed` limit. Set to 0 (or omit) to use the path's `max_speed`. Speed transitions smoothly between waypoints (~0.5s). Corner slowdown still applies.
 
-**Shorthand:**
-```yaml
-# Load and start from file
-- path: "waypoints.yaml"
-
-# Load inline with start
-- path:
-    start: true
-    waypoints:
-      - [0.5, 0.0]
-      - [1.0, 0.5, "STOP"]
-```
-
 ---
 
 ### `stop_path` - Stop/Abort Path
@@ -926,11 +737,6 @@ Aborts the current path execution.
 ```
 
 No parameters.
-
-**Shorthand:**
-```yaml
-- stop_path:
-```
 
 ---
 
@@ -981,8 +787,10 @@ When any of these conditions occur, the action reports an error which triggers t
 id: path_with_monitoring
 description: Path that might be interrupted
 actions:
-  - mode: POSITION
-  - wait: 1s
+  - type: set_mode
+    mode: POSITION
+  - type: wait_time
+    time_ms: 1000
 
   - type: group
     id: path_execution
@@ -992,7 +800,8 @@ actions:
         start: true
         wait: true  # Will detect mode changes and report error
 
-  - mode: OFF
+  - type: set_mode
+    mode: OFF
 ```
 
 If the control mode changes during path execution (e.g., robot tips over and switches to BALANCING), the `load_path` action will detect this and trigger an experiment error with full data collection.
@@ -1007,13 +816,19 @@ If the control mode changes during path execution (e.g., robot tips over and swi
 id: balance_test
 description: Basic balancing test with audio feedback
 actions:
-  - speak: "Starting balance test"
-  - wait: 1s
-  - mode: BALANCING
-  - beep
-  - wait: 10s
-  - mode: OFF
-  - speak: "Test complete"
+  - type: speak
+    text: "Starting balance test"
+  - type: wait_time
+    time_ms: 1000
+  - type: set_mode
+    mode: BALANCING
+  - type: beep
+  - type: wait_time
+    time_ms: 10000
+  - type: set_mode
+    mode: OFF
+  - type: speak
+    text: "Test complete"
 ```
 
 ### Example 2: Velocity Control Sequence
@@ -1023,16 +838,29 @@ id: velocity_sequence
 description: Execute a velocity command sequence
 timeout: 30.0
 actions:
-  - mode: BALANCING
-  - wait: 2s
-  - mode: VELOCITY
-  - velocity: [0.2, 0.0]    # Forward
-  - wait: 3s
-  - velocity: [0.0, 0.5]    # Turn
-  - wait: 2s
-  - velocity: [0.0, 0.0]    # Stop
-  - wait: 1s
-  - mode: OFF
+  - type: set_mode
+    mode: BALANCING
+  - type: wait_time
+    time_ms: 2000
+  - type: set_mode
+    mode: VELOCITY
+  - type: set_velocity        # Forward
+    forward: 0.2
+    turn: 0.0
+  - type: wait_time
+    time_ms: 3000
+  - type: set_velocity        # Turn
+    forward: 0.0
+    turn: 0.5
+  - type: wait_time
+    time_ms: 2000
+  - type: set_velocity        # Stop
+    forward: 0.0
+    turn: 0.0
+  - type: wait_time
+    time_ms: 1000
+  - type: set_mode
+    mode: OFF
 ```
 
 ### Example 3: Using Delays
@@ -1041,14 +869,19 @@ actions:
 id: delayed_actions
 description: Actions with relative delays
 actions:
-  - mode: BALANCING
+  - type: set_mode
+    mode: BALANCING
   - delay: 2.0
-    beep: 800
+    type: beep
+    frequency: 800
   - delay: 1.0
-    beep: 1000
+    type: beep
+    frequency: 1000
   - delay: 1.0
-    beep: 1200
+    type: beep
+    frequency: 1200
   - delay: 2.0
+    type: set_mode
     mode: OFF
 ```
 
@@ -1058,20 +891,33 @@ actions:
 id: parallel_demo
 description: Demonstrate parallel execution
 actions:
-  - mode: BALANCING
-  - wait: 1s
-  - parallel:
-      - speak: "Moving forward"
-      - beep: 500
-  - velocity: [0.3, 0.0]
-  - wait: 3s
-  - parallel:
-      - speak: "Stopping"
+  - type: set_mode
+    mode: BALANCING
+  - type: wait_time
+    time_ms: 1000
+  - type: parallel
+    actions:
+      - type: speak
+        text: "Moving forward"
+      - type: beep
+        frequency: 500
+  - type: set_velocity
+    forward: 0.3
+    turn: 0.0
+  - type: wait_time
+    time_ms: 3000
+  - type: parallel
+    actions:
+      - type: speak
+        text: "Stopping"
       - type: beep
         frequency: 1000
         repeats: 2
-  - velocity: [0.0, 0.0]
-  - mode: OFF
+  - type: set_velocity
+    forward: 0.0
+    turn: 0.0
+  - type: set_mode
+    mode: OFF
 ```
 
 ### Example 5: Complex Experiment with Markers
@@ -1086,9 +932,12 @@ actions:
     id: setup_phase
     marker_id: phase
     marker_value: setup
-  - speak: "Initializing experiment"
-  - mode: BALANCING
-  - wait: 2s
+  - type: speak
+    text: "Initializing experiment"
+  - type: set_mode
+    mode: BALANCING
+  - type: wait_time
+    time_ms: 2000
 
   # Phase 2: Test
   - type: set_marker
@@ -1099,20 +948,32 @@ actions:
   - delay: 0.5
     type: enable_external_input
     enabled: false
-  - mode: VELOCITY
-  - velocity: [0.5, 0.0]
-  - wait: 5s
-  - velocity: [0.0, 0.3]
-  - wait: 3s
-  - velocity: [0.0, 0.0]
+  - type: set_mode
+    mode: VELOCITY
+  - type: set_velocity
+    forward: 0.5
+    turn: 0.0
+  - type: wait_time
+    time_ms: 5000
+  - type: set_velocity
+    forward: 0.0
+    turn: 0.3
+  - type: wait_time
+    time_ms: 3000
+  - type: set_velocity
+    forward: 0.0
+    turn: 0.0
 
   # Phase 3: Cleanup
   - type: set_marker
     marker_id: phase
     marker_value: cleanup
-  - enable_external_input: true
-  - mode: OFF
-  - speak: "Experiment complete"
+  - type: enable_external_input
+    enabled: true
+  - type: set_mode
+    mode: OFF
+  - type: speak
+    text: "Experiment complete"
 ```
 
 ### Example 6: Timed Actions (Absolute Scheduling)
@@ -1144,12 +1005,19 @@ actions:
 id: move_to_test
 description: Move to a single position
 actions:
-  - speak: "Moving to position"
-  - mode: POSITION
-  - wait: 1s
-  - move_to: [1.0, 0.5]
-  - speak: "Arrived"
-  - mode: OFF
+  - type: speak
+    text: "Moving to position"
+  - type: set_mode
+    mode: POSITION
+  - type: wait_time
+    time_ms: 1000
+  - type: move_to
+    x: 1.0
+    y: 0.5
+  - type: speak
+    text: "Arrived"
+  - type: set_mode
+    mode: OFF
 ```
 
 ### Example 8: Turn to Heading
@@ -1158,16 +1026,26 @@ actions:
 id: turn_test
 description: Turn to face different directions
 actions:
-  - speak: "Turning test"
-  - mode: POSITION
-  - wait: 1s
-  - turn_to: {heading_deg: 90}
-  - speak: "Facing East"
-  - turn_to: {heading_deg: 180}
-  - speak: "Facing South"
-  - turn_to: {heading_deg: 0}
-  - speak: "Facing North"
-  - mode: OFF
+  - type: speak
+    text: "Turning test"
+  - type: set_mode
+    mode: POSITION
+  - type: wait_time
+    time_ms: 1000
+  - type: turn_to
+    heading_deg: 90
+  - type: speak
+    text: "Facing East"
+  - type: turn_to
+    heading_deg: 180
+  - type: speak
+    text: "Facing South"
+  - type: turn_to
+    heading_deg: 0
+  - type: speak
+    text: "Facing North"
+  - type: set_mode
+    mode: OFF
 ```
 
 ### Example 9: Path Following with Waypoints
@@ -1176,12 +1054,16 @@ actions:
 id: path_following
 description: Follow a rectangular path
 actions:
-  - speak: "Starting path following"
-  - mode: POSITION
-  - wait: 1s
+  - type: speak
+    text: "Starting path following"
+  - type: set_mode
+    mode: POSITION
+  - type: wait_time
+    time_ms: 1000
 
   # Set waypoints for a rectangle
-  - waypoints:
+  - type: set_waypoints
+    waypoints:
       - [0.5, 0.0]
       - [0.5, 0.5]
       - [0.0, 0.5]
@@ -1192,8 +1074,10 @@ actions:
     max_speed: 0.25
     wait: true
 
-  - speak: "Path complete"
-  - mode: OFF
+  - type: speak
+    text: "Path complete"
+  - type: set_mode
+    mode: OFF
 ```
 
 ### Example 10: Load Path from File
@@ -1202,9 +1086,12 @@ actions:
 id: file_path_test
 description: Load and follow a path from file
 actions:
-  - speak: "Loading path from file"
-  - mode: POSITION
-  - wait: 1s
+  - type: speak
+    text: "Loading path from file"
+  - type: set_mode
+    mode: POSITION
+  - type: wait_time
+    time_ms: 1000
 
   # Load and start path
   - type: load_path
@@ -1213,8 +1100,10 @@ actions:
     max_speed: 0.3
     wait: true
 
-  - speak: "Path finished"
-  - mode: OFF
+  - type: speak
+    text: "Path finished"
+  - type: set_mode
+    mode: OFF
 ```
 
 ### Example 11: Complex Navigation Sequence
@@ -1224,27 +1113,35 @@ id: navigation_demo
 description: Demonstrate various position control features
 timeout: 120.0
 actions:
-  - speak: "Navigation demonstration"
-  - mode: POSITION
-  - wait: 1s
+  - type: speak
+    text: "Navigation demonstration"
+  - type: set_mode
+    mode: POSITION
+  - type: wait_time
+    time_ms: 1000
 
   # Move to starting position
   - type: set_marker
     marker_id: phase
     marker_value: move_to_start
-  - move_to: {x: 0.5, y: 0.0, max_speed: 0.2}
+  - type: move_to
+    x: 0.5
+    y: 0.0
+    max_speed: 0.2
 
   # Turn to face the path direction
   - type: set_marker
     marker_id: phase
     marker_value: align
-  - turn_to: {heading_deg: 45}
+  - type: turn_to
+    heading_deg: 45
 
   # Set up waypoints with different types
   - type: set_marker
     marker_id: phase
     marker_value: path_setup
-  - waypoints:
+  - type: set_waypoints
+    waypoints:
       - [0.7, 0.2]                    # Pass through
       - [1.0, 0.5, 0.5]               # Smooth corner (low weight)
       - [1.2, 0.3]                    # Pass through
@@ -1263,11 +1160,16 @@ actions:
   - type: set_marker
     marker_id: phase
     marker_value: return
-  - move_to: [0.0, 0.0]
-  - turn_to: {heading_deg: 0}
+  - type: move_to
+    x: 0.0
+    y: 0.0
+  - type: turn_to
+    heading_deg: 0
 
-  - speak: "Demo complete"
-  - mode: OFF
+  - type: speak
+    text: "Demo complete"
+  - type: set_mode
+    mode: OFF
 ```
 
 ### Example 12: Path with Inline Definition and Per-Waypoint Speeds
@@ -1276,9 +1178,12 @@ actions:
 id: inline_path
 description: Load path from inline definition with variable speeds
 actions:
-  - speak: "Inline path test"
-  - mode: POSITION
-  - wait: 1s
+  - type: speak
+    text: "Inline path test"
+  - type: set_mode
+    mode: POSITION
+  - type: wait_time
+    time_ms: 1000
 
   - type: load_path
     start: true
@@ -1305,8 +1210,10 @@ actions:
           weight: 0.9
           speed: 0.15           # slow approach to final waypoint
 
-  - speak: "Finished"
-  - mode: OFF
+  - type: speak
+    text: "Finished"
+  - type: set_mode
+    mode: OFF
 ```
 
 ### Example 13: Non-Blocking Position Commands
@@ -1315,8 +1222,10 @@ actions:
 id: async_navigation
 description: Position commands without waiting
 actions:
-  - mode: POSITION
-  - wait: 1s
+  - type: set_mode
+    mode: POSITION
+  - type: wait_time
+    time_ms: 1000
 
   # Start move without waiting
   - type: move_to
@@ -1325,14 +1234,18 @@ actions:
     wait: false
 
   # Do other things while moving
-  - parallel:
-      - speak: "Moving in background"
+  - type: parallel
+    actions:
+      - type: speak
+        text: "Moving in background"
       - type: wait_position_event
         event: move_to_point_completed
         timeout: 30.0
 
-  - speak: "Arrived"
-  - mode: OFF
+  - type: speak
+    text: "Arrived"
+  - type: set_mode
+    mode: OFF
 ```
 
 ### Example 14: Using Groups for Data Extraction
@@ -1344,39 +1257,60 @@ id: grouped_experiment
 description: Experiment with named groups for easy data extraction
 timeout: 60.0
 actions:
-  - mode: BALANCING
-  - wait: 2s
+  - type: set_mode
+    mode: BALANCING
+  - type: wait_time
+    time_ms: 2000
 
   # Group 1: Forward velocity test
   - type: group
     id: forward_test
     actions:
-      - mode: VELOCITY
-      - velocity: [0.3, 0.0]
-      - wait: 3s
-      - velocity: [0.0, 0.0]
+      - type: set_mode
+        mode: VELOCITY
+      - type: set_velocity
+        forward: 0.3
+        turn: 0.0
+      - type: wait_time
+        time_ms: 3000
+      - type: set_velocity
+        forward: 0.0
+        turn: 0.0
 
-  - wait: 1s
+  - type: wait_time
+    time_ms: 1000
 
   # Group 2: Turn test
   - type: group
     id: turn_test
     actions:
-      - velocity: [0.0, 0.5]
-      - wait: 2s
-      - velocity: [0.0, 0.0]
+      - type: set_velocity
+        forward: 0.0
+        turn: 0.5
+      - type: wait_time
+        time_ms: 2000
+      - type: set_velocity
+        forward: 0.0
+        turn: 0.0
 
-  - wait: 1s
+  - type: wait_time
+    time_ms: 1000
 
   # Group 3: Combined motion
   - type: group
     id: combined_test
     actions:
-      - velocity: [0.2, 0.3]
-      - wait: 3s
-      - velocity: [0.0, 0.0]
+      - type: set_velocity
+        forward: 0.2
+        turn: 0.3
+      - type: wait_time
+        time_ms: 3000
+      - type: set_velocity
+        forward: 0.0
+        turn: 0.0
 
-  - mode: OFF
+  - type: set_mode
+    mode: OFF
 ```
 
 **Extracting group data in Python:**
@@ -1413,9 +1347,12 @@ id: velocity_sweep
 description: Test different forward velocities
 timeout: 60.0
 actions:
-  - mode: BALANCING
-  - wait: 2s
-  - mode: VELOCITY
+  - type: set_mode
+    mode: BALANCING
+  - type: wait_time
+    time_ms: 2000
+  - type: set_mode
+    mode: VELOCITY
 
   # Sweep through velocities
   - type: loop
@@ -1428,11 +1365,16 @@ actions:
         actions:
           - type: set_velocity
             forward: "${speed}"
-          - wait: 3s
-          - velocity: [0.0, 0.0]
-          - wait: 1s
+          - type: wait_time
+            time_ms: 3000
+          - type: set_velocity
+            forward: 0.0
+            turn: 0.0
+          - type: wait_time
+            time_ms: 1000
 
-  - mode: OFF
+  - type: set_mode
+    mode: OFF
 ```
 
 Each iteration creates a labeled group, so the report shows phase bars like "v=0.1 m/s", "v=0.2 m/s", etc.
@@ -1444,8 +1386,10 @@ id: repeated_trials
 description: Run 5 identical trials with beep between each
 timeout: 120.0
 actions:
-  - mode: BALANCING
-  - wait: 2s
+  - type: set_mode
+    mode: BALANCING
+  - type: wait_time
+    time_ms: 2000
 
   - type: loop
     count: 5
@@ -1454,16 +1398,26 @@ actions:
         id: "trial_${_index}"
         label: "Trial ${_index}"
         actions:
-          - beep
-          - mode: VELOCITY
-          - velocity: [0.3, 0.0]
-          - wait: 3s
-          - velocity: [0.0, 0.0]
-          - wait: 1s
-          - mode: BALANCING
-          - wait: 1s
+          - type: beep
+          - type: set_mode
+            mode: VELOCITY
+          - type: set_velocity
+            forward: 0.3
+            turn: 0.0
+          - type: wait_time
+            time_ms: 3000
+          - type: set_velocity
+            forward: 0.0
+            turn: 0.0
+          - type: wait_time
+            time_ms: 1000
+          - type: set_mode
+            mode: BALANCING
+          - type: wait_time
+            time_ms: 1000
 
-  - mode: OFF
+  - type: set_mode
+    mode: OFF
 ```
 
 ---
@@ -1568,20 +1522,24 @@ id: robust_experiment
 description: Experiment with error-prone action
 timeout: 30.0
 actions:
-  - mode: BALANCING
-  - wait: 2s
+  - type: set_mode
+    mode: BALANCING
+  - type: wait_time
+    time_ms: 2000
 
   # This path might fail if position is invalid
   - type: group
     id: path_attempt
     actions:
-      - mode: POSITION
+      - type: set_mode
+        mode: POSITION
       - type: load_path
         path: "my_path.yaml"
         start: true
         wait: true
 
-  - mode: OFF
+  - type: set_mode
+    mode: OFF
 ```
 
 If the path action fails, the experiment data will still contain:
@@ -1607,17 +1565,20 @@ To get phase bars on your report plots, add `label` to your groups:
   id: forward_drive
   label: "Forward Drive"
   actions:
-    - velocity: [0.5, 0.0]
-    - wait: 3s
+    - type: set_velocity
+      forward: 0.5
+      turn: 0.0
+    - type: wait_time
+      time_ms: 3000
 ```
 
 ---
 
 ## Tips and Best Practices
 
-1. **Use shorthand for readability** - The shorthand syntax makes experiments much easier to read and write.
+1. **Use full `type:` syntax** - Always use the explicit `type:` field for every action to avoid ambiguity.
 
-2. **Always end with `mode: OFF`** - Ensure the robot is in a safe state when the experiment ends.
+2. **Always end with `type: set_mode` / `mode: OFF`** - Ensure the robot is in a safe state when the experiment ends.
 
 3. **Use `timeout`** - Set a reasonable timeout to prevent runaway experiments.
 
@@ -1633,7 +1594,7 @@ To get phase bars on your report plots, add `label` to your groups:
 
 ### Position Control Tips
 
-9. **Set mode to POSITION first** - Position control actions require `mode: POSITION` before they can execute.
+9. **Set mode to POSITION first** - Position control actions require `type: set_mode` / `mode: POSITION` before they can execute.
 
 10. **Use `wait: true` (default)** - Most position commands should wait for completion to ensure proper sequencing.
 

@@ -231,5 +231,5 @@ def getTransitionMatrixFromSystem(sys, N):
 
 if __name__ == '__main__':
     plt.figure()
-    plt.plot(BILBO_REFERENCE_LONGER)
+    plt.plot(BILBO_BUMPED_REFERENCE_TRAJECTORY)
     plt.show()

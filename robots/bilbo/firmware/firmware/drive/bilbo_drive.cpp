@@ -1,5 +1,7 @@
 #include "bilbo_drive.h"
 #include "modbus_rtu.h"
+#include "firmware_settings.h"
+#include "robot-control_board.h"
 
 static const osThreadAttr_t drive_task_attributes = { .name = "drive",
 		.stack_size = 2000 * 4, .priority = (osPriority_t) osPriorityNormal, };
@@ -43,6 +45,13 @@ HAL_StatusTypeDef BILBO_Drive::start() {
 	if (status) {
 		return HAL_ERROR;
 	}
+
+#if ENABLE_MOTOR_SHUTDOWN_LINE
+	// Initialize motor shutdown safety line: drive HIGH = motors allowed to run.
+	// CubeMX should configure this pin as push-pull output with pullup, default HIGH.
+	HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_SET);
+#endif
 
 	this->motor_left->start();
 	this->motor_right->start();
@@ -182,6 +191,13 @@ void BILBO_Drive::task() {
 				setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
 				send_error("Motor comm error");
 				this->status = BILBO_DRIVE_STATUS_ERROR;
+#if ENABLE_MOTOR_SHUTDOWN_LINE
+				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_RESET);
+#endif
+				this->motor_left->stop();
+				osDelay(2);
+				this->motor_right->stop();
 				continue;
 			}
 			osDelay(2);
@@ -193,6 +209,13 @@ void BILBO_Drive::task() {
 				setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
 				send_error("Motor comm error");
 				this->status = BILBO_DRIVE_STATUS_ERROR;
+#if ENABLE_MOTOR_SHUTDOWN_LINE
+				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_RESET);
+#endif
+				this->motor_left->stop();
+				osDelay(2);
+				this->motor_right->stop();
 				continue;
 			}
 
@@ -216,6 +239,13 @@ void BILBO_Drive::task() {
 				setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
 				send_error("Motor comm error");
 				this->status = BILBO_DRIVE_STATUS_ERROR;
+#if ENABLE_MOTOR_SHUTDOWN_LINE
+				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_RESET);
+#endif
+				this->motor_left->stop();
+				osDelay(2);
+				this->motor_right->stop();
 				continue;
 			}
 
@@ -226,11 +256,24 @@ void BILBO_Drive::task() {
 				setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
 				send_error("Motor comm error");
 				this->status = BILBO_DRIVE_STATUS_ERROR;
+#if ENABLE_MOTOR_SHUTDOWN_LINE
+				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_RESET);
+				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_RESET);
+#endif
+				this->motor_left->stop();
+				osDelay(2);
+				this->motor_right->stop();
 				continue;
 			}
 
 		} else if (this->status == BILBO_DRIVE_STATUS_ERROR) {
-			nop();
+			// Keep trying to zero the motors every loop iteration.
+			// The SimplexMotion controllers retain the last commanded
+			// torque target until explicitly overwritten. A CAN read
+			// timeout does not necessarily mean writes will also fail.
+			this->motor_left->stop();
+			osDelay(2);
+			this->motor_right->stop();
 		}
 
 		ticks_loop = osKernelGetTickCount() - current_tick;

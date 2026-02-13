@@ -219,8 +219,9 @@ class PositionControl_Config:
     arrival_dwell_time: float = 0.5         # [s] Hold time at STOP point / path end
     reverse_enter_angle: float = 2.1        # [rad] ~120 deg - enter reverse mode
     reverse_exit_angle: float = 1.05        # [rad] ~60 deg - exit reverse mode
-    speed_curvature_power: float = 0.5     # [-] Exponent for spacing→speed mapping (1.0=linear, 0.5=sqrt)
     decel_limit: float = 0.0                # [m/s²] sqrt deceleration profile. 0 = disabled
+    curvature_gain: float = 2.0            # [-] Curvature sensitivity: v = max_speed / (1 + gain * κ). Higher = slower in curves.
+    curvature_lookahead: float = 0.3       # [m] How far ahead to estimate curvature (firmware-side)
 
 
 @dataclasses.dataclass

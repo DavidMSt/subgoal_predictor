@@ -567,3 +567,9 @@ bool BILBO_Control::position_move_to_point(move_to_point_command_t cmd) {
 bool BILBO_Control::position_reset() {
 	return this->position_control.reset();
 }
+
+void BILBO_Control::position_spi_path_received(uint16_t count) {
+	if (this->spi_path_rx_buffer != nullptr) {
+		this->position_control.spiPathReceived(this->spi_path_rx_buffer, count);
+	}
+}

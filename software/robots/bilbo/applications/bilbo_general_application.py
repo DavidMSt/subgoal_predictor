@@ -15,8 +15,9 @@ top_level_module = os.path.abspath(os.path.join(current_dir, '..', '..'))  # adj
 if top_level_module not in sys.path:
     sys.path.insert(0, top_level_module)
 
+
 # === CUSTOM MODULES ===================================================================================================
-from robots.bilbo.gui.bilbo_application_gui import BILBO_Application_GUI
+from robots.bilbo.gui.bilbo_gui import BILBO_Application_GUI
 # from extensions.cli.archive.cli_gui import CLI_GUI_Server
 from extensions.cli.cli import CommandSet, CLI, Command
 from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl

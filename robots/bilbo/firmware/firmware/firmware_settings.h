@@ -16,6 +16,11 @@
 //#define BILBO_MODEL_BIG
 //#define BILBO_MODEL_SMALL
 
+// Hardware safety line: STM32 GPIO connected to motor IN1.
+// Directly triggers motor quickstop independent of CAN communication.
+// Requires wiring STM32 GPIO to IN1 on both SimplexMotion motors.
+#define ENABLE_MOTOR_SHUTDOWN_LINE 0
+
 // REVISION
 #define TWIPR_FIRMWARE_REVISION_MAJOR 0x02
 #define TWIPR_FIRMWARE_REVISION_MINOR 0x02

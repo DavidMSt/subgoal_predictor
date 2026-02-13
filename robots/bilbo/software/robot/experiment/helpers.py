@@ -54,7 +54,7 @@ def trajectory_inputs_to_vector(trajectory_inputs: list[BILBO_InputTrajectorySte
     return np.array(trajectory_inputs_to_list(trajectory_inputs, single_input=single_input))
 
 
-def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain) -> BILBO_InputTrajectory | None:
+def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain, bias=0.0) -> BILBO_InputTrajectory | None:
     """
     Generates a random test trajectory for simulation or testing purposes. The function creates a time
     vector based on the specified duration and generates random inputs filtered by a cutoff frequency
@@ -66,6 +66,7 @@ def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain) -> 
         time_s: Maximum time duration of the trajectory in seconds.
         frequency: Cutoff frequency for filtering random inputs.
         gain: Scaling factor for random input signal amplitude.
+        bias: Constant offset added to the signal. Positive values bias the robot forward.
 
     Returns:
         BILBO_InputTrajectory | None: The trajectory object containing the generated data or None
@@ -77,7 +78,7 @@ def generate_random_input_trajectory(trajectory_id, time_s, frequency, gain) -> 
         print(f"Trajectory too long: {len(t_vector)} > {MAX_STEPS_TRAJECTORY} steps")
         return None
 
-    trajectory_input = generate_random_input(t_vector=t_vector, f_cutoff=frequency, sigma_I=gain)
+    trajectory_input = generate_random_input(t_vector=t_vector, f_cutoff=frequency, sigma_I=gain, bias=bias)
     trajectory_inputs = generate_trajectory_inputs(trajectory_input)
 
     trajectory = BILBO_InputTrajectory(

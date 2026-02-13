@@ -57,12 +57,14 @@ class BILBO_Interfaces:
     _input_thread: threading.Thread
     _exit_input_task: bool
 
-    def __init__(self, core: BILBO_Common, communication: BILBO_Communication, control: BILBO_Control):
+    def __init__(self, core: BILBO_Common, communication: BILBO_Communication, control: BILBO_Control,
+                 joystick_enabled: bool = True):
         self.logger = Logger('interfaces')
         self.logger.setLevel('DEBUG')
         self.core = core
         self.communication = communication
         self.control = control
+        self.joystick_enabled = joystick_enabled
 
         config = self.core.config
 
@@ -71,9 +73,13 @@ class BILBO_Interfaces:
         if self.has_display:
             self.display = BILBO_Display(core=self.core)
 
-        self._joystick_manager = JoystickManager()
-        self._joystick_manager.callbacks.new_joystick.register(self._onJoystickConnected)
-        self._joystick_manager.callbacks.joystick_disconnected.register(self._onJoystickDisconnected)
+        if self.joystick_enabled:
+            self._joystick_manager = JoystickManager()
+            self._joystick_manager.callbacks.new_joystick.register(self._onJoystickConnected)
+            self._joystick_manager.callbacks.joystick_disconnected.register(self._onJoystickDisconnected)
+        else:
+            self._joystick_manager = None
+            self.logger.info('Joystick disabled by settings')
 
         self._joystick = None  # type: ignore
 
@@ -151,7 +157,8 @@ class BILBO_Interfaces:
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
         self.logger.info('Start Interfaces')
-        self._joystick_manager.start()
+        if self._joystick_manager is not None:
+            self._joystick_manager.start()
 
         if self.has_display:
             self.display.start()
@@ -162,7 +169,8 @@ class BILBO_Interfaces:
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
         self.logger.info('Stop Interfaces')
-        self._joystick_manager.close()
+        if self._joystick_manager is not None:
+            self._joystick_manager.close()
 
         self._exit_input_task = True
         if self._input_thread is not None and self._input_thread.is_alive():
@@ -222,6 +230,8 @@ class BILBO_Interfaces:
 
         self._joystick.hat['up'].callbacks.pressed.register(self.control.enable_tic_control, enable=True)
         self._joystick.hat['down'].callbacks.pressed.register(self.control.enable_tic_control, enable=False)
+        self._joystick.hat['right'].callbacks.pressed.register(self.core.setResumeEvent, data=True)
+
 
         # joystick.setButtonCallback(button="A", event='down', function=self._onJoystickPress)
         # joystick.setButtonCallback(button="B", event='down', function=self._onJoystickPress)

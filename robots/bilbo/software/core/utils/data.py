@@ -70,7 +70,7 @@ def generate_time_vector_by_length(num_samples, dt, start=0.0):
     """
     return start + np.arange(num_samples) * dt
 
-def generate_random_input(t_vector, f_cutoff, sigma_I):
+def generate_random_input(t_vector, f_cutoff, sigma_I, bias=0.0):
     """
     Generate a random input trajectory u by filtering randomly drawn values.
     The trajectory u starts at zero.
@@ -82,6 +82,8 @@ def generate_random_input(t_vector, f_cutoff, sigma_I):
             Cutoff frequency for the 6th order Butterworth filter.
         sigma_I : float
             Scaling (amplitude) of the signal.
+        bias : float, optional
+            Constant offset added to the signal (default 0.0).
 
     Returns:
         u : ndarray
@@ -132,10 +134,10 @@ def generate_random_input(t_vector, f_cutoff, sigma_I):
     if len(idx_candidates) == 0 or (idx_candidates[0] + N > len(u)):
         # Fallback: if no index qualifies or there isn't enough room for a segment of length N,
         # return the first N samples.
-        return u[:N]
+        return u[:N] + bias
 
     start_idx = idx_candidates[0]
-    return u[start_idx:start_idx + N]
+    return u[start_idx:start_idx + N] + bias
 
 
 

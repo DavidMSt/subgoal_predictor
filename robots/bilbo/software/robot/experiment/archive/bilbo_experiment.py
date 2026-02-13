@@ -386,7 +386,6 @@ class BILBO_ExperimentHandler:
             return False
 
         # We successfully started the trajectory on the STM32. We are now disabling external control inputs
-        self.control.enable_external_input = False
         self.mode = BILBO_ExperimentHandler_Mode.RUNNING
         self.events.experiment_started.set(trajectory_id, flags={'trajectory_id': trajectory_id})
         return True
@@ -504,7 +503,6 @@ class BILBO_ExperimentHandler:
                                                 flags={'trajectory_id': trajectory_id})
 
             self.running = False
-            self.control.enable_external_input = True
 
         elif event == 'RECEIVED':
             self.logger.debug(f"Trajectory {trajectory_id} loaded")
@@ -521,7 +519,6 @@ class BILBO_ExperimentHandler:
                                                flags={'trajectory_id': trajectory_id})
 
             self.running = False
-            self.control.enable_external_input = True
 
             self.communication.wifi.sendEvent(event='trajectory',
                                               data={

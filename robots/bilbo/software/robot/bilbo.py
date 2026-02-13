@@ -1,8 +1,11 @@
 import ctypes
+import dataclasses
+from dataclasses import field
 import os
 import time
 
 import math
+import yaml
 
 # === OWN PACKAGES =====================================================================================================
 from core.utils.delayed_executor import delayed_execution
@@ -29,7 +32,7 @@ from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control_definitions import BILBO_Control_Mode
 from robot.control.bilbo_control import BILBO_Control
 from robot.drive.bilbo_drive import BILBO_Drive
-from robot.estimation.bilbo_estimation import BILBO_Estimation
+from robot.estimation.bilbo_estimation import BILBO_Estimation, BILBO_TrackerSettings
 from robot.logging.bilbo_logging import BILBO_Logging
 from robot.logging.bilbo_sample import BILBO_Sample_General
 from robot.sensors.bilbo_sensors import BILBO_Sensors
@@ -38,11 +41,51 @@ from robot.supervisor.twipr_supervisor import TWIPR_Supervisor
 from core.utils.revisions import get_versions, is_ll_version_compatible
 import robot.lowlevel.stm32_addresses as stm32_addresses
 from core.utils.exit import register_exit_callback
-
+from core.utils.dataclass_utils import from_dict_auto
+from robot.paths import init_paths
 
 # === GLOBAL VARIABLES =================================================================================================
 setLoggerLevel('wifi', 'ERROR')
 setLoggerLevel('Sound', 'ERROR')
+
+
+# === Settings =========================================================================================================
+@dataclasses.dataclass
+class BILBO_PathSettings:
+    main: str = '~/robot'
+
+
+@dataclasses.dataclass
+class BILBO_JoystickSettings:
+    enabled: bool = True
+
+
+@dataclasses.dataclass
+class BILBO_MiscSettings:
+    warn_on_sample_batching: bool = True
+
+@dataclasses.dataclass
+class STM32_Settings:
+    reset: bool = False
+
+@dataclasses.dataclass
+class BILBO_Settings:
+    stm32: STM32_Settings = field(default_factory=STM32_Settings)
+    paths: BILBO_PathSettings = field(default_factory=BILBO_PathSettings)
+    tracker: BILBO_TrackerSettings = field(default_factory=BILBO_TrackerSettings)
+    joystick: BILBO_JoystickSettings = field(default_factory=BILBO_JoystickSettings)
+    misc: BILBO_MiscSettings = field(default_factory=BILBO_MiscSettings)
+
+
+def _load_settings(settings_path: str | None = None) -> BILBO_Settings:
+    if settings_path is None:
+        settings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'settings.yaml')
+    settings_path = os.path.abspath(settings_path)
+    if not os.path.exists(settings_path):
+        return BILBO_Settings()
+    with open(settings_path, 'r') as f:
+        data = yaml.safe_load(f) or {}
+    return from_dict_auto(BILBO_Settings, data)
 
 
 # === Callbacks ========================================================================================================
@@ -87,7 +130,10 @@ class BILBO(MainProvider):
     _eventListener: SubscriberListener
 
     # === INIT =========================================================================================================
-    def __init__(self, reset_stm32: bool = False, simulation: bool = False):
+    def __init__(self, simulation: bool = False, settings_path: str | None = None):
+        self.settings = _load_settings(settings_path)
+        init_paths(self.settings.paths.main)
+
         self.lock = SingletonLock(lock_file="/tmp/twipr.lock", timeout=10, override=True, override_timeout=5)
         self.lock.__enter__()
 
@@ -96,10 +142,9 @@ class BILBO(MainProvider):
 
         if self.simulation:
             self.logger.important("=== SIMULATION MODE (Digital Twin) ===")
-
             self.board = SimulatedBoard()
         else:
-            if reset_stm32:
+            if self.settings.stm32.reset:
                 self.logger.info(f"Reset STM32. This takes ~2 Seconds")
                 resetSTM32()
                 time.sleep(3)
@@ -110,7 +155,7 @@ class BILBO(MainProvider):
         self.common = BILBO_Common(bilbo=self, board=self.board)
 
         # Read the ID from the ID file
-        self.id = self.common._get_id()
+        self.id = self.common.id
 
         self.loop_time = 0
         self.update_time = 0
@@ -127,7 +172,10 @@ class BILBO(MainProvider):
             self.communication = BILBO_Communication(board=self.board, core=self.common)
 
         # Set up the individual modules
-        self.estimation = BILBO_Estimation(common=self.common, comm=self.communication)
+        self.estimation = BILBO_Estimation(common=self.common,
+                                           comm=self.communication,
+                                           tracker_settings=self.settings.tracker)
+
         self.control = BILBO_Control(common=self.common, comm=self.communication, estimation=self.estimation)
         self.drive = BILBO_Drive(comm=self.communication)
         self.sensors = BILBO_Sensors(comm=self.communication)
@@ -135,7 +183,8 @@ class BILBO(MainProvider):
 
         self.interfaces = BILBO_Interfaces(communication=self.communication,
                                            control=self.control,
-                                           core=self.common)
+                                           core=self.common,
+                                           joystick_enabled=self.settings.joystick.enabled)
 
         self.utilities = BILBO_Utilities(core=self.common, communication=self.communication, board=self.board)
 
@@ -260,10 +309,10 @@ class BILBO(MainProvider):
         self.loop_time = time.perf_counter() - time_loop_start
         # print(f"Loop time {self.loop_time:.4f} s, Update time {self.update_time:.4f} s, Tick {self.tick}")
 
-        if self.loop_time > 0.4:
+        if self.loop_time > 1.0:
             self.logger.warning(f"Loop took {self.loop_time * 1000:.2f} ms")
 
-        if self.update_time > 0.4 and self._startup_phase == False:
+        if self.update_time > 1.0 and self._startup_phase == False:
             self.logger.warning(f"Update took {self.update_time * 1000:.2f} ms")
 
         self.common.end_of_step()

@@ -20,6 +20,12 @@ from robot.lowlevel.stm32_sample import (
 from core.utils.logging_utils import Logger
 
 
+@dataclasses.dataclass
+class BILBO_TrackerSettings:
+    enabled: bool = True
+    server: str = 'palantir.lan'
+
+
 class BILBO_Estimation_Status(enum.IntEnum):
     ERROR = 0,
     NORMAL = 1,
@@ -178,20 +184,25 @@ class BILBO_Estimation:
     _dead_reckoning_enabled: bool = True  # Config setting for dead-reckoning
     _tracker_updates_enabled: bool = True  # Whether to send tracker updates to lowlevel
 
-    def __init__(self, common: BILBO_Common, comm: BILBO_Communication):
+    def __init__(self, common: BILBO_Common, comm: BILBO_Communication,
+                 tracker_settings: BILBO_TrackerSettings | None = None):
         self._comm = comm
         self.common = common
         self.state = BILBO_DynamicState()
 
-        self.tracker = BILBO_OptiTrackListener(common=self.common)
-        self.tracker.callbacks.sample.register(self._on_tracker_sample_callback)
+        self.tracker_settings = tracker_settings or BILBO_TrackerSettings()
+
+        if self.tracker_settings.enabled:
+            self.tracker = BILBO_OptiTrackListener(common=self.common, server_address=self.tracker_settings.server)
+            self.tracker.callbacks.sample.register(self._on_tracker_sample_callback)
+        else:
+            self.tracker = None
         self.static_checker = StaticChecker()
         self.status = BILBO_Estimation_Status.NORMAL
         self.is_dead_reckoning = True
         self._dead_reckoning_enabled = True
         self._tracker_updates_enabled = True
         self._comm.events.rx_stm32_sample.on(self._onSample)
-        # self._comm.callbacks.rx_stm32_sample.register(self._onSample)
 
         self.logger = Logger('Estimation')
         self.logger.setLevel('DEBUG')
@@ -209,11 +220,13 @@ class BILBO_Estimation:
         self._dead_reckoning_enabled = enable_dead_reckoning
         self.set_dead_reckoning_enabled(enable_dead_reckoning)
         self.reset()
-        self.tracker.init()
+        if self.tracker is not None:
+            self.tracker.init()
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
-        self.tracker.start()
+        if self.tracker is not None:
+            self.tracker.start()
 
     # ------------------------------------------------------------------------------------------------------------------
     def getSample(self) -> BILBO_Estimation_Sample | dict:
@@ -245,7 +258,7 @@ class BILBO_Estimation:
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_sample_dict(self) -> dict:
-        tracker_state = self.tracker.get_state()
+        tracker_state = self.tracker.get_state() if self.tracker is not None else None
 
         if tracker_state is None:
             tracker_state = BILBO_ConfigurationState()

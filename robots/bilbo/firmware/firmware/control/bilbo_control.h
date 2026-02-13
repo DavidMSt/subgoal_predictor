@@ -143,6 +143,9 @@ public:
 	bilbo_position_control_data_t position_get_data();
 	uint16_t position_get_path_point_count();
 
+	// Position control interface - SPI path upload
+	void position_spi_path_received(uint16_t count);
+
 	// Position control interface - Single-point commands
 	bool position_turn_to_heading(turn_to_heading_command_t cmd);
 	bool position_move_to_point(move_to_point_command_t cmd);
@@ -179,6 +182,9 @@ public:
 	BILBO_PositionControl position_control;
 	BILBO_TIC_Controller tic_controller;
 	BILBO_VIC_Controller vic_controller;
+
+	// Pointer to SPI path receive buffer (set by firmware.cpp, in DMA-accessible RAM)
+	path_point_t *spi_path_rx_buffer = nullptr;
 
 	friend class BILBO_Sequencer;
 	friend class TWIPR_Supervisor;

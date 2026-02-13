@@ -1,0 +1,89 @@
+id: dilc_test
+description: Template DILC experiment
+
+# Number of learning trials (iterations).
+# Each trial runs the trajectory, measures the output, and computes ILC/IML updates.
+# More trials = lower tracking error, but diminishing returns after convergence.
+# Typical: 5-30. Start small and increase if error is still decreasing.
+J: 5
+
+# Sample period in seconds. Must match the firmware control loop (100 Hz → 0.01).
+# Total trajectory duration = len(reference) * Ts.
+Ts: 0.01
+
+# Desired output trajectory (theta/pitch angle profile).
+# Either a path to a .botrj file or an inline array of floats.
+# Length must be a multiple of 10 (STM32 sequencer requirement).
+reference: bumped_reference.botrj
+
+# Starting pose the robot navigates to before each trial.
+# Ensures repeatable initial conditions across trials.
+#   x, y: position in meters (world frame)
+#   psi:  heading in radians (0 = +x axis)
+initial_conditions:
+  x: 0.0
+  y: 0.0
+  psi: 0.0
+
+# ILC input Q-filter: smooths the input trajectory update across trials.
+# Prevents high-frequency noise in the tracking error from amplifying in u_{j+1}.
+# Without this filter, the learned input can become jagged/oscillatory.
+#
+#   fc:     Cutoff frequency in cycles/sample (normalized, 0 < fc < 0.5).
+#           Lower = more aggressive smoothing, slower but more stable learning.
+#           Higher = less smoothing, faster convergence but risk of instability.
+#           Conservative: 0.05. Moderate: 0.1-0.15. Aggressive: 0.2-0.3.
+#   L:      FIR filter length (must be odd). Longer = sharper cutoff.
+#           Typical: 31-61. Transition width ≈ 4/L.
+#   window: Window function for FIR design. "hann" is the default.
+#           Options: hann, hamming, blackman.
+input_lowpass:
+  fc: 0.05
+  L: 41
+  window: hann
+
+# IML model Q-filter: smooths the impulse response model update across trials.
+# Suppresses noise in the identified system model, producing smoother estimates.
+# Can typically be more aggressive (higher fc) than the input filter, since
+# model convergence is faster and less sensitive to noise.
+#
+# Same parameters as input_lowpass (fc, L, window).
+# Typical fc: 0.2-0.4 (higher than input_lowpass).
+model_lowpass:
+  fc: 0.4
+  L: 41
+  window: hann
+
+# Parameters for random initial input trajectory generation (u0).
+# Used when u0 is not explicitly provided.
+#   f_cutoff: Butterworth cutoff frequency [Hz]. Controls smoothness of the random signal.
+#   sigma:    Signal amplitude/scaling. Larger = stronger initial excitation.
+#   bias:     Constant offset added to the signal.
+u0_params:
+  f_cutoff: 1.5
+  sigma: 0.2
+  bias: -0.03
+
+meta:
+  # Auto-navigate to initial_conditions (x, y, psi) before each trial.
+  # true:  robot drives to pose autonomously (requires position control + OptiTrack)
+  # false: user positions the robot manually
+  automatic_initial_conditions_reset: true
+
+  # Wait for the robot to be stationary before starting each trial.
+  # Prevents residual sway from the previous motion from corrupting the measurement.
+  # true:  wait up to 5s for static detection
+  # false: start immediately (faster but less repeatable)
+  check_if_robot_is_static: true
+
+  # Auto-start trials after the robot is prepared (no resume needed).
+  # true:  trial starts automatically once the robot is positioned and static
+  # false: user must send resume to start each trial (default)
+  # Can be toggled during the experiment via the GUI or WiFi command.
+  auto_start_trials: false
+
+  # Auto-accept trial results (no resume/revert needed after trial).
+  # true:  automatically accept every trial and apply ILC/IML update
+  # false: user must accept, repeat (re-run), or abort each trial (default)
+  # Can be toggled during the experiment via the GUI or WiFi command.
+  auto_accept_trials: false

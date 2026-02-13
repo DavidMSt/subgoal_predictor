@@ -15,7 +15,6 @@ from extensions.optitrack.optitrack import RigidBodySample, OptiTrack
 from robot.bilbo_common import BILBO_Common
 from robot.bilbo_definitions import BILBO_OriginConfig, BILBO_ConfigurationState
 from robot.config import BILBO_OptiTrack_Definition, BILBO_Config
-from robot.settings import OPTITRACK_HOST
 
 
 # ======================================================================================================================
@@ -210,8 +209,8 @@ class BILBO_OptiTrackListener:
     status: BILBO_OptitrackListener_Status = BILBO_OptitrackListener_Status.NONE
 
     # === INIT =========================================================================================================
-    def __init__(self, common: BILBO_Common):
-        self.optitrack = OptiTrack(server_address=OPTITRACK_HOST)
+    def __init__(self, common: BILBO_Common, server_address: str = 'palantir.lan'):
+        self.optitrack = OptiTrack(server_address=server_address)
         self.callbacks = BILBO_OptitrackListener_Callbacks()
         self.events = BILBO_OptitrackListener_Events()
         self.common = common

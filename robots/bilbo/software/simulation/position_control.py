@@ -78,7 +78,6 @@ class PositionControlConfig:
     arrival_dwell_time: float = 0.5
     reverse_enter_angle: float = 2.1
     reverse_exit_angle: float = 1.05
-    speed_curvature_power: float = 0.5
     decel_limit: float = 0.6
 
 
@@ -657,10 +656,5 @@ class SimulatedPositionControl:
         return ax + frac * (bx - ax), ay + frac * (by - ay)
 
     def _speed_from_spacing(self, local_spacing: float, max_speed: float) -> float:
-        c = self.config
-        if self._max_spacing <= 0:
-            return max_speed
-        min_spacing = 0.005
-        ratio = (local_spacing - min_spacing) / (self._max_spacing - min_spacing + 1e-9)
-        ratio = max(0.0, min(1.0, ratio))
-        return max_speed * (ratio ** c.speed_curvature_power)
+        """Legacy: with uniform resampling, spacing is constant so just return max_speed."""
+        return max_speed

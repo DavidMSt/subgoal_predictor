@@ -6,6 +6,7 @@
  */
 
 #include "simplexmotion_can.h"
+#include "firmware_settings.h"
 
 
 
@@ -41,7 +42,14 @@ HAL_StatusTypeDef SimplexMotion_CAN::init(simplexmotion_can_config_t config) {
 		return HAL_ERROR;
 	}
 
-	// Beep
+#if ENABLE_MOTOR_SHUTDOWN_LINE
+	// Configure IN1 as hardware quickstop trigger.
+	// STM32 GPIO holds the line HIGH; LOW triggers motor quickstop.
+	status = this->configureShutdownInput();
+	if (status) {
+		return HAL_ERROR;
+	}
+#endif
 
 	return HAL_OK;
 }
@@ -377,6 +385,57 @@ HAL_StatusTypeDef SimplexMotion_CAN::getVoltage(float &voltage) {
 	}
 
 	voltage = voltage_int * 0.01;
+
+	return HAL_OK;
+}
+
+/* --------------------------------------------------------------------- */
+/**
+ * @brief Configures the motor's IN1 as a hardware quickstop trigger.
+ *
+ * Maps IN1 to StatusInputs InputA (status bit 12), sets polarity to
+ * active-low (inverted), and enables MaskQuickstop on InputA.
+ *
+ * The STM32 holds the line HIGH during normal operation. On error
+ * (or STM32 crash with external pulldown), the line goes LOW and
+ * the motor performs a controlled quickstop using MotorTorqueStop braking.
+ */
+HAL_StatusTypeDef SimplexMotion_CAN::configureShutdownInput() {
+	HAL_StatusTypeDef status;
+
+	// StatusInputs register (412):
+	//   bits 0..3: input number for InputA (0 = IN1)
+	//   bits 4..7: input number for InputB (unused, keep default)
+	//   bits 8..15: filter value (use 2 for light debounce)
+	uint16_t status_inputs = (2 << 8) | (0 << 0);  // InputA = IN1, filter = 2
+	status = this->write(SIMPLEXMOTION_CAN_REG_STATUS_INPUTS, status_inputs);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// InputPolarity register (140):
+	//   bit 0 = IN1 polarity. Set to 1 to invert (active LOW).
+	//   This means: line LOW → InputA active → quickstop triggers.
+	//   Read-modify-write to preserve other input polarities.
+	uint16_t polarity = 0;
+	this->read(SIMPLEXMOTION_CAN_REG_INPUT_POLARITY, polarity);
+	polarity |= (1 << 0);  // Set bit 0: IN1 inverted (active low)
+	status = this->write(SIMPLEXMOTION_CAN_REG_INPUT_POLARITY, polarity);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// MaskQuickstop register (413):
+	//   bit 12 = InputA. Setting this causes a controlled quickstop
+	//   when InputA becomes active (i.e., when IN1 goes LOW).
+	//   Read-modify-write to preserve any existing quickstop masks.
+	uint16_t mask_qs = 0;
+	this->read(SIMPLEXMOTION_CAN_REG_MASK_QUICKSTOP, mask_qs);
+	mask_qs |= (1 << 12);  // Enable quickstop on InputA
+	status = this->write(SIMPLEXMOTION_CAN_REG_MASK_QUICKSTOP, mask_qs);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// Set the quickstop braking torque (MotorTorqueStop, register 205).
+	// Use 80% of the configured torque limit for controlled deceleration.
+	uint16_t stop_torque = (uint16_t)(this->config.torque_limit * 1000 * 0.8);
+	status = this->write(SIMPLEXMOTION_CAN_REG_TORQUE_STOP, stop_torque);
+	if (status != HAL_OK) return HAL_ERROR;
 
 	return HAL_OK;
 }

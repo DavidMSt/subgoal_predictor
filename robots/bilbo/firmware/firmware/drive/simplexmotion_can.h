@@ -27,9 +27,15 @@
 #define SIMPLEXMOTION_CAN_REG_SPEED 202
 
 #define SIMPLEXMOTION_CAN_REG_TORQUE_LIMIT 204
+#define SIMPLEXMOTION_CAN_REG_TORQUE_STOP 205
+#define SIMPLEXMOTION_CAN_REG_INPUT_POLARITY 140
+#define SIMPLEXMOTION_CAN_REG_INPUT 145
 #define SIMPLEXMOTION_CAN_REG_MODE 400
 #define SIMPLEXMOTION_CAN_REG_TIME 420
 #define SIMPLEXMOTION_CAN_REG_STATUS 410
+#define SIMPLEXMOTION_CAN_REG_STATUS_INPUTS 412
+#define SIMPLEXMOTION_CAN_REG_MASK_QUICKSTOP 413
+#define SIMPLEXMOTION_CAN_REG_MASK_SHUTDOWN 414
 #define SIMPLEXMOTION_CAN_REG_ERROR 415
 
 
@@ -82,7 +88,7 @@ public:
 
 
 	HAL_StatusTypeDef setTorqueLimit(float maxTorque);
-//	HAL_StatusTypeDef getTorqueLimit(float &torque_limit);
+	HAL_StatusTypeDef configureShutdownInput();
 
 	simplexmotion_can_config_t config;
 	simplexmotion_can_mode_t mode;

@@ -119,14 +119,29 @@ class BILBO_Core:
         self.interface_events.resume.set()
 
     # ------------------------------------------------------------------------------------------------------------------
+    def set_resume_event_robot(self):
+        self.logger.info(f"Set Resume Event Robot")
+        self.device.executeFunction(function_name='resume', arguments={})
+
+    # ------------------------------------------------------------------------------------------------------------------
     def setRevertEvent(self):
         self.logger.info(f"Set Revert Event")
         self.interface_events.revert.set()
 
     # ------------------------------------------------------------------------------------------------------------------
+    def set_revert_event_robot(self):
+        self.logger.info(f"Set Revert Event Robot")
+        self.device.executeFunction(function_name='revert', arguments={})
+
+    # ------------------------------------------------------------------------------------------------------------------
     def setStopEvent(self):
         self.logger.info(f"Set Stop Event")
         self.interface_events.stop.set()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_stop_event_robot(self):
+        self.logger.info(f"Set Stop Event Robot")
+        self.device.executeFunction(function_name='stop', arguments={})
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleLogMessage(self, event_data, **kwargs):

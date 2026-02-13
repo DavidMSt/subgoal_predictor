@@ -64,7 +64,6 @@ from robots.bilbo.robot.experiment.experiment_actions import (
     # Parameter and action definitions
     ActionParameter,
     ActionEntry,
-    ShorthandRule,
     ActionRegistry,
     ExperimentParser,
 
@@ -89,11 +88,11 @@ from robots.bilbo.robot.experiment.experiment_actions import (
 # Core definitions
 from robots.bilbo.robot.experiment.experiment_definitions import (
     # Trajectories
-    BILBO_InputTrajectory,
-    BILBO_InputTrajectoryStep,
-    BILBO_StateTrajectory,
-    BILBO_TrajectoryData,
-    BILBO_OutputTrajectory,
+    InputTrajectory,
+    InputTrajectoryStep,
+    StateTrajectory,
+    TrajectoryData,
+    OutputTrajectory,
 
     # Action parameter dataclasses (for type checking)
     BeepActionParams,
@@ -148,33 +147,30 @@ from robots.bilbo.robot.experiment.experiment_definitions import (
     # Position control helper functions
     move_to,
     turn_to,
-    set_path,
-    set_waypoints,
-    start_path,
-    load_path,
     stop_path,
+    follow_path,
     wait_position_event,
 
     # Position control action params
     MoveToActionParams,
     TurnToActionParams,
-    SetPathActionParams,
-    SetWaypointsActionParams,
-    StartPathActionParams,
-    LoadPathActionParams,
     StopPathActionParams,
+    FollowPathActionParams,
+    FollowPathWaypointDef,
     WaitPositionEventActionParams,
     FuncActionParams,
     SetFeedbackGainActionParams,
     ResetControlActionParams,
-    PathPointDef,
-    WaypointDef,
 
     # File I/O
-    BILBO_InputFileData,
+    InputTrajectoryFileData,
+    OutputTrajectoryFileData,
     INPUT_TRAJECTORY_FILE_EXTENSION,
+    OUTPUT_TRAJECTORY_FILE_EXTENSION,
     write_input_file,
     read_input_file,
+    write_output_file,
+    read_output_file,
 )
 
 # Experiment handler
@@ -182,6 +178,23 @@ from robots.bilbo.robot.experiment.bilbo_experiment import (
     BILBO_ExperimentHandler,
     BILBO_ExperimentHandler_Events,
     BILBO_ExperimentHandler_Status,
+)
+
+# Multi-trial experiments (host-side proxies)
+from robots.bilbo.robot.experiment.dilc import (
+    DILC_Experiment,
+    DILC_Experiment_Settings,
+    DILC_Experiment_State,
+    DILC_Experiment_Events,
+    DILC_Trial_Result,
+    DILC_Trajectory_Data,
+    DILC_Trial_Data,
+    DILC_Results,
+    DILC_Results_Meta,
+    DILC_InitialConditions,
+    DILC_Experiment_Meta_Settings,
+    FIR_Design_Params,
+    load_dilc_settings_from_yaml,
 )
 
 __all__ = [
@@ -204,11 +217,11 @@ __all__ = [
     "normalize_waypoints",
 
     # Trajectories
-    "BILBO_InputTrajectory",
-    "BILBO_InputTrajectoryStep",
-    "BILBO_StateTrajectory",
-    "BILBO_TrajectoryData",
-    "BILBO_OutputTrajectory",
+    "InputTrajectory",
+    "InputTrajectoryStep",
+    "StateTrajectory",
+    "TrajectoryData",
+    "OutputTrajectory",
 
     # Action parameter dataclasses
     "BeepActionParams",
@@ -286,13 +299,32 @@ __all__ = [
     "WaypointDef",
 
     # File I/O
-    "BILBO_InputFileData",
+    "InputTrajectoryFileData",
+    "OutputTrajectoryFileData",
     "INPUT_TRAJECTORY_FILE_EXTENSION",
+    "OUTPUT_TRAJECTORY_FILE_EXTENSION",
     "write_input_file",
     "read_input_file",
+    "write_output_file",
+    "read_output_file",
 
     # Handler
     "BILBO_ExperimentHandler",
     "BILBO_ExperimentHandler_Events",
     "BILBO_ExperimentHandler_Status",
+
+    # Multi-trial experiments
+    "DILC_Experiment",
+    "DILC_Experiment_Settings",
+    "DILC_Experiment_State",
+    "DILC_Experiment_Events",
+    "DILC_Trial_Result",
+    "DILC_Trajectory_Data",
+    "DILC_Trial_Data",
+    "DILC_Results",
+    "DILC_Results_Meta",
+    "DILC_InitialConditions",
+    "DILC_Experiment_Meta_Settings",
+    "FIR_Design_Params",
+    "load_dilc_settings_from_yaml",
 ]

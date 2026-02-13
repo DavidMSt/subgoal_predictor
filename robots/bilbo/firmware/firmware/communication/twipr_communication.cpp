@@ -103,7 +103,9 @@ void TWIPR_CommunicationManager::init(twipr_communication_config_t config) {
 		.sample_buffer_dummy = _sample_buffer_dummy,
         .len_sample_buffer = TWIPR_FIRMWARE_SAMPLE_BUFFER_SIZE,
         .sequence_buffer = this->config.sequence_rx_buffer,
-        .len_sequence_buffer = this->config.len_sequence_buffer
+        .len_sequence_buffer = this->config.len_sequence_buffer,
+        .path_rx_buffer = this->config.path_rx_buffer,
+        .len_path_buffer = this->config.len_path_buffer
     };
     this->spi_interface.init(spi_config);
 
@@ -116,6 +118,9 @@ void TWIPR_CommunicationManager::init(twipr_communication_config_t config) {
 
     this->spi_interface.callbacks.samples_transmitted.registerFunction(this,
     		&TWIPR_CommunicationManager::_spi_txSamples_callback);
+
+    this->spi_interface.callbacks.path_received.registerFunction(this,
+    		&TWIPR_CommunicationManager::_spi_rxPath_callback);
 
 
 
@@ -345,6 +350,11 @@ void TWIPR_CommunicationManager::_uartResponseError(core_comm_SerialMessage *inc
 void TWIPR_CommunicationManager::_spi_rxTrajectory_callback(uint16_t len) {
     // Notify about the new trajectory.
     this->callbacks.trajectory_received.call(len);
+}
+
+void TWIPR_CommunicationManager::_spi_rxPath_callback(uint16_t len) {
+    // Notify about received path data.
+    this->callbacks.path_received.call(len);
 }
 
 /**

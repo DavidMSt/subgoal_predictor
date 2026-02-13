@@ -787,11 +787,22 @@ def joystick_mapping_test():
 
 # ======================================================================================================================
 def main():
-    # joystick_mapping_test()
+
+
     ...
     jm = JoystickManager()
     jm.init()
     jm.start()
+
+    while len(jm.joysticks) == 0:
+        time.sleep(1)
+
+    joystick = jm.joysticks[0]
+
+    joystick.hat['up'].callbacks.pressed.register(lambda: print("UP!"))
+    joystick.hat['down'].callbacks.pressed.register(lambda: print("DOWN!"))
+    joystick.hat['left'].callbacks.pressed.register(lambda: print("LEFT!"))
+    joystick.hat['right'].callbacks.pressed.register(lambda: print("RIGHT!"))
 
     while True:
         time.sleep(1)

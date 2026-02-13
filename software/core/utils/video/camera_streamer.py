@@ -13,13 +13,15 @@ class VideoStreamer:
                  stream_type='mjpeg',
                  width=640,
                  height=480,
-                 fps=24):
+                 fps=30,
+                 jpeg_quality=70):
         """
         camera_source: 0,1,... for webcam, or string '/dev/video0', or Raspberry Pi CSI camera pipeline
         host, port: where to bind the server
         path: URL path (e.g. '/video' or '/stream1')
         stream_type: 'mjpeg' or 'rtsp'
         width, height, fps: desired capture settings
+        jpeg_quality: JPEG encode quality (1-100, lower = smaller/faster)
         """
         self.camera_source = camera_source
         self.host = host
@@ -29,6 +31,7 @@ class VideoStreamer:
         self.width = width
         self.height = height
         self.fps = fps
+        self.jpeg_quality = jpeg_quality
 
         assert self.stream_type in ['mjpeg', 'rtsp'], "stream_type must be 'mjpeg' or 'rtsp'"
         if self.stream_type == 'rtsp':
@@ -50,12 +53,15 @@ class VideoStreamer:
 
     def _frame_generator(self):
         """Yield JPEG frames as multipart/x-mixed-replace for MJPEG."""
+        frame_interval = 1.0 / self.fps
+        encode_params = [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality]
+        next_frame_time = time.monotonic()
+
         while self.is_running:
             ret, frame = self.cap.read()
             if not ret:
                 continue
-            # encode as JPEG
-            ret2, jpeg = cv2.imencode('.jpg', frame)
+            ret2, jpeg = cv2.imencode('.jpg', frame, encode_params)
             if not ret2:
                 continue
             frame_bytes = jpeg.tobytes()
@@ -63,7 +69,13 @@ class VideoStreamer:
                     b'--frame\r\n'
                     b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
             )
-            time.sleep(1 / self.fps)
+            # Sleep only the remaining time to hit the target frame rate
+            next_frame_time += frame_interval
+            sleep_time = next_frame_time - time.monotonic()
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+            else:
+                next_frame_time = time.monotonic()
 
     def _setup_routes(self):
         @self.app.route(self.path)

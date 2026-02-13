@@ -9,18 +9,16 @@ The actual experiment execution happens on the robot side in:
 """
 from __future__ import annotations
 
-import dataclasses
 import enum
 import json
+import os
 import tempfile
-import threading
 import time
 from dataclasses import asdict
-from typing import Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.data import generate_time_vector, generate_time_vector_by_length
 from core.utils.dataclass_utils import from_dict_auto, asdict_optimized
 from core.utils.events import (
@@ -36,12 +34,14 @@ from robots.bilbo.robot.bilbo_control import BILBO_Control
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 from robots.bilbo.robot.bilbo_definitions import MAX_STEPS_TRAJECTORY
 from robots.bilbo.robot.experiment.experiment_definitions import (
-    BILBO_InputTrajectory,
-    BILBO_TrajectoryData,
+    InputTrajectory,
+    TrajectoryData,
     ExperimentDefinition,
     ExperimentData,
     ExperimentActionDefinition,
     ExperimentBuilder,
+    INPUT_TRAJECTORY_FILE_EXTENSION,
+    read_input_file,
     # Action helper functions for programmatic experiment creation
     beep,
     set_mode,
@@ -64,6 +64,63 @@ from robots.bilbo.robot.experiment.experiment_definitions import (
 )
 from robots.bilbo.robot.experiment.experiment_helpers import generate_random_input_trajectory, make_report
 
+if TYPE_CHECKING:
+    from robots.bilbo.robot.experiment import DILC_Experiment
+
+logger = Logger("BILBO_ExperimentHandler")
+
+
+# ======================================================================================================================
+def _resolve_trajectory_file_references(actions: list[dict], source_dir: str) -> None:
+    """Resolve string input_trajectory references in experiment action dicts.
+
+    Walks through actions (including nested groups/parallel/loops) and replaces
+    string input_trajectory values with the full trajectory data loaded from
+    .bitrj files in source_dir.  Modifies actions in-place.
+    """
+    for action in actions:
+        # Handle nested actions (group, parallel, loop)
+        if "actions" in action:
+            sub = action["actions"]
+            if isinstance(sub, list):
+                _resolve_trajectory_file_references(sub, source_dir)
+
+        action_type = action.get("type")
+        if action_type != "run_trajectory":
+            continue
+
+        # input_trajectory can be a flat key or inside parameters
+        if "parameters" in action and isinstance(action["parameters"], dict):
+            params = action["parameters"]
+        else:
+            params = action
+
+        traj_value = params.get("input_trajectory")
+        if not isinstance(traj_value, str):
+            continue
+
+        # Look for <name>.bitrj in the source directory
+        name = traj_value
+        if not name.endswith(INPUT_TRAJECTORY_FILE_EXTENSION):
+            name += INPUT_TRAJECTORY_FILE_EXTENSION
+        file_path = os.path.join(source_dir, name)
+
+        if not os.path.isfile(file_path):
+            logger.warning(
+                f"Trajectory file '{name}' not found in {source_dir} — "
+                f"sending string reference to robot as-is"
+            )
+            continue
+
+        file_data = read_input_file(file_path)
+        if file_data is None:
+            logger.warning(f"Failed to read trajectory file: {file_path}")
+            continue
+
+        trajectory = file_data.to_trajectory()
+        params["input_trajectory"] = asdict(trajectory)
+        logger.info(f"Resolved trajectory '{traj_value}' from {file_path} ({trajectory.length} steps)")
+
 
 # ======================================================================================================================
 class BILBO_ExperimentHandler_Status(enum.StrEnum):
@@ -85,7 +142,7 @@ class BILBO_ExperimentHandler_Events:
     # High-level trajectory event
     trajectory_finished: Event = Event(
         flags=EventFlag('trajectory_id', (int, str)),
-        data_type=BILBO_TrajectoryData
+        data_type=TrajectoryData
     )
     trajectory_loaded: Event = Event()
     waiting_for_user: Event = Event()
@@ -96,7 +153,8 @@ class BILBO_ExperimentHandler_Events:
     experiment_error: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
     experiment_timeout: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
 
-    # Legacy event
+    # DILC experiment events
+    dilc_experiment_initialized: Event = Event(copy_data_on_set=False)
     dilc_experiment_started: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
 
 
@@ -136,13 +194,14 @@ class BILBO_ExperimentHandler:
     """
     control: BILBO_Control
     status: BILBO_ExperimentHandler_Status = BILBO_ExperimentHandler_Status.IDLE
-    current_trajectory: BILBO_InputTrajectory | None = None
+    current_trajectory: InputTrajectory | None = None
 
-    _loadedTrajectory: BILBO_InputTrajectory | None = None
+    _loadedTrajectory: InputTrajectory | None = None
     _last_experiment_data: ExperimentData | dict | None = None
-    _gui: Any = None  # Optional GUI reference for file picker functionality
     _experiment_start_time: float | None = None  # Monotonic time when experiment started
     _EXPERIMENT_STALE_TIMEOUT: float = 600.0  # 10 minutes max before status is considered stale
+
+    dilc_experiment: DILC_Experiment | None = None
 
     # === INIT =========================================================================================================
     def __init__(self, core: BILBO_Core, control: BILBO_Control):
@@ -171,20 +230,60 @@ class BILBO_ExperimentHandler:
             predicate=pred_flag_equals('container', 'experiment'),
         )
 
-    # ------------------------------------------------------------------------------------------------------------------
-    def set_gui(self, gui) -> None:
-        """Set the GUI reference for file picker functionality.
+        # DILC experiment — None when no experiment is active
+        self.dilc_experiment = None
+
+    # === DILC ==========================================================================
+    def run_dilc_from_file(self, file: str):
+        """Run a DILC experiment from a YAML config file.
 
         Args:
-            gui: GUI instance with open_file_picker method
+            file: Path to a DILC experiment YAML file.
         """
-        self._gui = gui
+        from robots.bilbo.robot.experiment.dilc import DILC_Experiment, DILC_Experiment_State
 
-    # === PUBLIC METHODS ===============================================================================================
+        # Guard against starting a second experiment
+        if (self.dilc_experiment is not None
+                and self.dilc_experiment.state == DILC_Experiment_State.RUNNING):
+            self.logger.warning("A DILC experiment is already running")
+            return
+
+        if not file.endswith(('.yaml', '.yml')):
+            file += '.yaml'
+
+        if not os.path.isfile(file):
+            file_in_experiments = os.path.join(EXPERIMENT_DIR, file)
+            if not os.path.isfile(file_in_experiments):
+                self.logger.error(f"DILC config file not found: {file}")
+                return
+            file = file_in_experiments
+
+        # Clean up previous experiment instance to avoid duplicate event handlers
+        if self.dilc_experiment is not None:
+            self.dilc_experiment.close()
+
+        self.logger.info(f"Loading DILC experiment from: {file}")
+        self.dilc_experiment = DILC_Experiment(core=self.core)
+        self.dilc_experiment.callbacks.experiment_initialized.register(
+            lambda: self.events.dilc_experiment_initialized.set(
+                data={'experiment': self.dilc_experiment}
+            )
+        )
+        try:
+            self.dilc_experiment.configure_from_yaml(file)
+        except Exception as e:
+            self.logger.error(f"Failed to load DILC settings: {e}")
+            self.dilc_experiment = None
+            return
+        self.dilc_experiment.start()
+
+    # === EXPERIMENTS ==================================================================
+
     def run_experiment(
         self,
         experiment_definition: ExperimentDefinition,
         experiment_file_folder: str | None = None,
+        source_dir: str | None = None,
         blocking: bool = False
     ) -> ExperimentData | dict | None | bool:
         """Run an experiment on the robot.
@@ -192,6 +291,8 @@ class BILBO_ExperimentHandler:
         Args:
             experiment_definition: The experiment to run
             experiment_file_folder: Optional folder to save experiment data (if blocking)
+            source_dir: Directory containing the experiment YAML (used to resolve
+                        string trajectory references to .bitrj files before sending)
             blocking: If True, wait for experiment to complete and return data
 
         Returns:
@@ -212,6 +313,10 @@ class BILBO_ExperimentHandler:
                 return None
 
         definition_dict = experiment_definition.to_dict()
+
+        # Resolve string trajectory references (e.g. "my_traj" -> full trajectory data)
+        if source_dir and "actions" in definition_dict:
+            _resolve_trajectory_file_references(definition_dict["actions"], source_dir)
 
         result = self.device.executeFunction(
             function_name='run_experiment',
@@ -266,44 +371,20 @@ class BILBO_ExperimentHandler:
 
     def run_experiment_from_file(
         self,
-        file: str | None = None,
+        file: str,
         output: str | None = None,
         blocking: bool = True
     ) -> ExperimentData | dict | None:
-        """Load and run an experiment from a local file (HOST-ONLY mode).
-
-        This method is for running experiments directly on the host machine.
-        If no file is specified, opens a native file picker on the host.
+        """Load and run an experiment from a local file.
 
         Args:
-            file: Path to experiment file (YAML or JSON), or None to use native file picker
+            file: Path to experiment file (YAML or JSON).
             output: Output directory for experiment data. If None, uses the file's directory.
             blocking: If True, wait for completion
 
         Returns:
             Experiment data on success, None on failure
         """
-        import os
-
-        # If no file provided, use native file picker (works on all platforms from any thread)
-        if not file:
-            self.logger.info("No file specified, opening native file picker...")
-            try:
-                from core.utils.filepicker import pick_file
-                file = pick_file(
-                    title='Select Experiment File',
-                    allowed_extensions=['yaml', 'yml', 'json']
-                )
-            except Exception as e:
-                self.logger.error(f"File picker failed: {e}. Use -f <path> to specify a file.")
-                return None
-
-            if not file:
-                self.logger.info("File selection cancelled. Use -f <path> to specify a file.")
-                return None
-
-            self.logger.info(f"Selected file: {file}")
-
         # Ensure file has proper extension
         if not file.endswith((".yaml", ".yml", ".json")):
             file += ".yaml"
@@ -330,81 +411,15 @@ class BILBO_ExperimentHandler:
         if definition is None:
             return None
 
-        return self.run_experiment(definition, experiment_file_folder=output, blocking=blocking)
+        # Pass the YAML directory so string trajectory references can be resolved
+        yaml_dir = os.path.dirname(os.path.abspath(file))
 
-    def run_experiment_from_client(
-        self,
-        blocking: bool = True
-    ) -> ExperimentData | dict | None:
-        """Load and run an experiment from a remote client (CLIENT mode).
-
-        This method opens a file picker in the browser, uploads the file to a temp directory,
-        runs the experiment, and sends the result back to the client for download.
-
-        Args:
-            blocking: If True, wait for completion
-
-        Returns:
-            Experiment data on success, None on failure
-        """
-        if self._gui is None:
-            self.logger.error("No GUI available for client file picker")
-            return None
-
-        self.logger.info("Opening browser file picker for client...")
-        file = self._gui.open_file_picker(
-            accept='.yaml,.yml,.json',
-            timeout=120.0,
-            max_size=1024 * 1024  # 1 MB max
+        return self.run_experiment(
+            definition,
+            experiment_file_folder=output,
+            source_dir=yaml_dir,
+            blocking=blocking,
         )
-
-        if not file:
-            self.logger.info("File selection cancelled")
-            return None
-
-        self.logger.info(f"Client uploaded file: {file}")
-
-        # Use temp directory for output (we'll send it back to client)
-        output = tempfile.gettempdir()
-
-        # Validate the experiment file before running
-        definition = self._validate_and_load_experiment(file)
-        if definition is None:
-            return None
-
-        # Run the experiment
-        result = self.run_experiment(definition, experiment_file_folder=output, blocking=blocking)
-
-        # If successful and we have data, send the result file to the client for download
-        if result is not None and isinstance(result, dict):
-            self._send_result_to_client(result, definition.id)
-
-        return result
-
-    def _send_result_to_client(self, experiment_data: dict, experiment_id: str) -> None:
-        """Send experiment result file to the client for download."""
-        import os
-
-        if self._gui is None:
-            return
-
-        try:
-            # Create a temp file with the experiment data
-            filename = f"experiment_{experiment_id}.json"
-            temp_path = os.path.join(tempfile.gettempdir(), filename)
-
-            with open(temp_path, 'w') as f:
-                json.dump(experiment_data, f, indent=2)
-
-            # Send to client for download
-            self._gui.send_file_for_download(temp_path, filename)
-            self.logger.info(f"Sent experiment result to client: {filename}")
-
-            # Clean up temp file
-            os.remove(temp_path)
-
-        except Exception as e:
-            self.logger.error(f"Failed to send result to client: {e}")
 
     def _validate_and_load_experiment(self, file: str) -> ExperimentDefinition | None:
         """Validate and load an experiment definition from file.
@@ -442,7 +457,7 @@ class BILBO_ExperimentHandler:
 
         return definition
 
-    def run_trajectory(self, trajectory: BILBO_InputTrajectory) -> BILBO_TrajectoryData | None:
+    def run_trajectory(self, trajectory: InputTrajectory) -> TrajectoryData | None:
         """Run a trajectory on the robot (blocking).
 
         Args:
@@ -488,22 +503,24 @@ class BILBO_ExperimentHandler:
             self.logger.error(f"Trajectory \"{trajectory.name}\" failed due to missing data")
             return None
 
-        trajectory_data = from_dict_auto(BILBO_TrajectoryData, output_data_dict['data'])
+        trajectory_data = from_dict_auto(TrajectoryData, output_data_dict['data'])
 
         self.events.trajectory_finished.set(data=trajectory_data, flags={'trajectory_id': trajectory.id})
 
         self.logger.important(f"Trajectory \"{trajectory.name}\" finished.")
         return trajectory_data
 
-    def run_random_trajectory(self, time_s: float, frequency: float = 2, gain: float = 0.25):
+    # ------------------------------------------------------------------------------------------------------------------
+    def run_random_trajectory(self, time_s: float, frequency: float = 2, gain: float = 0.25, bias: float = 0.0):
         """Generate and run a random trajectory.
 
         Args:
             time_s: Duration in seconds
             frequency: Frequency parameter for random generation
             gain: Gain parameter for random generation
+            bias: Constant offset added to the signal. Positive values bias the robot forward.
         """
-        trajectory = generate_random_input_trajectory(1, time_s, frequency, gain)
+        trajectory = generate_random_input_trajectory(1, time_s, frequency, gain, bias=bias)
         self.logger.info(
             f"Generated random trajectory: {trajectory.id} (Length: {trajectory.time_vector[-1]} s). "
             f"Waiting for resume event..."
@@ -513,31 +530,37 @@ class BILBO_ExperimentHandler:
         self.events.trajectory_loaded.set(data=trajectory)
         self.events.waiting_for_user.set(data=trajectory)
 
-        self.core.interface_events.resume.wait(timeout=None)
+        # self.core.interface_events.resume.wait(timeout=None)
         data = self.run_trajectory(trajectory=trajectory)
         if data is None:
             return
 
+    # ------------------------------------------------------------------------------------------------------------------
     def start_trajectory(self):
         """Start a pre-loaded trajectory."""
         raise NotImplementedError("Not implemented yet")
 
+    # ------------------------------------------------------------------------------------------------------------------
     def sendTrajectory(self):
         """Send a trajectory to the robot without starting it."""
         raise NotImplementedError("Not implemented yet")
 
+    # ------------------------------------------------------------------------------------------------------------------
     def stopTrajectory(self):
         """Stop the currently running trajectory."""
         raise NotImplementedError("Not implemented yet")
 
-    def getCurrentTrajectory(self) -> BILBO_InputTrajectory | None:
+    # ------------------------------------------------------------------------------------------------------------------
+    def getCurrentTrajectory(self) -> InputTrajectory | None:
         """Get the currently running trajectory."""
         return self.current_trajectory
 
-    def getLoadedTrajectory(self) -> BILBO_InputTrajectory | None:
+    # ------------------------------------------------------------------------------------------------------------------
+    def getLoadedTrajectory(self) -> InputTrajectory | None:
         """Get the loaded (but not necessarily running) trajectory."""
         return self._loadedTrajectory
 
+    # ------------------------------------------------------------------------------------------------------------------
     def get_last_experiment_data(self) -> ExperimentData | dict | None:
         """Get the data from the last completed experiment."""
         return self._last_experiment_data
@@ -546,7 +569,7 @@ class BILBO_ExperimentHandler:
     def test_trajectory_experiment(self):
         """Run a simple test trajectory experiment."""
         u = -0.5 * np.ones(100 * 1)
-        traj = BILBO_InputTrajectory.from_vector(vector=u, name='test_trajectory', id=1)
+        traj = InputTrajectory.from_vector(vector=u, name='test_trajectory', id=1)
 
         exp_definition = (
             ExperimentBuilder("test_experiment", "Test experiment")

@@ -1,5 +1,4 @@
 import numpy as np
-from control import *
 import scipy
 
 

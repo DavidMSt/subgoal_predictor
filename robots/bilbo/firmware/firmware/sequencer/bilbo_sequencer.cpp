@@ -107,12 +107,15 @@ void BILBO_Sequencer::update() {
 	// Get the input from the sequence
 	twipr_sequence_input_t current_input = sequence_buffer[this->sequence_tick];
 
-	// Apply the input to the controller depending on control mode
+	// Apply the input to the controller depending on control mode.
+	// Write _external_input directly (friend access) because the sequencer
+	// disables the external-input gate to block joystick/UI during playback,
+	// so the gated set_external_input() would silently drop these values.
 	if (this->loaded_sequence.control_mode == bilbo_control_mode_t::BALANCING) {
-		bilbo_control_input_ext_t balancing_input = { .u_left =
+		this->config.control->_external_input = { .u_left =
 				current_input.u_1, .u_right = current_input.u_2 };
-		this->config.control->set_external_input(balancing_input);
 	}
+
 
 	this->sequence_tick++;
 }

@@ -166,15 +166,13 @@ class WifiEventContainer:
         self.wifi_events = {}
 
     def add_event(self, event: WifiEvent):
-        if event.id in self.wifi_events:
-            raise ValueError(f"WifiEvent '{event.id}' already exists in container '{self.id}'.")
-        if event.parent is not None:
-            raise ValueError(f"WifiEvent '{event.id}' already has a parent.")
+        if event.parent is not None and event.parent is not self:
+            raise ValueError(f"WifiEvent '{event.id}' already has a different parent.")
         self.wifi_events[event.id] = event
         event.parent = self
         event._wifi = self._wifi
 
-        # Register on the interface (checks global uniqueness)
+        # Register on the interface (replaces existing event with same UID)
         self._wifi.registerWifiEvent(event)
 
 
@@ -225,10 +223,8 @@ def wifi_event_definition(cls):
 
         if not hasattr(self, 'add_event') or not callable(getattr(self, 'add_event')):
             def _add_event(_self, event: WifiEvent):
-                if event.id in _self.wifi_events:
-                    raise ValueError(f"WifiEvent '{event.id}' already exists in container.")
-                if event.parent is not None:
-                    raise ValueError(f"WifiEvent '{event.id}' already has a parent.")
+                if event.parent is not None and event.parent is not _self:
+                    raise ValueError(f"WifiEvent '{event.id}' already has a different parent.")
                 _self.wifi_events[event.id] = event
                 event.parent = _self
                 event._wifi = _self._wifi
@@ -359,14 +355,21 @@ class BILBOLab_Wifi_Interface:
 
     # ------------------------------------------------------------------------------------------------------------------
     def registerWifiEvent(self, event: WifiEvent) -> None:
-        """Register a WifiEvent on this interface. Rejects duplicate UIDs."""
+        """Register a WifiEvent on this interface. Replaces existing event with same UID."""
         uid = event.uid
-        if uid in self._wifi_events:
-            raise ValueError(
-                f"WifiEvent '{uid}' is already registered on this interface."
-            )
         self._wifi_events[uid] = event
         event._wifi = self
+
+    def unregisterWifiEvent(self, event: WifiEvent) -> None:
+        """Remove a WifiEvent from this interface."""
+        uid = event.uid
+        self._wifi_events.pop(uid, None)
+        event._wifi = None
+
+    def unregisterWifiEvents(self, container: 'WifiEventContainer') -> None:
+        """Remove all WifiEvents belonging to a container."""
+        for event in container.wifi_events.values():
+            self.unregisterWifiEvent(event)
 
     # ------------------------------------------------------------------------------------------------------------------
     def sendStream(self, data: dict = None, stream_id: str = None) -> None:

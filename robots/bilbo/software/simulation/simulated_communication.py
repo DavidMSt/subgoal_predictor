@@ -567,7 +567,6 @@ def _pos_config(data) -> PositionControlConfig:
         arrival_dwell_time=float(_get(data, 'arrival_dwell_time', 0.5)),
         reverse_enter_angle=float(_get(data, 'reverse_enter_angle', 2.1)),
         reverse_exit_angle=float(_get(data, 'reverse_exit_angle', 1.05)),
-        speed_curvature_power=float(_get(data, 'speed_curvature_power', 0.5)),
         decel_limit=float(_get(data, 'decel_limit', 0.6)),
     )
 

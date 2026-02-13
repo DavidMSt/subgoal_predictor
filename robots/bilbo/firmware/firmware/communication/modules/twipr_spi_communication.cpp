@@ -130,6 +130,13 @@ void TWIPR_SPI_Communication::receiveTrajectoryInputs(uint16_t steps) {
 			sizeof(twipr_sequence_input_t) * steps);
 }
 
+void TWIPR_SPI_Communication::receivePathPoints(uint16_t count) {
+	send_info("Waiting for path with %d points", count);
+	this->_path_length = count;
+	// Each path point is 2 floats (x, y) = 8 bytes
+	this->spi_slave.receiveData(this->config.path_rx_buffer, 8 * count);
+}
+
 /**
  * @brief SPI receive complete callback.
  *
@@ -146,6 +153,10 @@ void TWIPR_SPI_Communication::rx_cmplt_function() {
 		this->mode = TWIPR_SPI_COMM_MODE_LISTENING_FOR_COMMAND;
 		this->startListeningForCommand();
 		this->callbacks.trajectory_received.call(this->_trajectory_length);
+	} else if (this->mode == TWIPR_SPI_COMM_MODE_RX_PATH) {
+		this->mode = TWIPR_SPI_COMM_MODE_LISTENING_FOR_COMMAND;
+		this->startListeningForCommand();
+		this->callbacks.path_received.call(this->_path_length);
 	}
 }
 
@@ -188,6 +199,11 @@ void TWIPR_SPI_Communication::_handleCommand() {
 		this->_trajectory_length = length;
 		this->mode = TWIPR_SPI_COMM_MODE_RX_TRAJECTORY;
 		this->receiveTrajectoryInputs(length);
+
+	} else if (command == TWIPR_SPI_COMMAND_PATH_WRITE) {
+		this->_path_length = length;
+		this->mode = TWIPR_SPI_COMM_MODE_RX_PATH;
+		this->receivePathPoints(length);
 	}
 
 }

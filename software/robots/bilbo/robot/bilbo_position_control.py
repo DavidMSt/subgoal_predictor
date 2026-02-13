@@ -8,12 +8,9 @@ Receives events via WiFi and maintains a local representation of the controller 
 import base64
 import dataclasses
 import enum
-import json
-import os
 import struct
+import threading
 import zlib
-
-import yaml
 
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.dataclass_utils import from_dict_auto
@@ -122,6 +119,7 @@ class PositionControlEvents:
     mode_changed: Event = Event(flags=EventFlag('mode', PositionControlMode))
 
     # Planning events - data contains PlannedPathData for visualization
+    path_planning_started: Event = Event(copy_data_on_set=False)
     path_planned: Event = Event(copy_data_on_set=False)
     path_cleared: Event
 
@@ -143,6 +141,7 @@ class PositionControlCallbacks:
     turn_to_heading_started: CallbackContainer
     turn_to_heading_completed: CallbackContainer
     mode_changed: CallbackContainer
+    path_planning_started: CallbackContainer
     path_planned: CallbackContainer
     state_updated: CallbackContainer
 
@@ -255,26 +254,6 @@ class BILBO_PositionControl:
             self.logger.debug("Path cleared")
         return result or False
 
-    def add_path_point(self, x: float, y: float) -> bool:
-        """Add a path point"""
-        from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
-
-        # Check if in POSITION mode
-        if self._top_level_control_mode != BILBO_Control_Mode.POSITION:
-            self.logger.warning(
-                f"Cannot add path points when not in POSITION mode (current: "
-                f"{self._top_level_control_mode.name if self._top_level_control_mode else 'None'})"
-            )
-            return False
-
-        result = self.device.executeFunction(
-            function_name='position_control_add_path_point',
-            arguments={'x': x, 'y': y},
-            return_type=bool,
-            request_response=True
-        )
-        return result or False
-
     def add_stop_index(self, index: int) -> bool:
         """Mark a path point index as STOP"""
         result = self.device.executeFunction(
@@ -329,30 +308,6 @@ class BILBO_PositionControl:
             self.logger.info(f"Started path")
         return result or False
 
-    def pause_path(self) -> bool:
-        """Pause path execution"""
-        result = self.device.executeFunction(
-            function_name='position_control_pause_path',
-            arguments=None,
-            return_type=bool,
-            request_response=True
-        )
-        if result:
-            self.logger.info("Path paused")
-        return result or False
-
-    def resume_path(self) -> bool:
-        """Resume paused path"""
-        result = self.device.executeFunction(
-            function_name='position_control_resume_path',
-            arguments=None,
-            return_type=bool,
-            request_response=True
-        )
-        if result:
-            self.logger.info("Path resumed")
-        return result or False
-
     def abort_path(self) -> bool:
         """Abort path execution"""
         result = self.device.executeFunction(
@@ -363,18 +318,6 @@ class BILBO_PositionControl:
         )
         if result:
             self.logger.info("Path aborted")
-        return result or False
-
-    def stop_path(self) -> bool:
-        """Stop and clear the current path (abort if running, then clear)"""
-        result = self.device.executeFunction(
-            function_name='position_control_stop_path',
-            arguments=None,
-            return_type=bool,
-            request_response=True
-        )
-        if result:
-            self.logger.info("Path stopped and cleared")
         return result or False
 
     def load_path(self, path_data: 'dict | list[tuple[float, float]]',
@@ -473,47 +416,6 @@ class BILBO_PositionControl:
                              (" and started" if start else ""))
         return result or False
 
-    def load_path_from_file(self, filepath: str, start: bool = False, clear_existing: bool = True) -> bool:
-        """
-        Load path from a JSON or YAML file and send to robot.
-
-        Args:
-            filepath: Path to .json or .yaml/.yml file
-            start: If True, automatically start the path after loading
-            clear_existing: If True, clear existing path before loading
-
-        Returns:
-            True if path was loaded (and started if requested) successfully
-        """
-        # Check file exists
-        if not os.path.isfile(filepath):
-            self.logger.error(f"Path file not found: {filepath}")
-            return False
-
-        # Determine file type
-        _, ext = os.path.splitext(filepath)
-        ext = ext.lower()
-
-        if ext not in ['.json', '.yaml', '.yml']:
-            self.logger.error(f"Unsupported file type: {ext}. Use .json, .yaml, or .yml")
-            return False
-
-        # Load and parse file
-        try:
-            with open(filepath, 'r') as f:
-                if ext == '.json':
-                    path_data = json.load(f)
-                else:
-                    path_data = yaml.safe_load(f)
-        except Exception as e:
-            self.logger.error(f"Failed to parse path file: {e}")
-            return False
-
-        self.logger.info(f"Loading path from {os.path.basename(filepath)}")
-
-        # Delegate to load_path()
-        return self.load_path(path_data=path_data, start=start, clear_existing=clear_existing)
-
     # =========================================================================
     # MOTION PLANNING + PATH FOLLOWING
     # =========================================================================
@@ -592,21 +494,24 @@ class BILBO_PositionControl:
             f"Planning and following path to ({target_arg['x']:.2f}, {target_arg['y']:.2f})"
         )
 
-        result = self.device.executeFunction(
-            function_name='position_control_plan_and_follow',
-            arguments=arguments,
-            return_type=bool,
-            request_response=True
-        )
-
-        if not result:
-            self.logger.error("plan_and_follow failed on robot")
-            return False
+        def _execute():
+            result = self.device.executeFunction(
+                function_name='position_control_plan_and_follow',
+                arguments=arguments,
+                return_type=bool,
+                request_response=True,
+                timeout=15
+            )
+            if not result:
+                self.logger.error("plan_and_follow failed on robot")
 
         if not blocking:
+            threading.Thread(target=_execute, daemon=True).start()
             return True
 
-        # Block until path finishes, times out, or is aborted
+        # Blocking mode: run inline and wait for completion
+        _execute()
+
         wait_timeout = timeout + 10.0 if timeout > 0 else 120.0
         _, match = wait_for_events(
             OR(self.events.path_finished, self.events.path_timeout, self.events.path_aborted),
@@ -662,22 +567,47 @@ class BILBO_PositionControl:
             f"Planning path to ({target_arg['x']:.2f}, {target_arg['y']:.2f}) (preview)"
         )
 
-        result = self.device.executeFunction(
-            function_name='position_control_plan_path',
-            arguments={
-                'target': target_arg,
-                'waypoints': waypoints,
-                'obstacles': obstacles,
-                'bounds': bounds_arg,
-                'seed': seed,
-            },
-            return_type=bool,
-            request_response=True
-        )
+        def _execute():
+            result = self.device.executeFunction(
+                function_name='position_control_plan_path',
+                arguments={
+                    'target': target_arg,
+                    'waypoints': waypoints,
+                    'obstacles': obstacles,
+                    'bounds': bounds_arg,
+                    'seed': seed,
+                },
+                return_type=bool,
+                request_response=True,
+                timeout=15
+            )
+            if not result:
+                self.logger.error("plan_path failed on robot")
 
-        if not result:
-            self.logger.error("plan_path failed on robot")
-            return False
+        import threading
+        threading.Thread(target=_execute, daemon=True).start()
+
+        return True
+
+    def build_prm(self) -> bool:
+        """Build the PRM roadmap on the robot. Must be called before PRM planning."""
+        self.logger.info("Building PRM roadmap...")
+
+        def _execute():
+            result = self.device.executeFunction(
+                function_name='position_control_build_prm',
+                arguments={},
+                return_type=bool,
+                request_response=True,
+                timeout=60
+            )
+            if result:
+                self.logger.info("PRM roadmap built successfully")
+            else:
+                self.logger.error("PRM roadmap build failed")
+
+        import threading
+        threading.Thread(target=_execute, daemon=True).start()
 
         return True
 
@@ -874,6 +804,10 @@ class BILBO_PositionControl:
                 self._current_path = PathData()
                 self.events.path_aborted.set()
                 self.callbacks.path_aborted.call()
+
+            case 'path_planning_started':
+                self.events.path_planning_started.set(data=data)
+                self.callbacks.path_planning_started.call(data)
 
             case 'path_planned':
                 # Preview-only path from motion planner

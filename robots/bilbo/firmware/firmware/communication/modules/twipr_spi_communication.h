@@ -23,6 +23,7 @@
 
 #define TWIPR_SPI_COMMAND_SAMPLES_READ 0x01
 #define TWIPR_SPI_COMMAND_TRAJECTORY_WRITE 0x02
+#define TWIPR_SPI_COMMAND_PATH_WRITE 0x03
 
 /**
  * @brief SPI Communication configuration structure.
@@ -37,6 +38,8 @@ typedef struct twipr_spi_comm_config_t {
     uint16_t len_sample_buffer;                   ///< Length of the sample data buffer.
     twipr_sequence_input_t *sequence_buffer;      ///< Buffer for receiving trajectory inputs.
     uint16_t len_sequence_buffer;                 ///< Length of the trajectory sequence buffer.
+    uint8_t *path_rx_buffer;                      ///< Buffer for receiving path points via SPI.
+    uint16_t len_path_buffer;                     ///< Max number of path points the buffer can hold.
 } twipr_spi_comm_config_t;
 
 /**
@@ -49,6 +52,7 @@ typedef enum twipr_spi_comm_mode_t {
 	TWIPR_SPI_COMM_MODE_LISTENING_FOR_COMMAND = 1,
     TWIPR_SPI_COMM_MODE_RX_TRAJECTORY   = 2,   ///< Reception mode.
     TWIPR_SPI_COMM_MODE_TX_SAMPLES   = 3,   ///< Transmission mode.
+    TWIPR_SPI_COMM_MODE_RX_PATH   = 4,   ///< Path points reception mode.
 } twipr_spi_comm_mode_t;
 
 /**
@@ -76,6 +80,7 @@ typedef struct bilbo_spi_comm_callbacks_t {
 	core_utils_CallbackContainer<2, uint16_t> trajectory_command;
 	core_utils_CallbackContainer<2, void> sample_command;
 	core_utils_CallbackContainer<2, void> samples_transmitted;
+	core_utils_CallbackContainer<2, uint16_t> path_received;
 } bilbo_spi_comm_callbacks_t;
 
 /**
@@ -146,6 +151,15 @@ public:
      */
     void receiveTrajectoryInputs(uint16_t steps);
 
+    /**
+     * @brief Receive path points over SPI.
+     *
+     * Initiates the reception of path point data into the configured path buffer.
+     *
+     * @param count Number of path points to receive.
+     */
+    void receivePathPoints(uint16_t count);
+
 
     /**
      * @brief SPI receive complete callback.
@@ -187,6 +201,7 @@ private:
 
     bool _samples_read;
     uint16_t _trajectory_length;
+    uint16_t _path_length;
 };
 
 #endif /* COMMUNICATION_TWIPR_SPI_COMMUNICATION_H_ */

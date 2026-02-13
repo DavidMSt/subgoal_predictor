@@ -8,6 +8,8 @@
 
 #include "twipr_errors.h"
 #include "firmware.hpp"
+#include "firmware_settings.h"
+#include "robot-control_board.h"
 
 BILBO_ErrorHandler* handler;
 osSemaphoreId_t log_semaphore;
@@ -50,6 +52,14 @@ void BILBO_ErrorHandler::setError(bilbo_error_type_t type, bilbo_error_t error){
 
 		this->config.firmware->firmware_state = TWIPR_FIRMWARE_STATE_ERROR;
 		stopControl();
+
+#if ENABLE_MOTOR_SHUTDOWN_LINE
+		// Pull shutdown lines LOW immediately on any major error.
+		// This triggers hardware quickstop on the SimplexMotion motors
+		// via their IN1 input, independent of CAN communication.
+		HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_RESET);
+#endif
 
 		// TODO: Make LEDs red, send error message
 	}
