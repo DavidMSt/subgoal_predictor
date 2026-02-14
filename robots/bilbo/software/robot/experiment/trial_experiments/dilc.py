@@ -767,8 +767,6 @@ class DILC_Experiment:
             # Blocking call — the robot executes the full input trajectory
             trajectory_data = self.experiment_handler.run_trajectory(input_trajectory)
 
-            beep(frequency=1000, repeats=1)
-
             if trajectory_data is None:
                 self.logger.error("Trajectory execution failed (run_trajectory returned None)")
                 self.events.trajectory_error.set(data={
@@ -865,7 +863,6 @@ class DILC_Experiment:
             self.logger.info(f"Trajectory finished successfully")
             self.logger.info(f"  Tracking error norm (||r - y||): {error_norm:.6f}")
             self.logger.info(f"  Max absolute error: {max_abs_error:.6f}")
-            beep(frequency=1000, repeats=2)
 
             self.events.trajectory_finished.set(data={
                 'trajectory': input_trajectory,

@@ -41,6 +41,8 @@ class Popup_Callbacks:
 @event_definition
 class Popup_Events:
     closed: Event
+    minimized: Event
+    restored: Event
 
 
 # ======================================================================================================================
@@ -73,6 +75,9 @@ class Popup:
             'title': '',
             'type': 'window',  # 'window', 'dialog'
             'closeable': True,  # Whether the popup can be closed
+            'minimizable': True,  # Whether the popup can be minimized to the dock (dialog only)
+            'disable_gui': True,  # Tint background dark and make it unresponsive (dialog only)
+            'opacity': 1.0,  # Global opacity of the popup (0.0 – 1.0)
         }
 
         self.config = {**default_config, **kwargs}
@@ -93,6 +98,8 @@ class Popup:
         self.logger = Logger(self.id)
         self.callbacks = Popup_Callbacks()
         self.events = Popup_Events()
+
+        self.minimized = False  # tracked so we can restore state on page reload
 
         self.instances = []
 
@@ -115,7 +122,8 @@ class Popup:
         """Get the configuration of the popup."""
         config = {
             'id': self.uid,
-            **self.config
+            **self.config,
+            'minimized': self.minimized,
         }
         return config
 
@@ -156,9 +164,17 @@ class Popup:
     def handleEvent(self, message, sender=None):
         match message['event']:
             case 'closed':
-                self.logger.info(f"Popup {self.id} closed manually")
+                self.logger.debug(f"Popup {self.id} closed manually")
                 if self.config.get('closeable', True):
                     self.close()
+            case 'minimized':
+                self.logger.debug(f"Popup {self.id} minimized")
+                self.minimized = True
+                self.events.minimized.set()
+            case 'restored':
+                self.logger.debug(f"Popup {self.id} restored")
+                self.minimized = False
+                self.events.restored.set()
             case _:
                 self.logger.info(f"Popup {self.id} received an unknown event")
 
@@ -201,6 +217,7 @@ class YesNoPopup(Popup):
             'title': title,
             'type': 'dialog',
             'closeable': False,
+            'minimizable': False,
             'grid': [4, 4],
         }
 

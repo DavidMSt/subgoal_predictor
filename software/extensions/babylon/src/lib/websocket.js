@@ -7,7 +7,8 @@ export class Websocket extends EventEmitter {
         super();
 
         const default_options = {
-            reconnect_pause: 3000, // ms
+            reconnect_pause: 2000, // ms (base delay)
+            reconnect_pause_max: 15000, // ms (max delay between reconnects)
             reconnect: true,
         }
 
@@ -19,16 +20,22 @@ export class Websocket extends EventEmitter {
         this.url = `ws://${host}:${port}`;
         this.connected = false;
         this.txQueue = [];
-
-
+        this._reconnectAttempts = 0;
+        this._reconnectTimer = null;
     }
 
     // -----------------------------------------------------------------------------------------------------------------
     connect() {
-        this.socket = new WebSocket(this.url);
+        try {
+            this.socket = new WebSocket(this.url);
+        } catch (e) {
+            this._scheduleReconnect();
+            return;
+        }
 
         if (!this.socket) {
-            alert("Cannot start websocket")
+            this._scheduleReconnect();
+            return;
         }
 
         this.socket.onopen = this.onOpen.bind(this);
@@ -39,8 +46,9 @@ export class Websocket extends EventEmitter {
 
     // -----------------------------------------------------------------------------------------------------------------
     onOpen(open) {
-        console.log("Websocket connected!");
+        console.log("Babylon websocket connected!");
         this.connected = true;
+        this._reconnectAttempts = 0;
         for (let message of this.txQueue) {
             this.send(message);
         }
@@ -63,18 +71,36 @@ export class Websocket extends EventEmitter {
     // -----------------------------------------------------------------------------------------------------------------
     onClose(close) {
         if (this.connected) {
-            console.log("WebSocket has been closed", close, this);
+            console.log("Babylon WebSocket closed");
             this.emit('close', close);
         }
         this.connected = false;
-        if (this.options.reconnect)
-            setTimeout(() => this.connect(), this.options.reconnect_pause);
+        if (this.options.reconnect) {
+            this._scheduleReconnect();
+        }
+    }
 
+    // -----------------------------------------------------------------------------------------------------------------
+    _scheduleReconnect() {
+        if (this._reconnectTimer) {
+            clearTimeout(this._reconnectTimer);
+            this._reconnectTimer = null;
+        }
+
+        this._reconnectAttempts++;
+        const baseDelay = this.options.reconnect_pause;
+        const maxDelay = this.options.reconnect_pause_max;
+        const delay = Math.min(baseDelay * Math.pow(1.5, this._reconnectAttempts - 1), maxDelay);
+        const jitter = delay * (0.8 + Math.random() * 0.4);
+
+        this._reconnectTimer = setTimeout(() => {
+            this._reconnectTimer = null;
+            this.connect();
+        }, jitter);
     }
 
     // -----------------------------------------------------------------------------------------------------------------
     send(message) {
-
         if (this.connected) {
             this.socket.send(JSON.stringify(message))
         } else {

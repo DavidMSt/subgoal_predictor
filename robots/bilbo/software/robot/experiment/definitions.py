@@ -116,6 +116,53 @@ class BILBO_OutputTrajectory:
         return np.arange(0, self.length) * self.dt
 
 
+@dataclasses.dataclass
+class BILBO_ModelVector:
+    """Impulse response model vector for DILC (Data-driven Iterative Learning Control).
+
+    The m-vector represents the impulse response of the system. It can be
+    converted to a lifted lower-triangular Toeplitz matrix (LTTM) via
+    vec2liftedMatrix() for use in the ILC/IML learning updates.
+
+    Attributes:
+        name: Human-readable name for this model vector.
+        id: Numeric identifier.
+        vector: The impulse response values as a list of floats.
+        dt: Sampling period in seconds.
+    """
+    name: str
+    id: int
+    vector: list[float]
+    dt: float = BILBO_CONTROL_DT
+
+    @property
+    def length(self) -> int:
+        return len(self.vector)
+
+    @property
+    def time_vector(self) -> np.ndarray:
+        return np.arange(0, self.length) * self.dt
+
+    def to_array(self) -> np.ndarray:
+        return np.asarray(self.vector)
+
+    def to_lifted_matrix(self) -> np.ndarray:
+        """Convert the m-vector to a lifted lower-triangular Toeplitz matrix."""
+        from core.utils.control.lib_control.lifted_systems import vec2liftedMatrix
+        return vec2liftedMatrix(self.to_array())
+
+    @classmethod
+    def from_vector(cls, vector: np.ndarray, name: str, id: int, dt: float = None) -> BILBO_ModelVector:
+        return cls(name=name, id=id, vector=vector.tolist(), dt=dt or BILBO_CONTROL_DT)
+
+    @classmethod
+    def from_lifted_matrix(cls, matrix: np.ndarray, name: str, id: int, dt: float = None) -> BILBO_ModelVector:
+        """Create a BILBO_ModelVector from a lifted lower-triangular Toeplitz matrix."""
+        from core.utils.control.lib_control.lifted_systems import liftedMatrix2Vec
+        vec = liftedMatrix2Vec(matrix)
+        return cls.from_vector(vec, name=name, id=id, dt=dt)
+
+
 # === EXPERIMENTS ======================================================================================================
 @dataclasses.dataclass
 class BILBO_TrajectoryExperimentMeta:
@@ -137,6 +184,7 @@ class BILBO_TrajectoryExperimentData:
 
 # === FILES ============================================================================================================
 INPUT_TRAJECTORY_FILE_EXTENSION = '.bitrj'
+MODEL_VECTOR_FILE_EXTENSION = '.bmvec'
 
 
 @dataclasses.dataclass
@@ -169,6 +217,65 @@ def read_input_file(file) -> BILBO_InputFileData | None:
         return data
     except Exception as e:
         print(f"Error reading input file: {e}")
+        return None
+
+
+@dataclasses.dataclass
+class BILBO_ModelVectorFileData:
+    """File data wrapper for a DILC model vector (impulse response).
+
+    Attributes:
+        id: Identifier for this model vector (e.g. experiment ID).
+        description: Human-readable description.
+        vector: The impulse response values.
+        dt: Sampling period in seconds.
+    """
+    id: str
+    description: str
+    vector: list[float]
+    dt: float = BILBO_CONTROL_DT
+
+    @property
+    def length(self) -> int:
+        return len(self.vector)
+
+    def to_array(self) -> np.ndarray:
+        return np.asarray(self.vector)
+
+    def to_lifted_matrix(self) -> np.ndarray:
+        """Convert the stored m-vector to a lifted lower-triangular Toeplitz matrix."""
+        from core.utils.control.lib_control.lifted_systems import vec2liftedMatrix
+        return vec2liftedMatrix(self.to_array())
+
+    def to_model_vector(self, name: str = '', model_id: int = 0) -> BILBO_ModelVector:
+        """Extract a BILBO_ModelVector (drops file metadata)."""
+        return BILBO_ModelVector(
+            name=name or self.id,
+            id=model_id,
+            vector=self.vector,
+            dt=self.dt,
+        )
+
+
+def write_model_vector_file(file_name, folder, data: BILBO_ModelVectorFileData):
+    data_dict = dataclasses.asdict(data)
+    file_path = f"{folder}/{file_name}{MODEL_VECTOR_FILE_EXTENSION}"
+    try:
+        writeJSON(file_path, data_dict)
+    except Exception as e:
+        print(f"Error writing model vector file: {e}")
+
+
+def read_model_vector_file(file) -> BILBO_ModelVectorFileData | None:
+    if not file_exists(file):
+        raise FileNotFoundError(f"Model vector file not found: {file}")
+
+    try:
+        data_dict = readJSON(file)
+        data = from_dict_auto(BILBO_ModelVectorFileData, data_dict)
+        return data
+    except Exception as e:
+        print(f"Error reading model vector file: {e}")
         return None
 
 

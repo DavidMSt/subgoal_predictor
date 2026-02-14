@@ -1,4 +1,5 @@
 import cv2
+import logging
 import threading
 import time
 from flask import Flask, Response, stream_with_context
@@ -46,6 +47,8 @@ class VideoStreamer:
 
         # For MJPEG server
         self.app = Flask(__name__)
+        # Suppress Flask/Werkzeug dev-server warning and per-request access logs
+        logging.getLogger('werkzeug').setLevel(logging.ERROR)
         self._setup_routes()
 
         self.thread = None

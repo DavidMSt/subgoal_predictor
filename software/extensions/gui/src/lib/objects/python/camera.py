@@ -2,6 +2,7 @@ import glob
 import json
 import os
 import platform
+import re
 import socket
 import subprocess
 import threading
@@ -10,11 +11,11 @@ from typing import Any
 
 import cv2
 
+from core.utils.exit import register_exit_callback
 from core.utils.network.network import getHostIP
 from core.utils.video.camera_streamer import VideoStreamer
 from extensions.gui.src.lib.objects.objects import Widget
 
-logger = logging.getLogger(__name__)
 
 # Thread-safe port allocation
 _port_lock = threading.Lock()
@@ -148,7 +149,9 @@ class CameraWidget(Widget):
 
     def __init__(self, widget_id: str, host: str = None, auto_start: bool = True,
                  width: int = 640, height: int = 480, fps: int = 30,
-                 max_scan_index: int = 10, **kwargs):
+                 max_scan_index: int = 10,
+                 excluded: list[str] = None, priority: list[str] = None,
+                 **kwargs):
         super().__init__(widget_id)
 
         default_config = {
@@ -165,6 +168,8 @@ class CameraWidget(Widget):
         self._fps = fps
         self._max_scan_index = max_scan_index
         self._auto_start = auto_start
+        self._excluded = [re.compile(p, re.IGNORECASE) for p in (excluded or [])]
+        self._priority = [re.compile(p, re.IGNORECASE) for p in (priority or [])]
 
         self._streamer: VideoStreamer | None = None
         self._current_port: int | None = None
@@ -173,11 +178,37 @@ class CameraWidget(Widget):
         self._lock = threading.Lock()
 
         # Scan on init
-        self._cameras = scan_cameras(max_index=self._max_scan_index)
+        self._cameras = self._scan_and_filter()
 
         if self._auto_start and self._cameras:
-            first_key = next(iter(self._cameras))
-            self._start_stream(first_key)
+            default_key = self._pick_default()
+            self._start_stream(default_key)
+
+        register_exit_callback(self.close_popout, priority=20)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _scan_and_filter(self) -> dict:
+        """Scan cameras and remove any whose label matches an excluded pattern."""
+        cameras = scan_cameras(max_index=self._max_scan_index)
+        if not self._excluded:
+            return cameras
+        return {
+            key: cam for key, cam in cameras.items()
+            if not any(pat.search(cam['label']) for pat in self._excluded)
+        }
+
+    def _pick_default(self) -> str:
+        """Pick the best default camera key based on the priority list.
+
+        Returns the key of the first camera whose label matches the earliest
+        priority pattern.  Falls back to the first camera if nothing matches.
+        """
+        if self._priority:
+            for pat in self._priority:
+                for key, cam in self._cameras.items():
+                    if pat.search(cam['label']):
+                        return key
+        return next(iter(self._cameras))
 
     # ------------------------------------------------------------------------------------------------------------------
     def _start_stream(self, camera_key: str):
@@ -186,7 +217,7 @@ class CameraWidget(Widget):
             self._stop_stream_internal()
 
             if camera_key not in self._cameras:
-                logger.warning(f"[CameraWidget:{self.id}] Camera key '{camera_key}' not found")
+                self.logger.warning(f"[CameraWidget:{self.id}] Camera key '{camera_key}' not found")
                 return
 
             camera_index = self._cameras[camera_key]['index']
@@ -205,7 +236,7 @@ class CameraWidget(Widget):
                 )
                 streamer.start()
             except Exception as e:
-                logger.error(f"[CameraWidget:{self.id}] Failed to start stream: {e}")
+                self.logger.error(f"[CameraWidget:{self.id}] Failed to start stream: {e}")
                 _release_port(port)
                 return
 
@@ -213,7 +244,7 @@ class CameraWidget(Widget):
             self._current_port = port
             self._selected_camera = camera_key
             self._stream_url = f"http://{self._host}:{port}/video"
-            logger.info(f"[CameraWidget:{self.id}] Streaming camera {camera_key} at {self._stream_url}")
+            self.logger.info(f"[CameraWidget:{self.id}] Streaming camera {camera_key} at {self._stream_url}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _stop_stream(self):
@@ -227,7 +258,7 @@ class CameraWidget(Widget):
             try:
                 self._streamer.stop()
             except Exception as e:
-                logger.warning(f"[CameraWidget:{self.id}] Error stopping stream: {e}")
+                self.logger.warning(f"[CameraWidget:{self.id}] Error stopping stream: {e}")
             self._streamer = None
 
         if self._current_port is not None:
@@ -239,7 +270,9 @@ class CameraWidget(Widget):
     # ------------------------------------------------------------------------------------------------------------------
     def rescan(self):
         """Re-scan cameras and push updated list to the frontend."""
-        self._cameras = scan_cameras(max_index=self._max_scan_index)
+        self.logger.info(f"[CameraWidget:{self.id}] Rescanning cameras...")
+        self._cameras = self._scan_and_filter()
+        self.logger.warning(f"[CameraWidget:{self.id}] Found {len(self._cameras)} camera(s): {[c['label'] for c in self._cameras.values()]}")
 
         # If the currently selected camera is gone, stop the stream
         if self._selected_camera and self._selected_camera not in self._cameras:
@@ -263,14 +296,14 @@ class CameraWidget(Widget):
     # ------------------------------------------------------------------------------------------------------------------
     def handleEvent(self, message, sender=None) -> Any:
         event = message.get('event')
-        logger.info(f"[CameraWidget:{self.id}] handleEvent: event={event}, message={message}")
+        # self.logger.info(f"[CameraWidget:{self.id}] handleEvent: event={event}, message={message}")
 
         if event == 'camera_select_change':
             camera_key = message.get('camera_key')
-            logger.info(f"[CameraWidget:{self.id}] Camera select change: key={camera_key}, current={self._selected_camera}")
+            self.logger.debug(f"[CameraWidget:{self.id}] Camera select change: key={camera_key}, current={self._selected_camera}")
             if camera_key and camera_key != self._selected_camera:
                 self._start_stream(camera_key)
-                logger.info(f"[CameraWidget:{self.id}] Stream started, sending URL: {self._stream_url}")
+                self.logger.debug(f"[CameraWidget:{self.id}] Stream started, sending URL: {self._stream_url}")
                 self.function('setStreamUrl', self._stream_url)
 
         elif event == 'rescan':
@@ -284,3 +317,7 @@ class CameraWidget(Widget):
     def close(self):
         """Clean shutdown."""
         self._stop_stream()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def close_popout(self, *args, **kwargs):
+        self.function(function_name='closePopout', args={})

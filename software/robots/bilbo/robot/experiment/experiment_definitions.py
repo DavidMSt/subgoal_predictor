@@ -188,6 +188,62 @@ class OutputTrajectory:
         )
 
 
+@dataclasses.dataclass
+class ModelVector:
+    """Impulse response model vector for DILC (Data-driven Iterative Learning Control).
+
+    The m-vector represents the impulse response of the system. It can be
+    converted to a lifted lower-triangular Toeplitz matrix (LTTM) via
+    vec2liftedMatrix() for use in the ILC/IML learning updates.
+
+    Attributes:
+        name: Human-readable name for this model vector.
+        id: Numeric identifier.
+        vector: The impulse response values as a list of floats.
+        dt: Sampling period in seconds.
+    """
+    name: str
+    id: int
+    vector: list[float]
+    dt: float = BILBO_CONTROL_DT
+
+    @property
+    def length(self) -> int:
+        return len(self.vector)
+
+    @property
+    def time_vector(self) -> np.ndarray:
+        return np.arange(0, self.length) * self.dt
+
+    def to_array(self) -> np.ndarray:
+        return np.asarray(self.vector)
+
+    def to_lifted_matrix(self) -> np.ndarray:
+        """Convert the m-vector to a lifted lower-triangular Toeplitz matrix."""
+        from core.utils.control.lib_control.lifted_systems import vec2liftedMatrix
+        return vec2liftedMatrix(self.to_array())
+
+    @classmethod
+    def from_vector(cls, vector: np.ndarray, name: str, id: int, dt: float = None) -> ModelVector:
+        return cls(name=name, id=id, vector=vector.tolist(), dt=dt or BILBO_CONTROL_DT)
+
+    @classmethod
+    def from_lifted_matrix(cls, matrix: np.ndarray, name: str, id: int, dt: float = None) -> ModelVector:
+        """Create a ModelVector from a lifted lower-triangular Toeplitz matrix."""
+        from core.utils.control.lib_control.lifted_systems import liftedMatrix2Vec
+        vec = liftedMatrix2Vec(matrix)
+        return cls.from_vector(vec, name=name, id=id, dt=dt)
+
+    def to_file_data(self, id: str = '', description: str = '') -> ModelVectorFileData:
+        """Wrap this model vector in a ModelVectorFileData for file I/O."""
+        return ModelVectorFileData(
+            id=id or self.name,
+            description=description,
+            vector=self.vector,
+            dt=self.dt,
+        )
+
+
 # ======================================================================================================================
 # ACTION TYPES - Concrete dataclasses for each action type
 # ======================================================================================================================
@@ -927,6 +983,7 @@ class ExperimentData:
 
 INPUT_TRAJECTORY_FILE_EXTENSION = '.bitrj'
 OUTPUT_TRAJECTORY_FILE_EXTENSION = '.botrj'
+MODEL_VECTOR_FILE_EXTENSION = '.bmvec'
 
 
 @dataclasses.dataclass
@@ -999,6 +1056,54 @@ def read_output_file(file_path: str) -> OutputTrajectoryFileData:
         raise FileNotFoundError(f"Output trajectory file not found: {file_path}")
     data_dict = readJSON(file_path)
     return from_dict_auto(OutputTrajectoryFileData, data_dict)
+
+
+@dataclasses.dataclass
+class ModelVectorFileData:
+    """File data wrapper for a DILC model vector (impulse response).
+
+    Attributes:
+        id: Identifier for this model vector (e.g. experiment ID).
+        description: Human-readable description.
+        vector: The impulse response values.
+        dt: Sampling period in seconds.
+    """
+    id: str
+    description: str
+    vector: list[float]
+    dt: float = BILBO_CONTROL_DT
+
+    @property
+    def length(self) -> int:
+        return len(self.vector)
+
+    def to_array(self) -> np.ndarray:
+        return np.asarray(self.vector)
+
+    def to_lifted_matrix(self) -> np.ndarray:
+        """Convert the stored m-vector to a lifted lower-triangular Toeplitz matrix."""
+        from core.utils.control.lib_control.lifted_systems import vec2liftedMatrix
+        return vec2liftedMatrix(self.to_array())
+
+    def to_model_vector(self, name: str = '', model_id: int = 0) -> ModelVector:
+        """Extract a ModelVector (drops file metadata)."""
+        return ModelVector(
+            name=name or self.id,
+            id=model_id,
+            vector=self.vector,
+            dt=self.dt,
+        )
+
+
+def write_model_vector_file(file_path: str, data: ModelVectorFileData):
+    writeJSON(file_path, dataclasses.asdict(data))
+
+
+def read_model_vector_file(file_path: str) -> ModelVectorFileData:
+    if not file_exists(file_path):
+        raise FileNotFoundError(f"Model vector file not found: {file_path}")
+    data_dict = readJSON(file_path)
+    return from_dict_auto(ModelVectorFileData, data_dict)
 
 
 # ======================================================================================================================

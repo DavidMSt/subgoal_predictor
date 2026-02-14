@@ -1,4 +1,5 @@
 import {Widget} from '../objects.js';
+import {getFromLocalStorage} from '../../helpers.js';
 
 /* ================================================================================================================== */
 export class CameraWidget extends Widget {
@@ -18,6 +19,7 @@ export class CameraWidget extends Widget {
 
         this._rotation = 0;
         this._isPopped = false;
+        this._noCameras = false;
         this._aspectRatio = null; // width / height, set on image load
         this._lastFloatRect = null; // {left, top, width, height} remembered across pop-out sessions
         this._cropRegion = null;   // {x, y, w, h} fractions of natural image, or null
@@ -138,6 +140,12 @@ export class CameraWidget extends Widget {
         this.floatRotateBtn.title = 'Rotate 90°';
         topBar.appendChild(this.floatRotateBtn);
 
+        this.floatNewTabBtn = document.createElement('button');
+        this.floatNewTabBtn.classList.add('cameraWidget__floatBtn');
+        this.floatNewTabBtn.textContent = '⛶';
+        this.floatNewTabBtn.title = 'Open in new tab';
+        topBar.appendChild(this.floatNewTabBtn);
+
         this.floatCropBtn = document.createElement('button');
         this.floatCropBtn.classList.add('cameraWidget__floatBtn');
         this.floatCropBtn.textContent = '✂';
@@ -232,6 +240,12 @@ export class CameraWidget extends Widget {
         this._populateDropdown(cameras, selected);
         this.configuration.cameras = cameras;
         this.configuration.selected = selected;
+        this._noCameras = Object.keys(cameras || {}).length === 0;
+        if (this._noCameras) this._showNoCameras();
+    }
+
+    closePopout() {
+        if (this._isPopped) this._popIn();
     }
 
     // ── WIDGET LIFECYCLE ────────────────────────────────────────────────────
@@ -247,7 +261,8 @@ export class CameraWidget extends Widget {
         if (this.configuration.stream_url) {
             this.setStreamUrl(this.configuration.stream_url);
         } else if (Object.keys(this.configuration.cameras || {}).length === 0) {
-            this._showStatus('No cameras found');
+            this._noCameras = true;
+            this._showNoCameras();
         } else {
             this._showStatus('Select a camera');
         }
@@ -271,6 +286,11 @@ export class CameraWidget extends Widget {
         });
 
         this.rescanBtn.addEventListener('click', () => {
+            this.callbacks.get('event').call({id: this.id, event: 'rescan'});
+        });
+
+        this.statusText.addEventListener('click', () => {
+            if (!this._noCameras) return;
             this.callbacks.get('event').call({id: this.id, event: 'rescan'});
         });
 
@@ -321,8 +341,12 @@ export class CameraWidget extends Widget {
         this.floatRotateBtn.addEventListener('click', () => {
             this._rotation = (this._rotation + 90) % 360;
             this._applyRotation();
+            this._saveFloatState();
         });
 
+        this.floatNewTabBtn.addEventListener('click', () => {
+            if (this.floatMedia.src) window.open(this.floatMedia.src, '_blank');
+        });
         this.floatCropBtn.addEventListener('click', () => this._enterCropMode());
         this.floatUncropBtn.addEventListener('click', () => this._clearCrop());
 
@@ -339,6 +363,7 @@ export class CameraWidget extends Widget {
 
         this.floatOpacity.addEventListener('input', () => {
             this.floatMedia.style.opacity = this.floatOpacity.value;
+            this._saveFloatState();
         });
 
         this.floatMedia.addEventListener('load', () => {
@@ -369,6 +394,7 @@ export class CameraWidget extends Widget {
                 this._compact = small;
                 this.element.classList.toggle('cameraWidget--compact', small);
                 this.media.style.objectFit = small ? 'cover' : this.configuration.fit;
+                if (this._noCameras) this._showNoCameras();
             }
         });
         this._resizeObserver.observe(this.element);
@@ -407,15 +433,33 @@ export class CameraWidget extends Widget {
         if (this._isPopped) return;
         this._isPopped = true;
 
-        if (this._lastFloatRect) {
-            // Restore previous position and size
+        // Try to restore saved state for this camera from localStorage
+        const saved = this._loadFloatState();
+
+        if (saved) {
+            this.floatPanel.style.left = saved.left + 'px';
+            this.floatPanel.style.top = saved.top + 'px';
+            this.floatPanel.style.width = saved.width + 'px';
+            this.floatPanel.style.height = saved.height + 'px';
+
+            if (saved.opacity != null) {
+                this.floatOpacity.value = saved.opacity;
+            }
+            if (saved.rotation != null) {
+                this._rotation = saved.rotation;
+            }
+            if (saved.crop) {
+                this._cropRegion = saved.crop;
+            }
+        } else if (this._lastFloatRect) {
+            // Fallback to in-memory position from earlier pop-out
             const r = this._lastFloatRect;
             this.floatPanel.style.left = r.left + 'px';
             this.floatPanel.style.top = r.top + 'px';
             this.floatPanel.style.width = r.width + 'px';
             this.floatPanel.style.height = r.height + 'px';
         } else {
-            // First pop-out: compute from widget size + aspect ratio
+            // First pop-out ever: compute from widget size + aspect ratio
             const rect = this.element.getBoundingClientRect();
             let w = Math.max(rect.width * 1.2, 320);
             let h = Math.max(rect.height * 1.2, 240);
@@ -440,11 +484,17 @@ export class CameraWidget extends Widget {
             this.floatPanel.style.height = h + 'px';
         }
 
+        if (this._noCameras) return;
+
         this.floatMedia.src = this.media.src;
-        this.floatMedia.style.transform = this.media.style.transform;
-        this.floatMedia.style.objectViewBox = this.media.style.objectViewBox || '';
         this.floatMedia.style.opacity = this.floatOpacity.value;
         this.floatPanel.style.display = 'block';
+
+        // Apply restored rotation and crop
+        this._applyRotation();
+        if (this._cropRegion) {
+            this._applyCrop(this._cropRegion);
+        }
 
         // Hide original, show placeholder
         this.media.style.display = 'none';
@@ -455,15 +505,22 @@ export class CameraWidget extends Widget {
         if (!this._isPopped) return;
         this._isPopped = false;
 
-        // Remember position and size for next pop-out
+        // Save state for this camera to localStorage
+        this._saveFloatState();
+
+        // Remember position in memory as well
         const r = this.floatPanel.getBoundingClientRect();
         this._lastFloatRect = {left: r.left, top: r.top, width: r.width, height: r.height};
 
         this.floatPanel.style.display = 'none';
         this.floatMedia.src = '';
 
-        this.media.style.display = 'block';
-        this._hideStatus();
+        if (this._noCameras) {
+            this._showNoCameras();
+        } else {
+            this.media.style.display = 'block';
+            this._hideStatus();
+        }
     }
 
     // ── DRAG & RESIZE (edge-detect, no extra DOM elements) ──────────────────
@@ -562,6 +619,7 @@ export class CameraWidget extends Widget {
                 document.removeEventListener('mouseup', onUp);
                 // Re-apply rotation scaling for new dimensions
                 if (this._rotation % 180 !== 0) this._applyRotation();
+                this._saveFloatState();
             };
 
             document.addEventListener('mousemove', onMove);
@@ -731,6 +789,7 @@ export class CameraWidget extends Widget {
 
         // Re-apply rotation scaling for new panel dimensions
         if (this._rotation % 180 !== 0) this._applyRotation();
+        this._saveFloatState();
     }
 
     _clearCrop() {
@@ -749,13 +808,38 @@ export class CameraWidget extends Widget {
 
         // Re-apply rotation scaling for new panel dimensions
         if (this._rotation % 180 !== 0) this._applyRotation();
+        this._saveFloatState();
     }
 
     // ── HELPERS ─────────────────────────────────────────────────────────────
 
+    _showNoCameras() {
+        this.media.style.display = 'none';
+        this.compactBtn.style.display = 'none';
+        if (this._compact) {
+            const rect = this.element.getBoundingClientRect();
+            const size = Math.floor(Math.min(rect.width, rect.height) * 0.45);
+            const btnSize = Math.floor(size * 0.7);
+            this.statusText.innerHTML =
+                `<span class="cameraWidget__noCamIcon" style="font-size:${size}px">📷</span>` +
+                `<button class="cameraWidget__rescanOverlay" style="font-size:${btnSize}px">🔄</button>`;
+        } else {
+            this.statusText.innerHTML = '';
+            this.statusText.textContent = 'No cameras found — click to rescan';
+        }
+        this.statusText.style.display = 'flex';
+        this.statusText.style.pointerEvents = 'auto';
+        this.statusText.style.cursor = 'pointer';
+    }
+
     _showStatus(text) {
+        this._noCameras = false;
+        this.compactBtn.style.display = '';
+        this.statusText.innerHTML = '';
         this.statusText.textContent = text;
         this.statusText.style.display = 'flex';
+        this.statusText.style.pointerEvents = '';
+        this.statusText.style.cursor = '';
     }
 
     _hideStatus() {
@@ -771,6 +855,38 @@ export class CameraWidget extends Widget {
         const fresh = `${base}${sep}_=${Date.now()}`;
         this.media.src = fresh;
         if (this._isPopped) this.floatMedia.src = fresh;
+    }
+
+    // ── FLOAT STATE PERSISTENCE (per camera) ────────────────────────────────
+
+    _floatStorageKey() {
+        const camKey = this.configuration.selected;
+        if (!camKey) return null;
+        return `camera_float_${this.id}_${camKey}`;
+    }
+
+    _saveFloatState() {
+        const key = this._floatStorageKey();
+        if (!key) return;
+        const rect = this.floatPanel.getBoundingClientRect();
+        const state = {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+            opacity: parseFloat(this.floatOpacity.value),
+            rotation: this._rotation,
+            crop: this._cropRegion,
+        };
+        try {
+            localStorage.setItem(key, JSON.stringify(state));
+        } catch (e) { /* quota exceeded – ignore */ }
+    }
+
+    _loadFloatState() {
+        const key = this._floatStorageKey();
+        if (!key) return null;
+        return getFromLocalStorage(key);
     }
 
     destroy() {

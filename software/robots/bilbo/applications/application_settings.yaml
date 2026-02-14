@@ -92,7 +92,7 @@ simulation:
   robots: null
 
 tracker:
-  enabled: true
+  enabled: false
   server: palantir.lan
   sample_rate: 30
 

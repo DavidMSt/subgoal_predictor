@@ -6,392 +6,27 @@ import {openFilePicker} from './lib/file_picker.js';
 import './lib/styles/popup.css'
 import './lib/styles/objects.css';
 
-import {OBJECT_MAPPING} from './lib/objects/mapping.js';
-import {Widget} from './lib/objects/objects.js'
+// NOTE: Page must be imported before WidgetGroup to ensure mapping.js
+// loads before group.js, resolving their circular dependency correctly.
+import {Page} from './lib/page.js';
+import {Category} from './lib/category.js';
+import {Popup} from './lib/popup.js';
+import {Callout} from './lib/callout.js';
+
 import {WidgetGroup} from './lib/objects/group.js';
 import {activeGUI, setActiveGUI} from "./lib/globals.js";
 
 import {
-    Callbacks,
     existsInLocalStorage,
-    getColor,
     getFromLocalStorage,
-    isObject,
     removeFromLocalStorage,
     splitPath,
     writeToLocalStorage
 } from './lib/helpers.js';
 import {Websocket} from './lib/websocket.js';
 
-
-const DEFAULT_BACKGROUND_COLOR = 'rgb(31,32,35)'
-const DEBUG = true;
-
 const GUI_WS_DEFAULT_PORT = 8100;
 
-
-class PageButton extends ButtonWidget {
-    constructor(id, page, data = {}) {
-        super(id, data);
-        this.page = page;
-        const favorites_context_menu_item = new ContextMenuItem('favorites',
-            {name: 'Add to favorites', front_icon: '⭐'})
-
-        this.addItemToContextMenu(favorites_context_menu_item);
-        favorites_context_menu_item.callbacks.get('click').register(this.onFavoritesClick.bind(this));
-        this.callbacks.get('click').register(this.onClick.bind(this));
-
-    }
-
-    select() {
-        this.updateConfig({text_color: [0.8, 0.8, 0.8], color: [0.2, 0.2, 0.2], border_width: 2});
-    }
-
-    deselect() {
-        this.updateConfig({text_color: [0.3, 0.3, 0.3], color: [0.15, 0.15, 0.15], border_width: 1});
-    }
-
-    onFavoritesClick() {
-        activeGUI.addShortcut(this.page);
-    }
-
-    onClick() {
-        writeToLocalStorage(`${activeGUI.id}_active_page`, this.page.id);
-    }
-
-    resize() {
-    }
-}
-
-class Page {
-
-    /** @type {Object} */
-    objects = {};
-
-    /** @type {Callbacks} */
-    callbacks = null;
-
-    /** @type {Object} */
-    configuration = {};
-
-    /** @type {string} */
-    id = '';
-
-    /** @type {HTMLElement | null} */
-    grid = null;
-
-    /** @type {PageButton | null} */
-    button = null;
-
-    constructor(id, configuration = {}, objects = {}) {
-        this.id = id;
-
-        const default_configuration = {
-            // rows: 16,
-            // columns: 40,
-            rows: 18,
-            columns: 50,
-            fillEmptyCells: true,
-            color: 'rgba(40,40,40,0.7)',
-            backgroundColor: DEFAULT_BACKGROUND_COLOR,
-            text_color: 'rgba(255,255,255,0.7)',
-            name: id,
-        }
-
-        this.configuration = {...default_configuration, ...configuration};
-
-        this.parent = null;
-        this.callbacks = new Callbacks();
-        this.callbacks.add('event');
-        this.objects = {};
-
-        this.occupied_grid_cells = new Set();
-
-        // Create the main grid container for this page that gets later swapped into the content container
-        this.grid = document.createElement('div');
-        this.grid.id = `page_${this.id}_grid`;
-        this.grid.className = 'grid';
-
-        // Make the number of rows and columns based on the configuration
-        this.grid.style.gridTemplateRows = `repeat(${this.configuration.rows}, 1fr)`;
-        this.grid.style.gridTemplateColumns = `repeat(${this.configuration.columns}, 1fr)`;
-
-        this.grid.style.display = 'grid';
-
-        // Fill the grid with empty cells
-        if (this.configuration.fillEmptyCells) {
-            this._fillContentGrid();
-        }
-
-        // Generate the button for this page that the category will later attach to the page bar
-        this.button = this._generateButton();
-
-        if (Object.keys(objects).length > 0) {
-            this.buildObjectsFromDefinition(objects);
-        }
-
-    }
-
-    /* ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ */
-    getObjectByPath(path) {
-        // Example invocations:
-        //   path = "button1"            → childKey = "/category1/page1/button1"
-        //   path = "groupG/widgetX"     → childKey = "/category1/page1/groupG"
-        //                                        then recurse with "widgetX"
-
-
-        const [firstSegment, remainder] = splitPath(path);
-        if (!firstSegment) {
-            console.warn(`[Page ID: ${this.id}] No first segment in path "${path}"`);
-            return null;
-        }
-
-        // Build the full‐UID key for the direct child:
-        //   this.id is "/category1/page1"
-        //   firstSegment might be "button1" or "groupG"
-        const childKey = `${this.id}/${firstSegment}`;
-
-        // Look up the widget or group in this.objects, which is keyed by full UID
-        const child = this.objects[childKey];
-        if (!child) {
-            console.warn(`[Page ID: ${this.id}] No child found for key "${childKey}" in path "${path}"`);
-            console.log(this.objects);
-            return null;
-        }
-
-        if (!remainder) {
-            // No deeper path → return the widget or group itself
-            return child;
-        }
-
-        // Check if the child has a function called getObjectByPath()
-        if (typeof child.getObjectByPath === "function") {
-            return child.getObjectByPath(remainder);
-        }
-        return null;
-    }
-
-    /* ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ */
-    getGUI() {
-        if (this.parent) {
-            return this.parent.getGUI();
-        }
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    update(data) {
-        console.log('Updating page:', this.id);
-    }
-
-
-    /* ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ */
-    handleAddMessage(data) {
-        const object_config = data.config;
-        if (object_config) {
-            this.buildObjectFromData(object_config)
-        }
-    }
-
-    /* ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ */
-    handleRemoveMessage(data) {
-        const object_id = data.id;
-        if (object_id) {
-            const object = this.objects[object_id];
-            if (object) {
-                this.removeObject(object);
-            } else {
-                console.warn(`Object ${object_id} not found`);
-            }
-        }
-    }
-
-    /* ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ */
-    buildObjectsFromDefinition(objects) {
-        for (const [id, config] of Object.entries(objects)) {
-            this.buildObjectFromData(config);
-        }
-    }
-
-    /* ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ */
-    buildObjectFromData(data) {
-        const id = data.id;
-        const type = data.type;
-        const width = data.width;
-        const height = data.height;
-        const row = data.row;
-        const col = data.column;
-
-        // Check if the type is in the object mapping variable
-        if (!OBJECT_MAPPING[type]) {
-            console.warn(`Object type "${type}" is not defined.`);
-            console.log(data);
-            return;
-        }
-
-        const object_class = OBJECT_MAPPING[type];
-
-        const object = new object_class(id, data);
-        this.addObject(object, row, col, width, height);
-    }
-
-    /* ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ */
-    /**
-     * Replace your old stub with this:
-     * @param {Widget} widget  — any widget subclass
-     * @param {int} row
-     * @param {int} col
-     * @param {int} width
-     * @param {int} height
-     */
-    addObject(widget, row, col, width, height) {
-        if (!(widget instanceof Widget)) {
-            console.warn('Expected a GUI_Object, got:', widget);
-            return;
-        }
-
-        if (!widget.id) {
-            console.warn('Widget must have an ID');
-            return;
-        }
-
-        if (this.objects[widget.id]) {
-            console.warn(`Widget with ID "${widget.id}" already exists in the grid.`);
-            return;
-        }
-
-        if (row < 0 || col < 0 || row >= this.configuration.rows || col >= this.configuration.columns) {
-            console.warn(`Invalid grid coordinates: row=${row}, col=${col}`);
-            return;
-        }
-
-        if (row + height - 1 > this.configuration.rows || col + width - 1 > this.configuration.columns) {
-            console.warn(`Invalid grid dimensions: row=${row}, col=${col}, width=${width}, height=${height}`);
-        }
-
-        const newCells = this._getOccupiedCells(row, col, width, height);
-
-        // Check for cell conflicts
-        for (const cell of newCells) {
-            if (this.occupied_grid_cells.has(cell)) {
-                console.warn(`Grid cell ${cell} is already occupied. Cannot place widget "${widget.id}".`);
-                return;
-            }
-        }
-
-        // Mark the cells as occupied
-        newCells.forEach(cell => this.occupied_grid_cells.add(cell));
-
-        // Render the widget’s DOM and append into the main grid container
-        widget.attach(this.grid, [row, col], [width, height]);
-        this.objects[widget.id] = widget;
-
-        widget.callbacks.get('event').register(this.onEvent.bind(this));
-
-
-        if (this.configuration.fillEmptyCells) {
-            this._fillContentGrid();
-        }
-
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    removeObject(object) {
-        // Check if the object is a string
-        if (typeof object === 'string') {
-            // If it's a string, assume it's the ID of the object
-            object = this.objects[object];
-        }
-        if (!(object instanceof Widget)) {
-            console.warn('Expected a GUI_Object, got:', object);
-            return;
-        }
-
-        // Check if the object exists in the page
-        if (!this.objects[object.id]) {
-            console.warn(`Object with ID "${object.id}" does not exist in this page.`);
-            return;
-        }
-
-        // Remove the object from the occupied cells. We need to get the occupied cells from the object.container html element
-        if (!object.container) {
-            console.warn(`Object "${object.id}" does not have a container. Cannot remove.`);
-            return;
-        }
-        // Get the row, column, width, and height from the object
-        const row = parseInt(object.container.style.gridRowStart, 10);
-        const col = parseInt(object.container.style.gridColumnStart, 10);
-        const width = parseInt(object.container.style.gridColumnEnd.replace('span', ''), 10);
-        const height = parseInt(object.container.style.gridRowEnd.replace('span', ''), 10);
-
-        const occupiedCells = this._getOccupiedCells(row, col, width, height);
-        occupiedCells.forEach(cell => this.occupied_grid_cells.delete(cell));
-
-        // Remove the object from the grid
-        this.grid.removeChild(object.container);
-
-        // Remove the object from the object dictionary
-        delete this.objects[object.id];
-
-        // Redraw the placeholders
-        this._fillContentGrid();
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    _generateButton() {
-        return new PageButton(this.id, this, {config: {text: this.configuration.name}});
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    _getOccupiedCells(row, col, width, height) {
-        const cells = [];
-        for (let r = row; r < row + height; r++) {
-            for (let c = col; c < col + width; c++) {
-                cells.push(`${r},${c}`);
-            }
-        }
-        return cells;
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    _fillContentGrid() {
-        let occupied_cells = 0;
-
-        // Remove any existing placeholders
-        this.grid
-            .querySelectorAll('.placeholder')
-            .forEach((el) => el.remove());
-
-        for (let row = 1; row < this.configuration.rows + 1; row++) {
-            for (let col = 1; col < this.configuration.columns + 1; col++) {
-                if (!this.occupied_grid_cells.has(`${row},${col}`)) {
-                    const gridItem = document.createElement('div');
-                    gridItem.className = 'placeholder';
-
-                    // Set a tooltip showing the 1-based row and column
-                    gridItem.title = `Row ${row}, Column ${col}`;
-
-                    gridItem.style.fontSize = '6px';
-                    gridItem.style.color = 'rgba(255,255,255,0.5)';
-                    this.grid.appendChild(gridItem);
-                } else {
-                    occupied_cells++;
-                }
-            }
-        }
-
-        // console.log(`Page "${this.id}" has ${occupied_cells} occupied cells.`);
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    onEvent(event) {
-        // Check if there is an 'event' callback for this page
-        // if (DEBUG) {
-        //     console.log(`[Page ID: ${this.id}] Event received:`, event);
-        // }
-        this.callbacks.get('event').call(event);
-    }
-
-}
 
 /* ================================================================================================================== */
 
@@ -473,1264 +108,14 @@ export class ShortcutButton extends ButtonWidget {
 }
 
 /* ================================================================================================================== */
-
-
-export class CategoryButton extends Widget {
-    constructor(id, category, data = {}) {
-
-        super(id, data);
-        const CATEGORY_BTN_DEFAULTS = {
-            name: '',
-            icon: null,
-            top_icon: null,
-            text_color: 'rgba(255,255,255,0.7)',
-        };
-
-        this.configuration = {...CATEGORY_BTN_DEFAULTS, ...this.configuration};
-
-        this.category = category;
-
-        this.callbacks.add('click');
-
-        // build the actual <button> element
-        this.element = document.createElement('button');
-        this.element.classList.add('category-button', 'not-selected');
-        this.element.style.color = this.configuration.text_color;
-
-        // left icon slot
-        this.iconSlot = document.createElement('span');
-        this.iconSlot.className = 'category-button__icon';
-        if (this.configuration.icon) {
-            if (/\.(png|jpe?g|svg)$/i.test(this.configuration.icon)) {
-                const img = document.createElement('img');
-                img.src = this.configuration.icon;
-                this.iconSlot.appendChild(img);
-            } else {
-                this.iconSlot.textContent = this.configuration.icon;
-            }
-        }
-        this.element.appendChild(this.iconSlot);
-
-        // text
-        this.textSpan = document.createElement('span');
-        this.textSpan.className = 'category-button__text';
-        this.textSpan.textContent = this.configuration.name;
-        this.element.appendChild(this.textSpan);
-
-        // top-right icon (e.g. ❗)
-        if (this.configuration.top_icon) {
-            this.topSlot = document.createElement('span');
-            this.topSlot.className = 'category-button__top-icon';
-            this.topSlot.textContent = this.configuration.top_icon;
-            this.element.appendChild(this.topSlot);
-        }
-
-        // attach GUI_Object context‐menu machinery + your click handler
-        this.assignListeners(this.element);
-
-        // Add to favorites for categories
-        const favorites_context_menu_item = new ContextMenuItem('favorites',
-            {name: 'Add to favorites', front_icon: '⭐'})
-
-        this.addItemToContextMenu(favorites_context_menu_item);
-        favorites_context_menu_item.callbacks.get('click').register(this.onFavoritesClick.bind(this));
-    }
-
-    onFavoritesClick() {
-        activeGUI.addShortcut(this.category);
-    }
-
-    /** required by GUI_Object */
-    getElement() {
-        return this.element;
-    }
-
-    /** retains the old “selected” / “not‐selected” styling */
-    setSelected(selected) {
-        this.element.classList.toggle('selected', selected);
-        this.element.classList.toggle('not-selected', !selected);
-    }
-
-    /** fires the usual Category.setCategory */
-    onClick() {
-        console.log('CategoryButton clicked');
-        this.callbacks.get('click').call(this.category);
-        activeGUI.setCategory(this.category.id);
-        // Save the first page into local storage
-        const firstPage = Object.values(this.category.pages)[0];
-        if (firstPage) {
-            this.category.setPage(firstPage.id);
-            writeToLocalStorage(`${activeGUI.id}_active_page`, firstPage.id);
-        } else {
-            console.warn(`Category "${this.category.id}" has no pages to select.`);
-        }
-    }
-
-    /** if you ever need to update name / icon at runtime */
-    updateConfig(cfg) {
-        if (cfg.name != null) this.textSpan.textContent = cfg.name;
-        if (cfg.icon != null) this.iconSlot.textContent = cfg.icon;
-        if (cfg.top_icon != null) {
-            if (!this.topSlot) {
-                this.topSlot = document.createElement('span');
-                this.topSlot.className = 'category-button__top-icon';
-                this.element.appendChild(this.topSlot);
-            }
-            this.topSlot.textContent = cfg.top_icon;
-        }
-    }
-
-    assignListeners(element) {
-        super.assignListeners(element);
-        element.addEventListener('click', this.onClick.bind(this));
-    }
-
-    update(data) {
-    }
-
-    initializeElement() {
-    }
-
-    resize() {
-    }
-}
-
-
-class CategoryHeadbar extends WidgetGroup {
-    constructor(id, payload = {}) {
-        super(id, payload);
-    }
-}
-
+/* Extracted modules: Page→lib/page.js, Category→lib/category.js, Popup→lib/popup.js, Callout→lib/callout.js       */
 /* ================================================================================================================== */
-class Category {
 
-    /** @type {Object<string,Page>} */
-    pages = {};
-
-    /** @type {Page|null} */
-    page = null;
-
-    /** @type {Object<string,Category>} */
-    categories = {};
-
-    /** @type {Callbacks} */
-    callbacks = null;
-
-    /** @type {Object} */
-    configuration = {};
-
-    /** @type {string} */
-    id = '';
-
-    /** @type {CategoryButton|null} */
-    button = null;
-
-    /** @type {Object<number,HTMLElement|null>} */
-    page_buttons = {};
-
-    /** @type {HTMLElement|null} */
-    page_grid = null;
-
-    /** @type {HTMLElement|null} */
-    content_grid = null;
-
-
-    /**
-     * @param {string} id
-     * @param {Object} [configuration={}]
-     * @param {Object} [pages={}]         – map of page-definitions
-     * @param {Object} [categories={}]    – map of subcategory-definitions
-     * @param headbar_payload
-     */
-    constructor(id, configuration = {}, pages = {}, categories = {}, headbar_payload = {}) {
-        this.id = id;
-
-        const default_configuration = {
-            name: id,
-            collapsed: false,
-            color: 'rgba(40,40,40,0.7)',
-            text_color: 'rgba(255,255,255,0.7)',
-            icon: null,
-            top_icon: null,
-            number_of_pages: +getComputedStyle(document.documentElement).getPropertyValue('--page_bar-cols'),
-            max_pages: +getComputedStyle(document.documentElement).getPropertyValue('--page_bar-cols'),
-        };
-
-        this.configuration = {...default_configuration, ...configuration};
-        this.parent = null;
-
-        this.callbacks = new Callbacks();
-        this.callbacks.add('event');
-        this.pages = {};
-        this.categories = {};
-        this.page = null;
-
-        // main button for this category
-        this.button = this._generateButton();
-
-        // slots for page-buttons
-        this.page_buttons = {};
-        for (let i = 0; i < this.configuration.number_of_pages; i++) {
-            this.page_buttons[i] = null;
-        }
-
-        // container for page buttons
-        this._createPageGrid();
-
-        this.headbar = new CategoryHeadbar(headbar_payload.id, headbar_payload);
-        this.headbar.callbacks.get('event').register(this.onEvent.bind(this))
-
-        // build out any initially defined pages & categories
-        if (Object.keys(pages).length > 0) {
-            this.buildPagesFromDefinition(pages);
-        }
-        if (Object.keys(categories).length > 0) {
-            this.buildCategoriesFromDefinition(categories);
-        }
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-
-    /**
-     * Look up something by path, descending into sub-categories first, then pages.
-     * Now supports absolute UIDs that include the reserved "categories" keyword.
-     * @param {string} path
-     * @returns {Category|Page|CategoryHeadbar|null}
-     */
-    getObjectByPath(path) {
-        const [firstSegment, remainder] = splitPath(path);
-        if (!firstSegment) return null;
-
-        // if the path explicitly includes the "categories" keyword,
-        // treat the next segment as a subcategory ID
-        if (firstSegment === 'categories') {
-            // e.g. path = "categories/subcat1/…"
-            const [catName, nextRemainder] = splitPath(remainder);
-            if (!catName) return null;
-            const fullKey = `${this.id}/categories/${catName}`;
-            const subCat = this.categories[fullKey];
-            if (!subCat) return null;
-            return nextRemainder
-                ? subCat.getObjectByPath(nextRemainder)
-                : subCat;
-        } else if (firstSegment === 'headbar') {
-            if (!remainder) return this.headbar;
-            return this.headbar.getObjectByPath(remainder);
-        }
-
-        // otherwise fall back to legacy behavior
-        const fullKey = `${this.id}/${firstSegment}`;
-
-        // 1) Sub-category?
-        const subCat = this.categories[fullKey];
-        if (subCat) {
-            if (!remainder) return subCat;
-            return subCat.getObjectByPath(remainder);
-        }
-
-        // 2) Page?
-        const page = this.pages[fullKey];
-        if (page) {
-            if (!remainder) return page;
-            return page.getObjectByPath(remainder);
-        }
-
-        return null;
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    getGUI() {
-        if (this.parent instanceof Category) {
-            return this.parent.getGUI();
-        } else if (this.parent instanceof GUI) {
-            return this.parent;
-        }
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    update(data) {
-        console.warn('Category update is not yet implemented.');
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    handleAddMessage(data) {
-
-        const object_type = data.type
-
-        switch (object_type) {
-            case 'page':
-                this.buildPageFromDefinition(data.config);
-                break;
-            case 'category':
-                this.buildCategoryFromDefinition(data.config);
-
-                const gui = this.getGUI();
-                if (gui) {
-                    gui.renderCategoryTree();
-                }
-                break;
-        }
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    handleRemoveMessage(data) {
-        const object_type = data.type
-
-        switch (object_type) {
-            case 'page':
-                const page_id = data.id
-                const page = this.pages[page_id]
-                if (page) {
-
-                    // Remove the page's button
-                    page.button.remove()
-                    page.grid.remove()
-                    delete this.pages[page_id]
-
-                    // Switch active page
-                    if (this.page === page) {
-                        // check the length of the this.pages array. If bigger than 0, then choose the first one
-                        if (Object.keys(this.pages).length > 0) {
-                            this.setPage(Object.keys(this.pages)[0])
-                        } else {
-                            // if the length is 0, then set the page to null
-                            this.setPage(null)
-                        }
-                    }
-
-                }
-                break;
-            case 'category':
-                const category_id = data.id;
-                const category = this.categories[category_id];
-                if (category) {
-                    // category.content_grid.remove()
-                    delete this.categories[category_id];
-                    // Switch active category if it was this category
-
-                    if (isObject(category.id, this.getGUI().category.id)) {
-                        this.getGUI().setCategory(this.id);
-                    }
-
-
-                    this.getGUI().renderCategoryTree();
-                }
-        }
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    /**
-     * Build multiple pages from a definition map
-     * @param {Object<string,*>} pages
-     */
-    buildPagesFromDefinition(pages) {
-        for (const [_, config] of Object.entries(pages)) {
-            this.buildPageFromDefinition(config);
-        }
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    /**
-     * Build a single page from its definition and add it
-     * @param {{id:string, config:Object, objects:Object, position?:number}} page_definition
-     */
-    buildPageFromDefinition(page_definition) {
-        const new_page = new Page(
-            page_definition.id,
-            page_definition.config,
-            page_definition.objects
-        );
-        this.addPage(new_page, page_definition.position);
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    /**
-     * Build multiple subcategories from a definition map
-     * @param {Object<string,*>} categories
-     */
-    buildCategoriesFromDefinition(categories) {
-        for (const [_, config] of Object.entries(categories)) {
-            this.buildCategoryFromDefinition(config);
-        }
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    /**
-     * Build a single subcategory from its definition and add it
-     * @param {{id:string, config:Object, pages:Object, categories:Object, position?:number}} cat_definition
-     */
-    buildCategoryFromDefinition(cat_definition) {
-        const new_category = new Category(
-            cat_definition.id,
-            cat_definition.config,
-            cat_definition.pages || {},
-            cat_definition.categories || {},
-            cat_definition.headbar || {}
-        );
-        this.addCategory(new_category, cat_definition.position);
-    }
-
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    _generateButton() {
-        return new CategoryButton(this.id,
-            this,
-            {
-                config: {
-                    name: this.configuration.name,
-                    icon: this.configuration.icon,
-                    top_icon: this.configuration.top_icon,
-                    text_color: this.configuration.text_color
-                }
-            }
-        );
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    _createPageGrid() {
-        this.page_grid = document.createElement('div');
-        this.page_grid.id = `page_${this.id}_grid`;
-        this.page_grid.className = 'page_bar_grid';
-    }
-
-
-    hidePages() {
-        Object.values(this.pages).forEach(pg => {
-            pg.grid.style.display = 'none';
-        });
-    }
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    /**
-     * Add a ControlGUI_Page to this category
-     * @param {Page} page
-     * @param {number|null} position
-     */
-    addPage(page, position = null) {
-        if (this.pages[page.id]) {
-            console.warn(`Page with ID "${page.id}" already exists in category "${this.id}".`);
-            return;
-        }
-
-        // find or validate slot
-        if (position !== null) {
-            if (this.page_buttons[position - 1] !== null) {
-                console.warn(`Position ${position} already used in category "${this.id}".`);
-                return;
-            }
-        } else {
-            for (let i = 1; i <= this.configuration.number_of_pages; i++) {
-                if (this.page_buttons[i - 1] === null) {
-                    position = i;
-                    break;
-                }
-            }
-            if (position === null) {
-                console.warn(`No free page slots in category "${this.id}".`);
-                return;
-            }
-        }
-
-        // wire up button
-        this.page_buttons[position - 1] = page.button;
-        // const button_element = page.button.getElement();
-        // button_element.style.gridRow = '1';
-        // button_element.style.gridColumn = String(position);
-        // this.page_grid.appendChild(button_element);
-        page.button.attach(this.page_grid, [1, position], [1, 1]);
-        page.button.on('click', () => this.setPage(page.id));
-
-
-        // register
-        this.pages[page.id] = page;
-        page.parent = this;
-        page.callbacks.get('event').register(this.onEvent.bind(this));
-
-        // Add the pages grid to my content grid
-        if (this.content_grid) {
-            // only attach it if it isn’t already in the DOM
-            if (page.grid.parentNode !== this.content_grid) {
-                this.content_grid.appendChild(page.grid);
-            }
-            Object.assign(page.grid.style, {
-                position: 'absolute',
-                top: '0',
-                left: '0',
-                width: '100%',
-                height: '100%',
-                display: 'none',
-            });
-        }
-
-        // if first page, show it
-        if (this.page === null) {
-            this.setPage(page.id);
-        }
-    }
-
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    /**
-     * Add a ControlGUI_Category as a nested subcategory
-     * @param {Category} category
-     * @param {number|null} position   – currently unused for UI
-     */
-    addCategory(category, position = null) {
-        if (this.categories[category.id]) {
-            console.warn(`Category with ID "${category.id}" already exists under "${this.id}".`);
-            return;
-        }
-        this.categories[category.id] = category;
-        category.parent = this;
-        category.callbacks.get('event').register(this.onEvent.bind(this));
-
-    }
-
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    /**
-     * Render page-buttons into `container` and absolutely‐position all page.grids
-     * (unchanged from before)
-     */
-    buildCategory(page_bar_container, headbar_container, content_grid) {
-
-        const gui = this.getGUI();
-        // 1) collapse or show the entire page‐bar row
-        if (gui) {
-            gui.showPageBar(this.configuration.max_pages > 1);
-        }
-        // 2) populate (or clear) the page‐bar itself
-        page_bar_container.innerHTML = '';
-        if (this.configuration.max_pages > 1) {
-            page_bar_container.style.display = '';
-            page_bar_container.appendChild(this.page_grid);
-        } else {
-            // we’ve already hidden the <nav>, but just in case:
-            page_bar_container.style.display = 'none';
-        }
-
-
-        // 3) Set the headbar
-        headbar_container.innerHTML = '';
-        headbar_container.appendChild(this.headbar.element);
-
-
-        this.content_grid = content_grid;
-        this.content_grid.style.position = 'relative';
-
-        Object.values(this.pages).forEach(page => {
-            if (page.grid.parentNode !== this.content_grid) {
-                this.content_grid.appendChild(page.grid);
-                Object.assign(page.grid.style, {
-                    position: 'absolute',
-                    top: '0',
-                    left: '0',
-                    width: '100%',
-                    height: '100%',
-                    display: 'none',
-                });
-            } else {
-                page.grid.style.display = 'none';
-            }
-        });
-
-        const startId = this.page ? this.page.id : Object.keys(this.pages)[0];
-        if (startId) this.setPage(startId);
-        else this._renderEmpty(page_bar_container, content_grid);
-    }
-
-    _renderEmpty(container, content_grid) {
-        content_grid.innerHTML = '';
-    }
-
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    /**
-     * Switch visible page (unchanged)
-     * @param {string|Page} pageOrId
-     */
-    setPage(pageOrId) {
-        const id = pageOrId instanceof Page ? pageOrId.id : pageOrId;
-        const page = this.pages[id];
-        if (!page) {
-            console.warn(`Page "${id}" not found in category "${this.id}".`);
-            return;
-        }
-
-        Object.values(this.pages).forEach(p => {
-            p.grid.style.display = 'none';
-            p.button.deselect();
-        });
-
-        page.grid.style.display = 'grid';
-        page.button.select();
-        window.dispatchEvent(new Event('resize'));
-        this.page = page;
-
-    }
-
-
-    /* -------------------------------------------------------------------------------------------------------------- */
-    onEvent(event) {
-        this.callbacks.get('event').call(event);
-    }
-}
-
-export class Popup {
-    constructor(id, config = {}, payload = {}) {
-        this.id = id;
-
-        const defaultConfig = {
-            type: 'window',      // 'window' or 'dialog' or 'tab'
-            title: 'Popup',
-            background_color: [0.2, 0.2, 0.2],
-            text_color: [1, 1, 1],
-            size: [800, 400],
-            resizable: true,
-            closeable: true,     // only applies to dialog
-            disable_gui: true,   // disable GUI as long as popup is open (only for dialog)
-            title_font_size: 10, // pt
-        };
-
-        // Merge without adopting undefined
-        const safeConfig = {
-            ...defaultConfig,
-            ...Object.fromEntries(
-                Object.entries(config).filter(([, v]) => v !== undefined)
-            ),
-        };
-
-        this.config = safeConfig;
-        this._title = (typeof this.config.title === 'string' && this.config.title.trim())
-            ? this.config.title.trim()
-            : defaultConfig.title;
-
-        this.groupWidget = this.createGroupWidget(payload);
-
-        this._win = null;
-        this._poll = null;
-        this._dialogEl = null;
-        this._overlayEl = null;     // for dialog popups
-        this._shellBlobUrl = null;  // keep to revoke later
-        this._messageHandler = null;
-        this._isClosed = false;     // prevents repeated closed events
-        this._attached = false;     // ensure we attach only once
-
-        this.callbacks = new Callbacks();
-        this.callbacks.add('event');
-        this.callbacks.add('closed');
-    }
-
-    createGroupWidget(payload) {
-        const {id} = payload;
-        const groupWidget = new WidgetGroup(id, payload);
-        groupWidget.callbacks.get('event').register((ev) => {
-            this.callbacks.get('event').call({popupId: this.id, ...ev});
-        });
-        return groupWidget;
-    }
-
-    _getShellURL() {
-        try {
-            return new URL('./lib/popup-shell.html', import.meta.url).href;
-        } catch {
-            return null;
-        }
-    }
-
-    _buildShellHTML() {
-        const popupCssURL = new URL('./lib/styles/popup.css', import.meta.url).href;
-        const objectsCssURL = new URL('./lib/styles/objects.css', import.meta.url).href;
-        const stylesCssURL = new URL('./lib/styles/styles.css', import.meta.url).href;
-        const widgetStylesURL = new URL('./lib/styles/widget-styles.css', import.meta.url).href;
-        const terminalStylesURL = new URL('./lib/cli_terminal/cli_terminal.css', import.meta.url).href;
-        const lineplotStylesURL = new URL('./lib/plot/lineplot/lineplot.css', import.meta.url).href;
-
-        // Ensure we always write a non-empty title
-        const safeTitle = this._title;
-
-        return `<!DOCTYPE html>
-<html style="height:100%" lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>${safeTitle.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="${popupCssURL}">
-  <link rel="stylesheet" href="${objectsCssURL}">
-  <link rel="stylesheet" href="${stylesCssURL}">
-  <link rel="stylesheet" href="${widgetStylesURL}">
-  <link rel="stylesheet" href="${terminalStylesURL}">
-  <link rel="stylesheet" href="${lineplotStylesURL}"></link>
-  <script>
-    // Re-apply title when DOM is ready, and notify the opener.
-    document.addEventListener('DOMContentLoaded', function () {
-      document.title = ${JSON.stringify(safeTitle)};
-      try { window.opener && window.opener.postMessage({ type: 'popup-shell-ready' }, '*'); } catch {}
-    });
-  </script>
-  <style>html, body { height:100%; margin:0; }</style>
-</head>
-<body>
-  <div id="popup-root" style="height:100%; display:flex; flex-direction:column;"></div>
-</body>
-</html>`;
-    }
-
-    _openRealShell(target, features = '') {
-        const shellURL = this._getShellURL();
-        if (!shellURL) return null;
-
-        // Add non-empty, encoded title param
-        const url = new URL(shellURL);
-        url.searchParams.set('t', this._title);
-
-        try {
-            const w = window.open(url.href, target, features || undefined);
-            if (!w || w.closed) return null;
-            return w;
-        } catch (e) {
-            console.warn('Popup: failed to open real shell URL.', e);
-            return null;
-        }
-    }
-
-    _openWithBlobURL(target, features = '') {
-        return;
-        try {
-            const html = this._buildShellHTML();
-            const blob = new Blob([html], {type: 'text/html'});
-            this._shellBlobUrl = URL.createObjectURL(blob);
-            const w = window.open(this._shellBlobUrl, target, features || undefined);
-            if (!w || w.closed) return null;
-            return w;
-        } catch (e) {
-            console.warn('Popup: failed to create/open Blob URL shell.', e);
-            return null;
-        }
-    }
-
-    _installMessageBridge() {
-        if (this._messageHandler) return; // only once
-        this._messageHandler = (ev) => {
-            if (ev && ev.data && ev.data.type === 'popup-shell-ready') {
-                this._attachIntoChildWindow();
-            }
-            if (ev && ev.data && ev.data.type === 'popup-set-title') {
-                try {
-                    if (this._win && this._win.document) this._win.document.title = String(ev.data.title || this._title);
-                } catch {
-                }
-            }
-        };
-        window.addEventListener('message', this._messageHandler);
-    }
-
-    _removeMessageBridge() {
-        if (this._messageHandler) {
-            window.removeEventListener('message', this._messageHandler);
-            this._messageHandler = null;
-        }
-    }
-
-    async _attachIntoChildWindow() {
-        if (!this._win || this._attached) return; // attach only once
-        this._attached = true;
-
-        // Apply title one more time (in case the shell didn't).
-        try {
-            this._win.document.title = this._title;
-        } catch {
-        }
-
-        // Wait until #popup-root exists (the shell page has loaded)
-        const root = await this._waitForElement(() => {
-            try {
-                return this._win && this._win.document && this._win.document.getElementById('popup-root');
-            } catch {
-                return null;
-            }
-        }, 4000);
-
-        if (!root) {
-            // As a last resort, write the shell directly (same-origin)
-            try {
-                const doc = this._win.document;
-                doc.open();
-                doc.write(this._buildShellHTML());
-                doc.close();
-            } catch (e) {
-                console.warn('Popup: fallback document.write failed.', e);
-            }
-        }
-
-        // Attach UI
-        try {
-            const doc = this._win.document;
-            if (doc && doc.body) {
-                doc.body.style.backgroundColor = getColor(this.config.background_color);
-            }
-            const mount = doc.getElementById('popup-root');
-            if (mount) this._attachGroup(mount);
-        } catch (e) {
-            console.warn('Popup: failed to attach group into child window.', e);
-        }
-
-        // Install a single poller to watch for manual close
-        if (!this._poll) {
-            this._poll = setInterval(() => {
-                // In some browsers, accessing .closed after navigation can throw
-                try {
-                    if (!this._win || this._win.closed) {
-                        clearInterval(this._poll);
-                        this._poll = null;
-                        this.close_manually();
-                    }
-                } catch {
-                    clearInterval(this._poll);
-                    this._poll = null;
-                    this.close_manually();
-                }
-            }, 500);
-        }
-    }
-
-    _waitForElement(getterFn, timeoutMs = 3000) {
-        return new Promise((resolve) => {
-            const start = Date.now();
-            const tick = () => {
-                const el = getterFn();
-                if (el) return resolve(el);
-                if (Date.now() - start > timeoutMs) return resolve(null);
-                setTimeout(tick, 50);
-            };
-            tick();
-        });
-    }
-
-    _openDialogFallback() {
-        if (this._dialogEl) return;
-
-        this._dialogEl = document.createElement('div');
-        this._dialogEl.id = this.id;
-        this._dialogEl.classList.add('popup', 'popup-dialog');
-
-        // Make the dialog the correct size
-        const [width, height] = this.config.size;
-        this._dialogEl.style.width = `${width}px`;
-        this._dialogEl.style.height = `${height}px`;
-
-        // title bar
-        const titleBar = document.createElement('div');
-        titleBar.classList.add('popup-titlebar');
-        titleBar.textContent = this._title;
-        titleBar.style.fontSize = `${this.config.title_font_size}pt`;
-        titleBar.style.paddingTop = '3px';
-        titleBar.style.paddingBottom = '3px';
-        titleBar.style.paddingLeft = '10px';
-        this._dialogEl.appendChild(titleBar);
-
-        if (this.config.closeable) {
-            const btn = document.createElement('button');
-            btn.classList.add('popup-close-btn');
-            btn.textContent = '×';
-            btn.addEventListener('click', () => this.close_manually());
-            titleBar.appendChild(btn);
-        }
-
-        // content area
-        const content = document.createElement('div');
-        content.classList.add('popup-content');
-        this._dialogEl.appendChild(content);
-
-        document.body.appendChild(this._dialogEl);
-
-        this._attachGroup(content);
-    }
-
-    _attachGroup(container) {
-        container.appendChild(this.groupWidget.getElement());
-    }
-
-    close_manually() {
-        if (this._isClosed) return;
-        this._isClosed = true;
-
-        if (this._poll) {
-            clearInterval(this._poll);
-            this._poll = null;
-        }
-        this._removeMessageBridge();
-
-        this.callbacks.get('event').call({
-            id: this.id,
-            event: 'closed',
-            data: {}
-        });
-
-        this.callbacks.get('closed').call(this.id);
-    }
-
-    close() {
-        if (this._isClosed) return;
-        this._isClosed = true;
-
-        if (this._win && !this._win.closed) {
-            try {
-                this._win.close();
-            } catch {
-            }
-        }
-        if (this._poll) {
-            clearInterval(this._poll);
-            this._poll = null;
-        }
-        this._removeMessageBridge();
-
-        if (this._dialogEl) {
-            this._dialogEl.remove();
-            this._dialogEl = null;
-        }
-        if (this._shellBlobUrl) {
-            URL.revokeObjectURL(this._shellBlobUrl);
-            this._shellBlobUrl = null;
-        }
-        this._hideOverlay();
-
-        console.warn(`Popup "${this.id}" closed.`);
-        this.callbacks.get('closed').call(this.id);
-    }
-
-    _openTab() {
-        this._installMessageBridge();
-
-        // this._openWithBlobURL('_blank');
-        // Prefer real same-origin shell → correct title immediately
-        this._win = this._openRealShell('_blank');
-
-        // Fallback to Blob shell (title set in HTML + JS)
-        if (!this._win || this._win.closed) {
-            this._win = this._openWithBlobURL('_blank');
-        }
-
-        if (!this._win || this._win.closed) {
-            console.warn(`Popup.open: window.open blocked, falling back to dialog for "${this.id}"`);
-            this._removeMessageBridge();
-            this._openDialogFallback();
-            return;
-        }
-
-        // Timed attach in case message fires too early
-        this._attachIntoChildWindow();
-    }
-
-    open() {
-        const [width, height] = this.config.size;
-
-        // ── Compute center coordinates ─────────────────────────────────────────
-        const screenX = window.screenX !== undefined ? window.screenX : window.screen.left;
-        const screenY = window.screenY !== undefined ? window.screenY : window.screen.top;
-        const availWidth = window.innerWidth || screen.width;
-        const availHeight = window.innerHeight || screen.height;
-
-        const left = Math.round(screenX + (availWidth - width) / 2);
-        const top = Math.round(screenY + (availHeight - height) / 2);
-
-        if (this.config.type === 'window') {
-            const features = [
-                `width=${width}`,
-                `height=${height}`,
-                `left=${left}`,
-                `top=${top}`,
-                `resizable=${this.config.resizable ? 'yes' : 'no'}`,
-            ].join(',');
-
-            this._installMessageBridge();
-
-            // Prefer real same-origin shell
-            this._win = this._openRealShell(this.id, features);
-
-            // Fallback to Blob shell
-            if (!this._win || this._win.closed) {
-                this._win = this._openWithBlobURL(this.id, features);
-            }
-
-            // If popup blocked, fallback to dialog
-            if (!this._win || this._win.closed) {
-                console.warn(`Popup.open: window.open blocked, falling back to dialog for "${this.id}"`);
-                this._removeMessageBridge();
-                this._openDialogFallback();
-                return;
-            }
-
-            // Timed attach as additional safety
-            this._attachIntoChildWindow();
-
-        } else if (this.config.type === 'tab') {
-            this._openTab();
-        } else {
-            // dialog
-            this._openDialogFallback();
-        }
-
-        // if it's a dialog and GUI should be disabled underneath
-        if (this.config.type === 'dialog' && this.config.disable_gui) {
-            this._showOverlay();
-        }
-    }
-
-    hide() {
-        if (this._dialogEl) this._dialogEl.style.display = 'none';
-    }
-
-    getObjectByPath(path) {
-        let key, remainder;
-        [key, remainder] = splitPath(path);
-
-        const childKey = `${this.id}/${key}`;
-
-        if (childKey === this.groupWidget.id) {
-            if (!remainder) {
-                return this.groupWidget;
-            } else {
-                return this.groupWidget.getObjectByPath(remainder);
-            }
-        }
-    }
-
-    // ── overlay helpers ─────────────────────────────────────────────────────
-    _showOverlay() {
-        const overlay = document.createElement('div');
-        overlay.id = `${this.id}__overlay`;
-        overlay.classList.add('popup-gui-overlay');
-        document.body.appendChild(overlay);
-        this._overlayEl = overlay;
-    }
-
-    _hideOverlay() {
-        if (this._overlayEl) {
-            this._overlayEl.display = 'none';
-            document.body.removeChild(this._overlayEl);
-            this._overlayEl.remove();
-            this._overlayEl = null;
-            console.log('Overlay removed.');
-        }
-    }
-}
-
-/* ================================================================================================================== */
-class CalloutButton {
-    constructor(text, text_color, color, size, on_click_callback) {
-        this.text = text;
-        this.text_color = text_color;
-        this.color = color;
-        this.size = size;
-        this.on_click_callback = on_click_callback;
-        this.element = this.configureElement();
-        this.attachListeners(this.element);
-    }
-
-    configureElement() {
-        const btn = document.createElement('button');
-        btn.classList.add('callout-btn');
-        btn.textContent = this.text;
-        Object.assign(btn.style, {
-            background: getColor(this.color),
-            color: getColor(this.text_color),
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            flex: `0 0 ${this.size}%`,   // width = size% of callout
-        });
-        return btn;
-    }
-
-    attachListeners(element) {
-        element.addEventListener('click', () => {
-            if (this.on_click_callback) this.on_click_callback();
-        });
-    }
-}
-
-class Callout {
-    // you can override these from GUI with Callout.baseRightMargin = ... etc.
-    static baseRightMargin = 10;
-    static baseBottomMargin = 200;
-    static gap = 10;
-    static container = null;
-
-    static getContainer() {
-        if (!Callout.container) {
-            const c = document.createElement('div');
-            c.id = 'callout-container';
-            c.classList.add('callout-container');
-            document.body.appendChild(c);
-            Callout.container = c;
-        }
-        return Callout.container;
-    }
-
-    constructor(id, config = {}, on_event_callback, close_callback) {
-        this.id = id;
-        this.on_event_callback = on_event_callback;
-        this.close_callback = close_callback;
-
-        const defaults = {
-            background_color: [0.2, 0.2, 0.2, 0.4],
-            border_color: [0.6, 0.6, 0.6],
-            border_width: 1,
-            size: [200, 80],  // [width, height] in px
-            expand: true,
-            text_color: [1, 1, 1],
-            font_size: 9,    // pt
-            font_family: 'Roboto',
-            closeable: true,
-            title: '',
-            title_font_size: 10,   // pt
-            title_text_color: [1, 1, 1],
-            title_text_weight: 'bold',
-            content: '',
-            symbol: 'ℹ️',
-            buttons: {},   // { key: { text, text_color, color, size } }
-        };
-
-        this.config = {...defaults, ...config};
-        this.buttons = {};
-
-        // build DOM
-        this.element = document.createElement('div');
-        this.element.id = this.id;
-        this.element.classList.add('callout');
-        this.configureElement(this.element);
-    }
-
-    configureElement(el) {
-        const [w, h] = this.config.size;
-        Object.assign(el.style, {
-            width: `${w}px`,
-            background: getColor(this.config.background_color),
-            border: `${this.config.border_width}px solid ${getColor(this.config.border_color)}`,
-            borderRadius: '6px',
-            boxSizing: 'border-box',
-            fontFamily: this.config.font_family,
-            fontSize: `${this.config.font_size}pt`,
-            color: getColor(this.config.text_color),
-            display: 'flex',
-            flexDirection: 'column',
-            position: 'relative',
-            overflow: 'hidden',
-        });
-
-        el.classList.add('callout')
-
-        if (this.config.expand) {
-            Object.assign(el.style, {
-                height: '100%',
-                flex: '1 1 auto',
-                minHeight: `${h}px`,
-            });
-        } else {
-            Object.assign(el.style, {
-                height: `${h}px`,
-                minHeight: `${h}px`,
-                // flex: '0 0 auto',
-            });
-        }
-
-        // header (title + optional ×)
-        const header = document.createElement('div');
-        header.classList.add('callout-header');
-        const title = document.createElement('span');
-        title.classList.add('callout-title');
-        title.textContent = this.config.title;
-        header.appendChild(title);
-        if (this.config.closeable) {
-            const x = document.createElement('button');
-            x.classList.add('callout-close-btn');
-            x.textContent = '×';
-            x.addEventListener('click', () => this.close_manually());
-            header.appendChild(x);
-        }
-        el.appendChild(header);
-
-        // content text
-        const content = document.createElement('div');
-        content.classList.add('callout-content');
-        content.textContent = this.config.content;
-        el.appendChild(content);
-
-        // buttons row
-        const btnRow = document.createElement('div');
-        btnRow.classList.add('callout-buttons');
-        this.buttons = this.generateButtons(this.config.buttons);
-        Object.values(this.buttons).forEach(b => btnRow.appendChild(b.element));
-        el.appendChild(btnRow);
-
-        // symbol in lower-right
-        const sym = document.createElement('div');
-        sym.classList.add('callout-symbol');
-        sym.textContent = this.config.symbol;
-        el.appendChild(sym);
-
-        // inject into page
-        const container = Callout.getContainer();
-        container.prepend(el);
-
-
-        // Add double click listener to element
-        el.addEventListener('dblclick', () => {
-            this.close_manually();
-        });
-    }
-
-    generateButtons(cfg) {
-        const btns = {};
-        Object.entries(cfg).forEach(([key, bcfg]) => {
-            btns[key] = new CalloutButton(
-                bcfg.text,
-                bcfg.text_color,
-                bcfg.color,
-                bcfg.size,
-                () => {
-                    if (this.on_event_callback) {
-                        this.on_event_callback({
-                            id: this.id,
-                            event: 'button_click',
-                            data: {button: key}
-                        });
-                    }
-                }
-            );
-        });
-        return btns;
-    }
-
-    close_manually() {
-        // user clicked “×” → notify backend
-        if (this.on_event_callback) {
-            this.on_event_callback({id: this.id, event: 'close', data: {}});
-        }
-    }
-
-    close() {
-        const el = this.element;
-        // 1) start the CSS transition
-        el.classList.add('closing');
-
-        // 2) when it’s done, actually remove it
-        el.addEventListener('transitionend', () => {
-            const container = Callout.getContainer();
-            if (container.contains(el)) container.removeChild(el);
-            if (this.close_callback) this.close_callback(this.id);
-            // if that was the last callout, tear down the whole container
-            if (!container.childElementCount) {
-                container.remove();
-                Callout.container = null;
-            }
-        }, {once: true});
-
-    }
-}
+// Re-export moved classes for external compatibility
+export {Page} from './lib/page.js';
+export {Category, CategoryButton} from './lib/category.js';
+export {Popup} from './lib/popup.js';
+export {Callout} from './lib/callout.js';
 
 /* ================================================================================================================== */
 export class GUI {
@@ -1905,6 +290,17 @@ export class GUI {
         this.category_bar_list.id = 'category_bar_list';
         this.category_bar.appendChild(this.category_bar_list);
 
+        // ── FAVORITES SECTION (in category bar) ────────────────────────────────
+        this.favorites_section = document.createElement('div');
+        this.favorites_section.id = 'favorites_section';
+        this.category_bar.appendChild(this.favorites_section);
+
+        this.shortcuts_container = document.createElement('div');
+        this.shortcuts_container.className = 'shortcuts-container';
+        this.favorites_section.appendChild(this.shortcuts_container);
+
+        this.drawShortcutsContainer();
+
         this.rootContainer.appendChild(this.category_bar);
 
 
@@ -1926,23 +322,18 @@ export class GUI {
 
         this.rootContainer.appendChild(this.bottombar);
 
-        this.apps_container = document.createElement('div');
-        this.apps_container.className = 'apps-container';
-        this.bottombar.appendChild(this.apps_container);
+        this.bottom_container = document.createElement('div');
+        this.bottom_container.className = 'bottom-container';
+        this.bottombar.appendChild(this.bottom_container);
 
-        this.shortcuts_container = document.createElement('div');
-        this.shortcuts_container.className = 'shortcuts-container';
-        this.bottombar.appendChild(this.shortcuts_container);
-
-        this.drawShortcutsContainer();
-
-        const emergency_container = document.createElement('div');
-        emergency_container.className = 'emergency-container';
-        this.bottombar.appendChild(emergency_container);
+        // Emergency stop container (conditionally shown later via _initialize)
+        this.emergency_container = document.createElement('div');
+        this.emergency_container.className = 'emergency-container';
+        this.bottombar.appendChild(this.emergency_container);
 
         this.stopButton = document.createElement('button');
         this.stopButton.className = 'stop-button';
-        emergency_container.appendChild(this.stopButton);
+        this.emergency_container.appendChild(this.stopButton);
 
         const stopIcon = document.createElement('img');
         stopIcon.src = 'emergency_stop.png';
@@ -1955,6 +346,8 @@ export class GUI {
             this._emergencyStop();
         });
 
+        // Emergency stop is enabled by default; _initialize may disable it
+        this._enableEmergencyStop = true;
 
         // Initial Display
         this.bottombar.style.display = 'none';
@@ -1964,12 +357,12 @@ export class GUI {
     drawShortcutsContainer() {
         this.shortcuts_group = new WidgetGroup('shortcuts', {
                 config: {
-                    rows: 3,
-                    columns: 2,
+                    rows: 4,
+                    columns: 1,
                     border_width: 0,
                     gap: 3,
                     fit: true,
-                    title: 'Favorites ⭐',
+                    title: 'Favorites',
                     title_bottom_border: false,
                     fill_empty: true,
                     non_fit_aspect_ratio: 0.5
@@ -2235,6 +628,13 @@ export class GUI {
             if (fullKey === this.terminal.id) {
                 return this.terminal;
             }
+        } else if (object_type === 'bottom_group') {
+            if (!this.bottom_group) {
+                console.warn(`Bottom group not found in GUI "${this.id}".`);
+                return null;
+            }
+            if (!object_remainder) return this.bottom_group;
+            return this.bottom_group.getObjectByPath(object_remainder);
         } else {
             console.warn(`UID "${uid}" does not start with a valid type (categories, popups, callouts).`);
             return null;
@@ -2671,6 +1071,32 @@ export class GUI {
             this.id = config.id || 'gui';
             // TODO: Here we have to set some properties, such as show category bar or auto_hide
 
+            // Handle top bar option (category head bar above page bar)
+            if (config.options && config.options.enable_top_bar === false) {
+                this.category_head_bar.style.display = 'none';
+                this.side_placeholder.style.display = 'none';
+                this.rootContainer.style.setProperty('--category-bar-height', '0px');
+            }
+
+            // Handle emergency stop option
+            if (config.options && config.options.enable_emergency_stop === false) {
+                this._enableEmergencyStop = false;
+                this.emergency_container.style.display = 'none';
+                this.bottombar.classList.add('no-emergency');
+            } else {
+                this._enableEmergencyStop = true;
+                this.emergency_container.style.display = '';
+                this.bottombar.classList.remove('no-emergency');
+            }
+
+            // Handle message rate display option
+            this._showMessageRate = !(config.options && config.options.show_message_rate === false);
+            this._messageRateWarning = (config.options && config.options.message_rate_warning) || 200;
+
+            if (!this._showMessageRate) {
+                this.msgRateDisplay.style.display = 'none';
+            }
+
             if (config.categories) {
                 for (let id in config.categories) {
                     const category = new Category(config.categories[id].id,
@@ -2693,9 +1119,9 @@ export class GUI {
                 console.log('Terminal is disabled');
             }
 
-            // Add all applications
-            if (config.applications) {
-                this._addApplications(config.applications);
+            // Add bottom group
+            if (config.bottom_group) {
+                this._addBottomGroup(config.bottom_group);
             }
 
         }
@@ -2716,10 +1142,10 @@ export class GUI {
         }
     }
 
-    _addApplications(config) {
-        this.app_group = new WidgetGroup(config.id, config);
-        this.app_group.attach(this.apps_container);
-        this.app_group.callbacks.get('event').register(this._onEvent.bind(this));
+    _addBottomGroup(config) {
+        this.bottom_group = new WidgetGroup(config.id, config);
+        this.bottom_group.attach(this.bottom_container);
+        this.bottom_group.callbacks.get('event').register(this._onEvent.bind(this));
     }
 
     /* ===============================================================================================================*/
@@ -2983,7 +1409,17 @@ export class GUI {
     _updateMessageRate() {
         const count = this.msgTimestamps.length;
         const rate = count / this.msgRateWindow;
-        this.msgRateDisplay.textContent = rate.toFixed(1) + ' M/s';
+
+        if (this._showMessageRate) {
+            this.msgRateDisplay.textContent = rate.toFixed(1) + ' M/s';
+        }
+
+        // Warning indicator when rate exceeds threshold (works whether text is shown or not)
+        if (rate >= this._messageRateWarning) {
+            this.statusIndicator.classList.add('rate-warning');
+        } else {
+            this.statusIndicator.classList.remove('rate-warning');
+        }
     }
 
     /* ===============================================================================================================*/
@@ -3253,6 +1689,7 @@ export class GUI {
 
         switch (e.code) {
             case 'Space':
+                if (!this._enableEmergencyStop) break;
                 if (!this._emergencyArmed) {
                     this._armEmergencyStop();
                 } else {

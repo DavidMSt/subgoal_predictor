@@ -160,6 +160,7 @@ class BILBO_Common:
         self.interaction_events.resume.set(data=data)
 
     def setRepeatEvent(self, data):
+        self.logger.info("Set repeat event")
         self.interaction_events.repeat.set(data=data)
 
     def setAbortEvent(self, data):

@@ -800,7 +800,6 @@ class RobotUI:
             show_name=False
         )
         self._first_stream_tick: int | None = None
-        self._agent_is_tracked: bool = False  # current color state
         self.map_widget.map.addObject(self.robot_map_agent)
 
         def map_double_click(data, *args, **kwargs):
@@ -1916,12 +1915,10 @@ class RobotUI:
                 psi=sample.estimation.state.psi
             )
 
-            # Change agent color based on tracking source
+            # Set agent color based on tracking source (resent every tick to guard against missed updates)
             is_tracked = not sample.estimation.is_dead_reckoning
-            if is_tracked != self._agent_is_tracked:
-                self._agent_is_tracked = is_tracked
-                color = [0.2, 0.6, 0.2] if is_tracked else [0.6, 0.2, 0.2]
-                self.robot_map_agent.updateConfig(color=color)
+            color = [0.2, 0.6, 0.2] if is_tracked else [0.6, 0.2, 0.2]
+            self.robot_map_agent.updateConfig(color=color)
 
     # ------------------------------------------------------------------------------------------------------------------
     def on_new_tracker_sample(self, sample, *args, **kwargs):

@@ -29,8 +29,8 @@ export class TerminalWidget extends Widget {
         this.socket = io(`http://${this.configuration.host}:${this.configuration.port}`, {
             reconnection: true,
             reconnectionAttempts: Infinity,
-            reconnectionDelay: 500,
-            reconnectionDelayMax: 2000,
+            reconnectionDelay: 2000,
+            reconnectionDelayMax: 15000,
         });
 
 

@@ -50,13 +50,82 @@ html, body {
   user-select: none;
 }
 
-/* ─── Close button (dialog only) ───────────────────────────────────── */
-.popup-close-btn {
+/* ─── Title bar button group ───────────────────────────────────────── */
+.popup-titlebar-buttons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+/* ─── Shared titlebar button base ─────────────────────────────────── */
+.popup-close-btn,
+.popup-popout-btn,
+.popup-minimize-btn {
   background: none;
   border: none;
-  color: #fff;
-  font-size: 1.2em;
+  color: #aaa;
   cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  transition: background 0.15s, color 0.15s;
+}
+
+/* ─── Close button (dialog only) ───────────────────────────────────── */
+.popup-close-btn {
+  font-size: 1.2em;
+  color: #ccc;
+}
+.popup-close-btn:hover {
+  background: rgba(200, 50, 50, 0.6);
+  color: #fff;
+}
+
+/* ─── Minimize button ────────────────────────────────────────────── */
+.popup-minimize-btn {
+  font-size: 1.1em;
+}
+.popup-minimize-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+/* ─── Pop-out button ──────────────────────────────────────────────── */
+.popup-popout-btn {
+  font-size: 1.1em;
+}
+.popup-popout-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+/* ─── Resize handle (bottom-right corner) ─────────────────────────── */
+.popup-resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  z-index: 10;
+}
+.popup-resize-handle::after {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid rgba(255,255,255,0.3);
+  border-bottom: 2px solid rgba(255,255,255,0.3);
+}
+
+/* ─── Draggable title bar cursor ──────────────────────────────────── */
+.popup-titlebar {
+  cursor: grab;
+}
+.popup-titlebar:active {
+  cursor: grabbing;
 }
 
 /* ─── Content area ─────────────────────────────────────────────────── */
@@ -81,4 +150,115 @@ html, body {
     background-color: rgba(0, 0, 0, 0.6); /* adjust opacity */
     z-index: 9998; /* just under the popup */
     pointer-events: auto;
+}
+
+/* ─── Dock container (left sidebar, below favorites) ─────────────── */
+.popup-dock {
+  flex: 0 0 auto;
+  border-top: 1px solid #333;
+  padding-top: 5px;
+  margin-top: 5px;
+}
+
+/* Collapsed label row — always visible */
+.popup-dock-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  color: rgba(255, 255, 255, 0.5);
+  font-family: 'Roboto', sans-serif;
+  font-size: 11px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  user-select: none;
+  cursor: default;
+}
+
+.popup-dock-label-icon {
+  font-size: 14px;
+}
+
+/* Expandable entry list — hidden until hover */
+.popup-dock-list {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.2s ease-out, opacity 0.2s ease-out;
+  opacity: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 2px;
+}
+
+.popup-dock:hover .popup-dock-list {
+  max-height: 300px;
+  opacity: 1;
+  transition: max-height 0.25s ease-in, opacity 0.15s ease-in;
+}
+
+.popup-dock:hover .popup-dock-label {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+/* ─── Dock entry rows ────────────────────────────────────────────── */
+.popup-dock-entry {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(40, 40, 50, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 4px 6px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.popup-dock-entry:hover {
+  background: rgba(60, 60, 75, 0.9);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+.popup-dock-entry-title {
+  flex: 1;
+  color: rgba(255, 255, 255, 0.7);
+  font-family: 'Roboto', sans-serif;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup-dock-entry-close {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 2px;
+  border-radius: 3px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.popup-dock-entry-close:hover {
+  background: rgba(200, 50, 50, 0.6);
+  color: #fff;
+}
+
+/* ─── Minimize / Restore animations ──────────────────────────────── */
+.popup-minimizing {
+  animation: popup-minimize-anim 0.25s ease-in forwards;
+}
+.popup-restoring {
+  animation: popup-restore-anim 0.2s ease-out forwards;
+}
+
+@keyframes popup-minimize-anim {
+  from { transform: scale(1); opacity: 1; }
+  to   { transform: scale(0.2); opacity: 0; }
+}
+@keyframes popup-restore-anim {
+  from { transform: scale(0.8); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
 }

@@ -19,7 +19,7 @@ from core.utils.exit import register_exit_callback
 from core.utils.files import get_absolute_path
 from core.utils.js.vite import run_vite_app
 from core.utils.logging_utils import Logger
-from core.utils.dataclass_utils import asdict_optimized
+from core.utils.dataclass_utils import asdict_optimized, from_dict_auto
 from core.utils.time import delayed_execution
 from core.utils.websockets import WebsocketServer, WebsocketClient, WebsocketServerClient
 from extensions.gui.settings import WS_PORT_DESKTOP, PORT_JS_APP, WS_PORT_MOBILE
@@ -32,7 +32,6 @@ from extensions.gui.src.lib.objects.python.callout import CalloutHandler
 from extensions.gui.src.lib.objects.python.indicators import BatteryIndicatorWidget, NetworkIndicator, \
     JoystickIndicator, ConnectionIndicator
 from extensions.gui.src.lib.objects.python.popup import Popup, PopupInstance
-from extensions.gui.src.lib.objects.python.popup_application import GUI_Popup_Application, Application_Payload
 from extensions.gui.src.lib.utilities import check_for_spaces, split_path, addIdPrefix, check_id
 
 
@@ -992,13 +991,29 @@ class Parent:
 
 
 @dataclasses.dataclass
+class GUISettings:
+    color: list = dataclasses.field(default_factory=lambda: [31 / 255, 32 / 255, 35 / 255, 1])
+    rows: int = 18
+    columns: int = 50
+    max_pages: int = 10
+    logo_path: str = ''
+    name: str = None
+    enable_emergency_stop: bool = True
+    bottom_group_size: list = dataclasses.field(default_factory=lambda: [3, 3])
+    enable_top_bar: bool = True
+    allow_multiple_instances: bool = False
+    show_message_rate: bool = True
+    message_rate_warning: int = 200
+
+
+@dataclasses.dataclass
 class GUI_Payload:
     id: str
     name: str
     options: dict
     export: Category_Payload
     categories: dict[str, Category_Payload]
-    applications: dict[str, Application_Payload]
+    bottom_group: dict
     cli_terminal: dict
     type: str = 'gui'
 
@@ -1032,8 +1047,7 @@ class GUI:
 
     popups: dict[str, Popup]
 
-    # apps: dict[str, GUI_Popup_Application]
-    application_group: Widget_Group
+    bottom_group: Widget_Group
 
     cli_terminal: CLI_Terminal
 
@@ -1047,28 +1061,16 @@ class GUI:
     def __init__(self, id,
                  host,
                  run_js: bool = False,
-                 allow_multiple_instances: bool = False,
                  options=None,
                  task: bool = True,
                  Ts: float = 0.05):
 
         self.id = self._prepareID(id)
-        if options is None:
-            options = {}
 
-        default_options = {
-            'color': [31 / 255, 32 / 255, 35 / 255, 1],
-            'rows': 18,
-            'columns': 50,
-            'max_pages': 10,
-            'logo_path': '',
-            'name': None,
-        }
-
-        self.options = {**default_options, **options}
-
-        if self.options['name'] is None:
-            self.options['name'] = self.id
+        self.settings = from_dict_auto(GUISettings, options or {})
+        if self.settings.name is None:
+            self.settings.name = self.id
+        self.options = dataclasses.asdict(self.settings)
 
         self.run_task = task
         self._thread = threading.Thread(target=self._task, daemon=True)  # But only start it if run_task is True
@@ -1111,16 +1113,17 @@ class GUI:
         # Event for file picker responses (request-response pattern)
         self.file_picker_event = Event(flags=EventFlag('request_id', str))
 
-        self.application_group = Widget_Group('apps',
-                                              rows=3,
-                                              columns=3,
-                                              border=False,
-                                              border_width=0,
-                                              title_bottom_border=False,
-                                              title='Apps and Shortcuts')
-        self.application_group.parent = self
+        bottom_size = self.options.get('bottom_group_size', [3, 3])
+        self.bottom_group = Widget_Group('bottom_group',
+                                        rows=bottom_size[0],
+                                        columns=bottom_size[1],
+                                        border=False,
+                                        border_width=0,
+                                        title_bottom_border=False,
+                                        title='')
+        self.bottom_group.parent = self
 
-        self.allow_multiple_instances = allow_multiple_instances
+        self.allow_multiple_instances = self.settings.allow_multiple_instances
 
         self.update_message_lock = threading.Lock()
 
@@ -1285,7 +1288,7 @@ class GUI:
 
     # ------------------------------------------------------------------------------------------------------------------
     def addApplicationButton(self, button):
-        self.application_group.addWidget(button)
+        self.bottom_group.addWidget(button)
 
     # ------------------------------------------------------------------------------------------------------------------
     def sendUpdate(self, uid: str, message: UpdateMessage):
@@ -1415,7 +1418,7 @@ class GUI:
         # 4) Split off the first ID. This should be the type of object we are looking for
         object_type, remainder = split_path(remainder)
 
-        if object_type not in ('categories', 'popups', 'callouts', 'apps'):
+        if object_type not in ('categories', 'popups', 'callouts', 'bottom_group'):
             self.logger.warning(f"UID '{uid}' does not start with a valid object type (categories/popups/callouts)")
             return None
 
@@ -1471,13 +1474,13 @@ class GUI:
 
                 return callout
 
-            case 'apps':
-                button_id, remainder = split_path(remainder)
-                if not button_id:
-                    self.logger.warning(f"UID '{uid}' does not contain a valid application ID")
+            case 'bottom_group':
+                widget_id, remainder = split_path(remainder)
+                if not widget_id:
+                    self.logger.warning(f"UID '{uid}' does not contain a valid bottom_group widget ID")
                     return None
 
-                return self.application_group.getObjectByPath(button_id)
+                return self.bottom_group.getObjectByPath(widget_id)
 
         return None
 
@@ -1490,7 +1493,7 @@ class GUI:
             options=self.options,
             export=self.export_category.getPayload(),
             categories={k: v.getPayload() for k, v in self.categories.items()},
-            applications=self.application_group.getPayload(),
+            bottom_group=self.bottom_group.getPayload(),
             cli_terminal=self.cli_terminal.getPayload(),
         )
 

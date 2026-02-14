@@ -116,6 +116,7 @@ export class Babylon extends Scene {
         this.config = {...default_config, ...config};
         this.id = id;
         this.objects = {}
+        this._renderLoopRunning = true; // Scene constructor starts the render loop
 
         this.canvas = canvasOrEngine;
 
@@ -177,7 +178,7 @@ export class Babylon extends Scene {
     /* -------------------------------------------------------------------------------------------------------------- */
     removeObject(object) {
 
-        // CHeck if object is a string
+        // Check if object is a string
         if (typeof object === 'string') {
             object = this.getObjectByUID(object);
             if (!object) {
@@ -191,14 +192,17 @@ export class Babylon extends Scene {
             console.warn(`Object with id ${object.id} does not exist`);
         }
 
-        object.delete();
+        if (typeof object.delete === 'function') {
+            object.delete();
+        }
         this.log(`Object ${object.id} removed`, 'warning');
     }
 
     reset() {
-        // Loop through all objects and remove them
-        for (const [key, value] of Object.entries(this.objects)) {
-            this.removeObject(value);
+        // Snapshot the values since removeObject mutates this.objects
+        const objects = Object.values(this.objects);
+        for (const obj of objects) {
+            this.removeObject(obj);
         }
     }
 
@@ -582,6 +586,12 @@ export class Babylon extends Scene {
     _onWebsocketConnect() {
         this.callbacks.get('websocket_connected').call();
         this.log(`Websocket connected`)
+
+        // Restart the render loop (stopped on disconnect)
+        if (this.engine && !this._renderLoopRunning) {
+            this.engine.runRenderLoop(() => this.scene.render());
+            this._renderLoopRunning = true;
+        }
     }
 
     /* --------------------------------------------------------------------------------------------------------------- */
@@ -589,6 +599,12 @@ export class Babylon extends Scene {
         this.callbacks.get('websocket_disconnected').call();
         this.log(`Websocket disconnected`)
         this.reset();
+
+        // Stop the render loop to prevent WebGL errors on disposed resources
+        if (this.engine) {
+            this.engine.stopRenderLoop();
+            this._renderLoopRunning = false;
+        }
     }
 
     /* --------------------------------------------------------------------------------------------------------------- */
@@ -1150,7 +1166,19 @@ export class Babylon extends Scene {
         this._mq = this._mqHandler = null;
         window.visualViewport?.removeEventListener?.('resize', this._vvHandler);
         window.removeEventListener('resize', this._winResizeHandler);
-        // engine.dispose() etc. if appropriate
+
+        // Stop render loop and dispose engine/scene
+        if (this.engine) {
+            this.engine.stopRenderLoop();
+            this._renderLoopRunning = false;
+        }
+        this.reset();
+        if (this.scene) {
+            this.scene.dispose();
+        }
+        if (this.engine) {
+            this.engine.dispose();
+        }
     }
 }
 

@@ -2715,7 +2715,6 @@
     position: relative;
     background: #111;
     overflow: hidden;
-    border-radius: 6px;
 }
 
 /* ── Compact pop-out button (hidden by default, shown in compact mode) ──── */
@@ -2757,6 +2756,62 @@
 
 .cameraWidget--compact .cameraWidget__statusText {
     font-size: 1.2em;
+}
+
+.cameraWidget__noCamIcon {
+    position: relative;
+    display: inline-block;
+    line-height: 1;
+    opacity: 0.35;
+}
+
+.cameraWidget__rescanOverlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.85);
+    background: rgba(10, 10, 10, 0.6);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 50%;
+    width: 2.2em;
+    height: 2.2em;
+    font-size: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    pointer-events: none;
+    z-index: 2;
+}
+
+.cameraWidget__statusText:hover .cameraWidget__rescanOverlay {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+.cameraWidget__noCamIcon::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 110%;
+    height: 110%;
+    transform: translate(-50%, -50%);
+    border: 2.5px solid rgb(220, 60, 60);
+    border-radius: 50%;
+    background: linear-gradient(
+        to top right,
+        transparent calc(50% - 1.5px),
+        rgb(220, 60, 60) calc(50% - 1.5px),
+        rgb(220, 60, 60) calc(50% + 1.5px),
+        transparent calc(50% + 1.5px)
+    );
+    pointer-events: none;
 }
 
 .cameraWidget--compact .cameraWidget__compactBtn {
@@ -2881,8 +2936,8 @@
 /* ── Floating pop-out panel ───────────────────────────────────────────────── */
 .cameraWidget__float {
     position: fixed;
-    z-index: 900;
-    background: transparent;
+    z-index: 10000;
+    background: rgba(0, 0, 0, 0.01);
     border-radius: 10px;
     overflow: hidden;
     box-shadow: 0 6px 32px rgba(0, 0, 0, 0.35);

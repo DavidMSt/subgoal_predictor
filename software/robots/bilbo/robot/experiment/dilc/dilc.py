@@ -29,6 +29,7 @@ from core.utils.yaml_utils import load_yaml
 from robots.bilbo.robot.experiment.experiment_definitions import (
     read_output_file, write_output_file, OutputTrajectoryFileData,
     write_input_file, InputTrajectory,
+    write_model_vector_file, ModelVector, ModelVectorFileData,
 )
 from core.utils.sound.sound import speak
 from robots.bilbo.settings import get_settings
@@ -589,6 +590,7 @@ class DILC_Experiment:
                 self._download_and_save_results(results_filepath)
 
             self._save_best_input()
+            self._save_best_model()
             self._auto_generate_report()
 
             self.events.experiment_finished.set(data=data)
@@ -775,6 +777,46 @@ class DILC_Experiment:
             self.logger.info(f"Saved best input trajectory to {self._run_dir}/{file_name}.bitrj")
         except Exception as e:
             self.logger.warning(f"Failed to save best input trajectory: {e}")
+
+    def _save_best_model(self):
+        """Save the model vector from the trial with the lowest IML error norm."""
+        if not self._run_dir:
+            return
+
+        # Prefer full results from JSON (has m arrays); fall back to WiFi trial data
+        trials = (self.results.trials if self.results and self.results.trials else None)
+        if trials is None and self.trials:
+            trials = [dataclasses.asdict(t) for t in self.trials]
+        if not trials:
+            self.logger.debug("No trial data available — skipping best model save")
+            return
+
+        try:
+            best_trial = min(trials, key=lambda t: t.get('e_norm_iml', float('inf')))
+            m = best_trial.get('m')
+            if m is None:
+                self.logger.warning("Best trial has no model vector data — skipping")
+                return
+
+            best_index = best_trial.get('trial_index', best_trial.get('index', '?'))
+            e_norm = best_trial.get('e_norm_iml', 0)
+            self.logger.info(f"Best model trial: {int(best_index) + 1} (e_norm_iml={e_norm:.6f})")
+
+            model = ModelVector.from_vector(
+                vector=np.asarray(m),
+                name=f"best_m (trial {int(best_index) + 1})",
+                id=int(best_index) + 1,
+                dt=self.settings.Ts if self.settings else 0.01,
+            )
+            file_data = model.to_file_data(
+                id=self.settings.id if self.settings else 'dilc',
+                description=f"Best model vector (trial {int(best_index) + 1}, e_norm_iml={e_norm:.6f})",
+            )
+            file_path = os.path.join(self._run_dir, f"{self._run_id or 'best_model'}.bmvec")
+            write_model_vector_file(file_path, file_data)
+            self.logger.info(f"Saved best model vector to {file_path}")
+        except Exception as e:
+            self.logger.warning(f"Failed to save best model vector: {e}")
 
     # === Auto Report ==================================================================
 

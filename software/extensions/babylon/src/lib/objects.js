@@ -357,7 +357,9 @@ export class BabylonObjectGroup {
         }
         delete this.objects[object.id];
         object.parent = null;
-        object.delete();
+        if (typeof object.delete === 'function') {
+            object.delete();
+        }
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */

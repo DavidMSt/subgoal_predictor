@@ -110,6 +110,19 @@ class BILBO_Interfaces:
         )
 
         self.communication.wifi.newCommand(
+            identifier='revert',
+            function=self.core.setRepeatEvent,
+            arguments=[CommandArgument(
+                name='data',
+                type='any',
+                optional=True,
+                default=None,
+                description='Data to repeat with (optional)'
+            )],
+            description='Repeat the last action'
+        )
+
+        self.communication.wifi.newCommand(
             identifier='abort',
             function=self.core.setAbortEvent,
             arguments=[CommandArgument(

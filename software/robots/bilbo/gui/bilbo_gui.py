@@ -1,12 +1,18 @@
+import dataclasses
+
 from core.utils.callbacks import callback_definition, CallbackContainer, Callback
+from core.utils.dataclass_utils import from_dict_auto
+from core.utils.files import get_absolute_path, file_exists
 from core.utils.logging_utils import Logger, addLogRedirection, LOGGING_COLORS
 from core.utils.mdns import MDNSAdvertiser
 from core.utils.network.port_forwarder import PortForwarder
+from core.utils.yaml_utils import load_yaml
 from extensions.cli.cli import CLI
 from extensions.gui.src.app import App
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.objects.python.buttons import Button
 from extensions.gui.src.lib.objects.python.callout import CalloutType
+from extensions.gui.src.lib.objects.python.camera import CameraWidget
 from extensions.gui.src.lib.objects.python.popup import YesNoPopup
 from extensions.gui.settings import PORT_JS_APP
 from robots.bilbo.gui.applications.input_viewer import InputViewerApplication
@@ -23,6 +29,18 @@ MDNS_HOSTNAME = "bilbolab"  # Will be accessible as http://bilbolab.local/gui (w
 
 
 # ======================================================================================================================
+
+@dataclasses.dataclass
+class BILBO_GUI_Settings:
+    enable_camera: bool = False
+    enable_emergency_stop: bool = False
+    bottom_group_size: list = dataclasses.field(default_factory=lambda: [3, 3])
+    enable_top_bar: bool = True
+    allow_multiple_instances: bool = False
+    show_message_rate: bool = True
+    message_rate_warning: int = 200
+
+
 @callback_definition
 class BILBO_Application_GUI_Callbacks:
     emergency_stop: CallbackContainer
@@ -49,6 +67,15 @@ class BILBO_Application_GUI:
                  mdns_hostname: str = MDNS_HOSTNAME,
                  mdns_use_port_80: bool = False):
 
+        settings_file = get_absolute_path('./gui_settings.yaml')
+
+        if file_exists(settings_file):
+            settings_dict = load_yaml(settings_file)
+        else:
+            settings_dict = {}
+
+        self.settings = from_dict_auto(BILBO_GUI_Settings, settings_dict)
+
         self.application_settings = settings
         self.callbacks = BILBO_Application_GUI_Callbacks()
         self.host = host
@@ -59,7 +86,15 @@ class BILBO_Application_GUI:
         self.gui = GUI(
             id='bilbo_application',
             host=host,
-            run_js=True
+            run_js=True,
+            options={
+                'enable_emergency_stop': self.settings.enable_emergency_stop,
+                'bottom_group_size': self.settings.bottom_group_size,
+                'enable_top_bar': self.settings.enable_top_bar,
+                'allow_multiple_instances': self.settings.allow_multiple_instances,
+                'show_message_rate': self.settings.show_message_rate,
+                'message_rate_warning': self.settings.message_rate_warning,
+            }
         )
 
         self.app = App(
@@ -72,7 +107,6 @@ class BILBO_Application_GUI:
         self.gui.cli_terminal.setCLI(cli)
         self.joystick_control = joystick_control
 
-
         # GUI Callbacks
         self.gui.callbacks.emergency_stop.register(self.callbacks.emergency_stop.call)
 
@@ -81,7 +115,7 @@ class BILBO_Application_GUI:
 
         self._addCategoriesAndPages()
 
-        self._addApplications()
+        self._create_bottom_group()
 
         self.logger = Logger('gui')
 
@@ -255,18 +289,14 @@ class BILBO_Application_GUI:
             del self.robot_app_folders[robot_id]
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _addApplications(self):
-        # BILBO Applications
-        # 1. Input viewer
-        input_viewer_button = Button(widget_id='input_viewer_button', text='Input Viewer')
-        # self.gui.addApplicationButton(input_viewer_button)
-        # input_viewer_button.callbacks.click.register(self._openInputViewer)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _testPopupOpen(self, sender, *args, **kwargs):
-
-        popup = YesNoPopup()
-        self.gui.openPopup(popup, client=sender)
+    def _create_bottom_group(self):
+        if self.settings.enable_camera:
+            camera = CameraWidget(
+                widget_id='testbed_camera',
+                excluded=['iPhone', 'FaceTime'],
+                priority=['Elgato 4K'],
+            )
+            self.gui.bottom_group.addWidget(camera, row=1, column=1, width=1, height=1)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _openInputViewer(self, sender, *args, **kwargs):
