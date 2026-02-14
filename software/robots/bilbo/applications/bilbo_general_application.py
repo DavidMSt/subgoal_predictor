@@ -1,10 +1,7 @@
-import dataclasses
 import logging
 import os
 import sys
 import time
-
-from core.utils.dataclass_utils import from_dict_auto
 
 # Get the directory of the current script
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -18,64 +15,17 @@ if top_level_module not in sys.path:
 
 # === CUSTOM MODULES ===================================================================================================
 from robots.bilbo.gui.bilbo_gui import BILBO_Application_GUI
-# from extensions.cli.archive.cli_gui import CLI_GUI_Server
-from extensions.cli.cli import CommandSet, CLI, Command
-from robots.bilbo.manager.bilbo_joystick_control import BILBO_JoystickControl
-from robots.bilbo.manager.bilbo_manager import BILBO_Manager
+from extensions.cli.cli import CLI
 from core.utils.exit import register_exit_callback, exit_program
 from core.utils.logging_utils import setLoggerLevel, Logger
 from core.utils.loop import infinite_loop
 from core.utils.sound.sound import speak, SoundSystem
-from core.utils.files import get_absolute_path
-from robots.bilbo.testbed.testbed_manager import TestbedManager, TestbedManagerSettings, TestbedSettings, \
-    TrackerSettings, TrackedObjects, ExtensionsSettings, RobotSettings
-from robots.bilbo.simulation.virtual_testbed import VirtualTestbed_Config
-from core.utils.callbacks import Callback
+from robots.bilbo.testbed.testbed_manager import TestbedManager
 from core.utils.network.network import getHostIP
-from robots.bilbo.robot.bilbo import BILBO
-from core.utils.yaml_utils import load_yaml
+from robots.bilbo.settings import ApplicationSettings, load_settings
 
 # ======================================================================================================================
 ENABLE_SPEECH_OUTPUT = True
-
-
-@dataclasses.dataclass
-class MDNSSettings:
-    enabled: bool = True
-    hostname: str = 'bilbolab'
-    use_port_80: bool = False
-
-
-@dataclasses.dataclass
-class ApplicationSettings:
-    """Settings as loaded from application_settings.yaml. Top-level keys map 1:1 to the YAML."""
-    testbed: TestbedSettings = dataclasses.field(default_factory=TestbedSettings)
-    robots: RobotSettings = dataclasses.field(default_factory=RobotSettings)
-    extensions: ExtensionsSettings = dataclasses.field(default_factory=ExtensionsSettings)
-    simulation: VirtualTestbed_Config = dataclasses.field(default_factory=VirtualTestbed_Config)
-    tracker: TrackerSettings = dataclasses.field(default_factory=TrackerSettings)
-    tracked_objects: TrackedObjects = dataclasses.field(default_factory=TrackedObjects)
-    mdns: MDNSSettings = dataclasses.field(default_factory=MDNSSettings)
-
-    @property
-    def testbed_manager_settings(self) -> TestbedManagerSettings:
-        return TestbedManagerSettings(
-            testbed=self.testbed,
-            robots=self.robots,
-            tracker=self.tracker,
-            tracked_objects=self.tracked_objects,
-            extensions=self.extensions,
-            simulation=self.simulation,
-        )
-
-
-def load_application_settings(path: str | None = None) -> ApplicationSettings:
-    """Load application settings from YAML file."""
-    if path is None:
-        path = get_absolute_path('application_settings.yaml')
-
-    yaml_data = load_yaml(path)
-    return from_dict_auto(ApplicationSettings, yaml_data)
 
 
 
@@ -152,7 +102,7 @@ class BILBO_Application:
 # ======================================================================================================================
 def run_bilbo_application():
     # Load settings from YAML file
-    settings = load_application_settings()
+    settings = load_settings()
 
     app = BILBO_Application(settings=settings)
     app.init()

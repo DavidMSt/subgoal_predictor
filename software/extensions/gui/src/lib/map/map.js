@@ -17,7 +17,7 @@ import {Websocket} from "../websocket.js";
 const MAP_DEFAULTS_WS_PORT = 8700
 
 /* === MAP ========================================================================================================== */
-class Map {
+export class Map {
     /** @type {HTMLCanvasElement} */ canvas;
     /** @type {CanvasRenderingContext2D} */ context;
     /** @type {object} */ config;
@@ -142,7 +142,9 @@ class Map {
         this.buildGroupsFromPayload(payload.groups);
 
         // Websocket connection
-        this.websocket = new Websocket({host: payload.websocket.host, port: payload.websocket.port});
+        this._wsHost = payload.websocket.host;
+        this._wsPort = payload.websocket.port;
+        this.websocket = new Websocket({host: this._wsHost, port: this._wsPort});
         this.websocket.on('message', this._onWebsocketMessage.bind(this));
         this.websocket.on('connected', this._onWebsocketConnected.bind(this));
         this.websocket.on('close', this._onWebsocketDisconnected.bind(this))
@@ -1306,6 +1308,24 @@ class Map {
         this.connectionIndicator.id = "connectionIndicator";
         this.connectionIndicator.className = "map-connection-indicator";
         this.container.appendChild(this.connectionIndicator);
+
+        // Pop-out button
+        this.popoutButton = document.createElement("button");
+        this.popoutButton.className = "map-popout-button";
+        this.popoutButton.title = "Pop Out";
+        this.popoutButton.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+        this.container.appendChild(this.popoutButton);
+
+        this.popoutButton.addEventListener('click', () => {
+            const host = this._wsHost || 'localhost';
+            const port = this._wsPort || '8700';
+            const url = new URL('/map-popup.html', window.location.origin);
+            url.searchParams.set('id', this.id);
+            url.searchParams.set('host', host);
+            url.searchParams.set('port', port);
+            url.searchParams.set('title', `Map: ${this.id}`);
+            window.open(url.href, '_blank', 'width=1000,height=800,resizable=yes');
+        });
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -1567,6 +1587,9 @@ class Map {
     /* === WEBSOCKET ================================================================================================ */
     _onWebsocketMessage(message) {
         switch (message.type) {
+            case 'init':
+                this._handleInitMessage(message);
+                break;
             case 'update':
                 this.handleUpdateMessage(message);
                 break;
@@ -1582,6 +1605,30 @@ class Map {
             default:
                 console.warn(`Unknown message type ${message.type}.`);
         }
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    _handleInitMessage(message) {
+        if (!message.payload) return;
+        const payload = message.payload;
+
+        // Apply config from server (merge with defaults)
+        if (payload.config) {
+            this.config = {...this.config, ...payload.config};
+            this.viewCenter = [...(this.config.initial_display_center || this.viewCenter)];
+            this.setZoom(this.config.initial_display_zoom ?? this.zoom);
+            this.updateCanvasSizeAndScale();
+        }
+
+        // Build objects and groups from init payload
+        if (payload.objects && Object.keys(payload.objects).length > 0) {
+            this.buildObjectsFromPayload(payload.objects);
+        }
+        if (payload.groups && Object.keys(payload.groups).length > 0) {
+            this.buildGroupsFromPayload(payload.groups);
+        }
+
+        this.drawMap();
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */

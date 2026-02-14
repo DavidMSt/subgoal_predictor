@@ -8,7 +8,7 @@ from extensions.optitrack import OptiTrack, RigidBodySample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Config
 from robots.bilbo.testbed.tracker.tracked_objects import TrackedBILBO, TrackedOrigin, TrackedLimboBar, TrackedBox, \
     TrackedWall, Origin_OptiTrack_Config, BoxObstacle_OptiTrack_Config, WallObstacle_OptiTrack_Config, \
-    LimboMarker_OptiTrack_Config
+    LimboMarker_OptiTrack_Config, OptiTrackOutlierFilterConfig
 
 
 @callback_definition
@@ -32,8 +32,9 @@ class BILBO_Tracker_Events:
 @dataclasses.dataclass
 class BILBO_Tracker_Config:
     server: str
-    max_sample_rate: float = 30.0
+    max_sample_rate: float = 50.0
     origin: Origin_OptiTrack_Config | None = None
+    outlier_filter: OptiTrackOutlierFilterConfig = dataclasses.field(default_factory=OptiTrackOutlierFilterConfig)
 
 
 class BILBO_Tracker_Status(enum.StrEnum):
@@ -106,7 +107,8 @@ class BILBO_Tracker:
                 f"BILBO robot {robot_id} not found in rigid bodies. Ensure to enable the rigid body in OptiTrack")
             return None
 
-        bilbo = TrackedBILBO(id=robot_id, config=config, origin=self.origin)
+        bilbo = TrackedBILBO(id=robot_id, config=config, origin=self.origin,
+                             outlier_filter_config=self.config.outlier_filter)
         self.bilbos[robot_id] = bilbo
         self.events.new_tracked_object.set(bilbo)
         self.logger.info(f"Added tracked BILBO robot {robot_id}")

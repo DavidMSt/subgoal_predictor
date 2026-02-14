@@ -45,8 +45,28 @@ HAL_StatusTypeDef SimplexMotion_RS485::init(
 		return HAL_ERROR;
 	}
 
+	// Set speed measurement filter for low-speed applications (0-200 RPM)
+	status = this->setSpeedFilter(SIMPLEXMOTION_SPEED_FILTER);
 
-	// Beep
+	if (status) {
+		return HAL_ERROR;
+	}
+
+	// Set encoder resolution
+	status = this->setEncoderResolution(SIMPLEXMOTION_ENCODER_RESOLUTION);
+
+	if (status) {
+		return HAL_ERROR;
+	}
+
+#if ENABLE_MOTOR_SHUTDOWN_LINE
+	// Configure IN1 as hardware quickstop trigger.
+	// STM32 GPIO holds the line HIGH; LOW triggers motor quickstop.
+	status = this->configureShutdownInput();
+	if (status) {
+		return HAL_ERROR;
+	}
+#endif
 
 	return HAL_OK;
 }
@@ -260,6 +280,119 @@ HAL_StatusTypeDef SimplexMotion_RS485::setTorqueLimit(float maxTorque) {
 	if (torque_limit_int != torque_limit_int_check) {
 		return HAL_ERROR;
 	}
+
+	return HAL_OK;
+}
+
+/* ================================================================================= */
+HAL_StatusTypeDef SimplexMotion_RS485::setSpeedFilter(uint16_t value) {
+	if (value > 15) {
+		return HAL_ERROR;
+	}
+
+	HAL_StatusTypeDef status = this->writeRegisters(
+			SIMPLEXMOTION_RS485_REG_SPEED_FILTER, 1, &value);
+	if (status != HAL_OK) {
+		return HAL_ERROR;
+	}
+
+	// Read back and verify
+	uint16_t readback = 0;
+	status = this->readRegisters(
+			SIMPLEXMOTION_RS485_REG_SPEED_FILTER, 1, &readback);
+	if (status != HAL_OK || readback != value) {
+		return HAL_ERROR;
+	}
+
+	return HAL_OK;
+}
+
+/* ================================================================================= */
+HAL_StatusTypeDef SimplexMotion_RS485::setEncoderResolution(uint16_t bits) {
+	// bits: 12 (4096 counts), 13 (8192 counts), or 14 (16384 counts)
+	uint16_t resolution_field;
+	switch (bits) {
+	case 12: resolution_field = 0; break;
+	case 13: resolution_field = 1; break;
+	case 14: resolution_field = 2; break;
+	default: return HAL_ERROR;
+	}
+
+	// Read current MotorOptions to preserve other bits
+	uint16_t options = 0;
+	HAL_StatusTypeDef status = this->readRegisters(
+			SIMPLEXMOTION_RS485_REG_MOTOR_OPTIONS, 1, &options);
+	if (status != HAL_OK) {
+		return HAL_ERROR;
+	}
+
+	// Clear bits 12-15, set new resolution
+	options = (options & 0x0FFF) | (resolution_field << 12);
+
+	status = this->writeRegisters(
+			SIMPLEXMOTION_RS485_REG_MOTOR_OPTIONS, 1, &options);
+	if (status != HAL_OK) {
+		return HAL_ERROR;
+	}
+
+	// Read back and verify
+	uint16_t readback = 0;
+	status = this->readRegisters(
+			SIMPLEXMOTION_RS485_REG_MOTOR_OPTIONS, 1, &readback);
+	if (status != HAL_OK || readback != options) {
+		return HAL_ERROR;
+	}
+
+	return HAL_OK;
+}
+
+/* ================================================================================= */
+/**
+ * @brief Configures the motor's IN1 as a hardware quickstop trigger.
+ *
+ * Maps IN1 to StatusInputs InputA (status bit 12), sets polarity to
+ * active-low (inverted), and enables MaskQuickstop on InputA.
+ *
+ * The STM32 holds the line HIGH during normal operation. On error
+ * (or STM32 crash with external pulldown), the line goes LOW and
+ * the motor performs a controlled quickstop using MotorTorqueStop braking.
+ */
+HAL_StatusTypeDef SimplexMotion_RS485::configureShutdownInput() {
+	HAL_StatusTypeDef status;
+
+	// StatusInputs register:
+	//   bits 0..3: input number for InputA (0 = IN1)
+	//   bits 4..7: input number for InputB (unused, keep default)
+	//   bits 8..15: filter value (use 2 for light debounce)
+	uint16_t status_inputs = (2 << 8) | (0 << 0);  // InputA = IN1, filter = 2
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_STATUS_INPUTS, 1, &status_inputs);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// InputPolarity register:
+	//   bit 0 = IN1 polarity. Set to 1 to invert (active LOW).
+	//   This means: line LOW -> InputA active -> quickstop triggers.
+	//   Read-modify-write to preserve other input polarities.
+	uint16_t polarity = 0;
+	this->readRegisters(SIMPLEXMOTION_RS485_REG_INPUT_POLARITY, 1, &polarity);
+	polarity |= (1 << 0);  // Set bit 0: IN1 inverted (active low)
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_INPUT_POLARITY, 1, &polarity);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// MaskQuickstop register:
+	//   bit 12 = InputA. Setting this causes a controlled quickstop
+	//   when InputA becomes active (i.e., when IN1 goes LOW).
+	//   Read-modify-write to preserve any existing quickstop masks.
+	uint16_t mask_qs = 0;
+	this->readRegisters(SIMPLEXMOTION_RS485_REG_MASK_QUICKSTOP, 1, &mask_qs);
+	mask_qs |= (1 << 12);  // Enable quickstop on InputA
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_MASK_QUICKSTOP, 1, &mask_qs);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// Set the quickstop braking torque (MotorTorqueStop).
+	// Use 80% of the configured torque limit for controlled deceleration.
+	uint16_t stop_torque = (uint16_t)(this->config.torque_limit * 1000 * 0.8);
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_TORQUE_STOP, 1, &stop_torque);
+	if (status != HAL_OK) return HAL_ERROR;
 
 	return HAL_OK;
 }

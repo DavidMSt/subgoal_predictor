@@ -26,9 +26,7 @@ def input_generation():
 
 def generation_of_learning_set():
     agent = BILBO_DynamicAgent(agent_id='source')
-
     data = generate_learning_set(agent, 10, 1000, 0.01)
-    print(data)
 
 
 if __name__ == '__main__':

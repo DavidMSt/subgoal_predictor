@@ -22,6 +22,7 @@ from robots.bilbo.testbed.objects import RealTestbedBILBO, VirtualTestbedBILBO, 
 from robots.bilbo.testbed.testbed import Testbed, TestbedConfig
 from robots.bilbo.testbed.tracker.tracked_objects import Origin_OptiTrack_Config, LimboMarker_OptiTrack_Config, \
     BoxObstacle_OptiTrack_Config, WallObstacle_OptiTrack_Config
+from robots.bilbo.testbed.tracker.tracked_objects import OptiTrackOutlierFilterConfig
 from robots.bilbo.testbed.tracker.tracker import BILBO_Tracker, BILBO_Tracker_Config, BILBO_Tracker_Status
 
 # Config directories
@@ -51,7 +52,8 @@ class TestbedSettings:
 class TrackerSettings:
     enabled: bool = True
     server: str = 'palantir.lan'
-    sample_rate: int = 30
+    sample_rate: int = 50
+    outlier_filter: OptiTrackOutlierFilterConfig = dataclasses.field(default_factory=OptiTrackOutlierFilterConfig)
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -162,6 +164,7 @@ class TestbedManager:
             self.tracker = BILBO_Tracker(BILBO_Tracker_Config(
                 server=self.settings.tracker.server,
                 max_sample_rate=self.settings.tracker.sample_rate,
+                outlier_filter=self.settings.tracker.outlier_filter,
             ))
         else:
             self.tracker = None

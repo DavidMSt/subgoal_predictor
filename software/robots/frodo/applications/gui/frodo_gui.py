@@ -35,7 +35,7 @@ from extensions.gui.src.lib.objects.python.indicators import BatteryIndicatorWid
     InternetIndicator, JoystickIndicator
 from extensions.gui.src.lib.objects.python.video import VideoWidget
 from extensions.gui.src.lib.objects.python.text import TextWidget
-from extensions.gui.src.lib.plot.realtime.rt_plot import ServerMode, UpdateMode
+
 from extensions.gui.src.lib.terminal.terminal_widget import TerminalWidget
 from robots.frodo.frodo import FRODO
 from robots.frodo.frodo_definitions import STATIC_DEFINITIONS, FRODO_Sample, TESTBED_SIZE, \

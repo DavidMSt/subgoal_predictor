@@ -55,6 +55,9 @@ export default defineConfig({
         main: path.resolve(__dirname, './index.html'),
         gui: path.resolve(__dirname, './gui.html'),
         app: path.resolve(__dirname, './app.html'),
+        'babylon-popup': path.resolve(__dirname, './babylon-popup.html'),
+        'map-popup': path.resolve(__dirname, './map-popup.html'),
+        'chart-popup': path.resolve(__dirname, './chart-popup.html'),
       },
       output: {
         dir: path.resolve(__dirname, 'dist')

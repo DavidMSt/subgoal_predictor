@@ -16,7 +16,7 @@ from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
 from extensions.cli.cli import CommandSet, CLI, Command, CommandArgument
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
-from extensions.gui.src.lib.plot.realtime.rt_plot import RT_Plot_Widget, ServerMode, UpdateMode, TimeSeries
+from extensions.gui.src.lib.plot.realtime.rt_plot import RT_Plot_Widget, TimeSeries
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 from extensions.simulation.src.objects.base_environment import BaseEnvironment
 from extensions.simulation.src.objects.bilbo import (
@@ -688,8 +688,6 @@ class BILBO_InteractiveExample:
 
         plot = RT_Plot_Widget(
             plot_config={"title": f"{robot_id} Plot", "show_title": True, "legend_label_type": "point"},
-            server_mode=ServerMode.EXTERNAL,
-            update_mode=UpdateMode.CONTINUOUS,
         )
 
         self.cli.root.addChild(robot.cli)

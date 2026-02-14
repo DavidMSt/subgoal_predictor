@@ -19,6 +19,59 @@ from robot.config import BILBO_OptiTrack_Definition, BILBO_Config
 
 # ======================================================================================================================
 @dataclasses.dataclass
+class OptiTrackOutlierFilterConfig:
+    enabled: bool = True
+    window_size: int = 3
+
+
+class OptiTrackOutlierFilter:
+    """Element-wise median filter over a sliding window of (x, y, z, theta, psi) states.
+
+    Rejects single-sample position/orientation spikes caused by symmetric confusion
+    at calibration volume edges. Angular channels (theta, psi) are unwrapped before
+    computing the median to handle the +/-pi discontinuity correctly.
+    """
+
+    def __init__(self, config: OptiTrackOutlierFilterConfig = None):
+        self.config = config or OptiTrackOutlierFilterConfig()
+        self._window_size = self.config.window_size
+        self._buffer = np.empty((self._window_size, 5))
+        self._count = 0
+
+    def update(self, x: float, y: float, z: float, theta: float, psi: float) -> tuple[float, float, float, float, float]:
+        if not self.config.enabled:
+            return x, y, z, theta, psi
+
+        idx = self._count % self._window_size
+        self._buffer[idx] = [x, y, z, theta, psi]
+        self._count += 1
+
+        if self._count < self._window_size:
+            return x, y, z, theta, psi
+
+        # Compute element-wise median with angular unwrapping for theta and psi
+        buf = self._buffer.copy()
+        oldest_idx = self._count % self._window_size
+        for col in (3, 4):  # theta, psi
+            ref = buf[oldest_idx, col]
+            for i in range(self._window_size):
+                diff = buf[i, col] - ref
+                buf[i, col] = ref + (diff + np.pi) % (2 * np.pi) - np.pi
+
+        result = np.median(buf, axis=0)
+
+        # Rewrap angles to [-pi, pi]
+        for col in (3, 4):
+            result[col] = (result[col] + np.pi) % (2 * np.pi) - np.pi
+
+        return result[0], result[1], result[2], result[3], result[4]
+
+    def reset(self):
+        self._count = 0
+
+
+# ======================================================================================================================
+@dataclasses.dataclass
 class TrackedOrigin_State:
     x: float = 0.0
     y: float = 0.0
@@ -112,6 +165,8 @@ class TrackedBILBO:
         self.state = BILBO_ConfigurationState(x=0, y=0, z=self.config.model.wheel_diameter / 2, theta=0, psi=0)
         self.origin = origin
 
+        self.outlier_filter = OptiTrackOutlierFilter()
+
         self.callbacks = TrackedBILBO_Callbacks()
         self.events = TrackedBILBO_Events()
 
@@ -120,6 +175,7 @@ class TrackedBILBO:
         # Check if tracking is valid
         if not data.valid:
             self.tracking_valid = False
+            self.outlier_filter.reset()
             return
 
         x_axis_point_start = np.asarray(data.markers[self.config.optitrack.point_x_axis_start])
@@ -176,7 +232,8 @@ class TrackedBILBO:
         else:
             position = wheel_mid_point_global
 
-        self.state = BILBO_ConfigurationState(x=position[0], y=position[1], z=position[2], theta=theta, psi=psi)
+        x, y, z, theta, psi = self.outlier_filter.update(position[0], position[1], position[2], theta, psi)
+        self.state = BILBO_ConfigurationState(x=x, y=y, z=z, theta=theta, psi=psi)
 
         self.tracking_valid = True
         self.callbacks.sample.call(self.state, self.tracking_valid)
@@ -210,7 +267,7 @@ class BILBO_OptiTrackListener:
 
     # === INIT =========================================================================================================
     def __init__(self, common: BILBO_Common, server_address: str = 'palantir.lan'):
-        self.optitrack = OptiTrack(server_address=server_address)
+        self.optitrack = OptiTrack(server_address=server_address, max_sample_rate=50)
         self.callbacks = BILBO_OptitrackListener_Callbacks()
         self.events = BILBO_OptitrackListener_Events()
         self.common = common
@@ -220,7 +277,7 @@ class BILBO_OptiTrackListener:
         self.tracked_object: TrackedBILBO | None = None
 
         self.optitrack.callbacks.description_received.register(self._description_received_callback)
-        self.optitrack.events.sample.on(self._sample_callback, max_rate=30)
+        self.optitrack.events.sample.on(self._sample_callback, max_rate=50)
 
         register_exit_callback(self.close)
 

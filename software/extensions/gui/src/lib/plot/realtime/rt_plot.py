@@ -1,25 +1,31 @@
+import collections
 import dataclasses
-import enum
 import threading
 import time
-from typing import List, Optional, Any, Callable, Union
+from typing import List, Optional, Any, Union
 
 from core.utils.callbacks import callback_definition, CallbackContainer
 from core.utils.dataclass_utils import update_dataclass_from_dict
 from core.utils.dict import update_dict
 from core.utils.exit import register_exit_callback
+from core.utils.logging_utils import Logger
+from core.utils.network.network import getHostIP
 from core.utils.time import IntervalTimer
+from core.utils.websockets import WebsocketServer
 from extensions.gui.src.lib.objects.objects import Widget
 
+# --- Port allocator for dedicated RT_Plot WebSocket servers ---
+_next_port = 8800
+_port_lock = threading.Lock()
 
-class ServerMode(str, enum.Enum):
-    STANDALONE = "standalone"  # you will push directly via send_to_plot
-    EXTERNAL = "external"  # same behavior here; enum kept for API symmetry
 
+def _allocate_port() -> int:
+    global _next_port
+    with _port_lock:
+        port = _next_port
+        _next_port += 1
+    return port
 
-class UpdateMode(str, enum.Enum):
-    CONTINUOUS = "continuous"  # backend thread aggregates latest values and pushes 'update' periodically
-    EXTERNAL = "external"  # you manually call backend.update_once(...) when new data arrives
 
 
 @callback_definition
@@ -217,16 +223,29 @@ class RT_Plot_Backend:
 
     # === INIT =========================================================================================================
     def __init__(self, id: str,
-                 send_function: Callable,
-                 update_function: Callable,
+                 server_host: str = 'localhost',
+                 server_port: int | None = None,
                  Ts: float = 0.05,
+                 buffer_size: int = 0,
                  plot_config: dict | None = None,
                  x_axis_config: dict | None = None,
                  **kwargs):
         self.id = id
         self.Ts = Ts
-        self.send_function = send_function
-        self.update_function = update_function
+
+        # Ring buffer for recent samples (0 = disabled)
+        self._history = collections.deque(maxlen=buffer_size) if buffer_size > 0 else None
+
+        # Dedicated WebSocket server for this plot
+        if server_port is None:
+            server_port = _allocate_port()
+        self.server_host = server_host
+        self.server_port = server_port
+        self.logger = Logger(f"RT_Plot [{id}]")
+
+        self.server = WebsocketServer(server_host, server_port, heartbeats=False)
+        self.server.callbacks.new_client.register(self._on_new_client)
+        self.server.callbacks.client_disconnected.register(self._on_client_disconnected)
 
         default_plot_config = {
             "background_color": [1, 1, 1, 0],
@@ -275,6 +294,8 @@ class RT_Plot_Backend:
         if self._thread is not None:
             return
         self._exit = False
+        self.server.start()
+        self.logger.debug(f"WebSocket server started on {self.server_host}:{self.server_port}")
         self._thread = threading.Thread(target=self._task, daemon=True)
         self._thread.start()
 
@@ -283,6 +304,7 @@ class RT_Plot_Backend:
         self._exit = True
         if self._thread is not None and self._thread.is_alive():
             self._thread.join()
+        self.server.stop()
 
     # ------------------------------------------------------------------------------------------------------------------
     def add_y_axis(self, y_axis: str | Y_Axis, config=None) -> Y_Axis:
@@ -302,7 +324,7 @@ class RT_Plot_Backend:
 
             self.y_axes[id] = y_axis
 
-        self.send_function("add_y_axis", y_axis.get_config())
+        self._send_to_frontend("add_y_axis", y_axis.get_config())
 
         y_axis.callbacks.update.register(self._update_y_axis_callback,
                                          inputs={'id': id},
@@ -320,7 +342,7 @@ class RT_Plot_Backend:
 
             del self.y_axes[id]
 
-        self.send_function("remove_y_axis", id)
+        self._send_to_frontend("remove_y_axis", id)
 
     # ------------------------------------------------------------------------------------------------------------------
     def add_timeseries(self, timeseries: TimeSeries | str, config=None) -> TimeSeries:
@@ -340,7 +362,7 @@ class RT_Plot_Backend:
 
             self.time_series[id] = timeseries
 
-        self.send_function("add_timeseries", timeseries.get_config())
+        self._send_to_frontend("add_timeseries", timeseries.get_config())
 
         timeseries.callbacks.update.register(
             function=self._update_timeseries_callback,
@@ -367,7 +389,7 @@ class RT_Plot_Backend:
 
             del self.time_series[timeseries_id]
 
-        self.send_function("remove_timeseries", timeseries_id)
+        self._send_to_frontend("remove_timeseries", timeseries_id)
 
     # ------------------------------------------------------------------------------------------------------------------
     def remove_all_timeseries(self) -> None:
@@ -386,11 +408,11 @@ class RT_Plot_Backend:
 
         config = update_dict(current_config, config, kwargs, allow_add=False)
         self.x_axis = X_Axis(**config)
-        self.send_function("update_x_axis", self.x_axis.get_config())
+        self._send_to_frontend("update_x_axis", self.x_axis.get_config())
 
     # ------------------------------------------------------------------------------------------------------------------
     def clear(self) -> None:
-        self.send_function("clear", {})
+        self._send_to_frontend("clear", {})
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_config(self) -> dict:
@@ -413,6 +435,10 @@ class RT_Plot_Backend:
             'y_axes': {k: value.get_config() for k, value in y_axes_snapshot.items()},
             'timeseries': {k: value.get_config() for k, value in timeseries_snapshot.items()},
         }
+
+        if self._history is not None:
+            payload['history'] = list(self._history)
+
         return payload
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -431,22 +457,49 @@ class RT_Plot_Backend:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _send_value_update(self) -> None:
-
         timestamp = time.time()
         timeseries_data = self.get_data()
-        data = {
+
+        if self._history is not None:
+            self._history.append({'time': timestamp, 'timeseries': timeseries_data})
+
+        message = {
+            'type': 'update',
             'time': timestamp,
             'timeseries': timeseries_data,
         }
-        self.update_function(data)
+        self.server.send(message)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _send_to_frontend(self, msg_type: str, payload) -> None:
+        message = {
+            'type': msg_type,
+            'payload': payload,
+        }
+        self.server.send(message)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_new_client(self, client, *args, **kwargs):
+        num_clients = len(self.server.clients)
+        self.logger.debug(f"Client connected ({num_clients} active)")
+        message = {
+            'type': 'init',
+            'payload': self.get_payload(),
+        }
+        self.server.sendToClient(client, message)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_client_disconnected(self, client, *args, **kwargs):
+        num_clients = len(self.server.clients)
+        self.logger.debug(f"Client disconnected ({num_clients} active)")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _update_y_axis_callback(self, id, config):
-        self.send_function("update_y_axis", {"id": id, "config": config})
+        self._send_to_frontend("update_y_axis", {"id": id, "config": config})
 
     # ------------------------------------------------------------------------------------------------------------------
     def _update_timeseries_callback(self, id, config):
-        self.send_function("update_timeseries", {"id": id, "config": config})
+        self._send_to_frontend("update_timeseries", {"id": id, "config": config})
 
 
 # === WIDGET ===========================================================================================================
@@ -456,11 +509,15 @@ class RT_Plot_Widget(Widget):
     def __init__(self, widget_id: str | None = None, plot_config=None, **kwargs):
         super().__init__(widget_id, **kwargs)
 
+        server_host = getHostIP()
+        if server_host is None:
+            server_host = 'localhost'
+
         self.plot = RT_Plot_Backend(f"{widget_id}_plot",
-                                    send_function=self._send_to_plot,
-                                    update_function=self._update_plot,
+                                    server_host=server_host,
                                     **plot_config or {},
                                     **kwargs)
+        self.plot.start()
 
     def getConfiguration(self) -> dict:
         config = super().getConfiguration()
@@ -468,25 +525,16 @@ class RT_Plot_Widget(Widget):
 
     def getPayload(self) -> dict:
         payload = super().getPayload()
-        payload['plot'] = self.plot.get_payload()
+        plot_payload = self.plot.get_payload()
+        plot_payload['websocket'] = {
+            'host': self.plot.server_host,
+            'port': self.plot.server_port,
+        }
+        payload['plot'] = plot_payload
         return payload
-
-    def onFirstBuilt(self):
-        self.plot.start()
 
     def handleEvent(self, message, sender=None) -> None:
         pass
-
-    def _send_to_plot(self, message_type, payload: dict):
-        self.function(function_name='send_to_plot',
-                      args={
-                          'message_type': message_type,
-                          'payload': payload,
-                      },
-                      )
-
-    def _update_plot(self, update_data: dict) -> None:
-        self.sendUpdate(update_data)
 
     def onDelete(self):
         self.plot.stop()

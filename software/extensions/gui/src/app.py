@@ -24,7 +24,7 @@ from extensions.gui.src.lib.objects.python.checkbox import CheckboxWidget
 from extensions.gui.src.lib.objects.python.popup import Popup
 from extensions.gui.src.lib.objects.python.sliders import SliderWidget
 from core.utils.dict import update_dict
-from extensions.gui.src.lib.plot.realtime.rt_plot import ServerMode, UpdateMode
+
 from extensions.gui.src.lib.utilities import split_path
 
 

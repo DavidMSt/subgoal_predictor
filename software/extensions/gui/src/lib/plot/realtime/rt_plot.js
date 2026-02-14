@@ -23,6 +23,7 @@ import streamingPlugin from "chartjs-plugin-streaming";
 import "./rt_plot.css";
 import {getColor, interpolateColors} from "../../helpers.js";
 import {Widget} from "../../objects/objects.js";
+import {Websocket} from "../../websocket.js";
 
 /* ================================================================================================================== */
 /* Plugins & defaults                                                                                                 */
@@ -408,6 +409,19 @@ class RT_Plot {
         // Resize handling
         const ro = new ResizeObserver(() => this.plot.resize());
         ro.observe(this.container);
+
+        // --- Dedicated WebSocket connection ---
+        const ws = payload.websocket;
+        if (ws && ws.host && ws.port) {
+            this._wsHost = ws.host;
+            this._wsPort = ws.port;
+            this.websocket = new Websocket({host: ws.host, port: ws.port});
+            this.websocket.on('message', (msg) => this.handleMessage(msg));
+            this.websocket.connect();
+
+            // Pop-out button
+            this._addPopoutButton();
+        }
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -860,6 +874,11 @@ class RT_Plot {
         const {type, payload} = message || {};
         switch (type) {
 
+            case "init": {
+                this._reinitializeFromPayload(payload);
+                break;
+            }
+
             case "update": {
                 this.update(message);
                 break;
@@ -910,6 +929,79 @@ class RT_Plot {
             }
         }
     }
+
+    /**
+     * Re-initialize from a full init payload (e.g. on WebSocket reconnect).
+     * Clears existing axes/series and rebuilds from the payload.
+     */
+    _reinitializeFromPayload(payload) {
+        if (!payload) return;
+
+        // Merge config if provided
+        if (payload.config) {
+            this.config = deepMerge(this.config, payload.config);
+        }
+
+        // Clear existing state
+        this.y_axes = {};
+        this.timeseries = {};
+        this._datasetsIndex = {};
+
+        // Rebuild axes and series
+        const y_axes = payload.y_axes || {};
+        for (const [id, axisCfg] of Object.entries(y_axes)) {
+            this.y_axes[id] = new RT_Plot_Y_Axis(id, axisCfg);
+        }
+
+        const datasetsCfg = payload.timeseries || {};
+        for (const [id, seriesCfg] of Object.entries(datasetsCfg)) {
+            this.timeseries[id] = new RT_Plot_TimeSeries(id, seriesCfg);
+        }
+
+        this._createOrRebuildChart();
+
+        // Pre-populate with historical data (uses server timestamps)
+        if (payload.history && payload.history.length > 0) {
+            for (const entry of payload.history) {
+                const tMillis = Math.floor((entry.time || 0) * 1000);
+                const tsBlock = entry.timeseries || {};
+                for (const [sid, val] of Object.entries(tsBlock)) {
+                    if (sid in this.timeseries) {
+                        this.timeseries[sid].pushPoint(tMillis, val, true);
+                    }
+                }
+            }
+
+            // Drain queued history into chart datasets immediately
+            for (const ds of this.plot.data.datasets) {
+                const ts = this.timeseries[ds.seriesId];
+                if (!ts) continue;
+                const pts = ts.drainForRefresh(true);
+                if (pts.length) ds.data.push(...pts);
+            }
+            this.plot.update('none');
+        }
+    }
+
+    /**
+     * Add a pop-out button to the top-right corner of the container.
+     */
+    _addPopoutButton() {
+        const btn = document.createElement("button");
+        btn.className = "rt-plot-popout-button";
+        btn.title = "Pop Out";
+        btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>`;
+        this.container.appendChild(btn);
+
+        btn.addEventListener('click', () => {
+            const url = new URL('/chart-popup.html', window.location.origin);
+            url.searchParams.set('id', this.id);
+            url.searchParams.set('host', this._wsHost || 'localhost');
+            url.searchParams.set('port', this._wsPort || '8800');
+            url.searchParams.set('title', `Chart: ${this.config.title || this.id}`);
+            window.open(url.href, '_blank', 'width=900,height=500,resizable=yes');
+        });
+    }
 }
 
 /* ================================================================================================================== */
@@ -920,18 +1012,10 @@ class RT_Plot {
 export class RT_Plot_Widget extends Widget {
     /**
      * Leave this class as your interface to the Python backend.
-     * Minor internal wiring to use the new RT_Plot API.
+     * Data and config messages now arrive via the dedicated WebSocket in RT_Plot.
      */
     constructor(id, payload = {}) {
         super(id, payload);
-
-        const default_config = {
-            host: "localhost",
-            port: 8080,
-            server_mode: "standalone", // 'standalone' | 'external'
-        };
-
-        this.configuration = {...this.configuration, ...default_config, ...(payload.config || {})};
 
         this.element = this.initializeElement();
         this.configureElement(this.element);
@@ -951,23 +1035,9 @@ export class RT_Plot_Widget extends Widget {
         // No-op: Chart is responsive; ResizeObserver is set in RT_Plot.
     }
 
-    /**
-     * Push streaming data from backend into the plot.
-     * Expected shape:
-     *  - { time?, timeseries: {...} | [...] }
-     */
-    update(data) {
-        this.plot.update(data);
-    }
-
     updateConfig(_data) {
         // Intentionally left as your extension point.
         return undefined;
-    }
-
-    send_to_plot({message_type, payload}) {
-        console.warn(`Send to plot: ${message_type}`)
-        this.plot.handleMessage({type: message_type, payload: payload});
     }
 
     /**

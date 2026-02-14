@@ -682,7 +682,51 @@ export class Babylon extends Scene {
 
     /* --------------------------------------------------------------------------------------------------------------- */
     _handleInitMessage(msg) {
-        this.log(`Received init message`)
+        this.log(`Received init message`);
+        if (msg.payload) {
+            if (msg.payload.config) {
+                this._applyInitConfig(msg.payload.config);
+            }
+            if (msg.payload.objects) {
+                this._buildObjectsFromConfig(msg.payload.objects);
+            }
+        }
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    _applyInitConfig(config) {
+        // Camera
+        if (config.camera && this.camera) {
+            const cam = config.camera;
+            if (cam.alpha != null) this.camera.alpha = cam.alpha;
+            if (cam.beta != null) this.camera.beta = cam.beta;
+            if (cam.radius != null) this.camera.radius = cam.radius;
+            if (cam.target) this.camera.setTarget(coordinatesToBabylon(cam.target));
+            if (cam.position) this.camera.setPosition(coordinatesToBabylon(cam.position));
+            if (cam.fov != null) this.camera.fov = cam.fov;
+            if (cam.radius_lower_limit != null) this.camera.lowerRadiusLimit = cam.radius_lower_limit;
+            if (cam.radius_upper_limit != null) this.camera.upperRadiusLimit = cam.radius_upper_limit;
+        }
+
+        // Background & ambient
+        if (config.background_color) {
+            this.scene.clearColor = getBabylonColor(config.background_color);
+        }
+        if (config.ambient_color) {
+            this.scene.ambientColor = getBabylonColor3(config.ambient_color);
+        }
+
+        // Fog
+        if (config.scene) {
+            const sc = config.scene;
+            if (sc.add_fog) {
+                if (sc.fog_mode === 'exp2') this.scene.fogMode = BabylonScene.FOGMODE_EXP2;
+                else if (sc.fog_mode === 'linear') this.scene.fogMode = BabylonScene.FOGMODE_LINEAR;
+                else if (sc.fog_mode === 'exp') this.scene.fogMode = BabylonScene.FOGMODE_EXP;
+                if (sc.fog_density != null) this.scene.fogDensity = sc.fog_density;
+                if (sc.fog_color) this.scene.fogColor = getBabylonColor3(sc.fog_color);
+            }
+        }
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -1653,6 +1697,29 @@ export class BabylonContainer {
 
         button_fullscreen.setTooltip("Fullscreen");
         button_fullscreen.attach(button_container);
+
+        const popoutIcon = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6'/%3E%3Cpolyline points='15 3 21 3 21 9'/%3E%3Cline x1='10' y1='14' x2='21' y2='3'/%3E%3C/svg%3E";
+        const button_popout = new ButtonWidget('popout', {
+            config: {
+                image: popoutIcon,
+                image_width: '75%',
+                image_height: '75%',
+            }
+        });
+        button_popout.setTooltip("Pop Out");
+        button_popout.attach(button_container);
+
+        button_popout.callbacks.get('click').register(() => {
+            const host = this.configuration.websocket_host || this.babylon.config.websocket_host || 'localhost';
+            const port = this.configuration.websocket_port || this.babylon.config.websocket_port || '9000';
+            const title = this.configuration.title || 'Babylon Visualization';
+            const url = new URL('/babylon-popup.html', window.location.origin);
+            url.searchParams.set('id', this.babylon.id);
+            url.searchParams.set('host', host);
+            url.searchParams.set('port', port);
+            url.searchParams.set('title', title);
+            window.open(url.href, '_blank', 'width=1200,height=800,resizable=yes');
+        });
 
         this.button_terminal = new TerminalButton('terminal', {
             config: {image: './icons/terminal-icon.png'}

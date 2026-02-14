@@ -42,6 +42,20 @@ HAL_StatusTypeDef SimplexMotion_CAN::init(simplexmotion_can_config_t config) {
 		return HAL_ERROR;
 	}
 
+	// Set speed measurement filter for low-speed applications (0-200 RPM)
+	status = this->setSpeedFilter(SIMPLEXMOTION_SPEED_FILTER);
+
+	if (status) {
+		return HAL_ERROR;
+	}
+
+	// Set encoder resolution
+	status = this->setEncoderResolution(SIMPLEXMOTION_ENCODER_RESOLUTION);
+
+	if (status) {
+		return HAL_ERROR;
+	}
+
 #if ENABLE_MOTOR_SHUTDOWN_LINE
 	// Configure IN1 as hardware quickstop trigger.
 	// STM32 GPIO holds the line HIGH; LOW triggers motor quickstop.
@@ -385,6 +399,63 @@ HAL_StatusTypeDef SimplexMotion_CAN::getVoltage(float &voltage) {
 	}
 
 	voltage = voltage_int * 0.01;
+
+	return HAL_OK;
+}
+
+/* --------------------------------------------------------------------- */
+HAL_StatusTypeDef SimplexMotion_CAN::setSpeedFilter(uint16_t value) {
+	if (value > 15) {
+		return HAL_ERROR;
+	}
+
+	HAL_StatusTypeDef status = this->write(SIMPLEXMOTION_CAN_REG_SPEED_FILTER, value);
+	if (status != HAL_OK) {
+		return HAL_ERROR;
+	}
+
+	// Read back and verify
+	uint16_t readback = 0;
+	status = this->read(SIMPLEXMOTION_CAN_REG_SPEED_FILTER, readback);
+	if (status != HAL_OK || readback != value) {
+		return HAL_ERROR;
+	}
+
+	return HAL_OK;
+}
+
+/* --------------------------------------------------------------------- */
+HAL_StatusTypeDef SimplexMotion_CAN::setEncoderResolution(uint16_t bits) {
+	// bits: 12 (4096 counts), 13 (8192 counts), or 14 (16384 counts)
+	uint16_t resolution_field;
+	switch (bits) {
+	case 12: resolution_field = 0; break;
+	case 13: resolution_field = 1; break;
+	case 14: resolution_field = 2; break;
+	default: return HAL_ERROR;
+	}
+
+	// Read current MotorOptions to preserve other bits
+	uint16_t options = 0;
+	HAL_StatusTypeDef status = this->read(SIMPLEXMOTION_CAN_REG_MOTOR_OPTIONS, options);
+	if (status != HAL_OK) {
+		return HAL_ERROR;
+	}
+
+	// Clear bits 12-15, set new resolution
+	options = (options & 0x0FFF) | (resolution_field << 12);
+
+	status = this->write(SIMPLEXMOTION_CAN_REG_MOTOR_OPTIONS, options);
+	if (status != HAL_OK) {
+		return HAL_ERROR;
+	}
+
+	// Read back and verify
+	uint16_t readback = 0;
+	status = this->read(SIMPLEXMOTION_CAN_REG_MOTOR_OPTIONS, readback);
+	if (status != HAL_OK || readback != options) {
+		return HAL_ERROR;
+	}
 
 	return HAL_OK;
 }

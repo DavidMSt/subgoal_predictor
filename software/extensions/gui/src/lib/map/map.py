@@ -370,7 +370,15 @@ class Map:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _onNewClient(self, client, *args, **kwargs):
-        ...
+        self._initializeClient(client)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _initializeClient(self, client):
+        message = {
+            'type': 'init',
+            'payload': self.getPayload()
+        }
+        self.sendMessage(message, client=client)
 
 
 # === MAP WIDGET =======================================================================================================

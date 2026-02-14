@@ -35,6 +35,14 @@
 // Control
 #define TWIPR_SAFETY_MAX_WHEEL_SPEED 75
 
+// Motor speed measurement filter (0 = no filtering, 4 = default, 15 = max)
+// Higher values smooth low-speed noise but add measurement lag
+#define SIMPLEXMOTION_SPEED_FILTER 7
+
+// Motor encoder resolution in bits (12 = 4096, 13 = 8192, 14 = 16384 counts/rev)
+// Higher resolution improves low-speed measurement but adds position noise
+#define SIMPLEXMOTION_ENCODER_RESOLUTION 12
+
 // Control - Trajectories
 #define TWIPR_SEQUENCE_TIME 30 // seconds
 

@@ -14,3 +14,4 @@ testbed/software/RobotManager/utils/sound/tts_files/index.json
 *.parcel-cache/
 CLAUDE.md
 .claude/
+software/research/

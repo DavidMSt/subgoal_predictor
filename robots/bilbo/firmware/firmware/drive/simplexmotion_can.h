@@ -38,6 +38,9 @@
 #define SIMPLEXMOTION_CAN_REG_MASK_SHUTDOWN 414
 #define SIMPLEXMOTION_CAN_REG_ERROR 415
 
+#define SIMPLEXMOTION_CAN_REG_SPEED_FILTER 121
+#define SIMPLEXMOTION_CAN_REG_MOTOR_OPTIONS 212
+
 
 typedef enum simplexmotion_can_mode_t {
 	SIMPLEXMOTION_CAN_MODE_OFF = 0,
@@ -88,6 +91,8 @@ public:
 
 
 	HAL_StatusTypeDef setTorqueLimit(float maxTorque);
+	HAL_StatusTypeDef setSpeedFilter(uint16_t value);
+	HAL_StatusTypeDef setEncoderResolution(uint16_t bits);
 	HAL_StatusTypeDef configureShutdownInput();
 
 	simplexmotion_can_config_t config;
