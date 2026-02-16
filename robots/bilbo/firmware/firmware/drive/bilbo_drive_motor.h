@@ -31,6 +31,10 @@ public:
 
 	virtual HAL_StatusTypeDef setTorqueLimit(float maxTorque) = 0;
 
+	// Reset the underlying bus (CAN/RS485). Default: no-op.
+	// Called by the drive task to recover from transient bus errors.
+	virtual void resetBus() {}
+
 };
 
 #endif /* DRIVE_BILBO_DRIVE_MOTOR_H_ */

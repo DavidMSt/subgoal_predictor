@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Camera</title>
+    <link rel="icon" href="./src/lib/assets/bilbo_icon.png" type="image/x-icon"/>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body {
+            margin: 0; padding: 0; height: 100%; overflow: hidden;
+            background: #1f2023; color: #ddd; font-family: system-ui, sans-serif;
+        }
+        #camera-root {
+            width: 100%; height: 100%;
+            display: flex; flex-direction: column;
+        }
+
+        /* --- Toolbar --- */
+        .cam-toolbar {
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 10px; background: #2a2b2e;
+            border-bottom: 1px solid #3a3b3e; flex-shrink: 0;
+            opacity: 0; transition: opacity 0.2s;
+        }
+        #camera-root:hover .cam-toolbar,
+        .cam-toolbar:focus-within { opacity: 1; }
+
+        .cam-toolbar select {
+            flex: 1; min-width: 0;
+            padding: 4px 6px; border-radius: 4px;
+            background: #1a1b1e; color: #ddd; border: 1px solid #555;
+            font-size: 12px;
+        }
+        .cam-toolbar button {
+            padding: 4px 8px; border-radius: 4px;
+            background: #3a3b3e; color: #ddd; border: 1px solid #555;
+            cursor: pointer; font-size: 13px; line-height: 1;
+        }
+        .cam-toolbar button:hover { background: #4a4b4e; }
+        .cam-toolbar button.active { background: #5577aa; border-color: #6688bb; }
+
+        /* --- Video area --- */
+        .cam-view {
+            flex: 1; position: relative; overflow: hidden;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .cam-view img {
+            max-width: 100%; max-height: 100%;
+            object-fit: contain;
+        }
+
+        /* --- Crop overlay --- */
+        .cam-crop-overlay {
+            position: absolute; inset: 0;
+            background: rgba(0,0,0,0.4); cursor: crosshair;
+            display: none; z-index: 10;
+        }
+        .cam-crop-selection {
+            position: absolute;
+            border: 2px dashed rgba(255,255,255,0.8);
+            background: rgba(255,255,255,0.08);
+        }
+    </style>
+</head>
+<body>
+<div id="camera-root"></div>
+<script type="module" src="./src/camera-popup.js"></script>
+</body>
+</html>

@@ -14,6 +14,7 @@ from robots.bilbo.testbed.tracker.tracked_objects import TrackedBILBO, TrackedLi
 class TestbedBILBO:
     id: str
     state: BILBO_DynamicState
+    true_state: BILBO_DynamicState | None
     config: BILBO_Config | None
 
 
@@ -43,6 +44,20 @@ class RealTestbedBILBO(TestbedBILBO):
         )
         return state
 
+    @property
+    def true_state(self) -> BILBO_DynamicState | None:
+        if self.tracked_object is None:
+            return BILBO_DynamicState()
+        return BILBO_DynamicState(
+            x=self.tracked_object.state.x,
+            y=self.tracked_object.state.y,
+            v=self.robot.data.estimation.state.v,
+            theta=self.tracked_object.state.theta,
+            theta_dot=self.robot.data.estimation.state.theta_dot,
+            psi=self.tracked_object.state.psi,
+            psi_dot=self.robot.data.estimation.state.psi_dot
+        )
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 class VirtualTestbedBILBO(TestbedBILBO):
@@ -55,6 +70,10 @@ class VirtualTestbedBILBO(TestbedBILBO):
 
     @property
     def state(self) -> BILBO_DynamicState:
+        return self.simulation_object.get_state()
+
+    @property
+    def true_state(self) -> BILBO_DynamicState:
         return self.simulation_object.get_state()
 
 
@@ -83,6 +102,7 @@ class BoxObstacle(Obstacle):
         }
 
 
+# ======================================================================================================================
 class RealBoxObstacle(BoxObstacle):
     tracked_object: TrackedBox
 

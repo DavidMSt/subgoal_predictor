@@ -22,81 +22,64 @@ simulation:
   enabled: true
   Ts: 0.01
   obstacles:
-    - id: box-111
+#    - id: box-111
+#      type: box
+#      size: [ 1.5 , 1.5 ]
+#      state: [ 1.5 , 1.5 , 0.707 ]
+    # --- Internal vertical walls (along Y axis) ---
+    - id: wall_v1
       type: box
-      size: [ 1.5 , 1.5 ]
-      state: [ 1.5 , 1.5 , 0.707 ]
-    # --- Outer boundary walls ---
-#    - id: wall_bottom
-#      type: box
-#      size: [ 3.0, 0.1 ]
-#      state: [ 1.5, 0, 0 ]
-#    - id: wall_top
-#      type: box
-#      size: [ 3.0, 0.1 ]
-#      state: [ 1.5, 3.0, 0 ]
-#    - id: wall_left
-#      type: box
-#      size: [ 3.0, 0.1 ]
-#      state: [ 0, 1.5, 1.57 ]
-#    - id: wall_right
-#      type: box
-#      size: [ 3.0, 0.1 ]
-#      state: [ 3.0, 1.5, 1.57 ]
-#    # --- Internal vertical walls (along Y axis) ---
-#    - id: wall_v1
-#      type: box
-#      size: [ 0.6, 0.1 ]
-#      state: [ 0.6, 0.9, 1.57 ]
-#    - id: wall_v2
-#      type: box
-#      size: [ 0.6, 0.1 ]
-#      state: [ 0.6, 2.7, 1.57 ]
-#    - id: wall_v3
-#      type: box
-#      size: [ 0.6, 0.1 ]
-#      state: [ 1.2, 0.3, 1.57 ]
-#    - id: wall_v4
-#      type: box
-#      size: [ 1.8, 0.1 ]
-#      state: [ 1.2, 2.1, 1.57 ]
-#    - id: wall_v5
-#      type: box
-#      size: [ 1.2, 0.1 ]
-#      state: [ 1.8, 0.6, 1.57 ]
-#    - id: wall_v6
-#      type: box
-#      size: [ 1.2, 0.1 ]
-#      state: [ 1.8, 1.8, 1.57 ]
-#    - id: wall_v7
-#      type: box
-#      size: [ 0.6, 0.1 ]
-#      state: [ 2.4, 0.9, 1.57 ]
-#    # --- Internal horizontal walls (along X axis) ---
-#    - id: wall_h1
-#      type: box
-#      size: [ 0.6, 0.1 ]
-#      state: [ 2.7, 0.6, 0 ]
-#    - id: wall_h2
-#      type: box
-#      size: [ 0.6, 0.1 ]
-#      state: [ 0.9, 1.2, 0 ]
-#    - id: wall_h3
-#      type: box
-#      size: [ 0.6, 0.1 ]
-#      state: [ 0.3, 1.8, 0 ]
-#    - id: wall_h4
-#      type: box
-#      size: [ 0.6, 0.1 ]
-#      state: [ 2.1, 1.8, 0 ]
-#    - id: wall_h5
-#      type: box
-#      size: [ 0.6, 0.1 ]
-#      state: [ 2.7, 2.4, 0 ]
+      size: [ 0.6, 0.1 ]
+      state: [ 0.6, 0.9, 1.57 ]
+    - id: wall_v2
+      type: box
+      size: [ 0.6, 0.1 ]
+      state: [ 0.6, 2.7, 1.57 ]
+    - id: wall_v3
+      type: box
+      size: [ 0.6, 0.1 ]
+      state: [ 1.2, 0.3, 1.57 ]
+    - id: wall_v4
+      type: box
+      size: [ 1.8, 0.1 ]
+      state: [ 1.2, 2.1, 1.57 ]
+    - id: wall_v5
+      type: box
+      size: [ 1.2, 0.1 ]
+      state: [ 1.8, 0.6, 1.57 ]
+    - id: wall_v6
+      type: box
+      size: [ 1.2, 0.1 ]
+      state: [ 1.8, 1.8, 1.57 ]
+    - id: wall_v7
+      type: box
+      size: [ 0.6, 0.1 ]
+      state: [ 2.4, 0.9, 1.57 ]
+    # --- Internal horizontal walls (along X axis) ---
+    - id: wall_h1
+      type: box
+      size: [ 0.6, 0.1 ]
+      state: [ 2.7, 0.6, 0 ]
+    - id: wall_h2
+      type: box
+      size: [ 0.6, 0.1 ]
+      state: [ 0.9, 1.2, 0 ]
+    - id: wall_h3
+      type: box
+      size: [ 0.6, 0.1 ]
+      state: [ 0.3, 1.8, 0 ]
+    - id: wall_h4
+      type: box
+      size: [ 0.6, 0.1 ]
+      state: [ 2.1, 1.8, 0 ]
+    - id: wall_h5
+      type: box
+      size: [ 0.6, 0.1 ]
+      state: [ 2.7, 2.4, 0 ]
   robots: null
 
 tracker:
-  enabled: false
+  enabled: true
   server: palantir.lan
   sample_rate: 50
   outlier_filter:

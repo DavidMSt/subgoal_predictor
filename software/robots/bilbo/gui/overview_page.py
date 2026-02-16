@@ -8,18 +8,31 @@ from core.utils.timecode.timecode_server import TimecodeServerStatus
 from extensions.babylon.src.babylon import BabylonVisualization
 from extensions.babylon.src.lib.objects.bilbo.bilbo import BabylonBilbo
 from extensions.babylon.src.lib.objects.box.box import Box
-from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
+from extensions.babylon.src.lib.objects.drawings.path import PathDrawing
+from extensions.babylon.src.lib.objects.drawings.points import PointsDrawing
+from robots.bilbo.robot.bilbo_position_control import PathData
+from robots.bilbo.utilities.babylon.scenarios.arena import ArenaScenario
+from robots.bilbo.utilities.babylon.scenarios.lab import LabScenario
 from extensions.gui.src.gui import Page
 from extensions.gui.src.lib.objects.objects import Widget_Group
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.objects.python.indicators import CircleIndicator
+from extensions.gui.src.lib.objects.python.bilbo_mode import BilboModeWidget
+from extensions.gui.src.lib.objects.python.buttons import MultiStateButton
 from extensions.gui.src.lib.objects.python.number import DigitalNumberWidget, DigitalClockWidget
 from extensions.gui.src.lib.objects.python.sliders import ClassicSliderWidget
 from extensions.gui.src.lib.objects.python.table import Table, TextColumn, IndicatorColumn, NumberColumn
-from extensions.gui.src.lib.objects.python.text import TextWidget
+from extensions.gui.src.lib.objects.python.text import TextWidget, StatusWidget, StatusWidgetElement
 from extensions.gui.src.lib.objects.python.text_input import InputWidget
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
+from robots.bilbo.robot.bilbo_utilities import CONTROL_MODE_COLORS
 from robots.bilbo.testbed.objects import TestbedBILBO, RealTestbedBILBO, BoxObstacle
 from robots.bilbo.testbed.testbed_manager import TestbedManager
+
+PATH_WIDTH = 0.03
+PATH_ENDPOINT_SIZE = 0.04
+PATH_START_COLOR = [0.3, 0.9, 0.3, 0.9]
+PATH_END_COLOR = [1.0, 0.3, 0.3, 0.9]
 
 
 # ======================================================================================================================
@@ -31,6 +44,9 @@ class BILBO_GUI_OverviewPage:
     class RobotContainer:
         robot: TestbedBILBO
         babylon: BabylonBilbo
+        group: Widget_Group | None = None
+        status_widget: StatusWidget | None = None
+        mode_widget: BilboModeWidget | None = None
 
     robots: dict[str, RobotContainer]
     _obstacle_babylon_objects: dict[str, Box]
@@ -43,6 +59,9 @@ class BILBO_GUI_OverviewPage:
         self.robots = {}
         self._obstacle_babylon_objects = {}
         self.babylon_visualization = None
+        self._selected_robot: str | None = None
+        self._path_objects: dict[str, list] = {}  # robot_id → [PathDrawing, PointsDrawing, ...]
+        self._data_source = 'OptiTrack'  # 'OptiTrack' or 'Robots'
 
         self._buildPage()
 
@@ -66,8 +85,31 @@ class BILBO_GUI_OverviewPage:
         # Build timecode group (disabled if timecode not enabled)
         self._build_timecode()
 
+        # Babylon group (full height right side)
+        babylon_group = Widget_Group(
+            group_id='babylon_group',
+            title='3D View',
+            rows=18,
+            columns=21,
+            show_title=True
+        )
+        self.page.addWidget(babylon_group, row=1, column=30, height=18, width=21)
+
         self.babylon_widget = BabylonWidget(widget_id='babylon_widget')
-        self.page.addWidget(self.babylon_widget, row=6, column=30, height=13, width=21)
+        babylon_group.addWidget(self.babylon_widget, row=1, column=1, height=13, width=21)
+
+        # Data source toggle
+        self._data_source_button = MultiStateButton(
+            id='data_source_toggle',
+            states=['OptiTrack', 'Robots'],
+            current_state='OptiTrack',
+            color=[[0.15, 0.25, 0.35], [0.25, 0.2, 0.15]],
+            title='Data Source',
+            fontSize=10,
+        )
+        babylon_group.addWidget(self._data_source_button, row=14, column=1, height=2, width=3)
+        self._data_source_button.callbacks.click.register(self._on_data_source_click)
+        self._data_source_button.callbacks.indicatorClick.register(self._on_data_source_indicator_click)
 
         # Build extensions group (individual widgets disabled based on settings)
         self._build_display_group()
@@ -259,10 +301,7 @@ class BILBO_GUI_OverviewPage:
                 tracker_table.delete_row(row)
 
         def tracker_new_sample(*args, **kwargs):
-            if self.manager.tracker.samples % 5 == 0:
-                tracker_status.blink(250)
-            else:
-                return
+            tracker_status.blink(250)
             # Go through the rigid bodies
             for rb_id, rigid_body_sample in self.manager.tracker.sample.items():
                 row = rb_table.get_row_by_id(row_id=rb_id)
@@ -336,7 +375,7 @@ class BILBO_GUI_OverviewPage:
             columns=2,
             show_title=True
         )
-        self.page.addWidget(display_group, row=1, width=10, height=4)
+        self.page.addWidget(display_group, row=15, column=1, width=10, height=4)
 
         # === Display Text Input ===
         self.display_text_input = InputWidget(
@@ -386,12 +425,110 @@ class BILBO_GUI_OverviewPage:
             self.limbo_height_slider.disable()
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _on_data_source_click(self, button, **kwargs):
+        button.increaseIndex()
+        self._data_source = button.state
+
+    def _on_data_source_indicator_click(self, button, index, **kwargs):
+        button.state_index = index
+        self._data_source = button.state
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _build_robot_group(self, container: 'BILBO_GUI_OverviewPage.RobotContainer'):
+        robot = container.robot
+        raw_color = robot.config.general.color if robot.config else [0.5, 0.5, 0.5]
+        # Normalize color components (may be floats or fraction strings like "201/255")
+        color = [eval(c) if isinstance(c, str) else float(c) for c in raw_color[:3]]
+        border_color = [int(c * 255) for c in color] + [0.8]
+
+        group = Widget_Group(
+            group_id=f'robot_{robot.id}',
+            title=robot.id,
+            rows=3,
+            columns=1,
+            show_title=True,
+            border_color=border_color,
+            border_width=2,
+        )
+
+        # Status widget
+        mode = robot.robot.control.mode if isinstance(robot, RealTestbedBILBO) else BILBO_Control_Mode.OFF
+        status_widget = StatusWidget(
+            widget_id=f'status_{robot.id}',
+            elements={
+                'status': StatusWidgetElement(
+                    label='Status',
+                    color=[0, 0.5, 0],
+                    status='connected',
+                ),
+                'static': StatusWidgetElement(
+                    label='Static',
+                    color=[0.5, 0.5, 0.5],
+                    status='—',
+                ),
+            },
+        )
+        group.addWidget(status_widget, row=1, column=1, height=1, width=1)
+
+        # Mode widget
+        mode_widget = BilboModeWidget(
+            widget_id=f'mode_{robot.id}',
+            current_mode=mode.name,
+            orientation='horizontal',
+        )
+        group.addWidget(mode_widget, row=2, column=1, height=2, width=1)
+
+        # Place group on page (column 11, stacked per robot index)
+        idx = len([r for r in self.robots.values() if r.group is not None])
+        row = 1 + idx * 5
+        self.page.addWidget(group, row=row, column=11, width=10, height=5)
+
+        container.group = group
+        container.status_widget = status_widget
+        container.mode_widget = mode_widget
+
+        # Wire up callbacks for real robots
+        if isinstance(robot, RealTestbedBILBO):
+            def on_mode_clicked(mode_id, _robot=robot, **kwargs):
+                try:
+                    _robot.robot.control.setControlMode(BILBO_Control_Mode[mode_id])
+                except (KeyError, Exception) as e:
+                    self.logger.warning(f'Failed to set mode {mode_id}: {e}')
+
+            mode_widget.callbacks.mode_clicked.register(on_mode_clicked)
+
+            def on_mode_changed(mode, _sw=status_widget, _mw=mode_widget, **kwargs):
+                _mw.current_mode = mode.name
+                _sw.elements['status'].status = mode.name
+                _sw.elements['status'].color = CONTROL_MODE_COLORS.get(mode, [0.5, 0.5, 0.5])
+                _sw.updateConfig()
+
+            robot.robot.control.events.mode_changed.on(on_mode_changed)
+
+            def on_stream(sample, _sw=status_widget, **kwargs):
+                is_static = sample.estimation.static
+                _sw.elements['static'].status = 'yes' if is_static else 'no'
+                _sw.elements['static'].color = [0, 0.5, 0] if is_static else [0.6, 0.4, 0]
+                _sw.updateConfig()
+
+            robot.robot.core.events.stream.on(on_stream, max_rate=5)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _remove_robot_group(self, container: 'BILBO_GUI_OverviewPage.RobotContainer'):
+        if container.group is not None:
+            self.page.removeWidget(container.group)
+            container.group = None
+            container.status_widget = None
+            container.mode_widget = None
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _on_new_testbed_robot(self, robot: TestbedBILBO, *args, **kwargs):
         if robot.id in self.robots:
             self.logger.warning(f'Testbed robot {robot.id} already exists. Skipping.')
             return
 
-        color = robot.config.general.color if robot.config else [0.5, 0.5, 0.5]
+        raw_color = robot.config.general.color if robot.config else [0.5, 0.5, 0.5]
+        color = [eval(c) if isinstance(c, str) else float(c) for c in raw_color[:3]]
         text = robot.config.general.short_id if robot.config else robot.id
 
         container = self.RobotContainer(
@@ -402,43 +539,62 @@ class BILBO_GUI_OverviewPage:
         self.robots[robot.id] = container
         self.babylon_visualization.addObject(container.babylon)
 
+        # Build per-robot status group
+        self._build_robot_group(container)
+
         # Subscribe to the robot's own stream so the 3D model updates
         # from estimation state (works even without OptiTrack tracker)
         if isinstance(robot, RealTestbedBILBO):
             babylon_ref = container.babylon
             robot.robot.core.events.stream.on(
-                lambda sample, _b=babylon_ref: _b.set_state(
-                    x=sample.estimation.state.x,
-                    y=sample.estimation.state.y,
-                    theta=sample.estimation.state.theta,
-                    psi=sample.estimation.state.psi,
+                lambda sample, _b=babylon_ref: (
+                    _b.set_state(
+                        x=sample.estimation.state.x,
+                        y=sample.estimation.state.y,
+                        theta=sample.estimation.state.theta,
+                        psi=sample.estimation.state.psi,
+                    ) if self._data_source == 'Robots' else None
                 ),
                 max_rate=20,
             )
 
-        # ------------------------------------------------------------------------------------------------------------------
+            # Subscribe to planner events for path visualization
+            rid = robot.id
+            pc = robot.robot.position_control
+            pc.events.path_planned.on(lambda data, _rid=rid: self._on_path_planned(_rid, data))
+            pc.events.path_loaded.on(lambda data, _rid=rid: self._on_path_planned(_rid, data))
+            pc.events.path_finished.on(lambda *a, _rid=rid, **kw: self._clear_path(_rid))
+            pc.events.path_aborted.on(lambda *a, _rid=rid, **kw: self._clear_path(_rid))
+            pc.events.path_timeout.on(lambda *a, _rid=rid, **kw: self._clear_path(_rid))
+            pc.events.path_cleared.on(lambda *a, _rid=rid, **kw: self._clear_path(_rid))
 
+        self._update_babylon_dropdown()
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _on_testbed_robot_disconnected(self, robot_id: str, *args, **kwargs):
         if robot_id not in self.robots:
             self.logger.warning(f'Testbed robot {robot_id} not found. Skipping.')
             return
 
+        self._clear_path(robot_id)
+        self._remove_robot_group(self.robots[robot_id])
         self.babylon_visualization.removeObject(self.robots[robot_id].babylon)
         del self.robots[robot_id]
+        self._update_babylon_dropdown()
 
         # ------------------------------------------------------------------------------------------------------------------
 
     def _on_new_tracker_sample(self, *args, **kwargs):
-        for robot in self.robots.values():
-            state = robot.robot.state
-            robot.babylon.set_state(
-                x=state.x,
-                y=state.y,
-                theta=state.theta,
-                psi=state.psi,
-            )
+        if self._data_source == 'OptiTrack':
+            for robot in self.robots.values():
+                robot.babylon.set_state(
+                    x=robot.robot.true_state.x,
+                    y=robot.robot.true_state.y,
+                    theta=robot.robot.true_state.theta,
+                    psi=robot.robot.true_state.psi,
+                )
 
-        # Update obstacle 3D positions
+        # Always update obstacle 3D positions from tracker
         for obs_id, box in self._obstacle_babylon_objects.items():
             if obs_id in self.manager.testbed.obstacles:
                 obs = self.manager.testbed.obstacles[obs_id]
@@ -461,7 +617,7 @@ class BILBO_GUI_OverviewPage:
         box = Box(
             object_id=f"obstacle_{obs_id}",
             color=[0.8, 0.15, 0.15],
-            alpha=0.8,
+            alpha=0.5,
             size={'x': obstacle.config.width, 'y': obstacle.config.height, 'z': 0.25},
         )
         box.setPosition(x=s.x, y=s.y, z=0.125)
@@ -485,59 +641,150 @@ class BILBO_GUI_OverviewPage:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _on_testbed_initialized(self, *args, **kwargs):
-        # Babylon
-        testbed_size = self.manager.settings.testbed.size
+        self._testbed_size = self.manager.settings.testbed.size
+        testbed_id = self.manager.settings.testbed.id
 
-        target_x = (testbed_size['x'][0] + testbed_size['x'][1]) / 2
-        target_y = (testbed_size['y'][0] + testbed_size['y'][1]) / 2
+        size_x = self._testbed_size['x'][1] - self._testbed_size['x'][0]
+        size_y = self._testbed_size['y'][1] - self._testbed_size['y'][0]
+        size = max(size_x, size_y)
+
+        # Choose scenario based on testbed ID
+        if testbed_id == 'lab':
+            scenario = LabScenario(size=size)
+        else:
+            scenario = ArenaScenario(size=size)
+
+        config = scenario.get_config()
+        config['title'] = 'BILBO Testbed'
 
         self.babylon_visualization = BabylonVisualization(
-            id='babylon', babylon_config=
-            {
-                'title': 'BILBO Testbed',
-                'camera': {
-                    'target': [target_x, target_y, 0],
-                    'position': [1.5, -0.9, 1.334]
-                }
-            }
+            id='babylon', babylon_config=config
         )
 
         self.babylon_widget.set_babylon(self.babylon_visualization)
         self.babylon_visualization.start()
 
-        floor = SimpleFloor('floor',
-                            size_x=testbed_size['x'],
-                            size_y=testbed_size['y'])
-        self.babylon_visualization.addObject(floor)
+        scenario.setup(self.babylon_visualization)
+
+        # Register floor double-click and dropdown callbacks
+        self.babylon_visualization.callbacks.floor_doubleclick.register(self._on_babylon_floor_doubleclick)
+        self.babylon_visualization.callbacks.dropdown_select.register(self._on_babylon_dropdown_select)
 
         # Add existing testbed obstacles to Babylon
         for obstacle in self.manager.testbed.obstacles.values():
             self._on_obstacle_added(obstacle)
 
-        # testbed_size = [3, 3]  # Size in meters
+    # ------------------------------------------------------------------------------------------------------------------
+    def _update_babylon_dropdown(self):
+        """Rebuild the Babylon dropdown from the current robot list."""
+        if self.babylon_visualization is None:
+            return
+        items = [{'key': rid, 'label': rid} for rid in self.robots]
+        # Keep current selection if still valid, otherwise pick the first
+        selected = self._selected_robot if self._selected_robot in self.robots else None
+        if selected is None and items:
+            selected = items[0]['key']
+        self._selected_robot = selected
+        self.babylon_visualization.set_dropdown(items, selected)
+        self._highlight_selected_robot()
 
-        # # Floor is kept larger than testbed for visual purposes
-        # floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
-        # self.babylon_visualization.addObject(floor)
-        #
-        # # Wall length matches testbed size
-        # # Wall positions are offset by half the testbed size to create the boundary
-        # wall1 = WallFancy('wall1', length=testbed_size[0], texture='wood4.png', include_end_caps=True)
-        # wall1.setPosition(y=testbed_size[1] / 2)
-        # self.babylon_visualization.addObject(wall1)
-        #
-        # wall2 = WallFancy('wall2', length=testbed_size[0], texture='wood4.png', include_end_caps=True)
-        # self.babylon_visualization.addObject(wall2)
-        # wall2.setPosition(y=-testbed_size[1] / 2)
-        #
-        # wall3 = WallFancy('wall3', length=testbed_size[1], texture='wood4.png')
-        # wall3.setPosition(x=testbed_size[0] / 2)
-        # wall3.setAngle(np.pi / 2)
-        # self.babylon_visualization.addObject(wall3)
-        #
-        # wall4 = WallFancy('wall4', length=testbed_size[1], texture='wood4.png')
-        # wall4.setPosition(x=-testbed_size[0] / 2)
-        # wall4.setAngle(np.pi / 2)
-        # self.babylon_visualization.addObject(wall4)
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_babylon_dropdown_select(self, selected: str):
+        self._selected_robot = selected
+        self.logger.info(f"Babylon dropdown selection: {selected}")
+        # Sync selection across all connected clients
+        self.babylon_visualization.update_dropdown_selection(selected)
+        self._highlight_selected_robot()
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def _highlight_selected_robot(self):
+        """Highlight the selected robot's 3D object, unhighlight all others."""
+        for rid, container in self.robots.items():
+            container.babylon.highlight(rid == self._selected_robot)
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_babylon_floor_doubleclick(self, x: float, y: float):
+        selected = self._selected_robot
+        if not selected or selected not in self.robots:
+            self.logger.warning("No robot selected for navigation")
+            return
+
+        container = self.robots[selected]
+        if not isinstance(container.robot, RealTestbedBILBO):
+            self.logger.warning(f"Robot {selected} is not a real robot")
+            return
+
+        # Bounds check
+        ts = self._testbed_size
+        if not (ts['x'][0] < x < ts['x'][1] and ts['y'][0] < y < ts['y'][1]):
+            self.logger.warning(f"Position out of bounds: ({x:.2f}, {y:.2f})")
+            return
+
+        self.logger.info(f"Planning path for {selected} to ({x:.2f}, {y:.2f})")
+        container.robot.robot.position_control.plan_and_follow(target=(x, y))
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_path_planned(self, robot_id: str, path_data: PathData):
+        """Draw the planned path with start/end markers in the 3D view."""
+        if self.babylon_visualization is None:
+            return
+        if not path_data or not path_data.path_points:
+            return
+
+        # Remove previous path objects for this robot
+        self._clear_path(robot_id)
+
+        # Get robot color for the path
+        robot_color = [0.5, 0.5, 0.5]
+        if robot_id in self.robots and self.robots[robot_id].robot.config:
+            raw = self.robots[robot_id].robot.config.general.color
+            robot_color = [eval(c) if isinstance(c, str) else float(c) for c in raw[:3]]
+        path_color = robot_color + [0.8]
+
+        objects = []
+
+        # Path line
+        drawing = PathDrawing(
+            object_id=f"path_{robot_id}",
+            pathColor=path_color,
+            pathWidth=PATH_WIDTH,
+        )
+        self.babylon_visualization.addObject(drawing)
+        drawing.setPoints(path_data.path_points)
+        objects.append(drawing)
+
+        # Start point
+        start = path_data.path_points[0]
+        start_pt = PointsDrawing(
+            object_id=f"path_start_{robot_id}",
+            fillColor=PATH_START_COLOR,
+            pointSize=PATH_ENDPOINT_SIZE,
+        )
+        self.babylon_visualization.addObject(start_pt)
+        start_pt.setPoints([start])
+        objects.append(start_pt)
+
+        # End point
+        end = path_data.path_points[-1]
+        end_pt = PointsDrawing(
+            object_id=f"path_end_{robot_id}",
+            fillColor=PATH_END_COLOR,
+            pointSize=PATH_ENDPOINT_SIZE,
+        )
+        self.babylon_visualization.addObject(end_pt)
+        end_pt.setPoints([end])
+        objects.append(end_pt)
+
+        self._path_objects[robot_id] = objects
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _clear_path(self, robot_id: str):
+        """Remove all path objects (line + endpoints) for a robot."""
+        if robot_id in self._path_objects:
+            objects = self._path_objects.pop(robot_id)
+            if self.babylon_visualization is not None:
+                for obj in objects:
+                    try:
+                        self.babylon_visualization.removeObject(obj)
+                    except Exception:
+                        pass

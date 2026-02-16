@@ -56,8 +56,10 @@ export default defineConfig({
         gui: path.resolve(__dirname, './gui.html'),
         app: path.resolve(__dirname, './app.html'),
         'babylon-popup': path.resolve(__dirname, './babylon-popup.html'),
+        'camera-popup': path.resolve(__dirname, './camera-popup.html'),
         'map-popup': path.resolve(__dirname, './map-popup.html'),
         'chart-popup': path.resolve(__dirname, './chart-popup.html'),
+        'network-popup': path.resolve(__dirname, './network-popup.html'),
       },
       output: {
         dir: path.resolve(__dirname, 'dist')

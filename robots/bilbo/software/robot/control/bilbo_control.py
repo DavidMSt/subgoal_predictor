@@ -271,7 +271,7 @@ class BILBO_Control:
 
         # Wait for the low-level mode change event
         if wait_for_change:
-            result, _ = self.events.lowlevel_mode_change.wait(timeout=0.1,
+            result, _ = self.events.lowlevel_mode_change.wait(timeout=0.5,
                                                               stale_event_time=0.1,
                                                               predicate=pred_flag_equals('mode', mode))
 

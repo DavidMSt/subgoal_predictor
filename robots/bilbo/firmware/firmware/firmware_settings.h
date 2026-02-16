@@ -9,11 +9,11 @@
 #define FIRMWARE_SETTINGS_H_
 
 /* USER SETTINGS */
-//#define BILBO_DRIVE_SIMPLEXMOTION_RS485
-#define BILBO_DRIVE_SIMPLEXMOTION_CAN
+#define BILBO_DRIVE_SIMPLEXMOTION_RS485
+//#define BILBO_DRIVE_SIMPLEXMOTION_CAN
 
-#define BILBO_MODEL_NORMAL // Define one of these: BILBO_MODEL_NORMAL, BILBO_MODEL_SMALL, BILBO_MODEL_BIG
-//#define BILBO_MODEL_BIG
+//#define BILBO_MODEL_NORMAL // Define one of these: BILBO_MODEL_NORMAL, BILBO_MODEL_SMALL, BILBO_MODEL_BIG
+#define BILBO_MODEL_BIG
 //#define BILBO_MODEL_SMALL
 
 // Hardware safety line: STM32 GPIO connected to motor IN1.
@@ -37,11 +37,11 @@
 
 // Motor speed measurement filter (0 = no filtering, 4 = default, 15 = max)
 // Higher values smooth low-speed noise but add measurement lag
-#define SIMPLEXMOTION_SPEED_FILTER 7
+#define SIMPLEXMOTION_SPEED_FILTER 5
 
 // Motor encoder resolution in bits (12 = 4096, 13 = 8192, 14 = 16384 counts/rev)
 // Higher resolution improves low-speed measurement but adds position noise
-#define SIMPLEXMOTION_ENCODER_RESOLUTION 12
+#define SIMPLEXMOTION_ENCODER_RESOLUTION 13
 
 // Control - Trajectories
 #define TWIPR_SEQUENCE_TIME 30 // seconds

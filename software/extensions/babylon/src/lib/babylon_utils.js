@@ -176,3 +176,23 @@ export function quatChanged(a, b, eps = 1e-6) {
         Math.abs(a.w - b.w) > eps
     );
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+/**
+ * Deep merge source into target. Arrays and non-plain-object values in source
+ * overwrite target; plain objects are merged recursively. Target is not mutated.
+ */
+export function deepMerge(target, source) {
+    const result = {...target};
+    for (const key of Object.keys(source)) {
+        const srcVal = source[key];
+        const tgtVal = target[key];
+        if (srcVal && typeof srcVal === 'object' && !Array.isArray(srcVal) &&
+            tgtVal && typeof tgtVal === 'object' && !Array.isArray(tgtVal)) {
+            result[key] = deepMerge(tgtVal, srcVal);
+        } else {
+            result[key] = srcVal;
+        }
+    }
+    return result;
+}

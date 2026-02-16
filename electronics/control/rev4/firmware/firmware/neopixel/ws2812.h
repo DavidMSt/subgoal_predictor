@@ -126,11 +126,9 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim);
 // Core/timer clock: 32 MHz, PSC = 0, ARR = 39  ->  (ARR+1)/32e6 = 1.25 us per bit
 #define TIMER_ARR               39
 
-// High-time ticks for '1' and '0' (no floats; safe margins)
-//#define WS2812_T1H_TICKS        26   // ~0.81 us high (26/40 * 1.25us)
-//#define WS2812_T0H_TICKS        11   // ~0.34 us high (11/40 * 1.25us)
-#define WS2812_T1H_TICKS        22   // ~0.81 us high (26/40 * 1.25us)
-#define WS2812_T0H_TICKS        10   // ~0.34 us high (11/40 * 1.25us)
+// High-time ticks for '1' and '0' at 32 MHz, ARR=39 (1.25 us/bit)
+#define WS2812_T1H_TICKS        26   // 0.8125 us high (spec: 0.65-0.95 us)
+#define WS2812_T0H_TICKS        11   // 0.3438 us high (spec: 0.25-0.55 us)
 
 // Reset latch tail in "bit slots" kept low (>= 50 us). 100 ~= 125 us.
 #define WS2812_RESET_SLOTS      100

@@ -28,8 +28,8 @@ from core.utils.logging_utils import Logger
 from core.utils.yaml_utils import load_yaml
 from robots.bilbo.robot.experiment.experiment_definitions import (
     read_output_file, write_output_file, OutputTrajectoryFileData,
-    write_input_file, InputTrajectory,
-    write_model_vector_file, ModelVector, ModelVectorFileData,
+    read_input_file, write_input_file, InputTrajectory,
+    read_model_vector_file, write_model_vector_file, ModelVector, ModelVectorFileData,
 )
 from core.utils.sound.sound import speak
 from robots.bilbo.settings import get_settings
@@ -70,6 +70,8 @@ class DILC_Experiment_Meta_Settings:
             pose before each trial.
         check_if_robot_is_static: If True, waits for the robot to be stationary before
             starting a trial.
+        static_timeout_s: Maximum time in seconds to wait for the robot to become
+            static before a trial. Only used when check_if_robot_is_static is True.
         auto_start_trials: If True, trials start automatically after the robot is
             prepared (no resume needed). If False, user must send resume to start each trial.
         auto_accept_trials: If True, trial results are accepted automatically (no
@@ -77,6 +79,7 @@ class DILC_Experiment_Meta_Settings:
     """
     automatic_initial_conditions_reset: bool = True
     check_if_robot_is_static: bool = True
+    static_timeout_s: float = 10.0
     auto_start_trials: bool = False
     auto_accept_trials: bool = False
 
@@ -126,8 +129,8 @@ class DILC_Experiment_Settings:
     model_lowpass: FIR_Design_Params
     meta: DILC_Experiment_Meta_Settings = dataclasses.field(default_factory=DILC_Experiment_Meta_Settings)
     u0_params: DILC_U0_Params = dataclasses.field(default_factory=DILC_U0_Params)
-    u0: np.ndarray | None = None
-    m0: np.ndarray | None = None
+    u0: np.ndarray | list | str | None = None
+    m0: np.ndarray | list | str | None = None
 
 
 # === Trial Data (received from robot events) ===
@@ -323,6 +326,12 @@ class DILC_Experiment:
         If settings.reference is a string, it is treated as a file path to an
         output trajectory file (.botrj) and loaded automatically.
 
+        If settings.u0 is a string, it is treated as a file path to an
+        input trajectory file (.bitrj) and loaded automatically.
+
+        If settings.m0 is a string, it is treated as a file path to a model
+        vector file (.bmvec) and loaded automatically.
+
         Args:
             settings: The experiment settings to use.
         """
@@ -341,6 +350,34 @@ class DILC_Experiment:
             settings.reference = ref
         else:
             raise TypeError(f"Unexpected reference type: {type(ref)}")
+
+        # Resolve u0 from file path if needed (same unwrapping as reference).
+        u0 = settings.u0
+        if isinstance(u0, np.ndarray) and u0.ndim == 0:
+            u0 = str(u0)
+        if isinstance(u0, str):
+            file_data = read_input_file(u0)
+            settings.u0 = file_data.trajectory.to_vector(single_input=True)
+        elif isinstance(u0, list):
+            settings.u0 = np.asarray(u0)
+        elif isinstance(u0, np.ndarray) or u0 is None:
+            pass  # already correct
+        else:
+            raise TypeError(f"Unexpected u0 type: {type(u0)}")
+
+        # Resolve m0 from file path if needed (same unwrapping as reference).
+        m0 = settings.m0
+        if isinstance(m0, np.ndarray) and m0.ndim == 0:
+            m0 = str(m0)
+        if isinstance(m0, str):
+            file_data = read_model_vector_file(m0)
+            settings.m0 = file_data.to_array()
+        elif isinstance(m0, list):
+            settings.m0 = np.asarray(m0)
+        elif isinstance(m0, np.ndarray) or m0 is None:
+            pass  # already correct
+        else:
+            raise TypeError(f"Unexpected m0 type: {type(m0)}")
 
         self.settings = settings
         self.state = DILC_Experiment_State.INITIALIZED
@@ -370,11 +407,17 @@ class DILC_Experiment:
           2. Inside ``self.reference_trajectory_dir`` (if set)
           3. As-is (will fail in ``configure()`` if not found)
 
+        The same resolution order applies to ``u0`` (path to a ``.bitrj``
+        input trajectory file) and ``m0`` (path to a ``.bmvec`` model vector
+        file) when given as strings.
+
         Args:
             file_path: Path to the YAML configuration file.
         """
         yaml_data = load_yaml(file_path)
         settings = from_dict_auto(DILC_Experiment_Settings, yaml_data)
+
+        yaml_dir = os.path.dirname(os.path.abspath(file_path))
 
         # from_dict_auto wraps strings in 0-d ndarray when the type hint
         # includes np.ndarray — unwrap so path resolution works correctly.
@@ -383,7 +426,6 @@ class DILC_Experiment:
 
         # Resolve relative reference path
         if isinstance(settings.reference, str) and not os.path.isabs(settings.reference):
-            yaml_dir = os.path.dirname(os.path.abspath(file_path))
             candidate = os.path.join(yaml_dir, settings.reference)
 
             if os.path.isfile(candidate):
@@ -394,6 +436,36 @@ class DILC_Experiment:
             else:
                 # Fall through with the yaml-relative path (will error in configure if missing)
                 settings.reference = candidate  # type: ignore
+
+        # Unwrap and resolve u0 file path (same logic as reference)
+        if isinstance(settings.u0, np.ndarray) and settings.u0.ndim == 0:
+            settings.u0 = str(settings.u0)
+
+        if isinstance(settings.u0, str) and not os.path.isabs(settings.u0):
+            candidate = os.path.join(yaml_dir, settings.u0)
+
+            if os.path.isfile(candidate):
+                settings.u0 = candidate  # type: ignore
+            elif self.reference_trajectory_dir and os.path.isfile(
+                    os.path.join(self.reference_trajectory_dir, settings.u0)):
+                settings.u0 = os.path.join(self.reference_trajectory_dir, settings.u0)  # type: ignore
+            else:
+                settings.u0 = candidate  # type: ignore
+
+        # Unwrap and resolve m0 file path (same logic as reference)
+        if isinstance(settings.m0, np.ndarray) and settings.m0.ndim == 0:
+            settings.m0 = str(settings.m0)
+
+        if isinstance(settings.m0, str) and not os.path.isabs(settings.m0):
+            candidate = os.path.join(yaml_dir, settings.m0)
+
+            if os.path.isfile(candidate):
+                settings.m0 = candidate  # type: ignore
+            elif self.reference_trajectory_dir and os.path.isfile(
+                    os.path.join(self.reference_trajectory_dir, settings.m0)):
+                settings.m0 = os.path.join(self.reference_trajectory_dir, settings.m0)  # type: ignore
+            else:
+                settings.m0 = candidate  # type: ignore
 
         self.configure(settings)
         self._yaml_file_path = os.path.abspath(file_path)

@@ -398,6 +398,11 @@ HAL_StatusTypeDef SimplexMotion_RS485::configureShutdownInput() {
 }
 
 /* ================================================================================= */
+void SimplexMotion_RS485::resetBus() {
+	resetAllModbusHandlers();
+}
+
+/* ================================================================================= */
 HAL_StatusTypeDef SimplexMotion_RS485::setTarget(int32_t target) {
 	HAL_StatusTypeDef ret;
 	uint16_t tx_data[2] = { 0 };

@@ -300,6 +300,21 @@ class BILBO_Application_GUI:
             )
             self.gui.bottom_group.addWidget(camera, row=1, column=1, width=1, height=1)
 
+        network_button = Button(
+            widget_id='network_monitor_btn', text='Network', icon='🌐',
+            font_size=9, color=[0.15, 0.2, 0.25],
+        )
+        network_button.callbacks.click.register(
+            Callback(function=self._open_network_monitor, discard_inputs=True)
+        )
+        self.gui.bottom_group.addWidget(network_button, row=1, column=2, width=1, height=1)
+        self._network_button = network_button
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _open_network_monitor(self, *args, **kwargs):
+        url = f"/network-popup.html?host={self.host}&port=8500&title=Network%20Monitor"
+        self._network_button.function('openUrl', [url, 'width=900,height=500,noopener'])
+
     # ------------------------------------------------------------------------------------------------------------------
     def _openInputViewer(self, sender, *args, **kwargs):
 

@@ -20,6 +20,7 @@ import {Websocket} from "./lib/websocket.js"
 import {
     coordinatesFromBabylon,
     coordinatesToBabylon,
+    deepMerge,
     getBabylonColor,
     getBabylonColor3,
     Scene
@@ -129,7 +130,7 @@ export class Babylon extends Scene {
 
         }
 
-        this.config = {...default_config, ...config};
+        this.config = deepMerge(default_config, config);
         this.id = id;
         this.objects = {}
         this._renderLoopRunning = true; // Scene constructor starts the render loop
@@ -144,7 +145,6 @@ export class Babylon extends Scene {
         this._initializeScene();
         this._addSceneClickListener();
 
-        this.objects = objects;
         this._buildObjectsFromConfig(objects);
 
         this.callbacks = new Callbacks();
@@ -729,6 +729,14 @@ export class Babylon extends Scene {
                 this.stopFollowing();
                 this.callbacks.get('follow_stopped').call();
                 break;
+            case 'set_dropdown':
+                this._applyDropdown(msg.items || [], msg.selected || null);
+                break;
+            case 'update_dropdown_selection':
+                if (this._dropdown && msg.selected != null) {
+                    this._dropdown.value = msg.selected;
+                }
+                break;
             default:
                 console.warn(`Unknown message type: ${msg.type}`);
                 break;
@@ -752,6 +760,26 @@ export class Babylon extends Scene {
             this._msgTimes = this._msgTimes.slice(this._msgHead);
             this._msgHead = 0;
         }
+    }
+
+    /* --------------------------------------------------------------------------------------------------------------- */
+    _applyDropdown(items, selected) {
+        if (!this._dropdown) return;
+        this._dropdown.innerHTML = '';
+        if (!items || items.length === 0) {
+            this._dropdown.style.display = 'none';
+            return;
+        }
+        for (const item of items) {
+            const opt = document.createElement('option');
+            opt.value = item.key;
+            opt.textContent = item.label;
+            this._dropdown.appendChild(opt);
+        }
+        if (selected != null) {
+            this._dropdown.value = selected;
+        }
+        this._dropdown.style.display = 'block';
     }
 
     /* --------------------------------------------------------------------------------------------------------------- */
@@ -970,6 +998,7 @@ export class Babylon extends Scene {
     _buildObjectsFromConfig(objects) {
         // Loop through the objects keys and values
         for (const [key, value] of Object.entries(objects)) {
+            if (value.id in this.objects) continue;  // skip already-registered objects (by uid)
             const type = value.type;
             const object_class = BABYLON_OBJECT_MAPPINGS[type];
             if (!object_class) {
@@ -1205,7 +1234,9 @@ export class Babylon extends Scene {
             this.config.camera.alpha, this.config.camera.beta,
             this.config.camera.radius, coordinatesToBabylon(this.config.camera.target), this.scene);
 
-        camera.setPosition(coordinatesToBabylon(this.config.camera.position));
+        if (this.config.camera.position) {
+            camera.setPosition(coordinatesToBabylon(this.config.camera.position));
+        }
         camera.attachControl(this.canvas, true);
         camera.inputs.attached.keyboard.detachControl();
         camera.wheelPrecision = 100;
@@ -1344,7 +1375,26 @@ export class Babylon extends Scene {
         //     this.scene.render();
         // });
 
+        // — DROPDOWN OVERLAY —
+        this._dropdown = document.createElement('select');
+        this._dropdown.classList.add('babylon-dropdown');
+        this._dropdown.style.display = 'none';
+        this._dropdown.addEventListener('change', () => {
+            this.sendEvent({type: 'dropdown_select', selected: this._dropdown.value});
+        });
+        // Append to the canvas container so it overlays the 3D viewport
+        const canvasContainer = this.canvas.parentElement;
+        if (canvasContainer) {
+            canvasContainer.appendChild(this._dropdown);
+        }
+
         return this.scene;
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    get selectedDropdownValue() {
+        if (!this._dropdown || this._dropdown.style.display === 'none') return null;
+        return this._dropdown.value || null;
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -1401,11 +1451,6 @@ export class Babylon extends Scene {
             if (pick.pickedMesh.metadata && pick.pickedMesh.metadata.object) {
                 const clickedObject = pick.pickedMesh.metadata.object;
 
-                for (const obj of Object.values(this.objects)) {
-                    obj.highlight(false);
-                }
-                clickedObject.highlight(true);
-
                 this.sendEvent({
                     type: 'object_click',
                     object_id: clickedObject.id,
@@ -1417,10 +1462,6 @@ export class Babylon extends Scene {
 
     /* -------------------------------------------------------------------------------------------------------------- */
     _handleDoubleSceneClick() {
-        for (const obj of Object.values(this.objects)) {
-            obj.highlight(false);
-        }
-
         const pick = this.scene.pick(this.scene.pointerX, this.scene.pointerY);
         if (pick.hit) {
             const p = pick.pickedPoint;
@@ -2091,8 +2132,14 @@ export class BabylonContainer {
             const host = this.configuration.websocket_host || this.babylon.config.websocket_host || 'localhost';
             const port = this.configuration.websocket_port || this.babylon.config.websocket_port || '9000';
             const title = this.configuration.title || 'Babylon Visualization';
+            const id = this.babylon.id;
+
+            // Pass the full config so the popup renders identically
+            const storageKey = `babylon_config_${id}`;
+            sessionStorage.setItem(storageKey, JSON.stringify(this.babylon.config));
+
             const url = new URL('/babylon-popup.html', window.location.origin);
-            url.searchParams.set('id', this.babylon.id);
+            url.searchParams.set('id', id);
             url.searchParams.set('host', host);
             url.searchParams.set('port', port);
             url.searchParams.set('title', title);

@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import time
+import subprocess
 
 # Get the directory of the current script
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -70,6 +71,9 @@ class BILBO_Application:
 
         self.gui.callbacks.emergency_stop.register(self.manager.emergency_stop)
 
+        # Network Monitor (runs as subprocess to avoid eventlet monkey_patch conflicts)
+        self._network_monitor_proc = None
+
         # Exit Handling
         register_exit_callback(self.close)
 
@@ -89,10 +93,22 @@ class BILBO_Application:
         self.manager.start()
         self.gui.start()
 
+        # Start network monitor as subprocess (separate process avoids eventlet conflicts)
+        software_dir = os.path.abspath(os.path.join(top_level_module, '..'))
+        network_monitor_script = os.path.join(software_dir, 'extensions', 'network_monitor', 'network_monitor_app.py')
+        self._network_monitor_proc = subprocess.Popen(
+            [sys.executable, network_monitor_script],
+            cwd=software_dir,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
         speak('Stop Bilbo application')
         self.logger.info('Closing Bilbo application')
+        if self._network_monitor_proc and self._network_monitor_proc.poll() is None:
+            self._network_monitor_proc.terminate()
         self.gui.close()
         time.sleep(2)
         global ENABLE_SPEECH_OUTPUT

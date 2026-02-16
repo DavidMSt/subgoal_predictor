@@ -5,6 +5,7 @@ import queue
 import time
 import logging
 from websocket_server import WebsocketServer as ws_server
+from websocket_server.websocket_server import WebSocketHandler as _WebSocketHandler
 import websocket
 import threading
 import json
@@ -15,6 +16,21 @@ from core.utils.exit import register_exit_callback
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.json_utils import jsonEncode
 from core.utils.logging_utils import Logger
+
+
+# Monkey-patch: the upstream WebSocketHandler.handshake() catches AssertionError
+# but not KeyError, so a plain HTTP request without an 'upgrade' header crashes
+# the handler thread.  Wrap it so that any exception during handshake simply
+# closes the connection instead of printing a noisy traceback.
+_original_handshake = _WebSocketHandler.handshake
+
+def _safe_handshake(self):
+    try:
+        _original_handshake(self)
+    except (KeyError, Exception):
+        self.keep_alive = False
+
+_WebSocketHandler.handshake = _safe_handshake
 
 
 # ======================================================================================================================

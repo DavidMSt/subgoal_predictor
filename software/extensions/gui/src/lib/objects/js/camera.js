@@ -146,6 +146,12 @@ export class CameraWidget extends Widget {
         this.floatNewTabBtn.title = 'Open in new tab';
         topBar.appendChild(this.floatNewTabBtn);
 
+        this.floatWindowBtn = document.createElement('button');
+        this.floatWindowBtn.classList.add('cameraWidget__floatBtn');
+        this.floatWindowBtn.textContent = '⧉';
+        this.floatWindowBtn.title = 'Open in window';
+        topBar.appendChild(this.floatWindowBtn);
+
         this.floatCropBtn = document.createElement('button');
         this.floatCropBtn.classList.add('cameraWidget__floatBtn');
         this.floatCropBtn.textContent = '✂';
@@ -222,27 +228,6 @@ export class CameraWidget extends Widget {
     }
 
     // ── PUBLIC API (called from Python backend) ─────────────────────────────
-
-    setStreamUrl(url) {
-        if (!url) {
-            this.media.style.display = 'none';
-            this._showStatus('No stream');
-            return;
-        }
-        if (!this._isPopped) this._showStatus('Connecting...');
-        const sep = url.includes('?') ? '&' : '?';
-        const fresh = `${url}${sep}_=${Date.now()}`;
-        this.media.src = fresh;
-        if (this._isPopped) this.floatMedia.src = fresh;
-    }
-
-    setCameras({cameras, selected}) {
-        this._populateDropdown(cameras, selected);
-        this.configuration.cameras = cameras;
-        this.configuration.selected = selected;
-        this._noCameras = Object.keys(cameras || {}).length === 0;
-        if (this._noCameras) this._showNoCameras();
-    }
 
     closePopout() {
         if (this._isPopped) this._popIn();
@@ -347,6 +332,8 @@ export class CameraWidget extends Widget {
         this.floatNewTabBtn.addEventListener('click', () => {
             if (this.floatMedia.src) window.open(this.floatMedia.src, '_blank');
         });
+
+        this.floatWindowBtn.addEventListener('click', () => this._openWindowPopup());
         this.floatCropBtn.addEventListener('click', () => this._enterCropMode());
         this.floatUncropBtn.addEventListener('click', () => this._clearCrop());
 
@@ -811,6 +798,102 @@ export class CameraWidget extends Widget {
         this._saveFloatState();
     }
 
+    // ── WINDOW POPUP (separate browser window via BroadcastChannel) ───────
+
+    _openWindowPopup() {
+        const streamUrl = this.configuration.stream_url || this.media.src.split('?')[0];
+        if (!streamUrl) return;
+
+        // Close the floating popout panel
+        if (this._isPopped) this._popIn();
+
+        // Store full state for the popup to pick up
+        const storageKey = `camera_popup_${this.id}`;
+        sessionStorage.setItem(storageKey, JSON.stringify({
+            cameras: this.configuration.cameras,
+            selected: this.configuration.selected,
+            stream_url: streamUrl,
+            rotation: this._rotation,
+            crop: this._cropRegion,
+        }));
+
+        const url = new URL('/camera-popup.html', window.location.origin);
+        url.searchParams.set('widget_id', this.id);
+        url.searchParams.set('title', 'Camera');
+        this._windowPopup = window.open(url.href, '_blank', 'width=800,height=600,resizable=yes');
+
+        // Set up BroadcastChannel listener (if not already)
+        if (!this._popupChannel) {
+            this._popupChannel = new BroadcastChannel(`camera_widget_${this.id}`);
+            this._popupChannel.onmessage = (e) => this._handlePopupMessage(e.data);
+        }
+    }
+
+    _handlePopupMessage(msg) {
+        if (!msg || !msg.type) return;
+
+        switch (msg.type) {
+            case 'camera_select': {
+                const key = msg.camera_key;
+                if (!key || key === this.configuration.selected) break;
+                this.configuration.selected = key;
+                this.select.value = key;
+                if (this.floatSelect) this.floatSelect.value = key;
+                this._clearCrop();
+                this.callbacks.get('event').call({
+                    id: this.id, event: 'camera_select_change', camera_key: key,
+                });
+                break;
+            }
+            case 'rotation':
+                this._rotation = msg.rotation || 0;
+                this._applyRotation();
+                break;
+            case 'crop':
+                if (msg.crop) {
+                    this._applyCrop(msg.crop);
+                } else {
+                    this._clearCrop();
+                }
+                break;
+            case 'popup_closed':
+                // Popup window was closed — no action needed
+                this._windowPopup = null;
+                break;
+        }
+    }
+
+    setStreamUrl(url) {
+        if (!url) {
+            this.media.style.display = 'none';
+            this._showStatus('No stream');
+            return;
+        }
+        if (!this._isPopped) this._showStatus('Connecting...');
+        const sep = url.includes('?') ? '&' : '?';
+        const fresh = `${url}${sep}_=${Date.now()}`;
+        this.media.src = fresh;
+        if (this._isPopped) this.floatMedia.src = fresh;
+
+        // Notify popup window of new stream URL
+        if (this._popupChannel) {
+            this._popupChannel.postMessage({type: 'stream_url', stream_url: url});
+        }
+    }
+
+    setCameras({cameras, selected}) {
+        this._populateDropdown(cameras, selected);
+        this.configuration.cameras = cameras;
+        this.configuration.selected = selected;
+        this._noCameras = Object.keys(cameras || {}).length === 0;
+        if (this._noCameras) this._showNoCameras();
+
+        // Notify popup window
+        if (this._popupChannel) {
+            this._popupChannel.postMessage({type: 'cameras', cameras, selected});
+        }
+    }
+
     // ── HELPERS ─────────────────────────────────────────────────────────────
 
     _showNoCameras() {
@@ -890,6 +973,11 @@ export class CameraWidget extends Widget {
     }
 
     destroy() {
+        if (this._popupChannel) {
+            this._popupChannel.postMessage({type: 'close'});
+            this._popupChannel.close();
+            this._popupChannel = null;
+        }
         if (this._resizeObserver) {
             this._resizeObserver.disconnect();
             this._resizeObserver = null;

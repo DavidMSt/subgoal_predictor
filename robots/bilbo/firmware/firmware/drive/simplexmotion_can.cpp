@@ -512,6 +512,11 @@ HAL_StatusTypeDef SimplexMotion_CAN::configureShutdownInput() {
 }
 
 /* --------------------------------------------------------------------- */
+void SimplexMotion_CAN::resetBus() {
+	this->config.can->reset();
+}
+
+/* --------------------------------------------------------------------- */
 uint32_t SimplexMotion_CAN::_getCANHeader(uint16_t address) {
 
 	return (0 << 24) | (this->config.id << 16) | address;

@@ -83,6 +83,8 @@ class DILC_Experiment_Meta_Settings:
             pose before each trial. Set to False for manual positioning.
         check_if_robot_is_static: If True, waits for the robot to be stationary before
             starting a trial. Prevents trajectory injection while the robot is swaying.
+        static_timeout_s: Maximum time in seconds to wait for the robot to become
+            static before a trial. Only used when check_if_robot_is_static is True.
         auto_start_trials: If True, trials start automatically after the robot is
             prepared (no resume needed). If False, user must send resume to start each trial.
         auto_accept_trials: If True, trial results are accepted automatically (no
@@ -90,6 +92,7 @@ class DILC_Experiment_Meta_Settings:
     """
     automatic_initial_conditions_reset: bool = True
     check_if_robot_is_static: bool = True
+    static_timeout_s: float = 10.0
     auto_start_trials: bool = False
     auto_accept_trials: bool = False
 
@@ -402,7 +405,6 @@ class DILC_Experiment:
         )
 
         self.common.interaction_events.abort.on(self.abort, once=True)
-
 
     # === PUBLIC METHODS ===========================================================================================
 
@@ -1032,7 +1034,6 @@ class DILC_Experiment:
             self.interfaces.enable_external_input()
             self.control.enable_external_input()
 
-
     # ----------------------------------------------------------------------------------------------------------
     def prepare_trial(self) -> bool:
         """Navigate the robot to the initial conditions and wait for stability.
@@ -1084,7 +1085,7 @@ class DILC_Experiment:
             # Turn to the desired heading
             result = self.control.position_control.turn_to_heading(
                 heading=ic.psi,
-                max_angular_speed=np.deg2rad(100),
+                max_angular_speed=np.deg2rad(180),
                 blocking=True,
                 timeout=10,
             )
@@ -1094,40 +1095,42 @@ class DILC_Experiment:
             self.logger.info("Reached initial heading")
 
             self.control.set_mode(BILBO_Control_Mode.BALANCING)
-            time.sleep(0.1)
+            time.sleep(0.25)
             self.control.set_mode(BILBO_Control_Mode.POSITION)
             time.sleep(0.25)
             # Make a tiny last pass to the desired position. Turning can lead to position errors
-            result = self.control.position_control.move_to_point(
-                x=ic.x,
-                y=ic.y,
-                blocking=True,
-                timeout=10,
-            )
-            if not result:
-                self.logger.error("Failed to reach final position")
-                return False
-            self.logger.info("Reached initial conditions")
+            # result = self.control.position_control.move_to_point(
+            #     x=ic.x,
+            #     y=ic.y,
+            #     blocking=True,
+            #     timeout=10,
+            # )
+            # if not result:
+            #     self.logger.error("Failed to reach final position")
+            #     return False
+            # self.logger.info("Reached initial conditions")
 
         else:
             self.logger.info("Skipping automatic positioning (disabled in meta settings)")
 
         # Enable TIC (Tilt-Integral-Control) for steady upright balancing
+        self.control.set_mode(BILBO_Control_Mode.BALANCING)
+        time.sleep(0.1)
         self.control.enable_tic_control(True)
 
         # Wait for the robot to be stationary before injecting the trajectory
         if self.settings.meta.check_if_robot_is_static:
-            self.logger.info("Waiting for robot to become static...")
+            timeout = self.settings.meta.static_timeout_s
+            self.logger.info(f"Waiting for robot to become static (timeout={timeout}s)...")
             result = wait_until(
                 lambda: self.estimation.static,
-                timeout_s=10,
+                timeout_s=timeout,
                 poll_period_s=0.25,
             )
             if not result:
-                self.logger.error("Robot did not become static within 5 seconds")
+                self.logger.error(f"Robot did not become static within {timeout} seconds")
                 return False
             self.logger.info("Robot is static and ready")
-
 
         self.control.set_mode(BILBO_Control_Mode.BALANCING)
         ic = self.settings.initial_conditions

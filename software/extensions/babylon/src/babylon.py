@@ -481,6 +481,7 @@ class BabylonCallbacks:
     floor_doubleclick: CallbackContainer
     floor_middleclick: CallbackContainer
     floor_rightclick: CallbackContainer
+    dropdown_select: CallbackContainer
 
 
 # ======================================================================================================================
@@ -551,6 +552,10 @@ class BabylonVisualization:
         register_exit_callback(self.close)
 
         self._thread = None
+
+        # Dropdown state (persisted so new clients receive it)
+        self._dropdown_items: list[dict] = []
+        self._dropdown_selected: str | None = None
 
         # Recording state
         self._is_recording = False
@@ -802,6 +807,24 @@ class BabylonVisualization:
         self.send({'type': 'stop_following'})
 
     # ------------------------------------------------------------------------------------------------------------------
+    def set_dropdown(self, items: list[dict], selected: str = None):
+        """Set the dropdown overlay items. Empty/None hides it.
+
+        Args:
+            items: List of dicts with 'key' and 'label' keys.
+            selected: Optional key to pre-select.
+        """
+        self._dropdown_items = items or []
+        self._dropdown_selected = selected
+        self.send({'type': 'set_dropdown', 'items': self._dropdown_items, 'selected': selected})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def update_dropdown_selection(self, selected: str):
+        """Change the selected dropdown value without rebuilding items."""
+        self._dropdown_selected = selected
+        self.send({'type': 'update_dropdown_selection', 'selected': selected})
+
+    # ------------------------------------------------------------------------------------------------------------------
     def getPayload(self):
         config = dict(self.config)
         config_cameras = list(config.get('cameras', []))
@@ -863,6 +886,9 @@ class BabylonVisualization:
                 elif event_type == 'floor_rightclick':
                     pos = event.get('position', [0, 0, 0])
                     self.callbacks.floor_rightclick.call(pos[0], pos[1])
+                elif event_type == 'dropdown_select':
+                    selected = event.get('selected', '')
+                    self.callbacks.dropdown_select.call(selected)
 
     # ------------------------------------------------------------------------------------------------------------------
 
@@ -921,6 +947,11 @@ class BabylonVisualization:
             self._clients.append(client)
             self.callbacks.new_client.call(client)
             self._initializeClient(client)
+
+            # Resend dropdown state so late-joining clients see it
+            if self._dropdown_items:
+                self.send({'type': 'set_dropdown', 'items': self._dropdown_items,
+                           'selected': self._dropdown_selected}, client)
         else:
             self.logger.warning(f"Client already connected: {client}")
 

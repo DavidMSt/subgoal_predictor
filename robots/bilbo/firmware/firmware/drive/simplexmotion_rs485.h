@@ -95,6 +95,8 @@ public:
 	HAL_StatusTypeDef setEncoderResolution(uint16_t bits);
 	HAL_StatusTypeDef configureShutdownInput();
 
+	void resetBus() override;
+
 	simplexmotion_rs485_config_t config;
 	simplexmotion_rs485_mode_t mode;
 

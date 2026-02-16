@@ -43,6 +43,11 @@ typedef enum bilbo_drive_status_t {
 	BILBO_DRIVE_STATUS_ERROR = 2,
 } bilbo_drive_status_t;
 
+// Number of immediate retries per failed operation (with bus reset between)
+#define BILBO_DRIVE_MAX_RETRIES 1
+// Consecutive failed task cycles before entering fatal error state
+#define BILBO_DRIVE_MAX_CONSECUTIVE_ERRORS 3
+
 class BILBO_Drive {
 public:
 

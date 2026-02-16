@@ -8,6 +8,7 @@
 #include "main.h"
 #include "firmware_c.h"
 #include "firmware_cpp.h"
+#include <string.h>
 
 WS2812_Strand neopixel_intern(FIRMWARE_NEOPIXEL_INTERN_TIM,
 FIRMWARE_NEOPIXEL_INTERN_CHANNEL, 2);
@@ -40,6 +41,19 @@ elapsedMillis timer_battery_adc = 0;
 // Previous state for external RGB LEDs (for change detection)
 static uint8_t prev_extern_rgb[16][3] = {{0}};
 static bool extern_rgb_initialized = false;
+static elapsedMillis timer_extern_refresh;
+#define EXTERN_REFRESH_INTERVAL_MS 500  // Force refresh every 500ms to recover from noise corruption
+
+// Atomic snapshot of register_map to prevent torn reads from I2C ISR.
+// The I2C slave ISR writes register_map byte-by-byte; without a snapshot,
+// the main loop can read a partially-updated RGB triplet (e.g. old R, new G, old B).
+static uint8_t reg_snapshot[255];
+
+static void snapshot_registers() {
+	__disable_irq();
+	memcpy(reg_snapshot, register_map, sizeof(reg_snapshot));
+	__enable_irq();
+}
 
 /* ================================================================================= */
 void firmware_init() {
@@ -114,15 +128,25 @@ void firmware_update() {
 
 	if (timer_led_update >= 50) {
 		timer_led_update = 0;
+
+		// Take atomic snapshot of register_map so all reads below see
+		// a consistent state, even if I2C ISR writes mid-update.
+		snapshot_registers();
+
 		updateInternRGBLEDsFromRegisters();
 		updateStatusLEDFromRegisters();
 		bool extern_changed = update_external_rgb_led();
 
-		// Only update and send external LEDs if colors have changed
+		// Force periodic refresh to recover from noise-corrupted WS2812 frames
+		if (!extern_changed && timer_extern_refresh >= EXTERN_REFRESH_INTERVAL_MS) {
+			extern_changed = true;
+		}
+
+		// Only update and send external LEDs if colors changed or refresh due
 		if (extern_changed) {
+			timer_extern_refresh = 0;
 			neopixel_extern.update();
 			neopixel_extern.send();
-			HAL_Delay(10);
 		}
 
 		// Internal LEDs (status indicators) - always update for blink support
@@ -133,6 +157,9 @@ void firmware_update() {
 
 	if (timer_buzzer >= 10) {
 		timer_buzzer = 0;
+
+		snapshot_registers();
+
 		updateBuzzerFromRegisters();
 		rc_buzzer.update();
 
@@ -159,7 +186,7 @@ void checkSD() {
 
 /* ================================================================================= */
 void updateStatusLEDFromRegisters() {
-	int8_t status = (int8_t) register_map[REG_ERROR_LED_CONFIG];
+	int8_t status = (int8_t) reg_snapshot[REG_ERROR_LED_CONFIG];
 
 	switch (status) {
 	case -1:
@@ -179,45 +206,45 @@ void updateStatusLEDFromRegisters() {
 
 void updateInternRGBLEDsFromRegisters() {
 	set_rgb_led_data(&neopixel_intern.led[0],
-			register_map[REG_STATUS_RGB_LED_1_CONFIG],
-			register_map[REG_STATUS_RGB_LED_1_RED],
-			register_map[REG_STATUS_RGB_LED_1_GREEN],
-			register_map[REG_STATUS_RGB_LED_1_BLUE],
-			register_map[REG_STATUS_RGB_LED_1_BLINK_TIME],
-			register_map[REG_STATUS_RGB_LED_1_BLINK_COUNTER]);
+			reg_snapshot[REG_STATUS_RGB_LED_1_CONFIG],
+			reg_snapshot[REG_STATUS_RGB_LED_1_RED],
+			reg_snapshot[REG_STATUS_RGB_LED_1_GREEN],
+			reg_snapshot[REG_STATUS_RGB_LED_1_BLUE],
+			reg_snapshot[REG_STATUS_RGB_LED_1_BLINK_TIME],
+			reg_snapshot[REG_STATUS_RGB_LED_1_BLINK_COUNTER]);
 	set_rgb_led_data(&neopixel_intern.led[1],
-			register_map[REG_STATUS_RGB_LED_2_CONFIG],
-			register_map[REG_STATUS_RGB_LED_2_RED],
-			register_map[REG_STATUS_RGB_LED_2_GREEN],
-			register_map[REG_STATUS_RGB_LED_2_BLUE],
-			register_map[REG_STATUS_RGB_LED_2_BLINK_TIME],
-			register_map[REG_STATUS_RGB_LED_2_BLINK_COUNTER]);
+			reg_snapshot[REG_STATUS_RGB_LED_2_CONFIG],
+			reg_snapshot[REG_STATUS_RGB_LED_2_RED],
+			reg_snapshot[REG_STATUS_RGB_LED_2_GREEN],
+			reg_snapshot[REG_STATUS_RGB_LED_2_BLUE],
+			reg_snapshot[REG_STATUS_RGB_LED_2_BLINK_TIME],
+			reg_snapshot[REG_STATUS_RGB_LED_2_BLINK_COUNTER]);
 	set_rgb_led_data(&neopixel_intern.led[2],
-			register_map[REG_STATUS_RGB_LED_3_CONFIG],
-			register_map[REG_STATUS_RGB_LED_3_RED],
-			register_map[REG_STATUS_RGB_LED_3_GREEN],
-			register_map[REG_STATUS_RGB_LED_3_BLUE],
-			register_map[REG_STATUS_RGB_LED_3_BLINK_TIME],
-			register_map[REG_STATUS_RGB_LED_3_BLINK_COUNTER]);
+			reg_snapshot[REG_STATUS_RGB_LED_3_CONFIG],
+			reg_snapshot[REG_STATUS_RGB_LED_3_RED],
+			reg_snapshot[REG_STATUS_RGB_LED_3_GREEN],
+			reg_snapshot[REG_STATUS_RGB_LED_3_BLUE],
+			reg_snapshot[REG_STATUS_RGB_LED_3_BLINK_TIME],
+			reg_snapshot[REG_STATUS_RGB_LED_3_BLINK_COUNTER]);
 
-
+	// Clear blink counters (acknowledge) in the real register map
 	register_map[REG_STATUS_RGB_LED_1_BLINK_COUNTER] = 0;
 	register_map[REG_STATUS_RGB_LED_2_BLINK_COUNTER] = 0;
 	register_map[REG_STATUS_RGB_LED_3_BLINK_COUNTER] = 0;
 }
 
 void updateBuzzerFromRegisters() {
-	uint8_t reg_config = register_map[REG_BUZZER_CONFIG];
-	uint8_t reg_data = register_map[REG_BUZZER_DATA];
-	uint8_t reg_freq = register_map[REG_BUZZER_FREQ];
-	uint8_t reg_blink_time = register_map[REG_BUZZER_BLINK_TIME];
-	uint8_t reg_blink_counter = register_map[REG_BUZZER_BLINK_COUNTER];
+	uint8_t reg_config = reg_snapshot[REG_BUZZER_CONFIG];
+	uint8_t reg_data = reg_snapshot[REG_BUZZER_DATA];
+	uint8_t reg_freq = reg_snapshot[REG_BUZZER_FREQ];
+	uint8_t reg_blink_time = reg_snapshot[REG_BUZZER_BLINK_TIME];
+	uint8_t reg_blink_counter = reg_snapshot[REG_BUZZER_BLINK_COUNTER];
 
 	rc_buzzer.setConfig((float) (reg_freq * 10),
 			(uint16_t) (reg_blink_time * 10), reg_blink_counter);
 
 	if (reg_data == 1) {
-		register_map[REG_BUZZER_DATA] = 0;
+		register_map[REG_BUZZER_DATA] = 0;  // Acknowledge in the real register map
 		rc_buzzer.start();
 	}
 
@@ -234,9 +261,9 @@ bool update_external_rgb_led() {
 
 	for (int i = 0; i < 16; ++i) {
 		uint16_t base = REG_EXTERNAL_RGB_LED_1_CONFIG + (i * 6);
-		uint8_t r = register_map[base + 1]; // RED
-		uint8_t g = register_map[base + 2]; // GREEN
-		uint8_t b = register_map[base + 3]; // BLUE
+		uint8_t r = reg_snapshot[base + 1]; // RED
+		uint8_t g = reg_snapshot[base + 2]; // GREEN
+		uint8_t b = reg_snapshot[base + 3]; // BLUE
 
 		// Check if this LED's color changed
 		if (r != prev_extern_rgb[i][0] ||

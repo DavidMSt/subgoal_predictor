@@ -113,14 +113,30 @@ void BILBO_Drive::task() {
 
 #ifdef BILBO_DRIVE_SIMPLEXMOTION_RS485
 	uint8_t taskmode = 0;
+	uint32_t consecutive_errors = 0;
+
 	while (true){
 		current_tick = osKernelGetTickCount();
 		if (this->status == BILBO_DRIVE_STATUS_OK) {
+			bool cycle_ok = true;
+
 			if (taskmode == 0){
 
 				HAL_StatusTypeDef status_speed_left = this->motor_left->readSpeed(motor_left_speed);
+				if (status_speed_left != HAL_OK) {
+					this->motor_left->resetBus();
+					osDelay(1);
+					status_speed_left = this->motor_left->readSpeed(motor_left_speed);
+				}
+
 				osDelay(1);
+
 				HAL_StatusTypeDef status_speed_right = this->motor_right->readSpeed(motor_right_speed);
+				if (status_speed_right != HAL_OK) {
+					this->motor_right->resetBus();
+					osDelay(1);
+					status_speed_right = this->motor_right->readSpeed(motor_right_speed);
+				}
 
 				if (status_speed_left == HAL_OK && status_speed_right == HAL_OK){
 					osSemaphoreAcquire(speed_semaphore, portMAX_DELAY);
@@ -128,8 +144,7 @@ void BILBO_Drive::task() {
 					this->_speed.right = motor_right_speed;
 					osSemaphoreRelease(speed_semaphore);
 				} else {
-					resetAllModbusHandlers();
-					nop();
+					cycle_ok = false;
 				}
 
 				taskmode = 1;
@@ -140,18 +155,39 @@ void BILBO_Drive::task() {
 				osSemaphoreRelease(torque_semaphore);
 
 				HAL_StatusTypeDef status_torque_left = this->motor_left->setTorque(motor_left_torque);
-				osDelay(1);
-				HAL_StatusTypeDef status_torque_right = this->motor_right->setTorque(motor_right_torque);
-
-				if (status_torque_left == HAL_OK && status_torque_right == HAL_OK){
-					nop();
-				} else {
-					resetAllModbusHandlers();
-					nop();
+				if (status_torque_left != HAL_OK) {
+					this->motor_left->resetBus();
+					osDelay(1);
+					status_torque_left = this->motor_left->setTorque(motor_left_torque);
 				}
+
+				osDelay(1);
+
+				HAL_StatusTypeDef status_torque_right = this->motor_right->setTorque(motor_right_torque);
+				if (status_torque_right != HAL_OK) {
+					this->motor_right->resetBus();
+					osDelay(1);
+					status_torque_right = this->motor_right->setTorque(motor_right_torque);
+				}
+
+				if (status_torque_left != HAL_OK || status_torque_right != HAL_OK){
+					cycle_ok = false;
+				}
+
 				taskmode = 0;
 			}
 
+			if (cycle_ok) {
+				consecutive_errors = 0;
+			} else {
+				consecutive_errors++;
+				if (consecutive_errors >= BILBO_DRIVE_MAX_CONSECUTIVE_ERRORS) {
+					setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
+					send_error("RS485 motor comm failed %d consecutive times",
+							BILBO_DRIVE_MAX_CONSECUTIVE_ERRORS);
+					this->status = BILBO_DRIVE_STATUS_ERROR;
+				}
+			}
 
 		} else {
 			nop();
@@ -162,12 +198,16 @@ void BILBO_Drive::task() {
 #endif
 #ifdef BILBO_DRIVE_SIMPLEXMOTION_CAN
 	osDelay(100);
+	uint32_t consecutive_errors = 0;
+
 	while (true) {
 		current_tick = osKernelGetTickCount();
 
 		if (this->status == BILBO_DRIVE_STATUS_OK) {
 
-			// Read the voltage
+			bool cycle_ok = true;
+
+			// Read the voltage (non-critical, no retry needed)
 			if (voltage_timer > 2000) {
 				voltage_timer.reset();
 				status = this->motor_left->getVoltage(motor_left_voltage);
@@ -176,47 +216,43 @@ void BILBO_Drive::task() {
 					osSemaphoreAcquire(voltage_semaphore, portMAX_DELAY);
 					this->_voltage = motor_left_voltage;
 					osSemaphoreRelease(voltage_semaphore);
-				} else {
-					nop();
-					// TODO
 				}
+				// Voltage read failure is non-critical, don't count as error
 				continue;
 			}
 
-			// Read the speed
+			// --- Read speed (left) with retry ---
 			HAL_StatusTypeDef status_speed_left = this->motor_left->readSpeed(
 					motor_left_speed);
 
-			if (status_speed_left == HAL_ERROR) {
-				setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
-				send_error("Motor comm error");
-				this->status = BILBO_DRIVE_STATUS_ERROR;
-#if ENABLE_MOTOR_SHUTDOWN_LINE
-				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_RESET);
-#endif
-				this->motor_left->stop();
+			if (status_speed_left != HAL_OK) {
+				// Bus may be hung — reset and retry once
+				this->motor_left->resetBus();
 				osDelay(2);
-				this->motor_right->stop();
-				continue;
+				status_speed_left = this->motor_left->readSpeed(motor_left_speed);
 			}
+
+			if (status_speed_left != HAL_OK) {
+				cycle_ok = false;
+			}
+
 			osDelay(2);
 
-			HAL_StatusTypeDef status_speed_right = this->motor_right->readSpeed(
-					motor_right_speed);
+			// --- Read speed (right) with retry ---
+			HAL_StatusTypeDef status_speed_right = HAL_ERROR;
+			if (cycle_ok) {
+				status_speed_right = this->motor_right->readSpeed(
+						motor_right_speed);
 
-			if (status_speed_right == HAL_ERROR) {
-				setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
-				send_error("Motor comm error");
-				this->status = BILBO_DRIVE_STATUS_ERROR;
-#if ENABLE_MOTOR_SHUTDOWN_LINE
-				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_RESET);
-#endif
-				this->motor_left->stop();
-				osDelay(2);
-				this->motor_right->stop();
-				continue;
+				if (status_speed_right != HAL_OK) {
+					this->motor_right->resetBus();
+					osDelay(2);
+					status_speed_right = this->motor_right->readSpeed(motor_right_speed);
+				}
+
+				if (status_speed_right != HAL_OK) {
+					cycle_ok = false;
+				}
 			}
 
 			if (status_speed_left == HAL_OK && status_speed_right == HAL_OK) {
@@ -226,44 +262,60 @@ void BILBO_Drive::task() {
 				osSemaphoreRelease(speed_semaphore);
 			}
 
-			// Set the torque
+			// --- Set torque with retry ---
+			if (cycle_ok) {
+				osSemaphoreAcquire(torque_semaphore, portMAX_DELAY);
+				motor_left_torque = this->_input.torque_left;
+				motor_right_torque = this->_input.torque_right;
+				osSemaphoreRelease(torque_semaphore);
 
-			osSemaphoreAcquire(torque_semaphore, portMAX_DELAY);
-			motor_left_torque = this->_input.torque_left;
-			motor_right_torque = this->_input.torque_right;
-			osSemaphoreRelease(torque_semaphore);
+				status = this->motor_left->setTorque(motor_left_torque);
+				if (status != HAL_OK) {
+					this->motor_left->resetBus();
+					osDelay(2);
+					status = this->motor_left->setTorque(motor_left_torque);
+				}
+				if (status != HAL_OK) {
+					cycle_ok = false;
+				}
 
-			status = this->motor_left->setTorque(motor_left_torque);
-
-			if (status == HAL_ERROR) {
-				setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
-				send_error("Motor comm error");
-				this->status = BILBO_DRIVE_STATUS_ERROR;
-#if ENABLE_MOTOR_SHUTDOWN_LINE
-				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_RESET);
-#endif
-				this->motor_left->stop();
 				osDelay(2);
-				this->motor_right->stop();
-				continue;
+
+				if (cycle_ok) {
+					status = this->motor_right->setTorque(motor_right_torque);
+					if (status != HAL_OK) {
+						this->motor_right->resetBus();
+						osDelay(2);
+						status = this->motor_right->setTorque(motor_right_torque);
+					}
+					if (status != HAL_OK) {
+						cycle_ok = false;
+					}
+				}
 			}
 
-			osDelay(2);
-			status = this->motor_right->setTorque(motor_right_torque);
+			// --- Evaluate cycle result ---
+			if (cycle_ok) {
+				consecutive_errors = 0;
+			} else {
+				consecutive_errors++;
+				setError(BILBO_ERROR_WARNING, BILBO_ERROR_MOTOR_COMM);
+				send_error("Motor comm error (attempt %lu/%d)",
+						consecutive_errors, BILBO_DRIVE_MAX_CONSECUTIVE_ERRORS);
 
-			if (status == HAL_ERROR) {
-				setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
-				send_error("Motor comm error");
-				this->status = BILBO_DRIVE_STATUS_ERROR;
+				if (consecutive_errors >= BILBO_DRIVE_MAX_CONSECUTIVE_ERRORS) {
+					setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
+					send_error("Motor comm failed %d consecutive times, entering error state",
+							BILBO_DRIVE_MAX_CONSECUTIVE_ERRORS);
+					this->status = BILBO_DRIVE_STATUS_ERROR;
 #if ENABLE_MOTOR_SHUTDOWN_LINE
-				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_RESET);
-				HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_LEFT_PORT, MOTOR_SHUTDOWN_LINE_LEFT_PIN, GPIO_PIN_RESET);
+					HAL_GPIO_WritePin(MOTOR_SHUTDOWN_LINE_RIGHT_PORT, MOTOR_SHUTDOWN_LINE_RIGHT_PIN, GPIO_PIN_RESET);
 #endif
-				this->motor_left->stop();
-				osDelay(2);
-				this->motor_right->stop();
-				continue;
+					this->motor_left->stop();
+					osDelay(2);
+					this->motor_right->stop();
+				}
 			}
 
 		} else if (this->status == BILBO_DRIVE_STATUS_ERROR) {

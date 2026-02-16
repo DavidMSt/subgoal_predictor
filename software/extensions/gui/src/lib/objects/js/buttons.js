@@ -323,6 +323,13 @@ export class ButtonWidget extends Widget {
         this.callbacks.get('rightclick').call({event: event});
     }
 
+    openUrl(url, features) {
+        if (url) {
+            const fullUrl = new URL(url, window.location.origin);
+            window.open(fullUrl.href, '_blank', features || 'noopener');
+        }
+    }
+
     initializeElement() {
     }
 

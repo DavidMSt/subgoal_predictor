@@ -135,11 +135,18 @@ class BILBO_Manager:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _deviceDisconnected_event(self, device: Device):
-        # Go through all robots and check if this device is one of them
-        for robot in self.robots.values():
-            if robot.device == device:
-                self._removeBilbo(robot)
-                break
+        # If the device never completed the handshake (not yet in self.robots),
+        # clean it up from _devices so it can reconnect later.
+        device_id = device.information.device_id
+        if device_id in self._devices:
+            # Check if it was promoted to a full robot
+            for robot in self.robots.values():
+                if robot.device == device:
+                    self._removeBilbo(robot)
+                    return
+            # Device connected but disconnected before handshake completed
+            self._devices.pop(device_id)
+            self.logger.info(f"Device \"{device_id}\" disconnected before handshake")
 
     # ------------------------------------------------------------------------------------------------------------------
     def _deviceEvent_callback(self, event_message: JSON_Message, device: Device):
