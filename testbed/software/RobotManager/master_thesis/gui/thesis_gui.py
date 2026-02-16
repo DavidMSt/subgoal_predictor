@@ -32,15 +32,16 @@ from extensions.joystick.joystick_manager import JoystickManager, Joystick
 # thesis imports
 from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
+from master_thesis.universal.offline_agent import FRODOOfflineAgent
+from master_thesis.universal.reactive_agent import FRODOReactiveAgent
+from master_thesis.universal.rl_agent import FRODORLAgent
 from master_thesis.general.general_obstacle import GeneralObstacle
 from master_thesis.gui.demo_scenarios.maze_examples import maze_single_2x2, maze_multi_4x4
 from master_thesis.general.general_task import GeneralTask
 
-from master_thesis.task_assignment.strategies.base_strategy import BaseStrategy
-from master_thesis.task_assignment.strategies.centralized_strategies import HungarianStrategyCent
-from master_thesis.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
+from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyType
 
-# TODO: implement babylon-only method that colors a task once it is assigned in the agetns color 
+from extensions.babylon.src.lib.objects.drawings import CircleDrawing, LineDrawing
 
 class BabylonTask(Box):
     """
@@ -68,10 +69,29 @@ class BabylonTask(Box):
         self.updateConfig()
         
 
+# Agent type → Babylon color
+AGENT_TYPE_COLORS: dict[type, list[float]] = {
+    FRODOOfflineAgent:  [0.3, 0.5, 1.0],   # blue
+    FRODOReactiveAgent: [0.3, 1.0, 0.5],   # green
+    FRODORLAgent:       [0.7, 0.3, 1.0],   # purple
+}
+
+# Task color palette (cycled through when spawning tasks)
+TASK_COLORS = [
+    [0.2, 0.8, 0.2],   # green
+    [0.2, 0.8, 0.8],   # cyan
+    [0.8, 0.2, 0.8],   # magenta
+    [0.8, 0.8, 0.2],   # yellow
+    [0.2, 0.4, 0.9],   # blue
+]
+
+
 @dataclasses.dataclass
 class RobotGUIContainer:
     babylon: BabylonFrodo
     sim_agent: FRODOUniversalAgent
+    assignment_circle: CircleDrawing | None = None
+    trajectory_lines: list = dataclasses.field(default_factory=list)
 
 @dataclasses.dataclass
 class ObstacleGUIContainer:
@@ -271,48 +291,58 @@ class ThesisGUI:
         ...
 
     # ------------------------------------------------------------------------------------------------------------------
-    def spawnAgentsAndTasks(self, n: int = 3):
+    def spawnAgentsAndTasks(self, n: int = 3,
+                            agent_class: type[FRODOUniversalAgent] = FRODOOfflineAgent):
         """
-        Spawn n agents and n tasks in collision-free positions using the occupancy grid.
-        This tests the hybrid spawning system (grid + FCL).
+        Spawn n agents and n tasks in collision-free positions.
+
+        Args:
+            n: Number of agents (and tasks) to spawn.
+            agent_class: Agent pipeline class (FRODOOfflineAgent, FRODOReactiveAgent, FRODORLAgent).
         """
-        self.logger.info(f"Spawning {n} agents and {n} tasks in collision-free positions...")
+        self.logger.info(f"Spawning {n} {agent_class.__name__} agents and {n} tasks...")
+
+        # Color by agent type
+        agent_color = AGENT_TYPE_COLORS.get(agent_class, [1, 1, 1])
+
+        # Agent numbering continues from current count
+        start_idx = len(self.robots)
 
         # Spawn agents using simulation's spawn_agents method
-        spawned_agents = self.sim.spawn_agents(n=n, agent_class=FRODOUniversalAgent)
+        spawned_agents = self.sim.spawn_agents(n=n, agent_class=agent_class)
 
         # Create babylon visualizations for spawned agents
         for i, agent in enumerate(spawned_agents):
             agent_id = agent.agent_id
 
-            # Create babylon visualization
-            robot_babylon = BabylonFrodo(object_id=agent_id, color=[1, 0, 0], fov=0, text=str(i+1))
+            robot_babylon = BabylonFrodo(
+                object_id=agent_id, color=agent_color, fov=0,
+                text=str(start_idx + i + 1),
+            )
             robot_babylon.setState(x=agent.state.x, y=agent.state.y, psi=agent.state.psi)
             self.babylon_visualization.addObject(robot_babylon)
 
-            # Store in robots dict
             self.robots[agent_id] = RobotGUIContainer(babylon=robot_babylon, sim_agent=agent)
             self.logger.info(f'Agent {agent_id} spawned at ({agent.state.x:.2f}, {agent.state.y:.2f})')
 
         # Spawn tasks using simulation's spawn_tasks method
         spawned_tasks = self.sim.spawn_tasks(n=n)
 
-        # Create babylon visualizations for spawned tasks
-        colors = [[0, 1, 0], [0, 1, 1], [1, 0, 1], [1, 1, 0], [0, 0.5, 1]]  # Various colors
+        # Task color index continues from current count
+        color_offset = len(self.tasks) - n
+
         for i, task in enumerate(spawned_tasks):
             task_id = task.object_id
-            color = colors[i % len(colors)]
+            color = TASK_COLORS[(color_offset + i) % len(TASK_COLORS)]
 
-            # Create babylon visualization
             task_visual = BabylonTask(
                 object_id=task_id,
                 color=color,
                 x=task.container.x,
-                y=task.container.y
+                y=task.container.y,
             )
             self.babylon_visualization.addObject(task_visual)
 
-            # Store task in container
             self.tasks[task_id] = TaskGUIContainer(babylon=task_visual, sim_task=task)
             self.logger.info(f'Task {task_id} spawned at ({task.container.x:.2f}, {task.container.y:.2f})')
 
@@ -339,17 +369,122 @@ class ThesisGUI:
         else:
             return None
 
+    # ------------------------------------------------------------------------------------------------------------------
+    def runPipeline(self):
+        """One-click: TA (Hungarian) → MP → EXE."""
+        self.sim.start_ta(strategy=StrategyType.HUNGARIAN)
+        self.sim.start_mp()
+        self.sim.start_exe()
+        self.showTrajectories()
+        self.logger.info("Pipeline started: TA → MP → EXE")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def showTrajectories(self):
+        """Visualize planned paths / subgoals for all agents."""
+
+        # Clear any existing trajectory lines first
+        for robot in self.robots.values():
+            for line in robot.trajectory_lines:
+                try:
+                    self.babylon_visualization.removeObject(line)
+                except Exception:
+                    pass
+            robot.trajectory_lines.clear()
+
+        for robot in self.robots.values():
+            agent = robot.sim_agent
+            plan_result = agent.sgm.last_plan_result
+            if plan_result is None:
+                continue
+
+            # Determine task color for the lines
+            assigned = agent.assigned_task
+            task_color = [1, 1, 1]
+            if assigned is not None:
+                task_gui = self.tasks.get(assigned.object_id)
+                if task_gui and task_gui.babylon is not None:
+                    task_color = task_gui.babylon.config.get('color', [1, 1, 1])
+
+            line_color = [*task_color[:3], 0.7]
+            agent_id = agent.agent_id
+
+            if plan_result.phase_container is not None:
+                # OMPL trajectory: draw connected waypoints
+                states = plan_result.phase_container.states
+                if states is not None and len(states) >= 2:
+                    for j in range(len(states) - 1):
+                        s0, s1 = states[j], states[j + 1]
+                        line = LineDrawing(
+                            f"traj_{agent_id}_{j}",
+                            start=[float(s0[0]), float(s0[1])],
+                            end=[float(s1[0]), float(s1[1])],
+                            color=line_color,
+                            width=0.015,
+                        )
+                        self.babylon_visualization.addObject(line)
+                        robot.trajectory_lines.append(line)
+
+            elif plan_result.subgoal is not None:
+                # Reactive / RL: draw line from agent to subgoal
+                sg = plan_result.subgoal
+                line = LineDrawing(
+                    f"traj_{agent_id}_sg",
+                    start=[float(agent.state.x), float(agent.state.y)],
+                    end=[float(sg[0]), float(sg[1])],
+                    color=line_color,
+                    width=0.015,
+                    style='dashed',
+                )
+                self.babylon_visualization.addObject(line)
+                robot.trajectory_lines.append(line)
+
+                # For RL agents: also draw subgoal → task goal
+                if assigned is not None and plan_result.requires_reactive:
+                    goal_line = LineDrawing(
+                        f"traj_{agent_id}_goal",
+                        start=[float(sg[0]), float(sg[1])],
+                        end=[float(assigned.x), float(assigned.y)],
+                        color=[*task_color[:3], 0.35],
+                        width=0.01,
+                        style='dotted',
+                    )
+                    self.babylon_visualization.addObject(goal_line)
+                    robot.trajectory_lines.append(goal_line)
+
+        self.logger.info(f"Trajectories shown for {len(self.robots)} agents")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _clearVisualizationOverlays(self):
+        """Remove all assignment circles and trajectory lines from Babylon."""
+        for robot in self.robots.values():
+            if robot.assignment_circle is not None:
+                try:
+                    self.babylon_visualization.removeObject(robot.assignment_circle)
+                except Exception:
+                    pass
+                robot.assignment_circle = None
+            for line in robot.trajectory_lines:
+                try:
+                    self.babylon_visualization.removeObject(line)
+                except Exception:
+                    pass
+            robot.trajectory_lines.clear()
+
     # === PRIVATE METHODS ==============================================================================================
-    
+
     def reset(self):
         """
         Reset the entire simulation:
+        - Remove all visualization overlays (circles, trajectory lines)
         - Remove all robots, obstacles, and tasks from Babylon visualization
         - Remove all objects from simulation environment
         - Clear all tracking dictionaries
         - Reinitialize collision checker and occupancy grids
         """
         self.logger.info("Resetting simulation...")
+
+        # Remove assignment circles and trajectory lines first
+        self._clearVisualizationOverlays()
 
         for robot_id, robot_container in list(self.robots.items()):
             if robot_container.babylon is not None:
@@ -394,15 +529,6 @@ class ThesisGUI:
         reset_button = Button(text="Reset", callback=self.reset)
         page1.addWidget(reset_button, height=2, width=4)
 
-        bilbo1_button = Button(text="Add BILBO 1", callback=Callback(
-            function=self.newRobot,
-            inputs={
-                'robot_id': 'bilbo1'
-            },
-            discard_inputs=True,
-        ))
-        page1.addWidget(bilbo1_button, height=2, width=4)
-
         # Simple Maze Button
         single_maze_button = Button(text="2x2_maze", callback=Callback(
             function=maze_single_2x2,
@@ -419,66 +545,69 @@ class ThesisGUI:
         ))
         page1.addWidget(multi_4x4_button, height=2, width=4)
 
-        # Add Task Button
-        task_button = Button(text="Add Task (1, 1)", callback=Callback(
-            function=self.newTask,
-            inputs={
-                'task_id': 'task1',
-                'x': 1.0,
-                'y': 1.0,
-                'color': [1, 1, 0]  # Yellow
-            },
-            discard_inputs=True,
-        ))
-        page1.addWidget(task_button, height=2, width=4)
+        # ── Spawn buttons (type-specific) ──────────────────────────────
 
-        # Spawn Agents & Tasks Button
-        spawn_button = Button(text="Spawn 3 Agents & Tasks", callback=Callback(
+        page1.addWidget(Button(text="Spawn 3 Offline", callback=Callback(
             function=self.spawnAgentsAndTasks,
-            inputs={'n': 3},
+            inputs={'n': 3, 'agent_class': FRODOOfflineAgent},
             discard_inputs=True,
-        ))
-        page1.addWidget(spawn_button, height=2, width=4)
+        )), height=2, width=4)
 
-        # Spawn Agents & Tasks Button
-        spawn_button = Button(text="Spawn Agent & Task", callback=Callback(
+        page1.addWidget(Button(text="Spawn 3 Reactive", callback=Callback(
+            function=self.spawnAgentsAndTasks,
+            inputs={'n': 3, 'agent_class': FRODOReactiveAgent},
+            discard_inputs=True,
+        )), height=2, width=4)
+
+        page1.addWidget(Button(text="Spawn 1+1", callback=Callback(
             function=self.spawnAgentsAndTasks,
             inputs={'n': 1},
             discard_inputs=True,
-        ))
-        page1.addWidget(spawn_button, height=2, width=4)
+        )), height=2, width=4)
 
-        # Start Centralized Task Assignment Button
-        ta_central_button = Button(text="Central Task Assignment", callback=Callback(
+        # ── Task Assignment ────────────────────────────────────────────
+
+        page1.addWidget(Button(text="Central TA", callback=Callback(
             function=self.sim.start_ta,
-            inputs={'strategy': HungarianStrategyCent},
+            inputs={'strategy': StrategyType.HUNGARIAN},
             discard_inputs=True,
-        ))
-        page1.addWidget(ta_central_button, height=2, width=4)
+        )), height=2, width=4)
 
-        # Start Decentralized Task Assignment Button
-        ta_local_button = Button(text="Local Task Assignment", callback=Callback(
+        page1.addWidget(Button(text="Local TA", callback=Callback(
             function=self.sim.start_ta,
-            inputs={'strategy': GreedyNearestStrategy},
+            inputs={'strategy': StrategyType.GREEDY_NEAREST},
             discard_inputs=True,
-        ))
-        page1.addWidget(ta_local_button, height=2, width=4)        
+        )), height=2, width=4)
 
-        # Start Motion Planning Button
-        mp_button = Button(text="Start Motion Planning", callback=Callback(
+        # ── Motion Planning & Execution ────────────────────────────────
+
+        page1.addWidget(Button(text="Start MP", callback=Callback(
             function=self.sim.start_mp,
             inputs={},
             discard_inputs=True,
-        ))
-        page1.addWidget(mp_button, height=2, width=4)
+        )), height=2, width=4)
 
-        # Start Execution Button
-        mp_button = Button(text="Start Execution", callback=Callback(
+        page1.addWidget(Button(text="Start Execution", callback=Callback(
             function=self.sim.start_exe,
             inputs={},
             discard_inputs=True,
-        ))
-        page1.addWidget(mp_button, height=2, width=4)
+        )), height=2, width=4)
+
+        # ── One-click pipeline: TA → MP → EXE ─────────────────────────
+
+        page1.addWidget(Button(text="Run Pipeline", callback=Callback(
+            function=self.runPipeline,
+            inputs={},
+            discard_inputs=True,
+        )), height=2, width=4)
+
+        # ── Visualization controls ─────────────────────────────────────
+
+        page1.addWidget(Button(text="Show Trajectories", callback=Callback(
+            function=self.showTrajectories,
+            inputs={},
+            discard_inputs=True,
+        )), height=2, width=4)
 
     def _buildBabylonFloor(self):
 
@@ -494,26 +623,34 @@ class ThesisGUI:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _simulationOutputStep(self):
-        ...
         for robot in list(self.robots.values()):
-            # Read state directly instead of using configuration_global
             state = robot.sim_agent.state
-            
+
             robot.babylon.setState(
                 x=state.x,
                 y=state.y,
                 psi=state.psi,
             )
-        # # Update all BILBOs
-        # for robot in self.robots.values():
-        #     try:
-        #         state = robot['robot'].state
-        #         robot['babylon'].set_state(x=state.x,
-        #                                    y=state.y,
-        #                                    theta=state.theta,
-        #                                    psi=state.psi)
-        #     except Exception as e:
-        #         self.logger.error(f'Error updating robot {robot["robot"].agent_id}: {e}')
+
+            # Detect new task assignment → create colored circle around agent
+            assigned = robot.sim_agent.assigned_task
+            if assigned is not None and robot.assignment_circle is None:
+                task_gui = self.tasks.get(assigned.object_id)
+                if task_gui and task_gui.babylon is not None:
+                    color = task_gui.babylon.config.get('color', [1, 1, 1])
+                    circle = CircleDrawing(
+                        f"assign_{robot.sim_agent.agent_id}",
+                        x=state.x, y=state.y,
+                        radius=0.2,
+                        fill_color=[*color[:3], 0.15],
+                        border_color=[*color[:3], 0.6],
+                    )
+                    self.babylon_visualization.addObject(circle)
+                    robot.assignment_circle = circle
+
+            # Update circle position to follow agent
+            if robot.assignment_circle is not None:
+                robot.assignment_circle.setPosition(state.x, state.y)
 
 
 # === BILBO INTERACTIVE CLI ============================================================================================
