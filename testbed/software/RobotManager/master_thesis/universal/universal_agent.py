@@ -1,12 +1,17 @@
+from abc import ABC, abstractmethod
 from typing import List
 
 from extensions.simulation.src.core.environment import BASE_ENVIRONMENT_ACTIONS
 
 from master_thesis.general.general_agent import FRODOGeneralAgent, FRODO_Agent_Config
-from master_thesis.modules.motion_planning.mp_agent_module import MPAgentModule
 from master_thesis.modules.task_assignment.ta_agent_module import TAAgentModule
-from master_thesis.modules.execution.exe_agent_module import EXEAgentModule
 
+# Pipeline abstractions
+from master_thesis.modules.motion_planning.path_planner_base import PathPlannerBase, PlanResult
+from master_thesis.modules.execution.motion_executor_base import MotionExecutorBase
+from master_thesis.modules.motion_planning.subgoal_manager import SubgoalManager
+
+# Containers
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer, AgentTAConfig, AgentTAState
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
@@ -15,22 +20,29 @@ from master_thesis.containers.module_containers.exe_containers.exe_container imp
 from master_thesis.containers.general_containers.task_container import TaskContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 
-import master_thesis.modules.task_assignment.strategies.centralized_strategies 
+import master_thesis.modules.task_assignment.strategies.centralized_strategies
 
-class FRODOUniversalAgent(FRODOGeneralAgent):
-    """
-    Agent with offline planning pipeline: TA -> MP (OMPL) -> EXE (trajectory playback).
 
-    This agent computes full trajectories offline via motion planning,
-    then executes them step-by-step. Good for static environments.
+class FRODOUniversalAgent(FRODOGeneralAgent, ABC):
     """
-    mpm: MPAgentModule
+    Abstract base agent with swappable planning pipeline: TA -> Planner -> Executor.
+
+    Subclasses must override ``_build_pipeline()`` to provide a concrete
+    planner/executor combination:
+
+      - FRODOOfflineAgent     → OMPL + Trajectory Playback
+      - FRODOReactiveAgent    → Direct Goal + MPPI
+      - FRODORLAgent          → RL Subgoal Predictor + MPPI
+    """
     tam: TAAgentModule
-    exm: EXEAgentModule
+    planner: PathPlannerBase
+    executor: MotionExecutorBase
+    sgm: SubgoalManager
 
-    def __init__(self, env_container, agent_id: str, Ts=0.1, start_config=(0.0,0.0,0.0), color: tuple[float, float, float] = (1.0, 1.0, 1.0), log_level: str = 'INFO') -> None:
+    def __init__(self, env_container, agent_id: str, Ts=0.1, start_config=(0.0,0.0,0.0),
+                 color: tuple[float, float, float] = (1.0, 1.0, 1.0), log_level: str = 'INFO') -> None:
         super().__init__(agent_id=agent_id, Ts=Ts, start_config=start_config, color=color, log_level=log_level)
-     
+
         # TODO: Use bilbolab code for this if possible
         self.container.comm_buffer["task_costs"] = {}
         self.container.comm_buffer["assigned_task"] = {}
@@ -38,12 +50,6 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
         # ------------------------------------------------------------------
         # MODULES
         # ------------------------------------------------------------------
-
-        # MPAgent module (lwr_cont will be set by simulation after agent is added)
-        self.mpm = MPAgentModule(
-            agent_cont=self.container,
-            lwr_cont=None,  # Will be set after agent is added to simulation
-            logger=self.logger)
 
         # TAAgent module (lwr_cont will be set by simulation after agent is added)
         self.tam = TAAgentModule(
@@ -54,26 +60,36 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
             comm_func= self.comm_func
         )
 
-        self.exi = EXEAgentModule(
-            agent_cont= self.container,
-            logger = self.logger,
-        ) # TODO
+        # Build planner + executor (overridden by subclasses)
+        self.planner, self.executor = self._build_pipeline()
+
+        # SubgoalManager coordinates planner <-> executor
+        self.sgm = SubgoalManager(
+            planner=self.planner,
+            executor=self.executor,
+            logger=self.logger,
+        )
+
+    @abstractmethod
+    def _build_pipeline(self) -> tuple[PathPlannerBase, MotionExecutorBase]:
+        """Build planner + executor pair."""
+        ...
+
+    # ------------------------------------------------------------------
+    # Scheduling
+    # ------------------------------------------------------------------
 
     def setup_scheduling(self):
-        """Override to add task assignment, motion planning, and execution actions"""
+        """Override to add task assignment, planning, and execution actions."""
         super().setup_scheduling()
 
-        # Attach task assignment action
+        # LOGIC: task assignment → planning trigger → replan tick
         self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_decentralized_task_assignment)
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_planning)
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_planning_tick)
 
-        # Attach motion planning action
-        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_motion_planning)
-
-        # Attach execution transfer action (moves planned phases to execution)
-        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.LOGIC].addAction(self._action_activate_exe_phase)
-
-        # Attach input function (provides control inputs from execution module)
-        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._action_exe_step)
+        # INPUT: get controls from executor
+        self.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.INPUT].addAction(self._action_executor_step)
 
     # ------------------------------------------------------------------
     # Actions
@@ -97,6 +113,9 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
             # Also update task's assigned agent (bidirectional)
             chosen_task.assigned_agent = self.container
 
+            # Notify SubgoalManager
+            self.sgm.assign_task(chosen_task)
+
             # Write decision to shared dict (for simulation to detect completion and conflicts)
             local_decisions = self.ta_cont.state.local_decisions
             if local_decisions is not None:
@@ -105,57 +124,28 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
 
             self.logger.info(f"Agent {self.agent_id} assigned task {chosen_task.object_id}")
 
-    def _action_motion_planning(self):
-        """Motion planning action - creates phase for assigned task."""
-         # TODO: give the option here to not use current as starting position
-        if self.mp_cont.start_planning is not None:
-            phase_key = self.mp_cont.start_planning
-            task = self.assigned_task
+    def _action_planning(self):
+        """Triggered by sim.start_mp() setting a flag. Runs planner once."""
+        if self.sgm.start_planning_flag is not None:
+            phase_key = self.sgm.start_planning_flag
 
+            task = self.assigned_task
             if task is None:
-                self.logger.warning(f'MP planning requested for phase "{phase_key}", but no assigned task')
-                self.mp_cont.start_planning = None
+                self.logger.warning(f'Planning requested (phase "{phase_key}"), but no assigned task')
+                self.sgm.start_planning_flag = None
                 return
 
             self.logger.info(f"Planning motion to task {task.object_id} at {task.configuration} (phase: {phase_key})")
+            self.sgm.start_planning(phase_key)
+            self.sgm.start_planning_flag = None
 
-            # Call motion planner (this adds the phase to runner)
-            self.mpm.plan_motion(
-                phase_key=phase_key,
-                goal_task=task
-            )
+    def _action_planning_tick(self):
+        """Every tick: check replan for reactive modes."""
+        self.sgm.tick()
 
-            # Reset the planning flag
-            self.mp_cont.start_planning = None
-
-    def _action_activate_exe_phase(self):
-        if not self.planned_phases or not self.exe_cont.start_execution:
-            return
-
-        # Get list of phase names to avoid dict modification during iteration
-        phase_names = list(self.planned_phases.keys())
-        
-        for phase_name in phase_names:
-            if phase_name not in self.exi.phases:
-                phase_container = self.planned_phases[phase_name]
-                
-                # Transfer to execution
-                self.exi.add_phase(phase_name, phase_container)
-
-                # Remove from MP module (phase has been transferred)
-                del self.mp_cont.phases[phase_name]
-                
-                self.logger.info(f"Phase '{phase_name}' transferred to execution module")
-                
-                # Activate
-                self.exi.activate_phase(phase_name)
-                
-                break
-
-
-    def _action_exe_step(self):
-        """Override parent to use execution module for control inputs."""
-        u = self.exi.step()
+    def _action_executor_step(self):
+        """Get control from executor."""
+        u = self.executor.step()
         self.input.v = float(u[0])
         self.input.psi_dot = float(u[1])
 
@@ -175,30 +165,38 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
 
     @assigned_task.setter
     def assigned_task(self, task: TaskContainer):
-        """Set assigned task and trigger motion planning."""
+        """Set assigned task and notify SubgoalManager."""
         assert isinstance(task, TaskContainer)
         self.tam.ta_container.assigned_task = task
+        self.sgm.assign_task(task)
 
     # ---------- Motion Planning ----------
     @property
-    def mp_cont(self):
-        return self.mpm.planner_cont
-    
+    def mp_cont(self) -> AgentMPPlannerContainer | None:
+        """Expose OMPL planner container (only available in OFFLINE mode)."""
+        from master_thesis.modules.motion_planning.ompl_trajectory_planner import OMPLTrajectoryPlanner
+        if isinstance(self.planner, OMPLTrajectoryPlanner):
+            return self.planner.planner_cont
+        return None
+
     @property
     def planned_phases(self):
-        return self.mpm.planner_cont.phases
-    
-    @planned_phases.setter #TODO: write access could be removed here? 
-    def planned_phases(self, name: str, phase: MPPhaseContainer):
-        self.mpm.planner_cont.phases[name] = phase
-    
-    # ---------- Phase Execution ----------
-    
-    @property
-    def exe_cont(self):
-        return self.exi.exe_cont
+        from master_thesis.modules.motion_planning.ompl_trajectory_planner import OMPLTrajectoryPlanner
+        if isinstance(self.planner, OMPLTrajectoryPlanner):
+            return self.planner.planner_cont.phases
+        return {}
 
-    # TODO: is there an alternative from bilbolab? 
+    # ---------- Phase Execution ----------
+
+    @property
+    def exe_cont(self) -> AgentExeContainer | None:
+        """Expose execution container (only available in OFFLINE mode)."""
+        from master_thesis.modules.execution.trajectory_executor import TrajectoryExecutor
+        if isinstance(self.executor, TrajectoryExecutor):
+            return self.executor.exe_cont
+        return None
+
+    # TODO: is there an alternative from bilbolab?
     def comm_func(self, payload: dict[str, dict]):
         assert isinstance(self.lwr_cont, LocalWorldContainer)
 
@@ -215,7 +213,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent):
                     for task_id, cost in data.items():
                         if task_id in neighbor_cont.comm_buffer[topic]:
                             neighbor_cont.comm_buffer[topic][task_id].append(cost)
-            
+
             neighbor_cont.comm_buffer["received_from"].append(self.container.agent_id)
 
 
@@ -240,10 +238,9 @@ def main():
 
     sim.start()
 
-    
+
 
     while True:
         time.sleep(10)
 if __name__ == "__main__":
     main()
-
