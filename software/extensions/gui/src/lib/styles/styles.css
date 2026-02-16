@@ -348,6 +348,16 @@ html, body {
     grid-template-areas: "terminal bottom";
 }
 
+#bottombar.no-terminal {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: "bottom emergency";
+}
+
+#bottombar.no-terminal.no-emergency {
+    grid-template-columns: 1fr;
+    grid-template-areas: "bottom";
+}
+
 /* if you want visual separation, optional: */
 .terminal-container {
     /*border: 1px solid rgba(255, 255, 255, 0.5);*/

@@ -3,9 +3,11 @@ import {
     DirectionalLight,
     GlowLayer,
     HemisphericLight,
+    MeshBuilder,
     PointerEventTypes,
     Scene as BabylonScene,
     ShadowGenerator,
+    StandardMaterial,
     Vector3,
 } from "@babylonjs/core";
 
@@ -91,6 +93,8 @@ export class Babylon extends Scene {
                 fog_color: [31 / 255, 32 / 255, 35 / 255],
                 fog_density: 0.08,
                 fog_mode: 'exp2',
+                fog_auto_scale: true,
+                fog_reference_radius: 0,
             },
 
             camera: {
@@ -104,7 +108,19 @@ export class Babylon extends Scene {
                 radius_upper_limit: 6,
             },
             lights: {
-                hemispheric_direction: [2, -1, 0]
+                hemispheric_direction: [2, -1, 0],
+                hemispheric_intensity: 0.5,
+                hemispheric_ground_color: [0, 0, 0],
+                directional_direction: [-1, -1, -1],
+                directional_position: [1, 1, 10],
+                directional_intensity: 1.1,
+                directional_shadows: true,
+                directional_shadow_darkness: 0.4,
+                directional2_direction: [1, -1, -1],
+                directional2_position: [1, -1, 10],
+                directional2_intensity: 0.4,
+                directional2_shadows: false,
+                directional2_shadow_darkness: 0.4,
             },
             ui: {
                 text_color: [1, 1, 1],
@@ -125,8 +141,8 @@ export class Babylon extends Scene {
 
         // element.addEventListener('mousedown', e => e.preventDefault()); // stops focus
         this._initializeWebsocket();
-        this._addSceneClickListener();
         this._initializeScene();
+        this._addSceneClickListener();
 
         this.objects = objects;
         this._buildObjectsFromConfig(objects);
@@ -138,8 +154,11 @@ export class Babylon extends Scene {
 
         this.callbacks.add('record_start');
         this.callbacks.add('record_stop');
+        this.callbacks.add('add_camera');
         this.callbacks.add('websocket_connected');
         this.callbacks.add('websocket_disconnected');
+        this.callbacks.add('follow_started');
+        this.callbacks.add('follow_stopped');
 
         this._addOwnCallbacks();
         // this.addTestObjects();
@@ -261,15 +280,47 @@ export class Babylon extends Scene {
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
-    setArcRotateCamera(position, target, alpha, beta, radius) {
-        this.camera.setPosition(coordinatesToBabylon(position));
-        this.camera.setTarget(coordinatesToBabylon(target));
-        this.camera.alpha = alpha;
-        this.camera.beta = beta;
-        this.camera.radius = radius;
+    setArcRotateCamera(position, target, alpha, beta, radius, fov) {
+        if (target) this.camera.setTarget(coordinatesToBabylon(target));
+        if (position && alpha == null && beta == null && radius == null) {
+            this.camera.setPosition(coordinatesToBabylon(position));
+        }
+        if (alpha != null) this.camera.alpha = alpha;
+        if (beta != null) this.camera.beta = beta;
+        if (radius != null) this.camera.radius = radius;
+        if (fov != null) this.camera.fov = fov;
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
+    followObject(objectId) {
+        this.stopFollowing();
+
+        let target = null;
+        for (const obj of Object.values(this.objects)) {
+            if (obj.id === objectId) { target = obj; break; }
+        }
+        if (!target) {
+            console.warn(`followObject: object '${objectId}' not found`);
+            return;
+        }
+
+        this._followTarget = target;
+        this._followObserver = this.scene.onBeforeRenderObservable.add(() => {
+            const pos = this._followTarget.position;
+            if (pos && pos.length >= 2) {
+                this.camera.setTarget(coordinatesToBabylon(pos));
+            }
+        });
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    stopFollowing() {
+        if (this._followObserver) {
+            this.scene.onBeforeRenderObservable.remove(this._followObserver);
+            this._followObserver = null;
+        }
+        this._followTarget = null;
+    }
 
     /* -------------------------------------------------------------------------------------------------------------- */
     getBabylonVisualization() {
@@ -478,7 +529,7 @@ export class Babylon extends Scene {
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
-    startRecordingHiBitrate(fileName = "babylonjs_highbit.webm", fps = 60, videoBitsPerSecond = 12_000_000) {
+    startRecordingHiBitrate(fileName = "babylonjs_highbit.webm", fps = 60, videoBitsPerSecond = 12_000_000, upscale = 1.0) {
         const canvas = this.scene?.getEngine?.().getRenderingCanvas?.();
         if (!canvas) {
             this.log("No canvas for recording.", "error");
@@ -489,10 +540,11 @@ export class Babylon extends Scene {
             return;
         }
 
-        // Render more pixels (same trick as above)
+        // Optionally render more pixels (upscale > 1 = higher resolution)
         const engine = this.scene.getEngine();
         this._prevScaling = engine.getHardwareScalingLevel?.() ?? 1;
-        engine.setHardwareScalingLevel(Math.max(0.25, this._prevScaling * 0.5));
+        const scaleDown = 1 / upscale;
+        engine.setHardwareScalingLevel(Math.max(0.25, this._prevScaling * scaleDown));
 
         const mime = _chooseBestMime();
         const stream = canvas.captureStream(fps);
@@ -506,11 +558,17 @@ export class Babylon extends Scene {
         };
         rec.onstop = () => {
             const blob = new Blob(chunks, {type: mime});
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = fileName;
-            a.click();
-            setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+
+            if (this._pendingSavePath) {
+                this._sendBlobToServer(blob, fileName);
+                this._pendingSavePath = null;
+            } else {
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = fileName;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+            }
 
             // restore
             try {
@@ -655,6 +713,22 @@ export class Babylon extends Scene {
             case 'objectFunction':
                 this._handleObjectFunctionMessage(msg);
                 break;
+            case 'command':
+                this._handleCommand(msg);
+                break;
+            case 'add_camera':
+                if (msg.camera) {
+                    this.callbacks.get('add_camera').call(msg.camera);
+                }
+                break;
+            case 'follow_object':
+                this.followObject(msg.object_id);
+                this.callbacks.get('follow_started').call(msg.object_id);
+                break;
+            case 'stop_following':
+                this.stopFollowing();
+                this.callbacks.get('follow_stopped').call();
+                break;
             default:
                 console.warn(`Unknown message type: ${msg.type}`);
                 break;
@@ -698,11 +772,15 @@ export class Babylon extends Scene {
         // Camera
         if (config.camera && this.camera) {
             const cam = config.camera;
+            // Apply target first (before alpha/beta/radius, which depend on it)
+            if (cam.target) this.camera.setTarget(coordinatesToBabylon(cam.target));
+            // position recalculates alpha/beta/radius, so only use it when those aren't explicitly set
+            const hasExplicitOrbit = cam.alpha != null || cam.beta != null || cam.radius != null;
+            if (cam.position && !hasExplicitOrbit) this.camera.setPosition(coordinatesToBabylon(cam.position));
+            // Explicit orbit parameters take precedence over position
             if (cam.alpha != null) this.camera.alpha = cam.alpha;
             if (cam.beta != null) this.camera.beta = cam.beta;
             if (cam.radius != null) this.camera.radius = cam.radius;
-            if (cam.target) this.camera.setTarget(coordinatesToBabylon(cam.target));
-            if (cam.position) this.camera.setPosition(coordinatesToBabylon(cam.position));
             if (cam.fov != null) this.camera.fov = cam.fov;
             if (cam.radius_lower_limit != null) this.camera.lowerRadiusLimit = cam.radius_lower_limit;
             if (cam.radius_upper_limit != null) this.camera.upperRadiusLimit = cam.radius_upper_limit;
@@ -726,6 +804,165 @@ export class Babylon extends Scene {
                 if (sc.fog_density != null) this.scene.fogDensity = sc.fog_density;
                 if (sc.fog_color) this.scene.fogColor = getBabylonColor3(sc.fog_color);
             }
+        }
+
+        // Lights
+        if (config.lights) {
+            const lc = config.lights;
+            if (lc.hemispheric_direction && this.hemisphericLight) {
+                this.hemisphericLight.direction = coordinatesToBabylon(lc.hemispheric_direction);
+            }
+            if (lc.hemispheric_intensity != null && this.hemisphericLight) {
+                this.hemisphericLight.intensity = lc.hemispheric_intensity;
+            }
+            if (lc.hemispheric_ground_color && this.hemisphericLight) {
+                this.hemisphericLight.groundColor = getBabylonColor3(lc.hemispheric_ground_color);
+            }
+            if (lc.directional_direction && this.dirLight) {
+                this.dirLight.direction = coordinatesToBabylon(lc.directional_direction);
+            }
+            if (lc.directional_position && this.dirLight) {
+                this.dirLight.position = coordinatesToBabylon(lc.directional_position);
+            }
+            if (lc.directional_intensity != null && this.dirLight) {
+                this.dirLight.intensity = lc.directional_intensity;
+            }
+            // Shadows for directional 1
+            if (lc.directional_shadows != null && this.dirLight) {
+                if (lc.directional_shadows && !this.scene.shadowGenerator) {
+                    this._enableShadows(this.dirLight, 'shadowGenerator', lc.directional_shadow_darkness ?? 0.4);
+                } else if (!lc.directional_shadows && this.scene.shadowGenerator) {
+                    this.scene.shadowGenerator.dispose();
+                    this.scene.shadowGenerator = null;
+                    this.dirLight.shadowEnabled = false;
+                }
+            }
+            if (lc.directional_shadow_darkness != null && this.scene.shadowGenerator) {
+                this.scene.shadowGenerator.setDarkness(lc.directional_shadow_darkness);
+            }
+
+            if (lc.directional2_direction && this.dirLight2) {
+                this.dirLight2.direction = coordinatesToBabylon(lc.directional2_direction);
+            }
+            if (lc.directional2_position && this.dirLight2) {
+                this.dirLight2.position = coordinatesToBabylon(lc.directional2_position);
+            }
+            if (lc.directional2_intensity != null && this.dirLight2) {
+                this.dirLight2.intensity = lc.directional2_intensity;
+            }
+            // Shadows for directional 2
+            if (lc.directional2_shadows != null && this.dirLight2) {
+                if (lc.directional2_shadows && !this.scene.shadowGenerator2) {
+                    this._enableShadows(this.dirLight2, 'shadowGenerator2', lc.directional2_shadow_darkness ?? 0.4);
+                } else if (!lc.directional2_shadows && this.scene.shadowGenerator2) {
+                    this.scene.shadowGenerator2.dispose();
+                    this.scene.shadowGenerator2 = null;
+                    this.dirLight2.shadowEnabled = false;
+                }
+            }
+            if (lc.directional2_shadow_darkness != null && this.scene.shadowGenerator2) {
+                this.scene.shadowGenerator2.setDarkness(lc.directional2_shadow_darkness);
+            }
+        }
+
+        // Additional camera views (for BabylonContainer to consume)
+        if (config.cameras) {
+            this.config.cameras = config.cameras;
+        }
+
+        // Coordinate system
+        if (config.show_coordinate_system === false) {
+            for (const name of ['axisX', 'axisY', 'axisZ']) {
+                const mesh = this.scene.getMeshByName(name);
+                if (mesh) mesh.dispose();
+            }
+        }
+
+        // Rebuild light helpers now that the real light positions/directions are applied
+        this._rebuildLightHelpers();
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    _enableShadows(light, sceneProperty, darkness = 0.4) {
+        light.shadowEnabled = true;
+        const gen = new ShadowGenerator(1024, light);
+        this.scene[sceneProperty] = gen;
+        gen.useExponentialShadowMap = true;
+        gen.depthScale = 200;
+        gen.forceBackFacesOnly = true;
+        gen.usePercentageCloserFiltering = true;
+        gen.useContactHardeningShadowMap = true;
+        gen.filteringQuality = ShadowGenerator.QUALITY_HIGH;
+        gen.bias = 1e-6;
+        gen.setDarkness(darkness);
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    _rebuildLightHelpers() {
+        // Dispose existing helpers so we can rebuild with current light values
+        const old = this.scene.meshes.filter(m => m.name.startsWith('_lightHelper_'));
+        for (const m of old) {
+            if (m.material) m.material.dispose();
+            m.dispose();
+        }
+        this._createLightHelpers();
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    _createLightHelpers() {
+        const radius = 0.08;
+        const arrowLen = 2.0;
+        const sphereRadius = 0.3;
+
+        const makeMat = (name, rgb) => {
+            const m = new StandardMaterial(name, this.scene);
+            m.disableLighting = true;
+            m.emissiveColor = getBabylonColor3(rgb);
+            return m;
+        };
+
+        // Hemispheric — arrow from origin in light direction (yellow)
+        if (this.hemisphericLight) {
+            const hDir = this.hemisphericLight.direction.normalize().scale(arrowLen);
+            const hPath = [Vector3.Zero(), hDir];
+            const hTube = MeshBuilder.CreateTube("_lightHelper_hemi_dir", {path: hPath, radius, tessellation: 8}, this.scene);
+            hTube.material = makeMat("_lightHelper_hemi_mat", [1, 1, 0]);
+            hTube.isPickable = false;
+            hTube.setEnabled(false);
+        }
+
+        // Directional 1 — sphere + arrow (orange)
+        if (this.dirLight) {
+            const d1Mat = makeMat("_lightHelper_dir1_mat", [1, 0.5, 0]);
+
+            const d1Sphere = MeshBuilder.CreateSphere("_lightHelper_dir1_pos", {diameter: sphereRadius * 2}, this.scene);
+            d1Sphere.position = this.dirLight.position.clone();
+            d1Sphere.material = d1Mat;
+            d1Sphere.isPickable = false;
+            d1Sphere.setEnabled(false);
+
+            const d1End = this.dirLight.position.add(this.dirLight.direction.normalize().scale(arrowLen));
+            const d1Tube = MeshBuilder.CreateTube("_lightHelper_dir1_dir", {path: [this.dirLight.position.clone(), d1End], radius, tessellation: 8}, this.scene);
+            d1Tube.material = d1Mat;
+            d1Tube.isPickable = false;
+            d1Tube.setEnabled(false);
+        }
+
+        // Directional 2 — sphere + arrow (cyan)
+        if (this.dirLight2) {
+            const d2Mat = makeMat("_lightHelper_dir2_mat", [0, 1, 1]);
+
+            const d2Sphere = MeshBuilder.CreateSphere("_lightHelper_dir2_pos", {diameter: sphereRadius * 2}, this.scene);
+            d2Sphere.position = this.dirLight2.position.clone();
+            d2Sphere.material = d2Mat;
+            d2Sphere.isPickable = false;
+            d2Sphere.setEnabled(false);
+
+            const d2End = this.dirLight2.position.add(this.dirLight2.direction.normalize().scale(arrowLen));
+            const d2Tube = MeshBuilder.CreateTube("_lightHelper_dir2_dir", {path: [this.dirLight2.position.clone(), d2End], radius, tessellation: 8}, this.scene);
+            d2Tube.material = d2Mat;
+            d2Tube.isPickable = false;
+            d2Tube.setEnabled(false);
         }
     }
 
@@ -802,6 +1039,83 @@ export class Babylon extends Scene {
     _handleObjectFunctionMessage(msg) {
         this.log(`Received object function message:`);
         this.log(msg);
+    }
+
+    /* --------------------------------------------------------------------------------------------------------------- */
+    _handleCommand(msg) {
+        const command = msg.command;
+        const params = msg.params || {};
+        switch (command) {
+            case 'startRecording':
+                this._startRecordingFromCommand(params);
+                break;
+            case 'stopRecording':
+                this.stopRecording();
+                break;
+            default:
+                this.log(`Unknown command: ${command}`, "warning");
+                break;
+        }
+    }
+
+    /* --------------------------------------------------------------------------------------------------------------- */
+    _startRecordingFromCommand(params) {
+        const fileName = params.filename || "babylonjs.webm";
+        const fps = params.fps || 60;
+        const bitrate = params.bitrate || 12_000_000;
+        const savePath = params.save_path || null;
+        const overlay = params.overlay || false;
+        const upscale = params.upscale || 1.0;
+
+        // Store save_path so the onstop handlers know where to send the blob
+        this._pendingSavePath = savePath;
+
+        if (overlay && this.container) {
+            this.container.startRecordingHiBitrateWithOverlay({fileName, fps, videoBitsPerSecond: bitrate, upscale});
+        } else {
+            this.startRecordingHiBitrate(fileName, fps, bitrate, upscale);
+        }
+    }
+
+    /* --------------------------------------------------------------------------------------------------------------- */
+    async _sendBlobToServer(blob, fileName) {
+        const CHUNK_SIZE = 48_000; // ~48 KB raw -> ~64 KB base64 (avoids WS continuation frames)
+        const totalChunks = Math.ceil(blob.size / CHUNK_SIZE);
+        this.log(`Sending recording to server: ${fileName} (${totalChunks} chunks, ${Math.round(blob.size / 1024)} KB)`, "important");
+
+        for (let i = 0; i < totalChunks; i++) {
+            const slice = blob.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+            const base64 = await this._blobToBase64(slice);
+            this.send({
+                type: 'recordingData',
+                fileName,
+                chunkIndex: i,
+                totalChunks,
+                data: base64,
+            });
+            // Yield briefly so the server can process each chunk
+            if (i % 10 === 9) await new Promise(r => setTimeout(r, 0));
+        }
+
+        this.send({
+            type: 'recordingComplete',
+            fileName,
+        });
+        this.log(`Recording data sent to server: ${fileName}`, "important");
+    }
+
+    /* --------------------------------------------------------------------------------------------------------------- */
+    _blobToBase64(blob) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                // result is "data:<mime>;base64,XXXX" — strip the prefix
+                const base64 = reader.result.split(',')[1];
+                resolve(base64);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+        });
     }
 
     /* --------------------------------------------------------------------------------------------------------------- */
@@ -931,7 +1245,10 @@ export class Babylon extends Scene {
         this.canvas.addEventListener('mousedown', e => e.preventDefault(), {capture: true});
 
         // — LIGHT —
-        new HemisphericLight("light", coordinatesToBabylon(this.config.lights.hemispheric_direction), this.scene).intensity = 0.5;
+        const lc = this.config.lights;
+        this.hemisphericLight = new HemisphericLight("light", coordinatesToBabylon(lc.hemispheric_direction), this.scene);
+        this.hemisphericLight.intensity = lc.hemispheric_intensity;
+        this.hemisphericLight.groundColor = getBabylonColor3(lc.hemispheric_ground_color);
         new GlowLayer("glow", this.scene).intensity = 0.1;
 
         // - SHADOW -
@@ -940,52 +1257,26 @@ export class Babylon extends Scene {
             new Vector3(0, 0, 0),
             this.scene
         );
-        this.dirLight.position = coordinatesToBabylon([1, 1, 10]);
-        this.dirLight.direction = coordinatesToBabylon([-1, -1, -1]);
-        this.dirLight.intensity = 1.1;
-        this.dirLight.shadowEnabled = true;
+        this.dirLight.position = coordinatesToBabylon(lc.directional_position);
+        this.dirLight.direction = coordinatesToBabylon(lc.directional_direction);
+        this.dirLight.intensity = lc.directional_intensity;
 
-        this.shadowGen = new ShadowGenerator(1024, this.dirLight);
-        this.scene.shadowGenerator = this.shadowGen;
-
-
-        this.shadowGen.useExponentialShadowMap = true;
-        this.shadowGen.depthScale = 200;                       // default is 50 — try 100–200
-        this.shadowGen.forceBackFacesOnly = true;
-
-        this.shadowGen.usePercentageCloserFiltering = true;     // PCF
-        this.shadowGen.useContactHardeningShadowMap = true;     // optional, nicer penumbra
-        this.shadowGen.filteringQuality = ShadowGenerator.QUALITY_HIGH;
-
-        this.shadowGen.bias = 1e-6;      // start 0.0005 → 0.003 until acne disappears
-
-        // this.shadowGen.useContactHardeningShadowMap = true;
-        // this.shadowGen.contactHardeningLightSizeUVRatio = 0.1;
-        // this.shadowGen.contactHardeningDarkeningLightSizeUVRatio = 0.3;
-        //
-        this.shadowGen.setDarkness(0.4);
+        if (lc.directional_shadows) {
+            this._enableShadows(this.dirLight, 'shadowGenerator', lc.directional_shadow_darkness);
+        }
 
         this.dirLight2 = new DirectionalLight(
             "shadowLight2",
             new Vector3(0, 0, 0),
             this.scene
         );
-        this.dirLight2.position = coordinatesToBabylon([1, -1, 10]);
-        this.dirLight2.direction = coordinatesToBabylon([1, -1, -1]);
-        this.dirLight2.intensity = 0.4;
+        this.dirLight2.position = coordinatesToBabylon(lc.directional2_position);
+        this.dirLight2.direction = coordinatesToBabylon(lc.directional2_direction);
+        this.dirLight2.intensity = lc.directional2_intensity;
 
-
-        // this.dirLight2.shadowEnabled = true;
-        //
-        // this.shadowGen2 = new ShadowGenerator(1024, this.dirLight2);
-        // this.scene.shadowGenerator2 = this.shadowGen2;
-        // this.shadowGen2.useExponentialShadowMap = true;
-        // this.shadowGen2.depthScale = 200;                       // default is 50 — try 100–200
-        //
-        // this.shadowGen2.useContactHardeningShadowMap = true;
-        // this.shadowGen2.contactHardeningLightSizeUVRatio = 0.1;
-        // this.shadowGen2.contactHardeningDarkeningLightSizeUVRatio = 0.3;
-        // this.shadowGen2.setDarkness(0);
+        if (lc.directional2_shadows) {
+            this._enableShadows(this.dirLight2, 'shadowGenerator2', lc.directional2_shadow_darkness);
+        }
 
         // — BACKGROUND —
         this.scene.clearColor = getBabylonColor(this.config.background_color);
@@ -1004,6 +1295,20 @@ export class Babylon extends Scene {
             }
             this.scene.fogDensity = this.config.scene.fog_density;
             this.scene.fogColor = getBabylonColor3(this.config.scene.fog_color);
+
+            // Auto-scale fog density with camera radius so apparent fog stays
+            // constant regardless of zoom level.
+            if (this.config.scene.fog_auto_scale) {
+                const baseDensity = this.config.scene.fog_density;
+                const refRadius = this.config.scene.fog_reference_radius > 0
+                    ? this.config.scene.fog_reference_radius
+                    : this.camera.radius;  // use initial radius as reference
+                this.camera.onViewMatrixChangedObservable.add(() => {
+                    if (this.scene.fogMode !== BabylonScene.FOGMODE_NONE) {
+                        this.scene.fogDensity = baseDensity * (refRadius / this.camera.radius);
+                    }
+                });
+            }
         }
 
 
@@ -1011,6 +1316,9 @@ export class Babylon extends Scene {
         if (this.config.show_coordinate_system) {
             drawCoordinateSystem(this.scene, this.config.coordinate_system_length);
         }
+
+        // Light helpers are created in _applyInitConfig after the real light
+        // settings arrive, so that they reflect the user-provided positions.
 
         // once, after scene creation:
         this.scene.setRenderingOrder(
@@ -1041,6 +1349,13 @@ export class Babylon extends Scene {
 
     /* -------------------------------------------------------------------------------------------------------------- */
     _addSceneClickListener() {
+        // Transparent ground plane for picking (floor tiles are not pickable)
+        this._pickPlane = MeshBuilder.CreateGround(
+            '__pickPlane', {width: 1000, height: 1000}, this.scene
+        );
+        this._pickPlane.isPickable = true;
+        this._pickPlane.visibility = 0;  // fully transparent but still pickable
+
         this.scene.onPointerObservable.add((pointerInfo) => {
             if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
                 this._handleSingleSceneClick();
@@ -1049,33 +1364,53 @@ export class Babylon extends Scene {
                 this._handleDoubleSceneClick();
             }
         });
+
+        // Middle-click on canvas → floor_middleclick event
+        this.canvas.addEventListener('pointerdown', (evt) => {
+            if (evt.button !== 1) return;
+            evt.preventDefault();
+            const pick = this.scene.pick(this.scene.pointerX, this.scene.pointerY);
+            if (pick.hit) {
+                const p = pick.pickedPoint;
+                this.sendEvent({
+                    type: 'floor_middleclick',
+                    position: [p.x, -p.z, p.y],
+                });
+            }
+        });
+
+        // Right-click on canvas → floor_rightclick event
+        this.canvas.addEventListener('contextmenu', (evt) => {
+            evt.preventDefault();
+            const pick = this.scene.pick(this.scene.pointerX, this.scene.pointerY);
+            if (pick.hit) {
+                const p = pick.pickedPoint;
+                const pos = [p.x, -p.z, p.y];
+                this.sendEvent({
+                    type: 'floor_rightclick',
+                    position: pos,
+                });
+            }
+        });
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
     _handleSingleSceneClick() {
         const pick = this.scene.pick(this.scene.pointerX, this.scene.pointerY);
         if (pick.hit) {
-            if (pick.pickedMesh.metadata) {
+            if (pick.pickedMesh.metadata && pick.pickedMesh.metadata.object) {
+                const clickedObject = pick.pickedMesh.metadata.object;
+
                 for (const obj of Object.values(this.objects)) {
                     obj.highlight(false);
                 }
-                pick.pickedMesh.metadata.object.highlight(true);
+                clickedObject.highlight(true);
 
-                // const center = pick.pickedMesh.getBoundingInfo()
-                //     .boundingBox
-                //     .centerWorld;
-                //
-                // // point the camera at that position
-                // this.camera.setTarget(center);
-
-
-                // this.framing.zoomOnMesh(pick.pickedMesh, /* focusXZ=*/ true, () => {
-                //     console.log("framing animation done");
-                // });
-
-
-            } else {
-                console.log("No object metadata");
+                this.sendEvent({
+                    type: 'object_click',
+                    object_id: clickedObject.id,
+                    position: clickedObject.position || [],
+                });
             }
         }
     }
@@ -1084,6 +1419,16 @@ export class Babylon extends Scene {
     _handleDoubleSceneClick() {
         for (const obj of Object.values(this.objects)) {
             obj.highlight(false);
+        }
+
+        const pick = this.scene.pick(this.scene.pointerX, this.scene.pointerY);
+        if (pick.hit) {
+            const p = pick.pickedPoint;
+            const pos = [p.x, -p.z, p.y];
+            this.sendEvent({
+                type: 'floor_doubleclick',
+                position: pos,
+            });
         }
     }
 
@@ -1554,6 +1899,7 @@ export class BabylonContainer {
         this.configureElement();
 
         this.babylon = new Babylon(this.id, this.babylon_canvas, payload.config, payload.objects);
+        this.babylon.container = this;
 
         this.babylon_canvas.setAttribute('tabindex', '-1');
         this.babylon_canvas.addEventListener('mousedown', (e) => e.preventDefault(), {capture: true});
@@ -1662,7 +2008,7 @@ export class BabylonContainer {
             }
         });
 
-        const button_settings = new ButtonWidget('settings',
+        this.button_settings = new ButtonWidget('settings',
             {
                 config: {
                     image: './icons/settings-icon.png',
@@ -1671,10 +2017,18 @@ export class BabylonContainer {
                 }
             });
 
-        button_settings.setTooltip("Settings");
-        button_settings.attach(button_container);
+        this.button_settings.setTooltip("Settings");
+        this.button_settings.attach(button_container);
 
-        const button_assets = new ButtonWidget('assets',
+        this.button_settings.callbacks.get('click').register(() => {
+            if (this.settings_overlay && this.settings_overlay.style.display === 'flex') {
+                this.closeSettingsOverlay();
+            } else {
+                this.openSettingsOverlay();
+            }
+        });
+
+        this.button_assets = new ButtonWidget('assets',
             {
                 config: {
                     image: './icons/assets-icon.png',
@@ -1683,8 +2037,16 @@ export class BabylonContainer {
                 }
             });
 
-        button_assets.setTooltip("Assets");
-        button_assets.attach(button_container);
+        this.button_assets.setTooltip("Assets");
+        this.button_assets.attach(button_container);
+
+        this.button_assets.callbacks.get('click').register(() => {
+            if (this.assets_overlay && this.assets_overlay.style.display === 'flex') {
+                this.closeAssetsOverlay();
+            } else {
+                this.openAssetsOverlay();
+            }
+        });
 
         const button_fullscreen = new ButtonWidget('fullscreen',
             {
@@ -1697,6 +2059,22 @@ export class BabylonContainer {
 
         button_fullscreen.setTooltip("Fullscreen");
         button_fullscreen.attach(button_container);
+
+        button_fullscreen.callbacks.get('click').register(() => {
+            if (document.fullscreenElement) {
+                document.exitFullscreen();
+            } else {
+                this.element.requestFullscreen();
+            }
+        });
+
+        element.addEventListener('fullscreenchange', () => {
+            if (document.fullscreenElement) {
+                button_fullscreen.setTooltip("Exit Fullscreen");
+            } else {
+                button_fullscreen.setTooltip("Fullscreen");
+            }
+        });
 
         const popoutIcon = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6'/%3E%3Cpolyline points='15 3 21 3 21 9'/%3E%3Cline x1='10' y1='14' x2='21' y2='3'/%3E%3C/svg%3E";
         const button_popout = new ButtonWidget('popout', {
@@ -1748,6 +2126,93 @@ export class BabylonContainer {
             }
         })
 
+        // --- Copy Camera button with right-click context menu ---
+        const copyCameraIcon = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z'/%3E%3Ccircle cx='12' cy='13' r='4'/%3E%3C/svg%3E";
+        const button_copy_camera = new ButtonWidget('copy_camera', {
+            config: {
+                image: copyCameraIcon,
+                image_width: '75%',
+                image_height: '75%',
+            }
+        });
+        button_copy_camera.setTooltip("Copy Camera");
+        button_copy_camera.attach(button_container);
+
+        // Helper: read current camera values as Python-friendly strings
+        const _getCameraValues = () => {
+            const cam = this.babylon.camera;
+            if (!cam) return null;
+            const t = cam.target;
+            return {
+                alpha: cam.alpha.toFixed(4),
+                beta: cam.beta.toFixed(4),
+                radius: cam.radius.toFixed(2),
+                fov: cam.fov.toFixed(4),
+                fov_deg: (cam.fov * 180 / Math.PI).toFixed(1),
+                tx: t.x.toFixed(2),
+                ty: (-t.z).toFixed(2),
+                tz: t.y.toFixed(2),
+            };
+        };
+
+        const _copyAndFlash = (text) => {
+            navigator.clipboard.writeText(text).then(() => {
+                button_copy_camera.setTooltip("Copied!");
+                setTimeout(() => button_copy_camera.setTooltip("Copy Camera"), 1500);
+            }).catch(err => console.warn('Copy camera to clipboard failed:', err));
+        };
+
+        // Left click: BabylonCamera constructor
+        button_copy_camera.callbacks.get('click').register(() => {
+            const v = _getCameraValues();
+            if (!v) return;
+            _copyAndFlash(
+                `BabylonCamera(target=[${v.tx}, ${v.ty}, ${v.tz}], alpha=${v.alpha}, beta=${v.beta}, radius=${v.radius}, fov=${v.fov})`
+            );
+        });
+
+        // Right click: context menu with multiple formats
+        const camMenu = document.createElement('div');
+        camMenu.classList.add('camera-copy-menu');
+        camMenu.style.display = 'none';
+        element.appendChild(camMenu);
+
+        const menuItems = [
+            {label: 'Copy BabylonCamera', fmt: (v) =>
+                `BabylonCamera(target=[${v.tx}, ${v.ty}, ${v.tz}], alpha=${v.alpha}, beta=${v.beta}, radius=${v.radius}, fov=${v.fov})`
+            },
+            {label: 'Copy add_camera()', fmt: (v) =>
+                `babylon.add_camera(BabylonCamera(name="Camera", target=[${v.tx}, ${v.ty}, ${v.tz}], alpha=${v.alpha}, beta=${v.beta}, radius=${v.radius}, fov=${v.fov}))`
+            },
+        ];
+
+        for (const item of menuItems) {
+            const row = document.createElement('div');
+            row.classList.add('camera-copy-menu-item');
+            row.textContent = item.label;
+            row.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const v = _getCameraValues();
+                if (v) _copyAndFlash(item.fmt(v));
+                camMenu.style.display = 'none';
+            });
+            camMenu.appendChild(row);
+        }
+
+        button_copy_camera.getElement().addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            // Position menu above the button
+            const rect = button_copy_camera.getElement().getBoundingClientRect();
+            const parentRect = element.getBoundingClientRect();
+            camMenu.style.left = `${rect.left - parentRect.left}px`;
+            camMenu.style.bottom = `${parentRect.bottom - rect.top + 4}px`;
+            camMenu.style.display = 'flex';
+        });
+
+        // Close menu on any click elsewhere
+        document.addEventListener('click', () => { camMenu.style.display = 'none'; });
+
         const top_bar = document.createElement('div');
         top_bar.classList.add('top-bar');
         element.appendChild(top_bar);
@@ -1756,6 +2221,16 @@ export class BabylonContainer {
         top_bar_title.classList.add('title');
         top_bar_title.textContent = this.configuration.title;
         top_bar.appendChild(top_bar_title);
+
+        // Follow indicator (hidden by default)
+        this._followBadge = document.createElement('div');
+        this._followBadge.classList.add('follow-badge');
+        this._followBadge.style.display = 'none';
+        this._followBadge.addEventListener('click', () => {
+            this.babylon.stopFollowing();
+            this._hideFollowBadge();
+        });
+        top_bar.appendChild(this._followBadge);
 
         const top_bar_time = document.createElement('div');
         top_bar_time.classList.add('time');
@@ -1806,6 +2281,39 @@ export class BabylonContainer {
         this.debug_overlay.style.display = 'none';
         element.appendChild(this.debug_overlay);
 
+        // Assets Overlay
+        this.assets_overlay = document.createElement('div');
+        this.assets_overlay.classList.add('assets-overlay');
+        this.assets_overlay.style.display = 'none';
+
+        const assets_close_container = document.createElement('div');
+        assets_close_container.classList.add('overlay-close-button');
+        assets_close_container.innerHTML = '&#x2715;';
+        assets_close_container.addEventListener('click', () => this.closeAssetsOverlay());
+        this.assets_overlay.appendChild(assets_close_container);
+
+        this._assetsListContainer = document.createElement('div');
+        this._assetsListContainer.classList.add('assets-list');
+        this.assets_overlay.appendChild(this._assetsListContainer);
+
+        element.appendChild(this.assets_overlay);
+
+        // Settings Overlay
+        this.settings_overlay = document.createElement('div');
+        this.settings_overlay.classList.add('settings-overlay');
+        this.settings_overlay.style.display = 'none';
+
+        const settings_close_container = document.createElement('div');
+        settings_close_container.classList.add('overlay-close-button');
+        settings_close_container.innerHTML = '&#x2715;';
+        settings_close_container.addEventListener('click', () => this.closeSettingsOverlay());
+        this.settings_overlay.appendChild(settings_close_container);
+
+        this._settingsListContainer = document.createElement('div');
+        this._settingsListContainer.classList.add('settings-list');
+        this.settings_overlay.appendChild(this._settingsListContainer);
+
+        element.appendChild(this.settings_overlay);
 
         this.top_bar = top_bar;
         this.top_bar_title = top_bar_title;
@@ -1841,6 +2349,8 @@ export class BabylonContainer {
     // -----------------------------------------------------------------------------------------------------------------
     openTerminalOverlay() {
         this.closeDebugOverlay();
+        this.closeAssetsOverlay();
+        this.closeSettingsOverlay();
         const controlsHeight = this.babylon_controls.offsetHeight;
         const topBarHeight = this.element.querySelector('.top-bar').offsetHeight;
 
@@ -1858,7 +2368,232 @@ export class BabylonContainer {
     // -----------------------------------------------------------------------------------------------------------------
     closeTerminalOverlay() {
         this.terminal_overlay.style.display = 'none';
+    }
 
+    // -----------------------------------------------------------------------------------------------------------------
+    openAssetsOverlay() {
+        this.closeTerminalOverlay();
+        this.closeDebugOverlay();
+        this.closeSettingsOverlay();
+
+        const controlsHeight = this.babylon_controls.offsetHeight;
+        const topBarHeight = this.element.querySelector('.top-bar').offsetHeight;
+
+        this.assets_overlay.style.top = `${topBarHeight + 5}px`;
+        this.assets_overlay.style.bottom = `${controlsHeight + 5}px`;
+        this.assets_overlay.style.display = 'flex';
+
+        this._renderAssetsList();
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    closeAssetsOverlay() {
+        this.assets_overlay.style.display = 'none';
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    _renderAssetsList() {
+        const container = this._assetsListContainer;
+        container.innerHTML = '';
+
+        const objects = this.babylon.objects;
+        if (!objects || Object.keys(objects).length === 0) {
+            const empty = document.createElement('div');
+            empty.classList.add('asset-item');
+            empty.style.opacity = '0.5';
+            empty.textContent = 'No objects in scene';
+            container.appendChild(empty);
+            return;
+        }
+
+        for (const [id, obj] of Object.entries(objects)) {
+            const item = document.createElement('div');
+            item.classList.add('asset-item');
+
+            const icon = document.createElement('span');
+            icon.textContent = (obj.objects) ? '\u25B6' : '\u25CF';
+            icon.style.fontSize = '8px';
+            icon.style.opacity = '0.6';
+            item.appendChild(icon);
+
+            const label = document.createElement('span');
+            label.textContent = id;
+            item.appendChild(label);
+
+            item.addEventListener('click', () => {
+                this.babylon.followObject(obj.id);
+                this._showFollowBadge(obj.id);
+                this.closeAssetsOverlay();
+            });
+
+            container.appendChild(item);
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    openSettingsOverlay() {
+        this.closeTerminalOverlay();
+        this.closeDebugOverlay();
+        this.closeAssetsOverlay();
+
+        const controlsHeight = this.babylon_controls.offsetHeight;
+        const topBarHeight = this.element.querySelector('.top-bar').offsetHeight;
+
+        this.settings_overlay.style.top = `${topBarHeight + 5}px`;
+        this.settings_overlay.style.bottom = `${controlsHeight + 5}px`;
+        this.settings_overlay.style.display = 'flex';
+
+        this._renderSettings();
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    closeSettingsOverlay() {
+        this.settings_overlay.style.display = 'none';
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    _renderSettings() {
+        const container = this._settingsListContainer;
+        container.innerHTML = '';
+
+        const scene = this.babylon.scene;
+        if (!scene) return;
+
+        // Store original fog mode on first render
+        if (this._originalFogMode == null) {
+            this._originalFogMode = scene.fogMode;
+        }
+
+        // --- Fog toggle ---
+        const fogRow = this._createToggleRow('Fog', scene.fogMode !== 0, (enabled) => {
+            if (enabled) {
+                scene.fogMode = this._originalFogMode || BabylonScene.FOGMODE_EXP2;
+            } else {
+                scene.fogMode = BabylonScene.FOGMODE_NONE;
+            }
+        });
+        container.appendChild(fogRow);
+
+        // --- Coordinate Axes toggle ---
+        const axisNames = ['axisX', 'axisY', 'axisZ'];
+        const axisMeshes = axisNames.map(n => scene.getMeshByName(n)).filter(Boolean);
+
+        if (axisMeshes.length > 0) {
+            const axesEnabled = axisMeshes[0].isEnabled();
+            const axesRow = this._createToggleRow('Coordinate Axes', axesEnabled, (enabled) => {
+                axisMeshes.forEach(m => m.setEnabled(enabled));
+            });
+            container.appendChild(axesRow);
+        }
+
+        // --- Light Helpers toggle ---
+        const lightHelperMeshes = scene.meshes.filter(m => m.name.startsWith('_lightHelper_'));
+        if (lightHelperMeshes.length > 0) {
+            const lightsEnabled = lightHelperMeshes[0].isEnabled();
+            const lightsRow = this._createToggleRow('Light Helpers', lightsEnabled, (enabled) => {
+                lightHelperMeshes.forEach(m => m.setEnabled(enabled));
+            });
+            container.appendChild(lightsRow);
+        }
+
+        // --- Wireframe toggle ---
+        const wireRow = this._createToggleRow('Wireframe', scene.forceWireframe || false, (enabled) => {
+            scene.forceWireframe = enabled;
+        });
+        container.appendChild(wireRow);
+
+        // --- FOV slider ---
+        const cam = this.babylon.camera;
+        if (cam) {
+            const currentDeg = cam.fov * 180 / Math.PI;
+            const fovRow = this._createSliderRow('FOV', currentDeg, 5, 120, '°', (val) => {
+                cam.fov = val * Math.PI / 180;
+            });
+            container.appendChild(fovRow);
+
+            // --- Radius upper limit slider ---
+            const radiusRow = this._createSliderRow(
+                'Max Radius', cam.upperRadiusLimit, 2, 50, 'm',
+                (val) => { cam.upperRadiusLimit = val; }
+            );
+            container.appendChild(radiusRow);
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    _createToggleRow(label, initialState, onChange) {
+        const row = document.createElement('div');
+        row.classList.add('setting-row');
+
+        const labelEl = document.createElement('span');
+        labelEl.classList.add('setting-label');
+        labelEl.textContent = label;
+        row.appendChild(labelEl);
+
+        const toggle = document.createElement('label');
+        toggle.classList.add('toggle');
+
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = initialState;
+        input.addEventListener('change', () => onChange(input.checked));
+
+        const slider = document.createElement('span');
+        slider.classList.add('toggle-slider');
+
+        toggle.appendChild(input);
+        toggle.appendChild(slider);
+        row.appendChild(toggle);
+
+        return row;
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    _createSliderRow(label, initialValue, min, max, unit, onChange) {
+        const row = document.createElement('div');
+        row.classList.add('setting-row', 'setting-row-slider');
+
+        const labelEl = document.createElement('span');
+        labelEl.classList.add('setting-label');
+        labelEl.textContent = label;
+        row.appendChild(labelEl);
+
+        const controls = document.createElement('div');
+        controls.classList.add('setting-slider-controls');
+
+        const valueEl = document.createElement('span');
+        valueEl.classList.add('setting-slider-value');
+        valueEl.textContent = `${Math.round(initialValue)}${unit}`;
+
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.classList.add('setting-slider');
+        input.min = min;
+        input.max = max;
+        input.step = 1;
+        input.value = Math.round(initialValue);
+        input.addEventListener('input', () => {
+            const val = parseFloat(input.value);
+            valueEl.textContent = `${Math.round(val)}${unit}`;
+            onChange(val);
+        });
+
+        controls.appendChild(input);
+        controls.appendChild(valueEl);
+        row.appendChild(controls);
+
+        return row;
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    _showFollowBadge(objectId) {
+        this._followBadge.innerHTML = `Following: <strong>${objectId}</strong> <span class="follow-badge-x">&#x2715;</span>`;
+        this._followBadge.style.display = 'flex';
+    }
+
+    // -----------------------------------------------------------------------------------------------------------------
+    _hideFollowBadge() {
+        this._followBadge.style.display = 'none';
     }
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -1895,11 +2630,15 @@ export class BabylonContainer {
 
 
         btn.callbacks.get('click').register(() => {
+            this.babylon.stopFollowing();
+            this._hideFollowBadge();
+            const fov = camera_data.fov != null ? camera_data.fov : this.babylon.config.camera.fov;
             this.babylon.setArcRotateCamera(camera_data.position,
                 camera_data.target,
                 camera_data.alpha,
                 camera_data.beta,
-                camera_data.radius);
+                camera_data.radius,
+                fov);
         })
 
         // Auto-adjust the grid columns to fit however many buttons exist now
@@ -1914,6 +2653,7 @@ export class BabylonContainer {
                                            fileName = "babylonjs.webm",
                                            fps = 60,
                                            videoBitsPerSecond = 12_000_000,
+                                           upscale = 1.0,
                                            enableTimeTicker = false,      // if true, updates this.top_bar_time every second while recording
                                        } = {}) {
         const engine = this.babylon.scene?.getEngine?.();
@@ -1973,8 +2713,8 @@ export class BabylonContainer {
 
         // -------- set higher internal resolution while recording ----------
         this.babylon._prevScaling = engine.getHardwareScalingLevel?.() ?? 1;
-        // halve the scaling level (i.e., render more pixels), but not below 0.25
-        engine.setHardwareScalingLevel(Math.max(0.25, this.babylon._prevScaling * 0.5));
+        const scaleDown = 1 / upscale;
+        engine.setHardwareScalingLevel(Math.max(0.25, this.babylon._prevScaling * scaleDown));
 
         // -------- build mix canvas ----------
         const mix = document.createElement('canvas');
@@ -2094,11 +2834,17 @@ export class BabylonContainer {
             stopTick();
 
             const blob = new Blob(chunks, {type: mime});
-            const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
-            a.download = fileName;
-            a.click();
-            setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+
+            if (this.babylon._pendingSavePath) {
+                this.babylon._sendBlobToServer(blob, fileName);
+                this.babylon._pendingSavePath = null;
+            } else {
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = fileName;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+            }
 
             try {
                 engine.setHardwareScalingLevel(this.babylon._prevScaling);
@@ -2167,6 +2913,17 @@ export class BabylonContainer {
         });
 
         this.babylon.callbacks.get('initialized').register(this._on_babylon_initialized.bind(this))
+
+        this.babylon.callbacks.get('add_camera').register((camera_data) => {
+            this.addCameraView(camera_data);
+        });
+
+        this.babylon.callbacks.get('follow_started').register((objectId) => {
+            this._showFollowBadge(objectId);
+        });
+        this.babylon.callbacks.get('follow_stopped').register(() => {
+            this._hideFollowBadge();
+        });
     }
 
     _on_babylon_initialized() {
@@ -2177,16 +2934,16 @@ export class BabylonContainer {
             alpha: this.babylon.camera.alpha,
             beta: this.babylon.camera.beta,
             radius: this.babylon.camera.radius,
+            fov: this.babylon.camera.fov,
         })
 
-        this.addCameraView({
-            name: 'top',
-            position: [0, 0, 6],
-            target: [0, 0, 0],
-            alpha: deg2rad(90),
-            beta: 0,
-            radius: 6
-        });
+        // Add camera views from config (if any)
+        const cameras = this.babylon.config.cameras;
+        if (Array.isArray(cameras)) {
+            for (const cam of cameras) {
+                this.addCameraView(cam);
+            }
+        }
     }
 
     _setConnectionStatus(connected, messages_per_second) {
@@ -2458,6 +3215,8 @@ export class BabylonContainer {
     /* -------------------------------------------------------------------------------------------------------------- */
     openDebugOverlay() {
         this.closeTerminalOverlay();
+        this.closeAssetsOverlay();
+        this.closeSettingsOverlay();
         this.debug_overlay.style.display = 'flex';
 
         const controlsHeight = this.babylon_controls.offsetHeight;

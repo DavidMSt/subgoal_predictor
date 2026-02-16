@@ -1523,3 +1523,183 @@ export class BabylonObjectLabeledLineDrawing extends BabylonLabeledLineDrawing {
         return v && typeof v === "object" && v instanceof BabylonObject;
     }
 }
+
+
+/* ===== PATH DRAWING ===== */
+export class BabylonPathDrawing extends BabylonDrawingObject {
+    constructor(id, scene, payload = {}) {
+        const defaults = {
+            pathColor: [1, 1, 1, 0.95],
+            pathWidth: 0.01,
+            groundY: 0,
+            lift: 0.001,
+        };
+        payload.config = {...defaults, ...(payload.config || {})};
+
+        // points live in data so they can be streamed via update()
+        const defaultData = {
+            points: [],   // [[x,y], [x,y,z], …] in z-up coords
+        };
+        payload.data = {...defaultData, ...(payload.data || {})};
+
+        super(id, scene, payload);
+    }
+
+    _applyCommon() {
+        if (!this._root) return;
+        for (const m of this._root.getChildMeshes()) {
+            m.isPickable = !!this.config.pickable;
+            m.metadata = m.metadata || {};
+            m.metadata.object = this;
+            m.renderingGroupId = 0;
+        }
+    }
+
+    _build() {
+        const pts = this.data.points;
+        if (!pts || pts.length < 2) return;
+
+        const {pathColor, pathWidth, groundY, lift} = this.config;
+        const floorY = (groundY ?? 0) + (lift ?? 0);
+        const halfW = Math.max(0.0005, pathWidth * 0.5);
+
+        const {c3, a} = this._toC3a(pathColor);
+        const mat = new StandardMaterial(`${this.id}_path_mat`, this.scene);
+        mat.diffuseColor = c3.clone();
+        mat.emissiveColor = c3.scale(0.6);
+        mat.specularColor = Color3.Black();
+        mat.alpha = a;
+        mat.backFaceCulling = false;
+
+        // Build one quad per segment to avoid twisting at corners
+        for (let i = 0; i < pts.length - 1; i++) {
+            const ax = pts[i][0] ?? 0;
+            const ay = pts[i][1] ?? 0;
+            const bx = pts[i + 1][0] ?? 0;
+            const by = pts[i + 1][1] ?? 0;
+
+            const dx = bx - ax;
+            const dy = by - ay;
+            const len = Math.max(1e-9, Math.hypot(dx, dy));
+            // Perpendicular in z-up coords
+            const nx = -dy / len * halfW;
+            const ny = dx / len * halfW;
+
+            const left = [
+                coordinatesToBabylon([ax + nx, ay + ny, floorY]),
+                coordinatesToBabylon([bx + nx, by + ny, floorY]),
+            ];
+            const right = [
+                coordinatesToBabylon([ax - nx, ay - ny, floorY]),
+                coordinatesToBabylon([bx - nx, by - ny, floorY]),
+            ];
+
+            const seg = MeshBuilder.CreateRibbon(
+                `${this.id}_seg_${i}`,
+                {pathArray: [left, right], sideOrientation: Mesh.DOUBLESIDE, updatable: false},
+                this.scene
+            );
+            seg.material = mat;
+            seg.parent = this._root;
+        }
+    }
+
+    update(data = {}) {
+        if (data.config) this.config = {...this.config, ...data.config};
+        if (data.data) this.data = {...this.data, ...data.data};
+        if (data.points) this.data.points = data.points;
+        if (data.position) this.setPosition(data.position);
+        this._disposeChildren();
+        this._build();
+        this._applyCommon();
+    }
+}
+
+
+/* ===== POINTS DRAWING ===== */
+export class BabylonPointsDrawing extends BabylonDrawingObject {
+    constructor(id, scene, payload = {}) {
+        const defaults = {
+            fillColor: [1, 1, 1, 0.8],
+            pointSize: 0.02,
+            groundY: 0,
+            lift: 0.002,
+        };
+        payload.config = {...defaults, ...(payload.config || {})};
+
+        const defaultData = {
+            points: [],
+        };
+        payload.data = {...defaultData, ...(payload.data || {})};
+
+        super(id, scene, payload);
+    }
+
+    _applyCommon() {
+        if (!this._root) return;
+        for (const m of this._root.getChildMeshes()) {
+            m.isPickable = !!this.config.pickable;
+            m.metadata = m.metadata || {};
+            m.metadata.object = this;
+        }
+    }
+
+    _build() {
+        const pts = this.data.points;
+        if (!pts || pts.length === 0) return;
+
+        const {fillColor, pointSize, groundY, lift} = this.config;
+        const floorY = (groundY ?? 0) + (lift ?? 0);
+        const radius = Math.max(0.001, pointSize * 0.5);
+
+        // Fill material (translucent)
+        const fillMat = this._makeTranslucentMat(`${this.id}_fill`, fillColor);
+
+        // Fill template disc
+        const fillTemplate = MeshBuilder.CreateDisc(
+            `${this.id}_fill_tmpl`,
+            {radius, tessellation: 24, sideOrientation: Mesh.DOUBLESIDE},
+            this.scene
+        );
+        fillTemplate.material = fillMat;
+        fillTemplate.isVisible = false;
+        fillTemplate.rotation.x = Math.PI / 2;
+        fillTemplate.parent = this._root;
+
+        // Instance fill at each point
+        for (let i = 0; i < pts.length; i++) {
+            const p = pts[i];
+            const pos = coordinatesToBabylon([p[0] ?? 0, p[1] ?? 0, floorY]);
+
+            const fillInst = fillTemplate.createInstance(`${this.id}_f_${i}`);
+            fillInst.position = pos;
+            fillInst.parent = this._root;
+        }
+    }
+
+    _makeTranslucentMat(id, rgba) {
+        const [r, g, b, a = 1] = rgba || [1, 1, 1, 1];
+        const col = new Color3(r, g, b);
+        const mat = new StandardMaterial(`${id}_mat`, this.scene);
+        mat.diffuseColor = col.clone();
+        mat.emissiveColor = col.scale(0.6);
+        mat.specularColor = Color3.Black();
+        mat.alpha = a;
+        mat.transparencyMode = Material.MATERIAL_ALPHABLEND;
+        mat.disableDepthWrite = true;
+        mat.needDepthPrePass = false;
+        mat.forceDepthWrite = false;
+        mat.backFaceCulling = false;
+        return mat;
+    }
+
+    update(data = {}) {
+        if (data.config) this.config = {...this.config, ...data.config};
+        if (data.data) this.data = {...this.data, ...data.data};
+        if (data.points) this.data.points = data.points;
+        if (data.position) this.setPosition(data.position);
+        this._disposeChildren();
+        this._build();
+        this._applyCommon();
+    }
+}

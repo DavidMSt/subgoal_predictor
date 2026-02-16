@@ -999,6 +999,7 @@ class GUISettings:
     logo_path: str = ''
     name: str = None
     enable_emergency_stop: bool = True
+    enable_terminal: bool = True
     bottom_group_size: list = dataclasses.field(default_factory=lambda: [3, 3])
     enable_top_bar: bool = True
     allow_multiple_instances: bool = False
@@ -1494,7 +1495,7 @@ class GUI:
             export=self.export_category.getPayload(),
             categories={k: v.getPayload() for k, v in self.categories.items()},
             bottom_group=self.bottom_group.getPayload(),
-            cli_terminal=self.cli_terminal.getPayload(),
+            cli_terminal=self.cli_terminal.getPayload() if self.settings.enable_terminal else None,
         )
 
         return payload

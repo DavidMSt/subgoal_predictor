@@ -971,7 +971,9 @@ export class GUI {
 
     /* -------------------------------------------------------------------------------------------------------------- */
     print(text, color = 'white') {
-        this.terminal.print(text, color);
+        if (this.terminal) {
+            this.terminal.print(text, color);
+        }
 
         // Loop through all the popups and print the text in them
         for (const popup_terminal of Object.values(this.popup_terminals)) {
@@ -1087,6 +1089,15 @@ export class GUI {
                 this._enableEmergencyStop = true;
                 this.emergency_container.style.display = '';
                 this.bottombar.classList.remove('no-emergency');
+            }
+
+            // Handle terminal option
+            if (config.options && config.options.enable_terminal === false) {
+                this.terminal_container.style.display = 'none';
+                this.bottombar.classList.add('no-terminal');
+            } else {
+                this.terminal_container.style.display = '';
+                this.bottombar.classList.remove('no-terminal');
             }
 
             // Handle message rate display option
@@ -1360,8 +1371,10 @@ export class GUI {
                 this.terminal.print('Connected to Server. Welcome!');
             }
         } else {
-            this.terminal.destroy();
-            this.terminal_container.innerHTML = '';
+            if (this.terminal) {
+                this.terminal.destroy();
+                this.terminal_container.innerHTML = '';
+            }
             this.statusIndicator.classList.remove('connected');
             this.msgRateDisplay.textContent = '---';
             this.bottombar.style.display = 'none';

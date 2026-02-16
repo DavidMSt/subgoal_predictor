@@ -253,6 +253,7 @@ export class BabylonFloorInstanced extends BabylonObject {
             tile_size: 0.5,
             tiles_x: 10,
             tiles_y: 10,
+            offset: [0, 0],
             color1: [0.5, 0.5, 0.5],
             color2: [0.65, 0.65, 0.65],
             texture_1: 'drawing_board.png',
@@ -268,38 +269,40 @@ export class BabylonFloorInstanced extends BabylonObject {
 
         this.config = {...defaultConfig, ...this.config};
         const {tile_size, tiles_x, tiles_y} = this.config;
+        const offsetX = this.config.offset[0] || 0;
+        const offsetZ = -(this.config.offset[1] || 0);
 
         // --- Create materials ---
-        this.material1 = new StandardMaterial(id + '_mat1', scene);
+        this.material1 = new StandardMaterial(id + '_mat1', this.scene);
         if (this.config.texture_1) {
             const tex1 = loadTexture(this.config.texture_1);
-            this.material1.diffuseTexture = new Texture(tex1, scene);
+            this.material1.diffuseTexture = new Texture(tex1, this.scene);
         } else {
             this.material1.diffuseColor = getBabylonColor3(this.config.color1);
         }
         this.material1.specularColor = getBabylonColor3([0, 0, 0]);
-        this.material1.emissiveColor = getBabylonColor3([0, 0, 0]);
+        adjustMaterialBrightness(this.material1, this.config.brightness_1);
 
-        this.material2 = new StandardMaterial(id + '_mat2', scene);
+        this.material2 = new StandardMaterial(id + '_mat2', this.scene);
         if (this.config.texture_2) {
             const tex2 = loadTexture(this.config.texture_2);
-            this.material2.diffuseTexture = new Texture(tex2, scene);
+            this.material2.diffuseTexture = new Texture(tex2, this.scene);
         } else {
             this.material2.diffuseColor = getBabylonColor3(this.config.color2);
         }
         this.material2.specularColor = getBabylonColor3([0, 0, 0]);
-        this.material2.emissiveColor = getBabylonColor3([0, 0, 0]);
+        adjustMaterialBrightness(this.material2, this.config.brightness_2);
 
         if (this.config.border_type === 'tile') {
-            this.borderMaterial = new StandardMaterial(id + '_mat_border', scene);
+            this.borderMaterial = new StandardMaterial(id + '_mat_border', this.scene);
             if (this.config.border_texture) {
                 const texB = loadTexture(this.config.border_texture);
-                this.borderMaterial.diffuseTexture = new Texture(texB, scene);
+                this.borderMaterial.diffuseTexture = new Texture(texB, this.scene);
             } else {
                 this.borderMaterial.diffuseColor = getBabylonColor3(this.config.border_color);
             }
             this.borderMaterial.specularColor = getBabylonColor3([0, 0, 0]);
-            this.borderMaterial.emissiveColor = getBabylonColor3([0, 0, 0]);
+            adjustMaterialBrightness(this.borderMaterial, this.config.border_texture_brightness);
         }
 
         // --- Create invisible base tile meshes (flat on XZ plane) ---
@@ -308,7 +311,7 @@ export class BabylonFloorInstanced extends BabylonObject {
             const mesh = MeshBuilder.CreateGround(
                 id + '_' + name,
                 {width: tile_size, height: tile_size},
-                scene
+                this.scene
             );
             mesh.material = material;
             mesh.isVisible = false;
@@ -341,8 +344,8 @@ export class BabylonFloorInstanced extends BabylonObject {
                 const inst = sourceMesh.createInstance(id + `_tile_${c}_${r}`);
                 // Map grid x->world x, grid y->world -z
                 inst.isPickable = false;
-                inst.position.x = (c - tiles_x / 2 + 0.5) * tile_size;
-                inst.position.z = -(r - tiles_y / 2 + 0.5) * tile_size;
+                inst.position.x = (c - tiles_x / 2 + 0.5) * tile_size + offsetX;
+                inst.position.z = -(r - tiles_y / 2 + 0.5) * tile_size + offsetZ;
                 this.tiles[r][c] = inst;
             }
         }
@@ -352,18 +355,18 @@ export class BabylonFloorInstanced extends BabylonObject {
             const halfX = tile_size * tiles_x / 2;
             const halfZ = tile_size * tiles_y / 2;
             const path = [
-                new Vector3(-halfX, 0.01, -halfZ),
-                new Vector3(halfX, 0.01, -halfZ),
-                new Vector3(halfX, 0.01, halfZ),
-                new Vector3(-halfX, 0.01, halfZ),
-                new Vector3(-halfX, 0.01, -halfZ)
+                new Vector3(-halfX + offsetX, 0.01, -halfZ + offsetZ),
+                new Vector3(halfX + offsetX, 0.01, -halfZ + offsetZ),
+                new Vector3(halfX + offsetX, 0.01, halfZ + offsetZ),
+                new Vector3(-halfX + offsetX, 0.01, halfZ + offsetZ),
+                new Vector3(-halfX + offsetX, 0.01, -halfZ + offsetZ)
             ];
             const borderTube = MeshBuilder.CreateTube(
                 id + '_borderTube',
                 {path, radius: this.config.border_width / 2, sideOrientation: MeshBuilder.DOUBLESIDE},
-                scene
+                this.scene
             );
-            const tubeMat = new StandardMaterial(id + '_borderLineMat', scene);
+            const tubeMat = new StandardMaterial(id + '_borderLineMat', this.scene);
             tubeMat.diffuseColor = getBabylonColor3(this.config.border_color);
             tubeMat.emissiveColor = getBabylonColor3(this.config.border_color);
             tubeMat.specularColor = getBabylonColor3([0, 0, 0]);

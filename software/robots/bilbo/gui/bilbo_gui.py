@@ -34,6 +34,7 @@ MDNS_HOSTNAME = "bilbolab"  # Will be accessible as http://bilbolab.local/gui (w
 class BILBO_GUI_Settings:
     enable_camera: bool = False
     enable_emergency_stop: bool = False
+    enable_terminal: bool = True
     bottom_group_size: list = dataclasses.field(default_factory=lambda: [3, 3])
     enable_top_bar: bool = True
     allow_multiple_instances: bool = False
@@ -89,6 +90,7 @@ class BILBO_Application_GUI:
             run_js=True,
             options={
                 'enable_emergency_stop': self.settings.enable_emergency_stop,
+                'enable_terminal': self.settings.enable_terminal,
                 'bottom_group_size': self.settings.bottom_group_size,
                 'enable_top_bar': self.settings.enable_top_bar,
                 'allow_multiple_instances': self.settings.allow_multiple_instances,

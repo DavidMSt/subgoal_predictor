@@ -146,21 +146,12 @@ export function adjustMaterialBrightness(material, factor) {
     // Clamp to avoid negative colors
     const f = Math.max(0, factor);
 
-    // If there's a texture, tint it by setting diffuseColor to (f,f,f)
+    // Scale diffuseColor which multiplies the texture before lighting.
+    // Values > 1 are allowed and make the surface brighter while preserving shadows.
     if (material.diffuseTexture) {
         material.diffuseColor = new Color3(f, f, f);
     } else {
-        // No texture? just scale the existing color
         material.diffuseColor = material.diffuseColor.scale(f);
-    }
-
-    // Optionally, for factor > 1 you can add a bit of emissive to
-    // prevent over‐clamping and give a subtle “glow” effect:
-    if (f > 1.0) {
-        const e = f - 1.0;
-        material.emissiveColor = new Color3(e, e, e);
-    } else {
-        material.emissiveColor = Color3.Black();
     }
 }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+import base64
 import dataclasses
 import math
 import os
@@ -350,12 +351,136 @@ class BabylonObjectGroup:
 
 
 # ======================================================================================================================
+@dataclasses.dataclass
+class BabylonCamera:
+    name: str = 'Camera'
+    target: list[float] = dataclasses.field(default_factory=lambda: [0, 0, 0])
+    alpha: float = math.radians(-18)
+    beta: float = math.radians(70)
+    radius: float = 3.5
+    fov: float = math.radians(65)
+    radius_lower_limit: float = 0.5
+    radius_upper_limit: float = 10.0
+
+    def __post_init__(self):
+        if self.radius > self.radius_upper_limit:
+            import warnings
+            warnings.warn(
+                f"BabylonCamera '{self.name}': radius ({self.radius}) exceeds "
+                f"radius_upper_limit ({self.radius_upper_limit})",
+                stacklevel=2,
+            )
+
+    def to_dict(self) -> dict:
+        return {
+            'name': self.name,
+            'target': list(self.target),
+            'alpha': self.alpha,
+            'beta': self.beta,
+            'radius': self.radius,
+            'fov': self.fov,
+            'radius_lower_limit': self.radius_lower_limit,
+            'radius_upper_limit': self.radius_upper_limit,
+        }
+
+
+# ======================================================================================================================
+@dataclasses.dataclass
+class BabylonScene:
+    """Fog and atmosphere settings.
+
+    When ``fog_auto_scale`` is True, the fog density is automatically scaled
+    with the camera radius so that the apparent fog strength stays constant
+    regardless of zoom level.  The ``fog_density`` value is then treated as
+    the density at ``fog_reference_radius`` (defaults to the camera's initial
+    radius).  Set ``fog_reference_radius`` explicitly to anchor the density to
+    a specific viewing distance.
+    """
+    add_fog: bool = True
+    fog_color: list[float] = dataclasses.field(default_factory=lambda: [31 / 255, 32 / 255, 35 / 255])
+    fog_density: float = 0.08
+    fog_mode: str = 'exp2'
+    fog_auto_scale: bool = True
+    fog_reference_radius: float = 0
+
+    def to_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+
+# ======================================================================================================================
+@dataclasses.dataclass
+class BabylonLights:
+    """Scene lighting: one hemispheric + two directional lights."""
+    hemispheric_direction: list[float] = dataclasses.field(default_factory=lambda: [2, -1, 0])
+    hemispheric_intensity: float = 0.5
+    hemispheric_ground_color: list[float] = dataclasses.field(default_factory=lambda: [0, 0, 0])
+    directional_direction: list[float] = dataclasses.field(default_factory=lambda: [-1, -1, -1])
+    directional_position: list[float] = dataclasses.field(default_factory=lambda: [1, 1, 10])
+    directional_intensity: float = 1.1
+    directional_shadows: bool = True
+    directional_shadow_darkness: float = 0.4
+    directional2_direction: list[float] = dataclasses.field(default_factory=lambda: [1, -1, -1])
+    directional2_position: list[float] = dataclasses.field(default_factory=lambda: [1, -1, 10])
+    directional2_intensity: float = 0.4
+    directional2_shadows: bool = False
+    directional2_shadow_darkness: float = 0.4
+
+    def to_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+
+# ======================================================================================================================
+@dataclasses.dataclass
+class BabylonUI:
+    """HUD / overlay text settings."""
+    text_color: list[float] = dataclasses.field(default_factory=lambda: [1, 1, 1])
+    font_size: int = 40
+
+    def to_dict(self) -> dict:
+        return dataclasses.asdict(self)
+
+
+# ======================================================================================================================
+@dataclasses.dataclass
+class BabylonConfig:
+    """Complete visualization config. Does NOT include runtime settings (title, host, port)."""
+    camera: BabylonCamera = dataclasses.field(default_factory=BabylonCamera)
+    scene: BabylonScene = dataclasses.field(default_factory=BabylonScene)
+    lights: BabylonLights = dataclasses.field(default_factory=BabylonLights)
+    ui: BabylonUI = dataclasses.field(default_factory=BabylonUI)
+
+    background_color: list[float] = dataclasses.field(default_factory=lambda: [31 / 255, 32 / 255, 35 / 255])
+    ambient_color: list[float] = dataclasses.field(default_factory=lambda: [0.5, 0.5, 0.5])
+    show_coordinate_system: bool = True
+    coordinate_system_length: float = 0.5
+
+    def to_dict(self) -> dict:
+        return {
+            'camera': self.camera.to_dict(),
+            'scene': self.scene.to_dict(),
+            'lights': self.lights.to_dict(),
+            'ui': self.ui.to_dict(),
+            'background_color': list(self.background_color),
+            'ambient_color': list(self.ambient_color),
+            'show_coordinate_system': self.show_coordinate_system,
+            'coordinate_system_length': self.coordinate_system_length,
+        }
+
+
+# ======================================================================================================================
 @callback_definition
 class BabylonCallbacks:
     new_client: CallbackContainer
     client_disconnected: CallbackContainer
     client_loaded: CallbackContainer
     object_event: CallbackContainer
+    recording_started: CallbackContainer
+    recording_stopped: CallbackContainer
+    recording_saved: CallbackContainer
+    object_click: CallbackContainer
+    floor_doubleclick: CallbackContainer
+    floor_middleclick: CallbackContainer
+    floor_rightclick: CallbackContainer
 
 
 # ======================================================================================================================
@@ -390,46 +515,20 @@ class BabylonVisualization:
                  id: str,
                  host='localhost',
                  port=9000,
-                 babylon_config=None):
+                 config: BabylonConfig | None = None,
+                 babylon_config: dict | None = None):
 
-        babylon_default_config = {
-            "title": "ABCDEF",
-            "websocket_host": "localhost",
-            "websocket_port": "9000",
-            "coordinate_system_length": 0.5,
-            "show_coordinate_system": True,
+        # Build the internal config dict from typed config or defaults
+        default = BabylonConfig() if config is None else config
+        config_dict = default.to_dict()
 
-            "background_color": [31 / 255, 32 / 255, 35 / 255],
-            "ambient_color": [0.5, 0.5, 0.5],
+        # Runtime keys (not part of BabylonConfig)
+        config_dict['title'] = 'ABCDEF'
+        config_dict['websocket_host'] = host
+        config_dict['websocket_port'] = str(port)
 
-            "scene": {
-                "add_fog": True,
-                "fog_color": [31 / 255, 32 / 255, 35 / 255],
-                "fog_density": 0.08,
-                "fog_mode": "exp2",
-            },
-
-            "camera": {
-                "position": [2, -2, 1],
-                "target": [0, 0, 0],
-                "alpha": math.radians(-18),
-                "beta": math.radians(70),
-                "radius": 3.5,
-                "fov": math.radians(65),
-                "radius_lower_limit": 0.5,
-                "radius_upper_limit": 6,
-            },
-
-            "lights": {
-                "hemispheric_direction": [2, -1, 0],
-            },
-
-            "ui": {
-                "text_color": [1, 1, 1],
-                "font_size": 40,
-            },
-        }
-        self.config = update_dict(babylon_default_config, babylon_config)
+        # Legacy dict override (for existing callers passing raw dicts)
+        self.config = update_dict(config_dict, babylon_config)
 
         self.id = id
 
@@ -443,6 +542,7 @@ class BabylonVisualization:
 
         self.objects = {}
         self._clients = []
+        self._cameras = []
 
         self.update_message = Babylon_UpdateMessage()
 
@@ -451,6 +551,12 @@ class BabylonVisualization:
         register_exit_callback(self.close)
 
         self._thread = None
+
+        # Recording state
+        self._is_recording = False
+        self._recording_save_path: str | None = None
+        self._recording_chunks: list[bytes] = []
+        self._recording_total_chunks: int = 0
 
     # ------------------------------------------------------------------------------------------------------------------
     def init(self):
@@ -481,6 +587,68 @@ class BabylonVisualization:
 
         self.server.stop()
         self.logger.info(f"Babylon visualization stopped")
+
+    # === RECORDING ====================================================================================================
+    @property
+    def is_recording(self) -> bool:
+        return self._is_recording
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def start_recording(self,
+                        filename: str = "babylonjs.webm",
+                        fps: int = 60,
+                        bitrate: int = 12_000_000,
+                        save_path: str | None = None,
+                        overlay: bool = False,
+                        upscale: float = 1.0):
+        """Start recording the BabylonJS visualization.
+
+        Args:
+            filename: Output filename.
+            fps: Recording frames per second.
+            bitrate: Video bitrate in bits/second.
+            save_path: If set, the recording will be saved to this server-side path
+                       instead of triggering a browser download.
+            overlay: If True, include HUD overlay in the recording.
+            upscale: Resolution upscale factor.
+        """
+        if self._is_recording:
+            self.logger.warning("Already recording.")
+            return
+
+        if save_path:
+            self._recording_save_path = os.path.expanduser(save_path)
+            self._recording_chunks = []
+            self._recording_total_chunks = 0
+
+        message = {
+            'type': 'command',
+            'command': 'startRecording',
+            'params': {
+                'filename': filename,
+                'fps': fps,
+                'bitrate': bitrate,
+                'save_path': save_path,
+                'overlay': overlay,
+                'upscale': upscale,
+            }
+        }
+        self.send(message)
+        self.logger.info(f"Sent start recording command: {filename}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def stop_recording(self):
+        """Stop the current recording."""
+        if not self._is_recording:
+            self.logger.warning("Not currently recording.")
+            return
+
+        message = {
+            'type': 'command',
+            'command': 'stopRecording',
+        }
+        self.send(message)
+        self.logger.info("Sent stop recording command.")
 
     # ------------------------------------------------------------------------------------------------------------------
     @property
@@ -612,9 +780,37 @@ class BabylonVisualization:
         self.send(message)
 
     # ------------------------------------------------------------------------------------------------------------------
+    def add_camera(self, camera: BabylonCamera):
+        """Add a named camera view button to the UI."""
+        cam_dict = camera.to_dict()
+        self._cameras.append(cam_dict)
+        self.send({'type': 'add_camera', 'camera': cam_dict})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def center_camera_on(self, obj):
+        """Start following a BabylonObject with the camera.
+
+        Args:
+            obj: A BabylonObject instance or an object id string.
+        """
+        object_id = obj if isinstance(obj, str) else obj.uid
+        self.send({'type': 'follow_object', 'object_id': object_id})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def stop_following(self):
+        """Stop following any object with the camera."""
+        self.send({'type': 'stop_following'})
+
+    # ------------------------------------------------------------------------------------------------------------------
     def getPayload(self):
+        config = dict(self.config)
+        config_cameras = list(config.get('cameras', []))
+        all_cameras = config_cameras + list(self._cameras)
+        if all_cameras:
+            config['cameras'] = all_cameras
+
         payload = {
-            'config': self.config,
+            'config': config,
             'objects': {k: v.getPayload() for k, v in self.objects.items()},
         }
 
@@ -641,7 +837,32 @@ class BabylonVisualization:
 
     # ------------------------------------------------------------------------------------------------------------------
     def onEvent(self, event_message, sender):
-        self.logger.important(f"Received event message: {event_message} from {sender}")
+        # self.logger.important(f"Received event message: {event_message} from {sender}")
+
+        # Handle recording events from the browser
+        if isinstance(event_message, dict) and 'event' in event_message:
+            event = event_message['event']
+            if isinstance(event, dict):
+                event_type = event.get('type')
+                if event_type == 'record_start':
+                    self._is_recording = True
+                    filename = event.get('data', {}).get('fileName', '')
+                    self.callbacks.recording_started.call(filename)
+                elif event_type == 'record_stop':
+                    self._is_recording = False
+                    self.callbacks.recording_stopped.call()
+                elif event_type == 'object_click':
+                    object_id = event.get('object_id', '')
+                    self.callbacks.object_click.call(object_id)
+                elif event_type == 'floor_doubleclick':
+                    pos = event.get('position', [0, 0, 0])
+                    self.callbacks.floor_doubleclick.call(pos[0], pos[1])
+                elif event_type == 'floor_middleclick':
+                    pos = event.get('position', [0, 0, 0])
+                    self.callbacks.floor_middleclick.call(pos[0], pos[1])
+                elif event_type == 'floor_rightclick':
+                    pos = event.get('position', [0, 0, 0])
+                    self.callbacks.floor_rightclick.call(pos[0], pos[1])
 
     # ------------------------------------------------------------------------------------------------------------------
 
@@ -685,6 +906,10 @@ class BabylonVisualization:
                 ...
             case 'event':
                 self._handleEventMessage(message, sender)
+            case 'recordingData':
+                self._handle_recording_data(message)
+            case 'recordingComplete':
+                self._handle_recording_complete(message)
             case _:
                 self.logger.warning(f"Unknown message type: {message['type']}")
 
@@ -715,8 +940,9 @@ class BabylonVisualization:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleEventMessage(self, message, sender=None):
-        if 'id' not in message:
-            self.logger.warning(f"Event message does not contain an id: {message}")
+        # Scene-level events (no object id)
+        if 'id' not in message or message['id'] is None:
+            self.onEvent(message, sender)
             return
 
         object = self.getObjectByUID(message['id'])
@@ -725,3 +951,49 @@ class BabylonVisualization:
             self.logger.warning(f"Object with id {message['id']} not found.")
 
         object.onEvent(message, sender)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handle_recording_data(self, message):
+        chunk_index = message.get('chunkIndex', 0)
+        total_chunks = message.get('totalChunks', 0)
+        data_b64 = message.get('data', '')
+
+        if chunk_index == 0:
+            self._recording_chunks = []
+            self._recording_total_chunks = total_chunks
+
+        chunk_bytes = base64.b64decode(data_b64)
+        self._recording_chunks.append(chunk_bytes)
+        self.logger.debug(f"Received recording chunk {chunk_index + 1}/{total_chunks} "
+                          f"({len(chunk_bytes)} bytes)")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handle_recording_complete(self, message):
+        file_name = message.get('fileName', 'recording.webm')
+
+        if not self._recording_save_path:
+            self.logger.warning("Received recording data but no save_path was set.")
+            self._recording_chunks = []
+            return
+
+        save_path = self._recording_save_path
+
+        # Ensure directory exists
+        save_dir = os.path.dirname(save_path)
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+
+        # Assemble and write
+        full_data = b''.join(self._recording_chunks)
+        with open(save_path, 'wb') as f:
+            f.write(full_data)
+
+        self.logger.info(f"Recording saved to {save_path} ({len(full_data)} bytes, "
+                         f"{len(self._recording_chunks)} chunks)")
+
+        # Cleanup
+        self._recording_chunks = []
+        self._recording_total_chunks = 0
+        self._recording_save_path = None
+
+        self.callbacks.recording_saved.call(save_path)

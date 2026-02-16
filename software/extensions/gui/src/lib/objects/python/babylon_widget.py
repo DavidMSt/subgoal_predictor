@@ -35,4 +35,33 @@ class BabylonWidget(Widget):
 
     def set_babylon(self, babylon: BabylonVisualization) -> None:
         self.babylon = babylon
+
+    # === RECORDING ====================================================================================================
+    def start_recording(self,
+                        filename: str = "babylonjs.webm",
+                        fps: int = 60,
+                        bitrate: int = 12_000_000,
+                        save_path: str | None = None,
+                        overlay: bool = False,
+                        upscale: float = 1.0):
+        """Start recording the BabylonJS visualization. Delegates to self.babylon."""
+        if self.babylon is None:
+            return
+        self.babylon.start_recording(
+            filename=filename, fps=fps, bitrate=bitrate,
+            save_path=save_path, overlay=overlay, upscale=upscale,
+        )
+
+    def stop_recording(self):
+        """Stop the current recording. Delegates to self.babylon."""
+        if self.babylon is None:
+            return
+        self.babylon.stop_recording()
+
+    @property
+    def is_recording(self) -> bool:
+        if self.babylon is None:
+            return False
+        return self.babylon.is_recording
+
     # === PRIVATE METHODS ==============================================================================================

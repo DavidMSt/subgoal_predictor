@@ -1,63 +1,66 @@
+import math
 import time
 
 import numpy as np
 
-from extensions.babylon.src.babylon import BabylonVisualization
+from extensions.babylon.src.standalone import StandaloneBabylon
+from extensions.babylon.src.scenarios import ArenaScenario
 from extensions.babylon.src.lib.objects.bilbo.bilbo import BabylonBilbo
-from extensions.babylon.src.lib.objects.floor.floor import SimpleFloor
-from extensions.babylon.src.lib.objects.box.box import Box, Wall, WallFancy
+from extensions.babylon.src.lib.objects.box.box import Box
 
 
-def example_simple_1():
-    babylon = BabylonVisualization(id='babylon', host='localhost', port=9000)
-    babylon.init()
+def example_standalone():
+    """Standalone BabylonJS visualization with three BILBOs driving in circles inside a walled arena."""
+
+    # Create and start the standalone visualization (opens browser automatically)
+    scenario = ArenaScenario(size=3)
+    babylon = StandaloneBabylon(title="BILBO Standalone Demo", ws_port=9000, http_port=9200,
+                                scenario=scenario)
     babylon.start()
 
-    floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
-    babylon.addObject(floor)
+    # Three BILBOs with distinct colors
+    robots = [
+        BabylonBilbo('bilbo1', color=[0.7, 0.1, 0.1], text='1'),
+        BabylonBilbo('bilbo2', color=[0.1, 0.5, 0.8], text='2'),
+        BabylonBilbo('bilbo3', color=[0.2, 0.65, 0.2], text='3'),
+    ]
+    for robot in robots:
+        babylon.addObject(robot)
 
-    box1 = Box('box1', size={'x': 0.1, 'y': 0.1, 'z': 0.1}, alpha=0.6)
-    babylon.addObject(box1)
+    # A small marker box in the center
+    marker = Box('marker', size={'x': 0.08, 'y': 0.08, 'z': 0.08}, color=[1, 0.8, 0.2])
+    babylon.addObject(marker)
+    marker.setPosition(z=0.04)
 
-    wall1 = WallFancy('wall1', length=3, texture='wood4.png', include_end_caps=True)
-    wall1.setPosition(y=1.5)
-    babylon.addObject(wall1)
+    # Animate: each BILBO orbits the center at a different radius and speed
+    orbits = [
+        {'radius': 0.5, 'speed': 0.8,  'phase': 0},
+        {'radius': 0.9, 'speed': -0.5, 'phase': 2 * np.pi / 3},
+        {'radius': 1.2, 'speed': 0.3,  'phase': 4 * np.pi / 3},
+    ]
 
-    wall2 = WallFancy('wall2', length=3, texture='wood4.png', include_end_caps=True)
-    babylon.addObject(wall2)
-    wall2.setPosition(y=-1.5)
+    t0 = time.time()
+    dt = 0.02
 
-    wall3 = WallFancy('wall3', length=3, texture='wood4.png')
-    wall3.setPosition(x=1.5)
-    wall3.setAngle(np.pi / 2)
-    babylon.addObject(wall3)
+    try:
+        while True:
+            t = time.time() - t0
+            for robot, orbit in zip(robots, orbits):
+                angle = orbit['speed'] * t + orbit['phase']
+                x = orbit['radius'] * math.cos(angle)
+                y = orbit['radius'] * math.sin(angle)
+                # theta = heading tangent to the circle
+                theta = angle + (math.pi / 2 if orbit['speed'] > 0 else -math.pi / 2)
+                # gentle rocking psi (pitch) for visual flair
+                psi = 0.05 * math.sin(3 * t + orbit['phase'])
+                robot.set_state(x=x, y=y, theta=theta, psi=psi)
 
-    wall4 = WallFancy('wall4', length=3, texture='wood4.png')
-    wall4.setPosition(x=-1.5)
-    wall4.setAngle(np.pi / 2)
-    babylon.addObject(wall4)
-
-    bilbo1 = BabylonBilbo('bilbo1', color=[156 / 255, 98 / 255, 98 / 255], )
-    babylon.addObject(bilbo1)
-
-    bilbo1.setPosition(y=1)
-    bilbo1.set_state(theta=np.pi / 4, psi=np.pi / 4)
-
-    bilbo2 = BabylonBilbo('bilbo2', color=[100 / 255, 125 / 255, 156 / 255], text='2', y=-0.5)
-    babylon.addObject(bilbo2)
-
-    bilbo3 = BabylonBilbo('bilbo3', color=[78 / 255, 115 / 255, 78 / 255], text='3', x=-0.5)
-    babylon.addObject(bilbo3)
-
-    box1.setPosition(z=0.2)
-
-    while True:
-        # box1.setPosition(x=box1.data.x + 0.01)
-        # box1.setPosition(y=box1.data.y + 0.01)
-        # if box1.data.x > 1:
-        #     box1.setPosition(x=0, y=0)
-        time.sleep(0.01)
+            time.sleep(dt)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        babylon.close()
 
 
 if __name__ == '__main__':
-    example_simple_1()
+    example_standalone()
