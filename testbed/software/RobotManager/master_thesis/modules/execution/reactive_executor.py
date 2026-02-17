@@ -47,6 +47,11 @@ class ReactiveExecutor(MotionExecutorBase):
     def clear(self):
         self._lcm.clear_goal()
 
+    @property
+    def last_trajectory(self):
+        """Best trajectory from the last controller step (for visualization)."""
+        return getattr(self._lcm.controller, 'last_trajectory', None)
+
     # ── Helpers ─────────────────────────────────────────────────────
 
     def set_lwr_cont(self, lwr_cont: LocalWorldContainer):

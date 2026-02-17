@@ -64,6 +64,9 @@ class MPPIController(LocalController):
         # Warm start: previous control sequence
         self._prev_controls = np.zeros((config.horizon, 2))
 
+        # Best trajectory from last compute_control call (for visualization)
+        self.last_trajectory: Optional[np.ndarray] = None
+
     def compute_control(
         self,
         state: np.ndarray,
@@ -115,6 +118,9 @@ class MPPIController(LocalController):
 
         # Weighted average of control sequences
         U_optimal = np.sum(weights[:, None, None] * U_candidates, axis=0)  # [H, 2]
+
+        # Store optimal trajectory for visualization
+        self.last_trajectory = self._rollout(state, U_optimal)
 
         # Warm start for next iteration (shift by 1, repeat last)
         self._prev_controls[:-1] = U_optimal[1:]

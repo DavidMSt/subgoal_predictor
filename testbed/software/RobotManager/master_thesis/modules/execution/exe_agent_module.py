@@ -27,10 +27,8 @@ class EXEAgentModule:
         # Phase registry (same as MP module pattern)
         self._phases: OrderedDict[str, MPPhaseContainer] = OrderedDict()
 
-        # Execution state
-        self._active_phase: str = 'idle'
+        # Transient flag for within-tick phase transitions
         self._pending_end: bool = False
-        self._queued_phases: list[str] = []
 
         # Create and register idle phase
         self._create_idle_phase()
@@ -51,19 +49,19 @@ class EXEAgentModule:
         if name not in self._phases:
             raise KeyError(f"Unknown phase '{name}'")
 
-        self.logger.info(f"activate_phase called: name={name}, current_active={self._active_phase}, pending_end={self._pending_end}, reset={reset}")
+        self.logger.info(f"activate_phase called: name={name}, current_active={self.exe_cont.state.active_phase}, pending_end={self._pending_end}, reset={reset}")
 
         if reset:
             self._phases[name].state.reset()
 
         self._pending_end = False
 
-        if cut_current or self._active_phase == 'idle':
-            self._active_phase = name
+        if cut_current or self.exe_cont.state.active_phase == 'idle':
+            self.exe_cont.state.active_phase = name
             self.exe_cont.state.execution_mode = 'phase'
             self.logger.info(f"Active phase set to '{name}', mode={self.exe_cont.state.execution_mode}")
         else:
-            self._queued_phases.append(name)
+            self.exe_cont.state.queued_phases.append(name)
             self.logger.info(f"Phase '{name}' queued for execution")
 
     def step(self) -> np.ndarray:
@@ -74,7 +72,7 @@ class EXEAgentModule:
             self._pending_end = False
             self._transition_phase()
 
-        phase = self._phases[self._active_phase]
+        phase = self._phases[self.exe_cont.state.active_phase]
 
         # Get current control from phase container
         u = self._step_phase(phase)
@@ -101,7 +99,7 @@ class EXEAgentModule:
         if state.ticks_left == 0:
             state.index += 1
             if state.index >= len(config.inputs):
-                if self._active_phase != 'idle':
+                if self.exe_cont.state.active_phase != 'idle':
                     self._pending_end = True
                 else:
                     state.index = 0  # Idle loops forever
@@ -112,7 +110,7 @@ class EXEAgentModule:
 
     def _transition_phase(self):
         """Handle phase transition when current phase ends."""
-        active_phase_name = self._active_phase
+        active_phase_name = self.exe_cont.state.active_phase
 
         # Track completed phase
         if active_phase_name != 'idle':
@@ -124,13 +122,13 @@ class EXEAgentModule:
                 del self._phases[active_phase_name]
 
         # Activate next queued phase or go to idle
-        if self._queued_phases:
-            next_phase = self._queued_phases.pop(0)
-            self._active_phase = next_phase
+        if self.exe_cont.state.queued_phases:
+            next_phase = self.exe_cont.state.queued_phases.pop(0)
+            self.exe_cont.state.active_phase = next_phase
             self.logger.info(f"Phase '{active_phase_name}' ended ({self.agent_cont.state}), transitioning to '{next_phase}'")
         else:
             # Set to idle phase
-            self._active_phase = 'idle'
+            self.exe_cont.state.active_phase = 'idle'
 
             self.exe_cont.state.execution_mode = 'idle'
 
@@ -167,7 +165,7 @@ class EXEAgentModule:
     @property
     def active_phase(self) -> str:
         """Get the name of the currently active phase."""
-        return self._active_phase
+        return self.exe_cont.state.active_phase
 
     @property
     def phases(self) -> dict[str, MPPhaseContainer]:

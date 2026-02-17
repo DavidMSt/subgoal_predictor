@@ -67,6 +67,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent, ABC):
         self.sgm = SubgoalManager(
             planner=self.planner,
             executor=self.executor,
+            ta_cont=self.tam.ta_container,
             logger=self.logger,
         )
 
@@ -112,9 +113,6 @@ class FRODOUniversalAgent(FRODOGeneralAgent, ABC):
 
             # Also update task's assigned agent (bidirectional)
             chosen_task.assigned_agent = self.container
-
-            # Notify SubgoalManager
-            self.sgm.assign_task(chosen_task)
 
             # Write decision to shared dict (for simulation to detect completion and conflicts)
             local_decisions = self.ta_cont.state.local_decisions
@@ -165,10 +163,9 @@ class FRODOUniversalAgent(FRODOGeneralAgent, ABC):
 
     @assigned_task.setter
     def assigned_task(self, task: TaskContainer):
-        """Set assigned task and notify SubgoalManager."""
+        """Set assigned task via TA container."""
         assert isinstance(task, TaskContainer)
         self.tam.ta_container.assigned_task = task
-        self.sgm.assign_task(task)
 
     # ---------- Motion Planning ----------
     @property

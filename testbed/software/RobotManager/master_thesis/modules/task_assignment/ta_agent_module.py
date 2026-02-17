@@ -126,33 +126,6 @@ class TAAgentModule():
         cost_vector = [self.distance_fun(self.agent_cont, task.container) for task in tasks]
         return cost_vector
     
-    def assign_task(self, task_id: str) -> None:
-        """Assign a task to this agent (centralized assignment)"""
-        self.ta_container._assigned_tasks.append(task_id)
-        if self.ta_container.current_task_id is None:
-            self.ta_container.current_task_id = task_id
-        self.logger.info(f"Agent {self.agent_id} assigned task {task_id}")
-
-    def get_current_task_goal(self, tasks_dict: dict) -> tuple[float, float] | None:
-        """Get goal position from current task"""
-        if self.ta_container.current_task_id is None:
-            return None
-        task = tasks_dict[self.ta_container.current_task_id]
-        return (task.container.x, task.container.y)
-
-    def mark_task_complete(self):
-        """Mark current task as complete, move to next"""
-        if self.ta_container.current_task_id:
-            self.logger.info(f"Agent {self.agent_id}: Task {self.ta_container.current_task_id} completed")
-            self.ta_container.tasks_completed += 1
-            self.ta_container.current_task_id = None
-
-            # Move to next task in queue if available
-            if len(self.ta_container.assigned_tasks) > 0:
-                self.ta_container.current_task_id = self.ta_container.assigned_tasks[0]
-                self.ta_container.assigned_tasks.pop(0)
-                self.logger.info(f"Agent {self.agent_id}: Starting next task {self.ta_container.current_task_id}")
-
     @property
     def assignment_pending(self) -> bool:
         return self.ta_container.assignment_pending

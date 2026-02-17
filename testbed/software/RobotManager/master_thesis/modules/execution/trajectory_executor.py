@@ -20,7 +20,6 @@ class TrajectoryExecutor(MotionExecutorBase):
     def __init__(self, agent_cont: FRODOAgentContainer, logger: Logger):
         super().__init__(agent_cont, logger)
         self._exi = EXEAgentModule(agent_cont=agent_cont, logger=logger)
-        self._pending_phase: str | None = None  # phase key staged but not yet activated
 
     # ── MotionExecutorBase interface ────────────────────────────────
 
@@ -40,24 +39,24 @@ class TrajectoryExecutor(MotionExecutorBase):
 
         self._exi.add_phase(phase_key, phase)
         # Don't activate yet — wait for start_execution()
-        self._pending_phase = phase_key
+        self.exe_cont.state.pending_phase = phase_key
 
     def is_active(self) -> bool:
         return self._exi.active_phase != 'idle'
 
     def is_goal_reached(self) -> bool:
-        return not self.is_active() and self._pending_phase is None
+        return not self.is_active() and self.exe_cont.state.pending_phase is None
 
     def clear(self):
         # Remove all non-idle phases and go back to idle
         for name in list(self._exi._phases.keys()):
             if name != 'idle':
                 del self._exi._phases[name]
-        self._exi._active_phase = 'idle'
-        self._exi._queued_phases.clear()
+        self.exe_cont.state.active_phase = 'idle'
+        self.exe_cont.state.queued_phases.clear()
         self._exi._pending_end = False
         self._exi.exe_cont.state.execution_mode = 'idle'
-        self._pending_phase = None
+        self.exe_cont.state.pending_phase = None
 
     # ── Delegation helpers ──────────────────────────────────────────
 
@@ -73,7 +72,7 @@ class TrajectoryExecutor(MotionExecutorBase):
     def start_execution(self):
         """Activate any staged phase (mirrors sim-level sim.start_exe() trigger)."""
         self._exi.exe_cont.start_execution = True
-        if self._pending_phase is not None:
-            self._exi.activate_phase(self._pending_phase)
-            self.logger.info(f"Activated pending phase '{self._pending_phase}'")
-            self._pending_phase = None
+        if self.exe_cont.state.pending_phase is not None:
+            self._exi.activate_phase(self.exe_cont.state.pending_phase)
+            self.logger.info(f"Activated pending phase '{self.exe_cont.state.pending_phase}'")
+            self.exe_cont.state.pending_phase = None

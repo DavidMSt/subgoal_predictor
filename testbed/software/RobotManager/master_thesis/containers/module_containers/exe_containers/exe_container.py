@@ -11,6 +11,11 @@ class AgentExecutionState:
     waypoints: list[tuple[float, float]] | None = None
     current_waypoint_idx: int = 0
 
+    # Phase tracking
+    active_phase: str = 'idle'
+    queued_phases: list[str] = field(default_factory=list)
+    pending_phase: str | None = None  # staged but not yet activated
+
     # Phase history/management
     completed_phases: list[str] = field(default_factory=list)  # Track what's been executed
     stopped_phases: list[str] = field(default_factory=list)    # Track interrupted phases

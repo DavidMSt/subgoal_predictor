@@ -6,25 +6,30 @@ from core.utils.logging_utils import Logger
 from master_thesis.modules.motion_planning.path_planner_base import PathPlannerBase, PlanResult
 from master_thesis.modules.execution.motion_executor_base import MotionExecutorBase
 from master_thesis.containers.general_containers.task_container import TaskContainer
+from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer
 
 
 class SubgoalManager:
     """
     Thin coordinator sitting between the planner and executor.
 
+    Reads the assigned task from the TA container (single source of truth)
+    rather than maintaining its own copy.
+
     Lifecycle (same for every pipeline mode):
-        1. sim.start_ta()  → TA module calls  sgm.assign_task(task)
+        1. sim.start_ta()  → TA module sets ta_cont.assigned_task
         2. sim.start_mp()  → sets sgm.start_planning_flag  → _action_planning picks it up
         3. sim.start_exe() → sets sgm._execution_enabled    → executor starts producing controls
         4. tick() each step → handles automatic re-planning for reactive modes
     """
 
-    def __init__(self, planner: PathPlannerBase, executor: MotionExecutorBase, logger: Logger):
+    def __init__(self, planner: PathPlannerBase, executor: MotionExecutorBase,
+                 ta_cont: AgentTAContainer, logger: Logger):
         self.planner = planner
         self.executor = executor
+        self._ta_cont = ta_cont
         self.logger = logger
 
-        self._current_task: TaskContainer | None = None
         self._plan_active: bool = False
         self._execution_enabled: bool = False
         self._last_result: PlanResult | None = None
@@ -33,21 +38,20 @@ class SubgoalManager:
         self.start_planning_flag: str | None = None
 
     @property
+    def current_task(self) -> TaskContainer | None:
+        """Read assigned task from the TA container (single source of truth)."""
+        return self._ta_cont.assigned_task
+
+    @property
     def last_plan_result(self) -> PlanResult | None:
         """Last successful plan result (for visualization)."""
         return self._last_result
 
     # ── External triggers ───────────────────────────────────────────
 
-    def assign_task(self, task: TaskContainer):
-        """Called when TA assigns a task.  Stores task but does NOT auto-plan."""
-        self._current_task = task
-        self._plan_active = False
-        self.executor.clear()
-        self.logger.debug(f"SubgoalManager: task assigned → {task.object_id}")
-
     def start_planning(self, phase_key: str = 'default'):
         """Explicit trigger from sim level (sim.start_mp()).  Runs planner once."""
+        self.executor.clear()
         self._do_plan(phase_key)
 
     def start_execution(self):
@@ -68,7 +72,7 @@ class SubgoalManager:
             return
         if not self._plan_active:
             return
-        if self._current_task is None:
+        if self.current_task is None:
             return
 
         # Re-plan when the executor reports goal reached AND the planner wants to replan
@@ -79,11 +83,11 @@ class SubgoalManager:
     # ── Internal ────────────────────────────────────────────────────
 
     def _do_plan(self, phase_key: str = 'default'):
-        if self._current_task is None:
+        if self.current_task is None:
             self.logger.warning("SubgoalManager: _do_plan called but no task assigned")
             return
 
-        result = self.planner.plan(self._current_task, phase_key)
+        result = self.planner.plan(self.current_task, phase_key)
         if result.success:
             self._last_result = result
             self.executor.set_plan(result, phase_key=phase_key)
@@ -94,7 +98,6 @@ class SubgoalManager:
 
     def reset(self):
         """Full reset (used between episodes in RL training)."""
-        self._current_task = None
         self._plan_active = False
         self._execution_enabled = False
         self._last_result = None
