@@ -672,7 +672,7 @@ class ThesisGUI:
                     circle = CircleDrawing(
                         f"assign_{robot.sim_agent.agent_id}",
                         x=state.x, y=state.y,
-                        radius=0.17,
+                        radius=0.14,
                         fill_color=[*color[:3], 0.25],
                         border_color=[*color[:3], 0.9],
                         border_width=0.03,
