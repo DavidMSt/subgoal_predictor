@@ -261,7 +261,8 @@ class ThesisGUI:
             return None
         
         # Babylon Visulization
-        task_babylon = BabylonTask(object_id=task_id, color=[220, 220, 220], x=x, y=y)
+        task_color = color if color is not None else [0.85, 0.85, 0.85]
+        task_babylon = BabylonTask(object_id=task_id, color=task_color, x=x, y=y)
         self.babylon_visualization.addObject(task_babylon)
 
         # Simulation

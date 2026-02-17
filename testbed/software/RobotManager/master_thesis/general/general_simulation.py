@@ -133,6 +133,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
         if self.environment.environment_container.entities_creation_frozen:
             raise RuntimeError("Cannot add agents after simulation has started. Entity creation is frozen.")
 
+        # Validate bounds BEFORE any state mutations
+        self.environment.check_limits(agent.container.x, agent.container.y)
+
         # Mark agent in occupancy_grid_full (not static)
         self.environment.mark_object_in_grid(
             x=agent.container.x, y=agent.container.y, psi=agent.container.psi,
@@ -231,9 +234,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
         temp_config = FRODO_Agent_Config()
         agent_length, agent_width = temp_config.length, temp_config.width
 
-        # Get environment limits
-        x_lim = self.environment.environment_container.limits[0]
-        y_lim = self.environment.environment_container.limits[1]
+        # Get environment limits (use environment.limits which reflects set_limits() calls)
+        x_lim = self.environment.limits[0]
+        y_lim = self.environment.limits[1]
 
         # Generate collision-free configurations if none provided
         if configurations is None:
@@ -332,9 +335,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
         # Task marker size (used for collision checking during spawn)
         task_size = 0.3  # 30cm marker footprint
 
-        # Get environment limits
-        x_lim = self.environment.environment_container.limits[0]
-        y_lim = self.environment.environment_container.limits[1]
+        # Get environment limits (use environment.limits which reflects set_limits() calls)
+        x_lim = self.environment.limits[0]
+        y_lim = self.environment.limits[1]
 
         # Generate collision-free positions if none provided
         if configurations is None:
