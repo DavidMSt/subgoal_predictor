@@ -92,6 +92,8 @@ class RobotGUIContainer:
     sim_agent: FRODOUniversalAgent
     assignment_circle: CircleDrawing | None = None
     trajectory_lines: list = dataclasses.field(default_factory=list)
+    _last_plan_result: object = None
+    _last_trajectory_update: float = 0.0
 
 @dataclasses.dataclass
 class ObstacleGUIContainer:
@@ -106,6 +108,8 @@ class TaskGUIContainer:
 
 # === BILBO INTERACTIVE EXAMPLE ========================================================================================
 class ThesisGUI:
+    TRAJECTORY_UPDATE_INTERVAL: float = 1.0  # seconds between trajectory redraws
+
     joystick_manager: JoystickManager
     babylon_visualization: BabylonVisualization
     robots: dict[str, RobotGUIContainer]
@@ -381,77 +385,95 @@ class ThesisGUI:
     # ------------------------------------------------------------------------------------------------------------------
     def showTrajectories(self):
         """Visualize planned paths / subgoals for all agents."""
-
-        # Clear any existing trajectory lines first
         for robot in self.robots.values():
-            for line in robot.trajectory_lines:
+            self._showTrajectoryForRobot(robot)
+
+        self.logger.info(f"Trajectories shown for {len(self.robots)} agents")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _showTrajectoryForRobot(self, robot: RobotGUIContainer):
+        """Draw trajectory lines for a single robot.
+
+        For efficiency, reuses existing LineDrawing objects via setEndpoints()
+        instead of removing/adding babylon objects each refresh.
+        """
+        agent = robot.sim_agent
+        plan_result = agent.sgm.last_plan_result
+        if plan_result is None:
+            return
+
+        # Determine task color for the lines
+        assigned = agent.assigned_task
+        task_color = [1, 1, 1]
+        if assigned is not None:
+            task_gui = self.tasks.get(assigned.object_id)
+            if task_gui and task_gui.babylon is not None:
+                task_color = task_gui.babylon.config.get('color', [1, 1, 1])
+
+        line_color = [*task_color[:3], 0.7]
+        agent_id = agent.agent_id
+
+        # Collect segments: list of (start_xy, end_xy)
+        segments: list[tuple[list, list]] = []
+
+        if plan_result.phase_container is not None:
+            # OMPL trajectory: connected waypoints
+            states = plan_result.phase_container.states
+            if states is not None and len(states) >= 2:
+                for j in range(len(states) - 1):
+                    s0, s1 = states[j], states[j + 1]
+                    segments.append(([float(s0[0]), float(s0[1])],
+                                     [float(s1[0]), float(s1[1])]))
+            style = 'solid'
+
+        elif plan_result.subgoal is not None:
+            # Reactive / RL: MPPI rollout, subsampled to ~10 segments
+            mppi_traj = getattr(agent.executor, 'last_trajectory', None)
+            if mppi_traj is not None and len(mppi_traj) >= 2:
+                step = max(1, len(mppi_traj) // 10)
+                indices = list(range(0, len(mppi_traj), step))
+                if indices[-1] != len(mppi_traj) - 1:
+                    indices.append(len(mppi_traj) - 1)
+                for j in range(len(indices) - 1):
+                    s0, s1 = mppi_traj[indices[j]], mppi_traj[indices[j + 1]]
+                    segments.append(([float(s0[0]), float(s0[1])],
+                                     [float(s1[0]), float(s1[1])]))
+            style = 'dashed'
+        else:
+            return
+
+        # Reuse existing lines where possible, add/remove only the difference
+        existing = robot.trajectory_lines
+        needed = len(segments)
+
+        # Remove excess lines
+        while len(existing) > needed:
+            try:
+                self.babylon_visualization.removeObject(existing.pop())
+            except Exception:
+                pass
+
+        # Update existing lines in-place
+        for i, (start, end) in enumerate(segments[:len(existing)]):
+            existing[i].setEndpoints(start, end)
+
+        # Create new lines for any additional segments
+        for i in range(len(existing), needed):
+            start, end = segments[i]
+            line = LineDrawing(
+                f"traj_{agent_id}_{i}",
+                start=start, end=end,
+                color=line_color, width=0.015, style=style,
+            )
+            try:
+                self.babylon_visualization.addObject(line)
+            except ValueError:
                 try:
                     self.babylon_visualization.removeObject(line)
                 except Exception:
                     pass
-            robot.trajectory_lines.clear()
-
-        for robot in self.robots.values():
-            agent = robot.sim_agent
-            plan_result = agent.sgm.last_plan_result
-            if plan_result is None:
-                continue
-
-            # Determine task color for the lines
-            assigned = agent.assigned_task
-            task_color = [1, 1, 1]
-            if assigned is not None:
-                task_gui = self.tasks.get(assigned.object_id)
-                if task_gui and task_gui.babylon is not None:
-                    task_color = task_gui.babylon.config.get('color', [1, 1, 1])
-
-            line_color = [*task_color[:3], 0.7]
-            agent_id = agent.agent_id
-
-            if plan_result.phase_container is not None:
-                # OMPL trajectory: draw connected waypoints
-                states = plan_result.phase_container.states
-                if states is not None and len(states) >= 2:
-                    for j in range(len(states) - 1):
-                        s0, s1 = states[j], states[j + 1]
-                        line = LineDrawing(
-                            f"traj_{agent_id}_{j}",
-                            start=[float(s0[0]), float(s0[1])],
-                            end=[float(s1[0]), float(s1[1])],
-                            color=line_color,
-                            width=0.015,
-                        )
-                        self.babylon_visualization.addObject(line)
-                        robot.trajectory_lines.append(line)
-
-            elif plan_result.subgoal is not None:
-                # Reactive / RL: draw line from agent to subgoal
-                sg = plan_result.subgoal
-                line = LineDrawing(
-                    f"traj_{agent_id}_sg",
-                    start=[float(agent.state.x), float(agent.state.y)],
-                    end=[float(sg[0]), float(sg[1])],
-                    color=line_color,
-                    width=0.015,
-                    style='dashed',
-                )
                 self.babylon_visualization.addObject(line)
-                robot.trajectory_lines.append(line)
-
-                # For RL agents: also draw subgoal → task goal
-                if assigned is not None and plan_result.requires_reactive:
-                    goal_line = LineDrawing(
-                        f"traj_{agent_id}_goal",
-                        start=[float(sg[0]), float(sg[1])],
-                        end=[float(assigned.x), float(assigned.y)],
-                        color=[*task_color[:3], 0.35],
-                        width=0.01,
-                        style='dotted',
-                    )
-                    self.babylon_visualization.addObject(goal_line)
-                    robot.trajectory_lines.append(goal_line)
-
-        self.logger.info(f"Trajectories shown for {len(self.robots)} agents")
+            existing.append(line)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _clearVisualizationOverlays(self):
@@ -469,6 +491,7 @@ class ThesisGUI:
                 except Exception:
                     pass
             robot.trajectory_lines.clear()
+            robot._last_plan_result = None
 
     # === PRIVATE METHODS ==============================================================================================
 
@@ -651,6 +674,21 @@ class ThesisGUI:
             # Update circle position to follow agent
             if robot.assignment_circle is not None:
                 robot.assignment_circle.setPosition(state.x, state.y)
+
+            # Detect new / updated trajectory → show lines
+            plan_result = robot.sim_agent.sgm.last_plan_result
+            if plan_result is not None:
+                if plan_result is not robot._last_plan_result:
+                    # New plan → draw immediately
+                    self._showTrajectoryForRobot(robot)
+                    robot._last_plan_result = plan_result
+                    robot._last_trajectory_update = time.time()
+                elif plan_result.requires_reactive:
+                    # Reactive mode → periodic refresh of MPPI trajectory
+                    now = time.time()
+                    if now - robot._last_trajectory_update >= self.TRAJECTORY_UPDATE_INTERVAL:
+                        self._showTrajectoryForRobot(robot)
+                        robot._last_trajectory_update = now
 
 
 # === BILBO INTERACTIVE CLI ============================================================================================

@@ -569,7 +569,7 @@ class BabylonVisualization:
         del self.objects[object.id]
 
         self.send(message)
-        self.logger.info(f"Object {object.uid} removed from scene.")
+        self.logger.debug(f"Object {object.uid} removed from scene.")
 
     # ------------------------------------------------------------------------------------------------------------------
     def updateObjectConfig(self, object_id, config):
