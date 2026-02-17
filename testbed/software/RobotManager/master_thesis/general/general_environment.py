@@ -192,8 +192,9 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         pos_dim.limits = limits
 
         # Keep environment container config in sync (config is frozen, so replace it)
-        from dataclasses import replace
-        self.environment_container.config = replace(self.environment_container.config, limits=limits)
+        if hasattr(self, 'environment_container'):
+            from dataclasses import replace
+            self.environment_container.config = replace(self.environment_container.config, limits=limits)
 
     def check_limits(self, x: float, y: float):
         (xmin, xmax), (ymin, ymax) = self.limits
