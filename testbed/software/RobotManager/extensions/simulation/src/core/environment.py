@@ -73,7 +73,7 @@ class Object(scheduling.ScheduledObject):
         self._configuration = None
         self.sample_flag = False  # Flag for tracking configuration updates
 
-        super().__init__()
+        super().__init__(object_id=self.object_id)
 
         self.env = None
 
