@@ -109,6 +109,7 @@ class TaskGUIContainer:
 # === BILBO INTERACTIVE EXAMPLE ========================================================================================
 class ThesisGUI:
     TRAJECTORY_UPDATE_INTERVAL: float = 1.0  # seconds between trajectory redraws
+    _output_enabled: bool = True  # guard against race conditions during reset
 
     joystick_manager: JoystickManager
     babylon_visualization: BabylonVisualization
@@ -506,6 +507,9 @@ class ThesisGUI:
         """
         self.logger.info("Resetting simulation...")
 
+        # Prevent output step from re-adding visuals during cleanup
+        self._output_enabled = False
+
         # Remove assignment circles and trajectory lines first
         self._clearVisualizationOverlays()
 
@@ -529,6 +533,7 @@ class ThesisGUI:
         # Reset simulation (removes all simulation objects and clears internal state)
         self.sim.reset_simulation()
 
+        self._output_enabled = True
         self.logger.info("Simulation reset complete")
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -646,6 +651,8 @@ class ThesisGUI:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _simulationOutputStep(self):
+        if not self._output_enabled:
+            return
         for robot in list(self.robots.values()):
             state = robot.sim_agent.state
 
@@ -664,11 +671,19 @@ class ThesisGUI:
                     circle = CircleDrawing(
                         f"assign_{robot.sim_agent.agent_id}",
                         x=state.x, y=state.y,
-                        radius=0.2,
-                        fill_color=[*color[:3], 0.15],
-                        border_color=[*color[:3], 0.6],
+                        radius=0.25,
+                        fill_color=[*color[:3], 0.25],
+                        border_color=[*color[:3], 0.9],
+                        border_width=0.03,
                     )
-                    self.babylon_visualization.addObject(circle)
+                    try:
+                        self.babylon_visualization.addObject(circle)
+                    except ValueError:
+                        try:
+                            self.babylon_visualization.removeObject(circle)
+                        except Exception:
+                            pass
+                        self.babylon_visualization.addObject(circle)
                     robot.assignment_circle = circle
 
             # Update circle position to follow agent
