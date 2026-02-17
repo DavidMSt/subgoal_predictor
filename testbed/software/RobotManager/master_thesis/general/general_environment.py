@@ -186,10 +186,14 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         for i, limit in enumerate(limits):
             if limit[0] > limit[1]:
                 self.logger.error(f"Invalid environment limits for dimension: {i}: {limit[0]} > {limit[1]}")
-        
+
         pos_dim = self.space.dimensions[0] # Get the first dimension of the space (E(2) vector)
         pos_dim.kwargs['wrapping'] = wrapping
         pos_dim.limits = limits
+
+        # Keep environment container config in sync (config is frozen, so replace it)
+        from dataclasses import replace
+        self.environment_container.config = replace(self.environment_container.config, limits=limits)
 
     def check_limits(self, x: float, y: float):
         (xmin, xmax), (ymin, ymax) = self.limits
