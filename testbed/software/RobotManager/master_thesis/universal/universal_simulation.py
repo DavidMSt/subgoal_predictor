@@ -178,6 +178,10 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
         """Reset the simulation to initial state - clears all agents, tasks, and obstacles."""
         self.logger.info("Resetting universal simulation...")
 
+        # Disable collision checker early so the scheduler won't use the old
+        # checker after agent_conts is cleared (_collision_checking guards None).
+        self.environment.collision_checker = None
+
         # Remove all agents from environment (proper cleanup with scheduler removal)
         for agent_id in list(self.agents.keys()):
             agent = self.agents[agent_id]

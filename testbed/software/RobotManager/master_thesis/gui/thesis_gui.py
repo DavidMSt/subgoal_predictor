@@ -36,8 +36,10 @@ from master_thesis.universal.offline_agent import FRODOOfflineAgent
 from master_thesis.universal.reactive_agent import FRODOReactiveAgent
 from master_thesis.universal.rl_agent import FRODORLAgent
 from master_thesis.general.general_obstacle import GeneralObstacle
-from master_thesis.gui.demo_scenarios.maze_examples import maze_single_2x2, maze_multi_4x4
 from master_thesis.general.general_task import GeneralTask
+from master_thesis.scenarios.base import ScenarioConfig, _resolve_agent_class
+from master_thesis.scenarios.door_scenario import door_scenario_config
+from master_thesis.scenarios.maze_scenarios import maze_2x2_config, maze_4x4_config
 
 from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyType
 
@@ -178,26 +180,43 @@ class ThesisGUI:
         time.sleep(2)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def newRobot(self, robot_id: str) -> RobotGUIContainer | None:
+    def newRobot(self,
+                 robot_id: str,
+                 agent_class: type[FRODOUniversalAgent] = FRODOOfflineAgent,
+                 start_config: tuple[float, float, float] = (0.0, 0.0, 0.0),
+                 color: list[float] | None = None,
+                 **kwargs,
+                 ) -> RobotGUIContainer | None:
 
         # Check if the robot already exists
         if robot_id in self.robots:
             self.logger.warning(f'Robot with ID {robot_id} already exists')
             return None
 
+        # Determine Babylon color: explicit > agent-type default > red
+        bab_color = color if color is not None else AGENT_TYPE_COLORS.get(agent_class, [1, 0, 0])
+
         # babylon visualization
-        robot_babylon = BabylonFrodo(object_id=robot_id, color=[1, 0, 0], fov=0, text='1')
+        idx = len(self.robots)
+        robot_babylon = BabylonFrodo(object_id=robot_id, color=bab_color, fov=0, text=str(idx + 1))
+        robot_babylon.setState(x=start_config[0], y=start_config[1], psi=start_config[2])
         self.babylon_visualization.addObject(robot_babylon)
 
         # simulation
-        robot_sim = self.sim.new_agent(agent_id=robot_id)
+        robot_sim = self.sim.new_agent(
+            agent_id=robot_id,
+            agent_class=agent_class,
+            start_config=start_config,
+            color=tuple(bab_color),
+            **kwargs,
+        )
         assert robot_sim is not None
 
         # store both
         self.robots[robot_id] = RobotGUIContainer(
             babylon=robot_babylon,
             sim_agent=robot_sim)
-        self.logger.info(f'Robot with ID {robot_id} added')
+        self.logger.info(f'Robot with ID {robot_id} ({agent_class.__name__}) added at {start_config}')
 
         return self.robots[robot_id]
     
@@ -353,6 +372,36 @@ class ThesisGUI:
             self.logger.info(f'Task {task_id} spawned at ({task.container.x:.2f}, {task.container.y:.2f})')
 
         self.logger.info(f"Successfully spawned {len(spawned_agents)} agents and {len(spawned_tasks)} tasks")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def loadScenario(self, config: ScenarioConfig):
+        """Load a :class:`ScenarioConfig` into the GUI (sim + Babylon objects)."""
+        self.sim.environment.set_limits(limits=config.limits)
+
+        for obs in config.obstacles:
+            self.newObstacle(
+                obs.obstacle_id,
+                x=obs.x, y=obs.y, psi=obs.psi,
+                length=obs.length, width=obs.width,
+            )
+
+        for a in config.agents:
+            self.newRobot(
+                a.agent_id,
+                agent_class=_resolve_agent_class(a.agent_class_name),
+                start_config=a.start_config,
+                color=list(a.color) if a.color else None,
+                **a.kwargs,
+            )
+
+        for t in config.tasks:
+            self.newTask(t.task_id, x=t.x, y=t.y, psi=t.psi, color=t.color)
+
+        self.logger.info(
+            f"Scenario '{config.name}' loaded: "
+            f"{len(config.agents)} agents, {len(config.tasks)} tasks, "
+            f"{len(config.obstacles)} obstacles"
+        )
 
     # ------------------------------------------------------------------------------------------------------------------
 
@@ -558,21 +607,24 @@ class ThesisGUI:
         reset_button = Button(text="Reset", callback=self.reset)
         page1.addWidget(reset_button, height=2, width=4)
 
-        # Simple Maze Button
-        single_maze_button = Button(text="2x2_maze", callback=Callback(
-            function=maze_single_2x2,
-            inputs={'demo': self},
+        # Scenario buttons — all use loadScenario(config)
+        page1.addWidget(Button(text="2x2_maze", callback=Callback(
+            function=self.loadScenario,
+            inputs={'config': maze_2x2_config()},
             discard_inputs=True,
-        ))
-        page1.addWidget(single_maze_button, height=2, width=4)
+        )), height=2, width=4)
 
-        # 4x4 Multi-Agent Maze Button
-        multi_4x4_button = Button(text="4x4_maze", callback=Callback(
-            function=maze_multi_4x4,
-            inputs={'demo': self},
+        page1.addWidget(Button(text="4x4_maze", callback=Callback(
+            function=self.loadScenario,
+            inputs={'config': maze_4x4_config()},
             discard_inputs=True,
-        ))
-        page1.addWidget(multi_4x4_button, height=2, width=4)
+        )), height=2, width=4)
+
+        page1.addWidget(Button(text="Door", callback=Callback(
+            function=self.loadScenario,
+            inputs={'config': door_scenario_config()},
+            discard_inputs=True,
+        )), height=2, width=4)
 
         # ── Spawn buttons (type-specific) ──────────────────────────────
 

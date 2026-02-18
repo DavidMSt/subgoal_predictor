@@ -129,6 +129,10 @@ class LocalControlModule:
         """
         Extract obstacle positions from local world container.
 
+        Rectangular obstacles (walls) are decomposed into a chain of
+        overlapping circles along the wall centerline so that MPPI
+        samples cannot pass through them.
+
         Returns:
             List of [x, y, radius] arrays
         """
@@ -140,7 +144,35 @@ class LocalControlModule:
         # Get obstacles from local world
         if hasattr(lwr_cont, 'obstacles') and lwr_cont.obstacles is not None:
             for obs_id, obs_cont in lwr_cont.obstacles.items():
-                if hasattr(obs_cont, 'x') and hasattr(obs_cont, 'y'):
+                if not (hasattr(obs_cont, 'x') and hasattr(obs_cont, 'y')):
+                    continue
+
+                shape = getattr(obs_cont, 'shape', 'box')
+                length = getattr(obs_cont, 'length', 0.0)
+                width = getattr(obs_cont, 'width', 0.0)
+
+                if shape == 'box' and length > 0 and width > 0:
+                    # Decompose rectangular wall into chain of circles
+                    psi = getattr(obs_cont, 'psi', 0.0)
+                    cx, cy = obs_cont.x, obs_cont.y
+                    radius = width / 2.0
+                    spacing = radius  # overlap by half a diameter
+
+                    # Direction along the wall long axis
+                    dx = np.cos(psi)
+                    dy = np.sin(psi)
+
+                    # Number of circles to cover the full length
+                    n_circles = max(1, int(np.ceil(length / spacing)) + 1)
+                    half_length = length / 2.0
+
+                    for i in range(n_circles):
+                        t = -half_length + i * spacing
+                        if t > half_length:
+                            t = half_length
+                        obstacles.append(np.array([cx + t * dx, cy + t * dy, radius]))
+                else:
+                    # Circular or unknown shape — single circle
                     radius = getattr(obs_cont, 'radius', 0.3)
                     obstacles.append(np.array([obs_cont.x, obs_cont.y, radius]))
 
@@ -158,11 +190,11 @@ class LocalControlModule:
         if lwr_cont is None:
             return other_agents
 
-        # Get visible agents from local world
-        if hasattr(lwr_cont, 'visible_agents') and lwr_cont.visible_agents is not None:
-            for agent_id, agent_cont in lwr_cont.visible_agents.items():
+        # Get neighbor agents from local world
+        if hasattr(lwr_cont, 'neighbors') and lwr_cont.neighbors is not None:
+            for agent_id, agent_cont in lwr_cont.neighbors.items():
                 # Skip self
-                if agent_id == self.agent_cont.object_id:
+                if agent_id == self.agent_cont.agent_id:
                     continue
 
                 if hasattr(agent_cont, 'x') and hasattr(agent_cont, 'y'):

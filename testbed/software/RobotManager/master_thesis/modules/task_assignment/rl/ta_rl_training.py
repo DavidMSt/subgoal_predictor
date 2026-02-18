@@ -1,4 +1,5 @@
-import numpy as np
+from __future__ import annotations
+
 import logging
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
@@ -6,12 +7,15 @@ from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
 from master_thesis.modules.task_assignment.rl.ta_rl_gym_wrapper import RLEnvMLP
 
-def make_env():
+
+def make_env(scenario=None, render_mode=None):
     """Create and wrap the environment."""
     env = RLEnvMLP(
         max_n=10,
         limits=(((-5, 5), (-5, 5))),
-        max_episode_steps=1000
+        max_episode_steps=1000,
+        scenario=scenario,
+        render_mode=render_mode,
     )
 
     # Reduce logging verbosity for faster training
@@ -22,18 +26,21 @@ def make_env():
     return env
 
 
-def train():
-    # 1. Create environment
-    env = make_env()
-    
+def train(scenario=None, render_eval=False):
+    # 1. Create environment (headless training)
+    env = make_env(scenario=scenario)
+
     # Check if environment follows Gym API properly
     print("Checking environment...")
     check_env(env, warn=True)
     print("Environment check passed!")
-    
-    # 2. Create evaluation environment (for periodic testing)
-    eval_env = make_env()
-    
+
+    # 2. Create evaluation environment (optionally visualised)
+    eval_env = make_env(
+        scenario=scenario,
+        render_mode="human" if render_eval else None,
+    )
+
     # 3. Set up callbacks
     # Save model every 10k steps
     checkpoint_callback = CheckpointCallback(
@@ -41,7 +48,7 @@ def train():
         save_path='./logs/checkpoints/',
         name_prefix='ta_rl_model'
     )
-    
+
     # Evaluate every 5k steps
     eval_callback = EvalCallback(
         eval_env,
@@ -51,7 +58,7 @@ def train():
         deterministic=True,
         render=False
     )
-    
+
     # 4. Create PPO model
     model = PPO(
         "MlpPolicy",  # Use MLP policy (matches your padded observations)
@@ -66,7 +73,7 @@ def train():
         verbose=1,
         tensorboard_log="./logs/tensorboard/",
     )
-    
+
     # 5. Train
     print("Starting training...")
     model.learn(
@@ -74,11 +81,11 @@ def train():
         callback=[checkpoint_callback, eval_callback],
         progress_bar=True
     )
-    
+
     # 6. Save final model
     model.save("./logs/final_model/ta_rl_policy")
     print("Training complete! Model saved.")
-    
+
     return model
 
 

@@ -138,6 +138,19 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         for obj in self.objects.values():
             obj.output(self)
 
+    def removeObject(self, objects):
+        """Override to clean up all scheduler action links (not just the 6 defaults)."""
+        if not isinstance(objects, list):
+            objects = [objects]
+        for obj in objects:
+            # Unlink ALL custom action parents (INPUT, LOGIC, DYNAMICS, etc.)
+            # that were added by Environment.addObject()
+            for action in list(obj.scheduling.actions.values()):
+                for parent in list(action.parents):
+                    if getattr(parent, 'object', None) is self:
+                        parent.removeAction(action)
+        super().removeObject(objects)
+
     def addObject(self, objects: core_env.Object | list[Object]):
         assert self.collision_checker is not None
 

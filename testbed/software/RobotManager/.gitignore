@@ -6,3 +6,6 @@ logs*
 
 # Exercise files (personal learning notes)
 master_thesis/exercises/
+
+# Claude related
+CLAUDE_todo.md

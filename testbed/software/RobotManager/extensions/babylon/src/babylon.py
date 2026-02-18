@@ -641,7 +641,7 @@ class BabylonVisualization:
 
     # === PRIVATE METHODS ==============================================================================================
     def _pollObjects(self):
-        for id, obj in self.objects.items():
+        for id, obj in list(self.objects.items()):
             if obj.pollable:
                 data = obj.getData()
                 self.updateObject(obj, data)

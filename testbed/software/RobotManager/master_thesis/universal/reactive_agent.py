@@ -20,10 +20,12 @@ class FRODOReactiveAgent(FRODOUniversalAgent):
     def __init__(self, env_container, agent_id, Ts=0.1, start_config=(0.0, 0.0, 0.0),
                  color=(1.0, 1.0, 1.0), log_level='INFO',
                  mppi_horizon: int = 30,
-                 mppi_n_samples: int = 100):
+                 mppi_n_samples: int = 100,
+                 replan_interval: int = 1):
         # Store before super().__init__ which calls _build_pipeline()
         self._mppi_horizon = mppi_horizon
         self._mppi_n_samples = mppi_n_samples
+        self._replan_interval = replan_interval
         super().__init__(env_container, agent_id, Ts, start_config, color, log_level)
 
     def _build_pipeline(self) -> tuple[PathPlannerBase, MotionExecutorBase]:
@@ -48,5 +50,6 @@ class FRODOReactiveAgent(FRODOUniversalAgent):
             controller=MPPIController(mppi_config),
             lwr_cont=None,
             logger=self.logger,
+            replan_interval=self._replan_interval,
         )
         return planner, executor

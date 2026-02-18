@@ -93,6 +93,12 @@ class SubgoalManager:
             self.executor.set_plan(result, phase_key=phase_key)
             self._plan_active = True
             self.logger.debug(f"SubgoalManager: plan succeeded (phase_key={phase_key})")
+
+            # Auto-activate if execution was already enabled (handles the
+            # race in runPipeline where start_exe() is called before planning
+            # completes — pending_phase would otherwise never be activated).
+            if self._execution_enabled and hasattr(self.executor, 'start_execution'):
+                self.executor.start_execution()
         else:
             self.logger.warning("SubgoalManager: planner returned success=False")
 
