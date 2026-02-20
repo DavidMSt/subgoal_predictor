@@ -65,6 +65,7 @@ class InputWidget(Widget):
             "inputFieldWidth": "100%",
             "inputFieldPosition": "center",
             "tooltip": None,  # custom tooltip text
+            "commit_on_blur": False,  # commit value when field loses focus
         }
 
         self.config = {**default_config, **config, **kwargs}
@@ -113,6 +114,9 @@ class InputWidget(Widget):
 
     # ------------------------------------------------------------------------------------------------------------------
     def _checkValue(self, value):
+        if value is None:
+            return None, True, None
+
         if isinstance(value, str):
             value = value.strip()
 
@@ -137,9 +141,11 @@ class InputWidget(Widget):
             normalized_value = normalized_int
 
         elif self.datatype == "float":
+            if isinstance(value, (int, float)):
+                return float(value), True, None
             try:
                 normalized_float = float(value)
-            except ValueError:
+            except (ValueError, TypeError):
                 self.logger.debug(f"Invalid float input: {value!r}")
                 return None, False, f"Could not parse float: {value!r}"
 

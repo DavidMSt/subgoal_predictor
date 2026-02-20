@@ -141,9 +141,9 @@ class Startup:
             if self.long_press_detected:
                 self.long_press_detected = False
 
-                if check_for_running_lock_holder(lock_file='/tmp/twipr.lock'):
+                if check_for_running_lock_holder(lock_file='/tmp/bilbo.lock'):
                     self.sound_system.speak("Terminate running application")
-                    terminate('/tmp/twipr.lock')
+                    terminate('/tmp/bilbo.lock')
                 else:
                     if self.joystick_connected:
                         self.sound_system.speak("Start Standalone Mode")
@@ -183,13 +183,13 @@ class Startup:
         ssid = get_wifi_ssid()
         self.status_page.set_ssid(ssid)
 
-        # Check if there is currently a TWIPR Process is running:
-        if check_for_running_lock_holder(lock_file='/tmp/twipr.lock'):
+        # Check if there is currently a BILBO Process is running:
+        if check_for_running_lock_holder(lock_file='/tmp/bilbo.lock'):
             self.program_running = True
         else:
             self.program_running = False
 
-        mode = get_lock_mode(lock_file='/tmp/twipr.lock')
+        mode = get_lock_mode(lock_file='/tmp/bilbo.lock')
 
         self.status_page.set_mode(mode)
 

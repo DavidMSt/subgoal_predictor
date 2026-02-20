@@ -1,52 +1,82 @@
 /*
- * firmware_setting.h
+ * firmware_settings.h
  *
- *  Created on: 3 Mar 2023
- *      Author: lehmann_workstation
+ * Central configuration for BILBO firmware.
+ * Edit this file to build for different robot variants.
+ *
+ * Created on: 3 Mar 2023
+ * Author: Dustin Lehmann
  */
 
 #ifndef FIRMWARE_SETTINGS_H_
 #define FIRMWARE_SETTINGS_H_
 
-/* USER SETTINGS */
-#define BILBO_DRIVE_SIMPLEXMOTION_RS485
-//#define BILBO_DRIVE_SIMPLEXMOTION_CAN
+/* ================================================================
+ * ROBOT VARIANT — uncomment ONE option per group
+ * ================================================================ */
 
-//#define BILBO_MODEL_NORMAL // Define one of these: BILBO_MODEL_NORMAL, BILBO_MODEL_SMALL, BILBO_MODEL_BIG
-#define BILBO_MODEL_BIG
+// Board hardware revision
+//#define BOARD_REV_3
+#define BOARD_REV_4
+
+// Robot model (sets wheel diameter and wheel distance in bilbo_model.h)
+#define BILBO_MODEL_NORMAL
 //#define BILBO_MODEL_SMALL
+//#define BILBO_MODEL_BIG
 
-// Hardware safety line: STM32 GPIO connected to motor IN1.
-// Directly triggers motor quickstop independent of CAN communication.
-// Requires wiring STM32 GPIO to IN1 on both SimplexMotion motors.
-#define ENABLE_MOTOR_SHUTDOWN_LINE 0
+/* ================================================================
+ * MOTOR INTERFACE — uncomment ONE
+ * ================================================================ */
 
-// REVISION
-#define TWIPR_FIRMWARE_REVISION_MAJOR 0x02
-#define TWIPR_FIRMWARE_REVISION_MINOR 0x02
+// SimplexMotion communication bus
+//#define BILBO_DRIVE_SIMPLEXMOTION_RS485
+#define BILBO_DRIVE_SIMPLEXMOTION_CAN
 
-// FIRMWARE MODES
-#define TWIPR_FIRMWARE_USE_MOTORS 1
+// Motor torque limit (Nm). Clamps all motor commands to this value.
+#define BILBO_MOTOR_TORQUE_LIMIT 0.5
 
-// Main Task Frequency
-#define BILBO_CONTROL_TASK_TIME 0.01 // seconds
-#define TWIPR_CONTROL_TASK_FREQ 100
-
-// Control
-#define TWIPR_SAFETY_MAX_WHEEL_SPEED 75
-
-// Motor speed measurement filter (0 = no filtering, 4 = default, 15 = max)
-// Higher values smooth low-speed noise but add measurement lag
+// Motor speed measurement filter (0 = none, 4 = default, 15 = max).
+// Higher values smooth low-speed noise but add measurement lag.
 #define SIMPLEXMOTION_SPEED_FILTER 5
 
-// Motor encoder resolution in bits (12 = 4096, 13 = 8192, 14 = 16384 counts/rev)
-// Higher resolution improves low-speed measurement but adds position noise
+// Motor encoder resolution in bits (12 = 4096, 13 = 8192, 14 = 16384 counts/rev).
+// Higher resolution improves low-speed measurement but adds position noise.
 #define SIMPLEXMOTION_ENCODER_RESOLUTION 13
 
-// Control - Trajectories
-#define TWIPR_SEQUENCE_TIME 30 // seconds
+// Hardware safety line: STM32 GPIO drives motor IN1 HIGH during operation,
+// pulls LOW on error to trigger motor quickstop independent of CAN/RS485.
+// Requires physical wiring from STM32 GPIO to IN1 on both motors.
+#define ENABLE_MOTOR_SHUTDOWN_LINE 0
 
-// Logging
-#define TWIPR_FIRMWARE_SAMPLE_BUFFER_TIME 0.1 // seconds
+/* ================================================================
+ * CONTROL LOOP
+ * ================================================================ */
+
+// Main control loop frequency (Hz). Estimation runs at the same rate.
+#define BILBO_CONTROL_TASK_FREQ 100
+
+// Max wheel speed before safety shutdown (rad/s)
+#define BILBO_SAFETY_MAX_WHEEL_SPEED 75
+
+// Enable/disable motor output (0 = dry-run, useful for testing without motors)
+#define BILBO_FIRMWARE_USE_MOTORS 1
+
+/* ================================================================
+ * TRAJECTORIES & LOGGING
+ * ================================================================ */
+
+// Maximum trajectory duration (seconds). Determines pre-allocated buffer size.
+#define BILBO_SEQUENCE_TIME 30
+
+// Sample buffer aggregation time (seconds). Samples are collected for this
+// duration before being sent to the host.
+#define BILBO_FIRMWARE_SAMPLE_BUFFER_TIME 0.1
+
+/* ================================================================
+ * FIRMWARE REVISION — update when flashing new versions
+ * ================================================================ */
+
+#define BILBO_FIRMWARE_REVISION_MAJOR 0x03
+#define BILBO_FIRMWARE_REVISION_MINOR 0x00
 
 #endif /* FIRMWARE_SETTINGS_H_ */

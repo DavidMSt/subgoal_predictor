@@ -31,7 +31,7 @@
 
 #include "bilbo_position_control.h"
 #include <cstring>
-#include "twipr_communication.h"
+#include "bilbo_communication.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
@@ -833,12 +833,6 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_follow_path(
 	// -----------------------------------------------------------------
 	// 11. ARRIVAL CHECKS
 	// -----------------------------------------------------------------
-
-	// Get robot's position on path
-	float robot_path_x, robot_path_y;
-	_interpolate_path(_progress, robot_path_x, robot_path_y);
-	float dist_to_robot_proj = _distance(current_state.x, current_state.y,
-	                                      robot_path_x, robot_path_y);
 
 	// PATH END check
 	float last_pt_dist = _distance(current_state.x, current_state.y,

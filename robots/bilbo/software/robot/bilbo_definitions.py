@@ -30,9 +30,10 @@ class BILBO_ConfigurationState:
 class BILBO_OriginConfig:
     id: str
     points: list
-    origin: int
-    x_axis_end: int
-    y_axis_end: int
+    x_start: int
+    x_end: int
+    y_start: int
+    y_end: int
     marker_size: float
     offset_x: float = 0.0
     offset_y: float = 0.0

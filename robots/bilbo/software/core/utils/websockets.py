@@ -391,13 +391,13 @@ class WebsocketClient:
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
         self.logger.info("Connection closed")
+        self._exit = True
         try:
             self.ws.close()
         except Exception:
             pass
-        self._exit = True
         if self._thread and self._thread.is_alive():
-            self._thread.join()
+            self._thread.join(timeout=5)
 
     # ------------------------------------------------------------------------------------------------------------------
     def task(self):
@@ -443,7 +443,7 @@ class WebsocketClient:
             timeout = 5  # Adjust timeout as needed
             start_time = time.time()
 
-            while not self.connected and time.time() - start_time < timeout:
+            while not self.connected and not self._exit and time.time() - start_time < timeout:
                 time.sleep(0.5)
 
             if self.connected:

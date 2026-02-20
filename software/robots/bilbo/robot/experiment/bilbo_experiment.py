@@ -66,6 +66,7 @@ from robots.bilbo.robot.experiment.experiment_helpers import generate_random_inp
 
 if TYPE_CHECKING:
     from robots.bilbo.robot.experiment import DILC_Experiment
+    from robots.bilbo.robot.experiment.limbobar_dilc import LimboBar_DILC_Experiment
 
 logger = Logger("BILBO_ExperimentHandler")
 
@@ -157,6 +158,9 @@ class BILBO_ExperimentHandler_Events:
     dilc_experiment_initialized: Event = Event(copy_data_on_set=False)
     dilc_experiment_started: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
 
+    # LimboBar DILC experiment events
+    limbobar_dilc_experiment_initialized: Event = Event(copy_data_on_set=False)
+
 
 @event_definition
 class BILBO_ExperimentHandler_InternalEvents:
@@ -194,6 +198,7 @@ class BILBO_ExperimentHandler:
     """
     control: BILBO_Control
     status: BILBO_ExperimentHandler_Status = BILBO_ExperimentHandler_Status.IDLE
+    current_experiment_definition: ExperimentDefinition | None = None
     current_trajectory: InputTrajectory | None = None
 
     _loadedTrajectory: InputTrajectory | None = None
@@ -202,6 +207,7 @@ class BILBO_ExperimentHandler:
     _EXPERIMENT_STALE_TIMEOUT: float = 600.0  # 10 minutes max before status is considered stale
 
     dilc_experiment: DILC_Experiment | None = None
+    limbobar_dilc_experiment: LimboBar_DILC_Experiment | None = None
 
     # === INIT =========================================================================================================
     def __init__(self, core: BILBO_Core, control: BILBO_Control):
@@ -232,6 +238,7 @@ class BILBO_ExperimentHandler:
 
         # DILC experiment — None when no experiment is active
         self.dilc_experiment = None
+        self.limbobar_dilc_experiment = None
 
     # === DILC ==========================================================================
     def run_dilc_from_file(self, file: str):
@@ -276,6 +283,50 @@ class BILBO_ExperimentHandler:
             self.dilc_experiment = None
             return
         self.dilc_experiment.start()
+
+    # === LIMBOBAR DILC ================================================================
+    def run_limbobar_dilc_from_file(self, file: str):
+        """Run a LimboBar DILC experiment from a YAML config file.
+
+        Args:
+            file: Path to a LimboBar DILC experiment YAML file.
+        """
+        from robots.bilbo.robot.experiment.limbobar_dilc import (
+            LimboBar_DILC_Experiment, LimboBar_DILC_Experiment_State,
+        )
+
+        if (self.limbobar_dilc_experiment is not None
+                and self.limbobar_dilc_experiment.state == LimboBar_DILC_Experiment_State.RUNNING):
+            self.logger.warning("A LimboBar DILC experiment is already running")
+            return
+
+        if not file.endswith(('.yaml', '.yml')):
+            file += '.yaml'
+
+        if not os.path.isfile(file):
+            file_in_experiments = os.path.join(EXPERIMENT_DIR, file)
+            if not os.path.isfile(file_in_experiments):
+                self.logger.error(f"LimboBar DILC config file not found: {file}")
+                return
+            file = file_in_experiments
+
+        if self.limbobar_dilc_experiment is not None:
+            self.limbobar_dilc_experiment.close()
+
+        self.logger.info(f"Loading LimboBar DILC experiment from: {file}")
+        self.limbobar_dilc_experiment = LimboBar_DILC_Experiment(core=self.core)
+        self.limbobar_dilc_experiment.callbacks.experiment_initialized.register(
+            lambda: self.events.limbobar_dilc_experiment_initialized.set(
+                data={'experiment': self.limbobar_dilc_experiment}
+            )
+        )
+        try:
+            self.limbobar_dilc_experiment.configure_from_yaml(file)
+        except Exception as e:
+            self.logger.error(f"Failed to load LimboBar DILC settings: {e}")
+            self.limbobar_dilc_experiment = None
+            return
+        self.limbobar_dilc_experiment.start()
 
     # === EXPERIMENTS ==================================================================
 
@@ -337,6 +388,7 @@ class BILBO_ExperimentHandler:
 
         self.logger.info(f"Experiment \"{experiment_definition.id}\" started successfully")
         self.status = BILBO_ExperimentHandler_Status.EXPERIMENT_RUNNING
+        self.current_experiment_definition = experiment_definition
         self._experiment_start_time = time.monotonic()
         self.events.experiment_started.set(flags={'experiment_id': experiment_definition.id})
 
@@ -807,6 +859,7 @@ class BILBO_ExperimentHandler:
             case 'finished':
                 self.logger.debug(f"Event: Experiment \"{experiment_id}\" finished")
                 self.status = BILBO_ExperimentHandler_Status.IDLE
+                self.current_experiment_definition = None
                 self._experiment_start_time = None
                 self._events_internal.experiment_finished.set(
                     flags={'experiment_id': experiment_id},
@@ -820,6 +873,7 @@ class BILBO_ExperimentHandler:
             case 'error':
                 self.logger.warning(f"Event: Experiment \"{experiment_id}\" failed")
                 self.status = BILBO_ExperimentHandler_Status.IDLE
+                self.current_experiment_definition = None
                 self._experiment_start_time = None
                 self._events_internal.experiment_error.set(
                     flags={'experiment_id': experiment_id},
@@ -833,6 +887,7 @@ class BILBO_ExperimentHandler:
             case 'timeout':
                 self.logger.warning(f"Event: Experiment \"{experiment_id}\" timed out")
                 self.status = BILBO_ExperimentHandler_Status.IDLE
+                self.current_experiment_definition = None
                 self._experiment_start_time = None
                 self._events_internal.experiment_timeout.set(
                     flags={'experiment_id': experiment_id},

@@ -2,17 +2,17 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 from core.utils.control.lib_control.il.ilc import BILBO_STANDARD_REFERENCE_TRAJECTORY, getTransitionMatrixFromSystem, \
-    getLearningMatricesOptimal
+    getLearningMatricesOptimal, BILBO_BUMPED_REFERENCE_TRAJECTORY
 from core.utils.control.lib_control.il.iml import imlUpdateOptimal, getOptimalLearningMatrix, \
     getOptimalLearningMatrixFromMatrix
 from core.utils.control.lib_control.lifted_systems import vec2liftedMatrix, liftedMatrix2Vec
 from core.utils.data import generate_time_vector, generate_random_input, resample
-from extensions.simulation.src.objects.bilbo import BILBO_Dynamics_2D, DEFAULT_BILBO_MODEL, \
+from robots.bilbo.simulation.bilbo_model import BILBO_Dynamics_2D, DEFAULT_BILBO_MODEL, \
     BILBO_Dynamics_2D_Linear, BILBO_2D_POLES, BILBO_MICHAEL_MODEL
 
 
 def example_ilc():
-    N = len(BILBO_STANDARD_REFERENCE_TRAJECTORY)
+    N = len(BILBO_BUMPED_REFERENCE_TRAJECTORY)
     # Generate the robot
     bilbo_dynamics = BILBO_Dynamics_2D(model=DEFAULT_BILBO_MODEL, Ts=0.01)
     bilbo_dynamics.polePlacement(poles=BILBO_2D_POLES, apply_poles_to_system=True)
@@ -23,7 +23,7 @@ def example_ilc():
     P = getTransitionMatrixFromSystem(bilbo_dynamics_linear.system, N=N)
 
     # Reference trajectory
-    reference_trajectory = BILBO_STANDARD_REFERENCE_TRAJECTORY
+    reference_trajectory = BILBO_BUMPED_REFERENCE_TRAJECTORY
 
     # u0:
     u0 = np.zeros((N,))
@@ -231,4 +231,4 @@ def example_dilc2():
 
 
 if __name__ == '__main__':
-    example_dilc2()
+    example_ilc()

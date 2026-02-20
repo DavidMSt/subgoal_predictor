@@ -6,7 +6,7 @@
  */
 
 #include "bilbo_control.h"
-#include "twipr_communication.h"
+#include "bilbo_communication.h"
 
 BILBO_Control *control = nullptr;
 
@@ -21,7 +21,7 @@ void BILBO_Control::init(bilbo_control_init_config_t config) {
 	this->config = config;
 
 	// Initialize the balancing controller
-	twipr_balancing_control_config_t balancing_control_config;
+	bilbo_balancing_control_config_t balancing_control_config;
 	this->balancing_control.init(balancing_control_config);
 
 	this->status = bilbo_control_status_t::RUNNING;
@@ -69,6 +69,9 @@ bool BILBO_Control::set_config(bilbo_control_config_t config) {
 	// Configure the VIC controller
 	this->vic_controller.set_config(this->control_config.vic_config);
 
+	// Configure the PSI controller
+	this->psi_controller.set_config(this->control_config.psi_config);
+
 	return true;
 }
 
@@ -110,6 +113,13 @@ bool BILBO_Control::set_tic_config(bilbo_tic_config_t config) {
 bool BILBO_Control::set_vic_config(bilbo_vic_config_t config) {
 	this->control_config.vic_config = config;
 	this->vic_controller.set_config(config);
+	return true;
+}
+
+/* -------------------------------------------------------------------------------------- */
+bool BILBO_Control::set_psi_config(bilbo_psi_config_t config) {
+	this->control_config.psi_config = config;
+	this->psi_controller.set_config(config);
 	return true;
 }
 
@@ -176,20 +186,26 @@ bool BILBO_Control::set_mode(bilbo_control_mode_t mode) {
 //		this->_set_torque( { 0.0f, 0.0f });
 		this->set_vic_enabled(false);
 		this->set_tic_enabled(false);
+		this->set_psi_enabled(false);
 //		send_info("Set mode to OFF. Tick: %d", tick_global);
 		break;
 	}
 	case bilbo_control_mode_t::DIRECT: {
 		this->balancing_control.set_mode(
-				twipr_balancing_control_mode_t::DIRECT);
+				bilbo_balancing_control_mode_t::DIRECT);
+		this->set_vic_enabled(false);
+		this->set_tic_enabled(false);
+		this->set_psi_enabled(false);
 		send_info("Set mode to DIRECT. Tick: %d", tick_global);
 		break;
 	}
 	case bilbo_control_mode_t::BALANCING: {
 		this->vic_controller.reset();
+		this->psi_controller.reset();
 		this->set_vic_enabled(true); // Sets VIC to enabled if configured
 		this->set_tic_enabled(false);
-		this->balancing_control.set_mode(twipr_balancing_control_mode_t::ON);
+		this->set_psi_enabled(false); // PSI is toggled manually via button
+		this->balancing_control.set_mode(bilbo_balancing_control_mode_t::ON);
 //		send_info("Set mode to BALANCING. Tick: %d", tick_global);
 		break;
 	}
@@ -205,10 +221,11 @@ bool BILBO_Control::set_mode(bilbo_control_mode_t mode) {
 			return false;
 		}
 
-		this->balancing_control.set_mode(twipr_balancing_control_mode_t::ON);
+		this->balancing_control.set_mode(bilbo_balancing_control_mode_t::ON);
 		this->velocity_control.reset();
 		this->vic_controller.set_enabled(false); // Disable VIC when entering VELOCITY mode
 		this->set_tic_enabled(false);
+		this->set_psi_enabled(false); // Disable PSI when entering VELOCITY mode
 //		send_info("Set mode to VELOCITY. Tick: %d", tick_global);
 		break;
 	}
@@ -224,7 +241,8 @@ bool BILBO_Control::set_mode(bilbo_control_mode_t mode) {
 		}
 		this->vic_controller.set_enabled(false); // Disable VIC when entering POSITION mode
 		this->set_tic_enabled(false);
-		this->balancing_control.set_mode(twipr_balancing_control_mode_t::ON);
+		this->set_psi_enabled(false); // Disable PSI when entering POSITION mode
+		this->balancing_control.set_mode(bilbo_balancing_control_mode_t::ON);
 		this->velocity_control.reset();
 		// Reset position control and clear any existing path/commands
 		this->position_control.reset();
@@ -325,19 +343,42 @@ bool BILBO_Control::set_tic_enabled(bool state) {
 
 }
 /* -------------------------------------------------------------------------------------- */
+bool BILBO_Control::set_psi_enabled(bool state) {
+	this->psi_controller.set_enabled(state);
+	this->_data.psi_enabled = this->psi_controller.is_enabled();
+
+	if (state) {
+		send_info("PSI control enabled. Tick: %d", tick_global);
+	} else {
+		send_info("PSI control disabled. Tick: %d", tick_global);
+	}
+
+	control_event_message_data_t event_message_data_psi = { .event =
+			control_event_t::PSI_CHANGED, .mode = mode, .data = this->_data,
+			.tick = tick_global };
+	BILBO_Message_Control_Event message_psi(event_message_data_psi);
+	sendMessage(message_psi);
+	return true;
+}
+/* -------------------------------------------------------------------------------------- */
+bool BILBO_Control::set_psi_setpoint(float psi) {
+	this->psi_controller.set_setpoint(psi);
+	return true;
+}
+/* -------------------------------------------------------------------------------------- */
 bilbo_control_output_t BILBO_Control::update() {
 
 	bilbo_velocity_control_command_t velocity_command = { .v = 0, .psi_dot = 0 };
 	bilbo_velocity_control_output_t velocity_output = { 0, 0 };
 
 	bilbo_control_input_ext_t external_input = { 0, 0 };
-	twipr_balancing_control_input_t balancing_input = { 0, 0 };
-	twipr_balancing_control_output_t balancing_output = { 0, 0 };
+	bilbo_balancing_control_input_t balancing_input = { 0, 0 };
+	bilbo_balancing_control_output_t balancing_output = { 0, 0 };
 
 	bilbo_control_output_t output = { 0, 0 };
 
 	// Fetch the current dynamic state
-	twipr_estimation_state_t dynamic_state =
+	bilbo_estimation_state_t dynamic_state =
 			this->config.estimation->getState();
 
 	bilbo_position_state_t position_state =
@@ -373,9 +414,13 @@ bilbo_control_output_t BILBO_Control::update() {
 
 			// 3. Update TIC
 			float tic_output = this->tic_controller.update(dynamic_state.theta);
-			// 4. Combine outputs
-			output.u_left = balancing_output.u_1 + vic_output + tic_output;
-			output.u_right = balancing_output.u_2 + vic_output + tic_output;
+
+			// 4. Update PSI (differential: +left, -right)
+			float psi_output = this->psi_controller.update(dynamic_state.psi);
+
+			// 5. Combine outputs
+			output.u_left = balancing_output.u_1 + vic_output + tic_output + psi_output;
+			output.u_right = balancing_output.u_2 + vic_output + tic_output - psi_output;
 			break;
 		}
 		case bilbo_control_mode_t::VELOCITY: {
@@ -441,6 +486,7 @@ bilbo_control_output_t BILBO_Control::update() {
 	this->_data.mode = this->mode;
 	this->_data.tic_enabled = this->tic_controller.is_enabled();
 	this->_data.vic_enabled = this->vic_controller.is_active();
+	this->_data.psi_enabled = this->psi_controller.is_active();
 	this->_data.position_control_data = this->position_control.get_data();
 	this->_data.velocity_command = velocity_command;
 	this->_data.velocity_output = velocity_output;

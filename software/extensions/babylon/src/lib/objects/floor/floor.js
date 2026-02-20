@@ -194,6 +194,7 @@ export class BabylonSimpleFloor extends BabylonObject {
         this.mesh.material = mat;
         this.mesh.isPickable = false;
         this.mesh.receiveShadows = true;
+        this.mesh.parent = this.root;
 
         // ----- POSITION / OFFSET HANDLING -----
         this._applyOriginAndOffset();
@@ -381,11 +382,32 @@ export class BabylonFloorInstanced extends BabylonObject {
      * @param {number} y - Row (0..tiles_y-1)
      * @param {boolean} state - true = visible, false = hidden
      */
-    setVisibility(x, y, state) {
+    setTileVisibility(x, y, state) {
         if (y < 0 || y >= this.tiles.length) return;
         const row = this.tiles[y];
         if (!row || x < 0 || x >= row.length) return;
         row[x].isVisible = state;
+    }
+
+    /**
+     * Show or hide the entire floor (all tiles and base meshes).
+     * @param {boolean} visible
+     */
+    setVisibility(visible) {
+        this.visible = visible;
+        const state = !!visible;
+        // Toggle tile instances (InstancedMesh needs setEnabled)
+        for (const row of this.tiles) {
+            for (const tile of row) {
+                tile.setEnabled(state);
+            }
+        }
+        // Toggle base tile templates
+        if (this.baseTiles) {
+            for (const mesh of Object.values(this.baseTiles)) {
+                if (mesh) mesh.setEnabled(state);
+            }
+        }
     }
 
     highlight(state) {

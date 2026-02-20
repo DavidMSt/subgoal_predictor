@@ -62,8 +62,8 @@ class BILBO_InputTrajectory:
         return trajectory_inputs_to_vector(self.inputs, single_input=single_input)
 
     @classmethod
-    def from_vector(cls, vector: np.ndarray, name: str, id: int, dt: float = None) -> BILBO_InputTrajectory:
-        return cls(name=name, id=id, inputs=generate_trajectory_inputs(vector), dt=dt or BILBO_CONTROL_DT)
+    def from_vector(cls, vector: np.ndarray, name: str, id: int, dt: float = None, delta: float = 0.0) -> BILBO_InputTrajectory:
+        return cls(name=name, id=id, inputs=generate_trajectory_inputs(vector, delta=delta), dt=dt or BILBO_CONTROL_DT)
 
     @classmethod
     def from_file(cls, file):

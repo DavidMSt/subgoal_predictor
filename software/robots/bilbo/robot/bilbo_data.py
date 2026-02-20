@@ -210,6 +210,8 @@ class BILBO_Sample_General:
     internet_connected: bool = False
     timecode: str = '00:00:00:00'
     timecode_fps: float = 0.0
+    rpi_temperature: float = 0.0
+    rpi_throttle: int = 0
 
 
 class TWIPR_Control_Status(enum.IntEnum):
@@ -356,6 +358,7 @@ class BILBO_Control_Sample:
     input: BILBO_Control_Inputs = dataclasses.field(default_factory=BILBO_Control_Inputs)
     tic_enabled: bool = False
     vic_enabled: bool = False
+    psi_enabled: bool = False
     input_enabled: bool = False
     position_control: BILBO_PositionControl_Sample = dataclasses.field(default_factory=BILBO_PositionControl_Sample)
 

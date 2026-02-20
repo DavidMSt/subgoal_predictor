@@ -5,7 +5,7 @@ from core.utils.dataclass_utils import from_dict_auto
 from robots.bilbo.robot.bilbo_core import BILBO_Core
 from robots.bilbo.robot.bilbo_data import BILBO_Sample
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_ControlConfig, VelocityControl_Config, \
-    PID_Config, VelocityConfig
+    PID_Config, VelocityConfig, Feedforward_Config, TIC_Config, VIC_Config, PSI_Config, PositionControl_Config
 from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals
 
 
@@ -15,6 +15,7 @@ class BILBO_Control_Events:
     configuration_changed: Event
     tic_mode_changed: Event
     vic_mode_changed: Event
+    psi_mode_changed: Event
     error: Event
 
 
@@ -141,6 +142,61 @@ class BILBO_Control:
         return from_dict_auto(BILBO_ControlConfig, config)
 
     # ------------------------------------------------------------------------------------------------------------------
+    def set_velocity_ff_config_v(self, config: Feedforward_Config):
+        self.device.executeFunction('set_velocity_ff_config_forward',
+                                    arguments={'config': dataclasses.asdict(config)})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_velocity_ff_config_psi_dot(self, config: Feedforward_Config):
+        self.device.executeFunction('set_velocity_ff_config_turn',
+                                    arguments={'config': dataclasses.asdict(config)})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_tic_config(self, config: TIC_Config):
+        self.device.executeFunction('set_tic_config',
+                                    arguments={'config': dataclasses.asdict(config)})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_vic_config(self, config: VIC_Config):
+        self.device.executeFunction('set_vic_config',
+                                    arguments={'config': dataclasses.asdict(config)})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_psi_config(self, config: PSI_Config):
+        self.device.executeFunction('set_psi_config',
+                                    arguments={'config': dataclasses.asdict(config)})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def enablePSI(self, state):
+        if self.mode not in [BILBO_Control_Mode.BALANCING]:
+            return
+        self.device.executeFunction(function_name='enable_psi', arguments={
+            'enable': state
+        })
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_psi_setpoint(self, psi: float):
+        self.device.executeFunction(function_name='set_psi_setpoint', arguments={
+            'psi': psi
+        })
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_general_config(self, max_wheel_torque: float, max_wheel_speed: float):
+        self.device.executeFunction('set_general_config',
+                                    arguments={'max_wheel_torque': max_wheel_torque,
+                                               'max_wheel_speed': max_wheel_speed})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_statefeedback_gain(self, K: list):
+        self.device.executeFunction('set_statefeedback_gain',
+                                    arguments={'K': K})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_position_control_config(self, config: PositionControl_Config):
+        self.device.executeFunction('set_position_control_config',
+                                    arguments={'config': dataclasses.asdict(config)})
+
+    # ------------------------------------------------------------------------------------------------------------------
     def readControlConfiguration(self):
         ...
 
@@ -172,6 +228,8 @@ class BILBO_Control:
                 self._handle_tic_change_event(data)
             case 'vic_change':
                 self._handle_vic_change_event(data)
+            case 'psi_change':
+                self._handle_psi_change_event(data)
             case 'error':
                 ...
             case _:
@@ -185,8 +243,8 @@ class BILBO_Control:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handleConfigurationChangeEvent(self, data):
-        self.callbacks.configuration_changed.call(data['configuration'])
-        self.events.configuration_changed.set(data['configuration'])
+        self.callbacks.configuration_changed.call(data)
+        self.events.configuration_changed.set(data)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _handle_tic_change_event(self, data):
@@ -199,6 +257,12 @@ class BILBO_Control:
         self.logger.debug(f"VIC mode changed to {data['vic_enabled']}")
         vic_enabled = data['vic_enabled']
         self.events.vic_mode_changed.set(vic_enabled)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _handle_psi_change_event(self, data):
+        self.logger.debug(f"PSI mode changed to {data['psi_enabled']}")
+        psi_enabled = data['psi_enabled']
+        self.events.psi_mode_changed.set(psi_enabled)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _sampleStreamHandler(self, sample: BILBO_Sample):

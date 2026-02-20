@@ -1451,6 +1451,11 @@
     animation: table-shake 300ms ease, table-blink-error 200ms ease;
 }
 
+.tableWidget td.table-cell-input input.tableInput.dirty {
+    border-color: rgba(255, 100, 80, 0.7);
+    background-color: rgba(180, 50, 30, 0.15);
+}
+
 /* ===== Button cell ===== */
 .tableWidget td.table-cell-button {
     padding: 0;
@@ -4492,5 +4497,16 @@
 
 .bmw-mode-unavailable .bmw-circle {
     border-color: rgba(255, 255, 255, 0.15);
+}
+
+/* === Bilbo Limbo Widget ========================================================================================= */
+.bilbo-limbo-widget {
+    overflow: hidden;
+}
+
+.bilbo-limbo-widget canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
 }
 

@@ -27,7 +27,7 @@ from robot.lowlevel.stm32_control import (
     bilbo_velocity_control_command,
     bilbo_velocity_control_output,
     bilbo_control_input_ext,
-    twipr_balancing_control_output,
+    bilbo_balancing_control_output,
     bilbo_control_output,
     position_control_event_t,
     position_control_event_data,
@@ -466,7 +466,7 @@ class SimulatedFirmware:
                     u_left=self._ext_input_left,
                     u_right=self._ext_input_right,
                 ),
-                balancing_output=twipr_balancing_control_output(
+                balancing_output=bilbo_balancing_control_output(
                     u_1=self._last_bal_left,
                     u_2=self._last_bal_right,
                 ),

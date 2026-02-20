@@ -753,7 +753,10 @@ class NatNetClient:
             except socket.timeout:
                 # Send keep-alive to maintain connection (required for NatNet 4.x / Motive 3+)
                 if not self._stop_threads:
-                    self._send_request(self.command_socket, self.NAT_KEEPALIVE)
+                    try:
+                        self._send_request(self.command_socket, self.NAT_KEEPALIVE)
+                    except (socket.error, OSError):
+                        break
             except socket.error as e:
                 if not self._stop_threads:
                     self.logger.error(f"Command socket error: {e}")
@@ -789,7 +792,10 @@ class NatNetClient:
 
     def run_alive_thread(self):
         while not self._stop_threads:
-            self._send_request(self.command_socket, self.NAT_KEEPALIVE)
+            try:
+                self._send_request(self.command_socket, self.NAT_KEEPALIVE)
+            except (socket.error, OSError):
+                break
             time.sleep(2)
 
     def close(self):

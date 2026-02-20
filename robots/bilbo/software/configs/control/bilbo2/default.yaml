@@ -19,7 +19,7 @@ inputs:
 balancing_control:
 #  K: [ 0.25, 0.2, 0.03, 0.025, 0.25, 0.2, 0.03, -0.025 ]  # LQR gains: [v, theta, theta_dot, psi_dot] x [left, right]
   #  K: [ 0.25, 0.2, 0.05, 0.025, 0.25, 0.2, 0.05, -0.025 ]  # LQR gains: [v, theta, theta_dot, psi_dot] x [left, right]
-  K: [ 0.25, 0.265, 0.035, 0.025, 0.25, 0.265, 0.035, -0.025 ]  # LQR gains: [v, theta, theta_dot, psi_dot] x [left, right]
+  K: [ 0.25, 0.32, 0.035, 0.025, 0.25, 0.32, 0.035, -0.025 ]  # LQR gains: [v, theta, theta_dot, psi_dot] x [left, right]
   tic:
     enabled: true                     # Enable theta integral controller (pitch drift compensation)
     ki: 0.4                           # [Nm/(rad*s)] Integral gain
@@ -31,12 +31,17 @@ balancing_control:
     max_torque: 0.02                  # [Nm] Output saturation
     v_limit: 0.05                     # [m/s] Only active below this speed
     theta_limit: 0.16                 # [rad] Auto-disable above this pitch
+  psi:
+    enabled: false                    # Enable yaw angle PI controller (heading drift compensation)
+    kp: -0.2                           # [Nm/rad] Proportional gain
+    ki: -0.35                          # [Nm/(rad*s)] Integral gain
+    max_torque: 0.05                  # [Nm] Output saturation (differential)
 velocity_control:
   v: # Forward velocity controller
     pid:
       Kp: -0.00                       # [rad/(m/s)] Proportional gain (disabled)
       Kd: -0.0                        # [rad*s/(m/s)] Derivative gain (disabled)
-      Ki: -0.03                       # [rad/(m/s*s)] Integral gain
+      Ki: -0.05                       # [rad/(m/s*s)] Integral gain
       enable_i_limit: false           # Enable integral windup limit
       i_term_limit: 0.0               # [rad] Integral term saturation
       enable_input_limit: false       # Enable input saturation
@@ -50,7 +55,7 @@ velocity_control:
       enable_setpoint_rate_limit: false  # Enable setpoint slew rate limiting
       setpoint_rate_limit: 0.0        # [m/s^2] Setpoint slew rate limit
     feedforward:
-      Kv: -0.26                       # [rad/(m/s)] Viscous friction compensation
+      Kv: -0.25                       # [rad/(m/s)] Viscous friction compensation
       Ka: -0.02                       # [rad/(m/s^2)] Inertia compensation
       Kc: -0.0                        # [rad] Coulomb/stiction compensation (adjusted by roughness)
       enable_vref_slew: true          # Enable velocity reference slew rate limiting
@@ -97,7 +102,7 @@ velocity_control:
       enable_output_slew: false
       output_slew_rate: 0.0
 position_control: # Dense path following (pure pursuit)
-  kp_angular: 8.0                     # [(rad/s)/rad] Heading error proportional gain
+  kp_angular: 4.0                     # [(rad/s)/rad] Heading error proportional gain
   ki_angular: 0.25                    # [(rad/s)/(rad*s)] Heading error integral gain
   kp_linear: 0.0                      # [1/s] Speed proportional gain (unused when decel_limit > 0)
   ki_linear: 0.012                    # [1/s^2] Speed integral gain
@@ -111,7 +116,7 @@ position_control: # Dense path following (pure pursuit)
   stop_dwell_time: 1.0                # [s] Hold time at STOP waypoints
   reverse_enter_angle: 2.1            # [rad] Enter reverse mode (~120 deg)
   reverse_exit_angle: 1.05            # [rad] Exit reverse mode (~60 deg)
-  decel_limit: 0.6                    # [m/s^2] Sqrt deceleration profile (0 = use kp_linear instead)
+  decel_limit: 0.5                    # [m/s^2] Sqrt deceleration profile (0 = use kp_linear instead)
   curvature_gain: 0.2                # [-] Curvature→speed: v = max_speed / (1 + gain * κ). Higher = slower in curves.
   curvature_lookahead: 0.1            # [m] How far ahead to estimate curvature from path points
 planning:

@@ -1,13 +1,13 @@
 import enum
 
 
-class TWIPR_AddressTables(enum.IntEnum):
+class BILBO_AddressTables(enum.IntEnum):
     REGISTER_TABLE_GENERAL = 0x01
 
 import enum
 
 
-class TWIPR_SystemAddresses(enum.IntEnum):
+class BILBO_SystemAddresses(enum.IntEnum):
     # 0x01 - 0x0F : SYSTEM / FIRMWARE
     FIRMWARE_STATE = 0x01
     FIRMWARE_TICK = 0x02
@@ -25,7 +25,7 @@ class TWIPR_SystemAddresses(enum.IntEnum):
     FIRMWARE_RESET = 0xF0
 
 
-class TWIPR_ControlAddresses(enum.IntEnum):
+class BILBO_ControlAddresses(enum.IntEnum):
     # 0x20 - 0x2F : CONTROL (CORE)
     READ_MODE = 0x20
     SET_MODE = 0x21
@@ -56,9 +56,12 @@ class TWIPR_ControlAddresses(enum.IntEnum):
     SET_VELOCITY_INTEGRAL_CONTROL_CONFIG = 0x39
     ENABLE_TIC = 0x3A
     ENABLE_VIC = 0x3B
+    SET_PSI_CONFIG = 0x3C
+    ENABLE_PSI = 0x3D
+    SET_PSI_SETPOINT = 0x3E
 
 
-class TWIPR_PositionControlAddresses(enum.IntEnum):
+class BILBO_PositionControlAddresses(enum.IntEnum):
     # 0x60 - 0x6F : POSITION CONTROL
     SET_CONFIG = 0x60
     GET_CONFIG = 0x61
@@ -78,7 +81,7 @@ class TWIPR_PositionControlAddresses(enum.IntEnum):
     ADD_PATH_BATCH = 0x6F
 
 
-class TWIPR_SequencerAddresses(enum.IntEnum):
+class BILBO_SequencerAddresses(enum.IntEnum):
     # 0x40 - 0x4F : SEQUENCER
     LOAD = 0x40
     START = 0x41
@@ -86,7 +89,7 @@ class TWIPR_SequencerAddresses(enum.IntEnum):
     READ = 0x43
 
 
-class TWIPR_EstimationAddresses(enum.IntEnum):
+class BILBO_EstimationAddresses(enum.IntEnum):
     # 0x50 - 0x5F : ESTIMATION
     SET_THETA_OFFSET = 0x50
     SET_POSITION_STATE = 0x51
@@ -97,3 +100,7 @@ class TWIPR_EstimationAddresses(enum.IntEnum):
     GET_PSIDOT_LPF = 0x56
     SET_PSIDOT_LPF = 0x57
     SET_DEAD_RECKONING_ENABLE = 0x58
+    GET_THETA_DOT_LPF = 0x59
+    SET_THETA_DOT_LPF = 0x5A
+    GET_CONFIG = 0x5B
+    SET_CONFIG = 0x5C

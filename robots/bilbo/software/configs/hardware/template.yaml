@@ -37,6 +37,7 @@ model:
   distance_wheels: 0.00           # meters between wheels
   l_cg: 0.00                      # center of gravity distance (m)
   theta_offset: 0.0               # radians
+  trajectory_delta: 0.0           # Asymmetric torque split: left = u*(0.5+delta), right = u*(0.5-delta)
 
 electronics:
   board_revision: "<board_revision>"     # e.g. "revA"

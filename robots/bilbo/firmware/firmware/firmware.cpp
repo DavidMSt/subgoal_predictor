@@ -1,13 +1,16 @@
 /*
  * firmware.cpp
  *
- *  Created on: Feb 13, 2023
- *      Author: lehmann_workstation
+ * Main entry point for the BILBO firmware.
  *
- *  Description:
- *  Implementation of the TWIPR firmware control functions. This file defines
- *  the core logic for the firmware initialization, tasks, control mechanisms,
- *  and module integration for the TWIPR robot platform.
+ * This file contains the firmware lifecycle:
+ *   firmware()    — spawns the firmware FreeRTOS task
+ *   init()        — configures all modules (comm, sensors, estimation, control, drive, safety, ...)
+ *   start()       — starts all modules and spawns the control task
+ *   task()        — 100 Hz control loop (sequencer → control → logging)
+ *   helperTask()  — background housekeeping (LEDs, debug output)
+ *
+ * The register map wiring (UART register protocol) is in firmware_registers.cpp.
  */
 
 #include "main.h"
@@ -15,314 +18,317 @@
 #include "firmware.hpp"
 #include <stdio.h>
 
-/* Global Firmware Instance */
-TWIPR_Firmware twipr_firmware;
+/* ================================================================
+ * GLOBALS
+ * ================================================================ */
 
-/* DMA-accessible buffer for receiving path points via SPI */
-_RAM_D2 path_point_t path_rx_buffer[BILBO_POSITION_CONTROL_MAX_PATH_POINTS];
+BILBO_Firmware bilbo_firmware;
 
-/* Set the global tick */
 uint32_t tick_global = 0;
 
-/* Register Entries */
+// DMA-accessible buffer for receiving path points via SPI
+_RAM_D2 path_point_t path_rx_buffer[BILBO_POSITION_CONTROL_MAX_PATH_POINTS];
 
-core_utils_RegisterEntry<bool, void> reg_f_reset(&register_map,
-REG_ADDRESS_F_FIRMWARE_RESET, &twipr_firmware, &TWIPR_Firmware::reset);
+/* ================================================================
+ * TASK SETUP
+ * ================================================================ */
 
-/* Firmware State Register Entry */
-core_utils_RegisterEntry<twipr_firmware_state_t, void> reg_fw_state(
-		&register_map, REG_ADDRESS_R_FIRMWARE_STATE,
-		&twipr_firmware.firmware_state);
+static const osThreadAttr_t firmware_task_attributes = {
+		.name = "firmware",
+		.stack_size = 8000 * 4,
+		.priority = (osPriority_t) osPriorityNormal,
+};
 
-/* Firmware Tick Register Entry */
-core_utils_RegisterEntry<uint32_t, void> reg_fw_tick(&register_map,
-REG_ADDRESS_R_FIRMWARE_TICK, &twipr_firmware.tick);
+static const osThreadAttr_t control_task_attributes = {
+		.name = "control",
+		.stack_size = 4000 * 4,
+		.priority = (osPriority_t) osPriorityNormal,
+};
 
-/* Firmware Revision Register Entry */
-core_utils_RegisterEntry<twipr_firmware_revision_t, void> reg_fw_rev(
-		&register_map, REG_ADDRESS_R_FIRMWARE_REVISION,
-		&twipr_firmware.revision);
-
-/* Firmware Beep Function Register Entry */
-core_utils_RegisterEntry<void, buzzer_beep_struct_t> reg_fw_beep(&register_map,
-REG_ADDRESS_F_FIRMWARE_BEEP, &rc_buzzer, &RobotControl_Buzzer::beep);
-
-/* Board Revision Register Entry */
-core_utils_RegisterEntry<uint8_t, void> reg_board_rev(&register_map,
-REG_ADDRESS_R_BOARD_REVISION, &board_revision);
-
-/* Max Wheel Speed Register Entry */
-core_utils_RegisterEntry<float, float> reg_max_speed(&register_map,
-REG_ADDRESS_RW_MAX_WHEEL_SPEED,
-		&twipr_firmware.supervisor.config.max_wheel_speed);
-
-/* External LED Function Register Entry */
-core_utils_RegisterEntry<void, rgb_color_struct_t> reg_set_ext_led(
-		&register_map, REG_ADDRESS_F_EXTERNAL_LED, &extender,
-		&RobotControl_Extender::rgbLEDStrip_extern_setColor);
-
-core_utils_RegisterEntry<void, external_led_colors_struct_t> reg_set_all_ext_led(
-		&register_map, REG_ADDRESS_F_ALL_EXTERNAL_LEDS, &extender,
-		&RobotControl_Extender::rgbLEDStrip_extern_setAllColors);
-
-/* Debug 1 Flag Register Entry */
-core_utils_RegisterEntry<uint8_t, uint8_t> reg_debug1(&register_map,
-REG_ADDRESS_RW_DEBUG_1, &twipr_firmware.debugData.debug1);
-
-/* Control */
-
-/* Read Control Mode Register Entry */
-core_utils_RegisterEntry<bilbo_control_mode_t, void> reg_ctrl_mode(
-		&register_map, REG_ADDRESS_R_CONTROL_MODE,
-		&twipr_firmware.control.mode);
-
-/* Set Control Mode Function Register Entry */
-core_utils_RegisterEntry<bool, bilbo_control_mode_t> reg_set_mode(&register_map,
-REG_ADDRESS_F_CONTROL_SET_MODE, &twipr_firmware.control,
-		&BILBO_Control::set_mode);
-
-/* Set Control Gain Function Register Entry */
-core_utils_RegisterEntry<bool, float[8]> reg_set_gain(&register_map,
-REG_ADDRESS_F_CONTROL_SET_K, &twipr_firmware.control,
-		&BILBO_Control::set_balancing_gain);
-
-/* Set Balancing Input Register Entry */
-core_utils_RegisterEntry<bool, bilbo_control_input_ext_t> reg_set_balancing(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_BALANCING_INPUT,
-		&twipr_firmware.control, &BILBO_Control::set_external_input);
-
-/* Set Speed Input Register Entry */
-core_utils_RegisterEntry<bool, bilbo_velocity_control_command_t> reg_set_speed(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_SPEED_INPUT,
-		&twipr_firmware.control, &BILBO_Control::set_velocity_command);
-
-/* Get Control Configuration Register Entry */
-core_utils_RegisterEntry<bilbo_control_config_t, void> reg_get_ctrl_conf(
-		&register_map, REG_ADDRESS_F_CONTROL_GET_CONFIGURATION,
-		&twipr_firmware.control, &BILBO_Control::get_config);
-
-core_utils_RegisterEntry<bool, pid_control_config_t> reg_set_vel_config_v(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_VELOCITY_CONFIG_V,
-		&twipr_firmware.control, &BILBO_Control::set_vc_pid_v);
-
-core_utils_RegisterEntry<bool, feedforward_config_t> reg_set_vel_config_v_ff(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_VELOCITY_CONFIG_V_FF,
-		&twipr_firmware.control, &BILBO_Control::set_vc_ff_v);
-
-core_utils_RegisterEntry<bool, pid_control_config_t> reg_set_vel_config_psidot(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_VELOCITY_CONFIG_PSIDOT,
-		&twipr_firmware.control, &BILBO_Control::set_vc_pid_psidot);
-
-core_utils_RegisterEntry<bool, feedforward_config_t> reg_set_vel_config_psidot_ff(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_VELOCITY_CONFIG_PSIDOT_FF,
-		&twipr_firmware.control, &BILBO_Control::set_vc_ff_psidot);
-
-core_utils_RegisterEntry<bool, bilbo_tic_config_t> reg_set_tic_config(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_TIC_CONFIG,
-		&twipr_firmware.control, &BILBO_Control::set_tic_config);
-
-core_utils_RegisterEntry<bool, bilbo_vic_config_t> reg_set_vic_config(
-		&register_map, REG_ADDRESS_F_CONTROL_SET_VIC_CONFIG,
-		&twipr_firmware.control, &BILBO_Control::set_vic_config);
-
-core_utils_RegisterEntry<bool, float> reg_set_max_torque(&register_map,
-REG_ADDRESS_F_CONTROL_SET_MAX_TORQUE, &twipr_firmware.control,
-		&BILBO_Control::set_max_torque);
-
-/* Sequencer */
-
-/* Load Sequence Function Register Entry */
-core_utils_RegisterEntry<bool, twipr_sequencer_sequence_data_t> reg_load_seq(
-		&register_map, REG_ADDRESS_F_SEQUENCE_LOAD, &twipr_firmware.sequencer,
-		&BILBO_Sequencer::loadSequence);
-
-/* Read Sequence Data Register Entry */
-core_utils_RegisterEntry<twipr_sequencer_sequence_data_t, void> reg_read_seq(
-		&register_map, REG_ADDRESS_F_SEQUENCE_READ, &twipr_firmware.sequencer,
-		&BILBO_Sequencer::readSequence);
-
-/* Start Sequence Function Register Entry */
-core_utils_RegisterEntry<bool, uint16_t> reg_start_seq(&register_map,
-REG_ADDRESS_F_SEQUENCE_START, &twipr_firmware.sequencer,
-		&BILBO_Sequencer::startSequence);
-
-/* Abort Sequence Function Register Entry */
-core_utils_RegisterEntry<void, void> reg_abort_seq(&register_map,
-REG_ADDRESS_F_SEQUENCE_STOP, &twipr_firmware.sequencer,
-		&BILBO_Sequencer::abortSequence);
-
-//core_utils_RegisterEntry<bool, bilbo_control_config_t> reg_set_control_config(
-//		&register_map,
-//		REG_ADDRESS_F_CONTROL_SET_CONFIGURATION, &twipr_firmware.control,
-//		&BILBO_Control::set_config);
-
-core_utils_RegisterEntry<bool, bool> reg_enable_vel_int_cont(&register_map,
-REG_ADDRESS_F_ENABLE_VELOCITY_INTEGRAL_CONTROL, &twipr_firmware.control,
-		&BILBO_Control::set_vic_enabled);
-
-core_utils_RegisterEntry<bool, float> reg_set_theta_offset(&register_map,
-REG_ADDRESS_F_ESTIMATION_SET_THETA_OFFSET, &twipr_firmware.estimation,
-		&TWIPR_Estimation::setThetaOffset);
-
-core_utils_RegisterEntry<bool, bool> reg_enable_tic(&register_map,
-REG_ADDRESS_F_ENABLE_TIC, &twipr_firmware.control,
-		&BILBO_Control::set_tic_enabled);
-
-core_utils_RegisterEntry<bool, bool> reg_enable_vic(&register_map,
-REG_ADDRESS_F_ENABLE_VIC, &twipr_firmware.control,
-		&BILBO_Control::set_vic_enabled);
-
-core_utils_RegisterEntry<void, bilbo_position_state_t> reg_set_position_state(
-		&register_map,
-		REG_ADDRESS_F_ESTIMATION_SET_POSITION_STATE, &twipr_firmware.estimation,
-		&TWIPR_Estimation::set_position_state);
-
-core_utils_RegisterEntry<void, bilbo_position_state_t> reg_set_position_update(
-		&register_map,
-		REG_ADDRESS_F_ESTIMATION_SET_POSITION_UPDATE,
-		&twipr_firmware.estimation, &TWIPR_Estimation::set_position_update);
-
-/* Position Control Register Entries */
-
-core_utils_RegisterEntry<bool, bilbo_position_control_config_t> reg_position_set_config(
-		&register_map, REG_ADDRESS_F_POSITION_SET_CONFIG,
-		&twipr_firmware.control, &BILBO_Control::set_position_control_config);
-
-core_utils_RegisterEntry<bilbo_position_control_config_t, void> reg_position_get_config(
-		&register_map, REG_ADDRESS_F_POSITION_GET_CONFIG,
-		&twipr_firmware.control, &BILBO_Control::get_position_control_config);
-
-core_utils_RegisterEntry<bool, void> reg_position_clear_path(&register_map,
-		REG_ADDRESS_F_POSITION_CLEAR_PATH, &twipr_firmware.control,
-		&BILBO_Control::position_clear_path);
-
-core_utils_RegisterEntry<bool, path_point_t> reg_position_add_path_point(
-		&register_map, REG_ADDRESS_F_POSITION_ADD_PATH_POINT,
-		&twipr_firmware.control, &BILBO_Control::position_add_path_point);
-
-core_utils_RegisterEntry<bool, bilbo_path_start_cmd_t> reg_position_start_path(
-		&register_map, REG_ADDRESS_F_POSITION_START_PATH,
-		&twipr_firmware.control, &BILBO_Control::position_start_path);
-
-core_utils_RegisterEntry<void, void> reg_position_pause_path(&register_map,
-		REG_ADDRESS_F_POSITION_PAUSE_PATH, &twipr_firmware.control,
-		&BILBO_Control::position_pause_path);
-
-core_utils_RegisterEntry<void, void> reg_position_resume_path(&register_map,
-		REG_ADDRESS_F_POSITION_RESUME_PATH, &twipr_firmware.control,
-		&BILBO_Control::position_resume_path);
-
-core_utils_RegisterEntry<void, void> reg_position_abort_path(&register_map,
-		REG_ADDRESS_F_POSITION_ABORT_PATH, &twipr_firmware.control,
-		&BILBO_Control::position_abort_path);
-
-core_utils_RegisterEntry<bilbo_path_state_t, void> reg_position_path_state(
-		&register_map, REG_ADDRESS_R_POSITION_PATH_STATE,
-		&twipr_firmware.control, &BILBO_Control::position_get_path_state);
-
-core_utils_RegisterEntry<bilbo_position_control_data_t, void> reg_position_data(
-		&register_map, REG_ADDRESS_R_POSITION_DATA, &twipr_firmware.control,
-		&BILBO_Control::position_get_data);
-
-core_utils_RegisterEntry<uint16_t, void> reg_position_path_point_count(&register_map,
-		REG_ADDRESS_R_POSITION_PATH_POINT_COUNT, &twipr_firmware.control,
-		&BILBO_Control::position_get_path_point_count);
-
-core_utils_RegisterEntry<bool, uint16_t> reg_position_add_stop_index(&register_map,
-		REG_ADDRESS_F_POSITION_ADD_STOP_INDEX, &twipr_firmware.control,
-		&BILBO_Control::position_add_stop_index);
-
-core_utils_RegisterEntry<bool, path_points_batch_t> reg_position_add_path_batch(
-		&register_map, REG_ADDRESS_F_POSITION_ADD_PATH_BATCH,
-		&twipr_firmware.control, &BILBO_Control::position_add_path_points_batch);
-
-core_utils_RegisterEntry<bool, turn_to_heading_command_t> reg_position_turn_to_heading(
-		&register_map, REG_ADDRESS_F_POSITION_TURN_TO_HEADING,
-		&twipr_firmware.control, &BILBO_Control::position_turn_to_heading);
-
-core_utils_RegisterEntry<bool, move_to_point_command_t> reg_position_move_to_point(
-		&register_map, REG_ADDRESS_F_POSITION_MOVE_TO_POINT,
-		&twipr_firmware.control, &BILBO_Control::position_move_to_point);
-
-core_utils_RegisterEntry<bool, void> reg_position_reset(&register_map,
-		REG_ADDRESS_F_POSITION_RESET, &twipr_firmware.control,
-		&BILBO_Control::position_reset);
-
-core_utils_RegisterEntry<void, void> reg_estimation_reset(&register_map,
-REG_ADDRESS_F_ESTIMATION_RESET, &twipr_firmware.estimation,
-		&TWIPR_Estimation::reset);
-
-core_utils_RegisterEntry<velocity_lowpass_filter_config_t, void> reg_get_velocity_lpf(
-		&register_map,
-		REG_ADDRESS_F_ESTIMATION_GET_VELOCITY_LPF, &twipr_firmware.estimation,
-		&TWIPR_Estimation::get_velocity_lpf_config);
-
-core_utils_RegisterEntry<void, velocity_lowpass_filter_config_t> reg_set_velocity_lpf(
-		&register_map,
-		REG_ADDRESS_F_ESTIMATION_SET_VELOCITY_LPF, &twipr_firmware.estimation,
-		&TWIPR_Estimation::set_velocity_lpf_config);
-
-core_utils_RegisterEntry<psi_dot_lowpass_filter_config_t, void> reg_get_psidot_lpf(
-		&register_map,
-		REG_ADDRESS_F_ESTIMATION_GET_PSIDOT_LPF, &twipr_firmware.estimation,
-		&TWIPR_Estimation::get_psi_dot_lpf_config);
-
-core_utils_RegisterEntry<void, psi_dot_lowpass_filter_config_t> reg_set_psidot_lpf(
-		&register_map,
-		REG_ADDRESS_F_ESTIMATION_SET_PSIDOT_LPF, &twipr_firmware.estimation,
-		&TWIPR_Estimation::set_psi_dot_lpf_config);
-
-core_utils_RegisterEntry<void, bool> reg_set_dead_reckoning_enable(
-		&register_map,
-		REG_ADDRESS_F_ESTIMATION_SET_DEAD_RECKONING_ENABLE,
-		&twipr_firmware.estimation,
-		&TWIPR_Estimation::set_dead_reckoning_enable);
-
-/* Thread Attributes for Firmware and Control Tasks */
-const osThreadAttr_t firmware_task_attributes = { .name = "firmware",
-		.stack_size = 8000 * 4, .priority = (osPriority_t) osPriorityNormal, };
-
-const osThreadAttr_t control_task_attributes = { .name = "control",
-		.stack_size = 4000 * 4, .priority = (osPriority_t) osPriorityNormal, };
-
-elapsedMillis activityTimer;
-elapsedMillis infoTimer;
-
-/**
- * @brief Initializes and starts the firmware task.
- *
- * This is the entry point from the main function that spawns the firmware task.
- */
 void firmware() {
-	osThreadNew(start_firmware_task, (void*) &twipr_firmware,
+	osThreadNew(start_firmware_task, (void*) &bilbo_firmware,
 			&firmware_task_attributes);
 }
 
-/**
- * @brief Task wrapper to execute the firmware's main task function.
- * @param argument Pointer to the firmware object.
- *
- * This function casts the argument to a TWIPR_Firmware pointer and calls the helperTask.
- */
-
 void start_firmware_task(void *argument) {
-	TWIPR_Firmware *firmware = (TWIPR_Firmware*) argument;
-	// Start the helper task (core firmware loop)
-	firmware->helperTask();
+	((BILBO_Firmware*) argument)->helperTask();
 }
 
-/**
- * @brief Main firmware task logic.
- *
- * Initializes firmware components, provides feedback via buzzer and LEDs, then
- * enters the main loop for periodic control tasks.
- */
-void TWIPR_Firmware::helperTask() {
-	// Initialize firmware modules and configurations
-	HAL_StatusTypeDef status;
-	status = this->init();
+void start_firmware_control_task(void *argument) {
+	((BILBO_Firmware*) argument)->task();
+}
+
+/* ================================================================
+ * INIT — configure all modules
+ * ================================================================ */
+
+HAL_StatusTypeDef BILBO_Firmware::init() {
+
+	// --- Board-level peripherals ---
+
+	robot_control_init();
+	robot_control_start();
+	io_start();
+
+	rc_rgb_led_status.setColor(120, 40, 0);  // Orange = startup
+	rc_rgb_led_status.state(1);
+	rc_buzzer.setConfig(800, 250, 1);
+	rc_buzzer.start();
+	osDelay(250);
+
+	// --- Error handler ---
+
+	bilbo_error_handler_config_t error_handler_config = {
+			.firmware = this };
+	this->error_handler.init(error_handler_config);
+
+	// --- Communication (UART + SPI + Modbus) ---
+
+	bilbo_communication_config_t comm_config = {
+			.huart                    = BOARD_CM4_UART,
+			.hspi                     = BOARD_SPI_CM4,
+			.sample_notification_gpio = core_utils_GPIO(CM4_SAMPLE_NOTIFICATION_PORT,
+			                                            CM4_SAMPLE_NOTIFICATION_PIN),
+			.sequence_rx_buffer       = this->sequencer.rx_buffer,
+			.len_sequence_buffer      = BILBO_SEQUENCE_BUFFER_SIZE,
+			.path_rx_buffer           = (uint8_t*) path_rx_buffer,
+			.len_path_buffer          = BILBO_POSITION_CONTROL_MAX_PATH_POINTS,
+			.reset_uart_exti          = CM4_UART_RESET_EXTI,
+			.modbus_huart             = BOARD_RS485_UART,
+			.modbus_gpio_port         = BOARD_RS485_UART_EN_GPIOx,
+			.modbus_gpio_pin          = BOARD_RS485_UART_EN_GPIO_PIN,
+	};
+	this->comm.init(comm_config);
+	this->comm.start();
+
+	// --- Sensors ---
+
+	bilbo_sensors_config_t sensors_config = {
+			.drive = &this->drive };
+	this->sensors.init(sensors_config);
+
+	// --- Estimation ---
+
+	bilbo_estimation_init_config_t estimation_config = {
+			.drive   = &this->drive,
+			.sensors = &this->sensors };
+	this->estimation.init(estimation_config);
+
+	// --- Control ---
+
+	bilbo_control_init_config_t control_config = {
+			.estimation = &this->estimation,
+			.drive      = &this->drive,
+			.Ts         = 1.0f / BILBO_CONTROL_TASK_FREQ,
+	};
+	this->control.init(control_config);
+
+	// Wire SPI path receive into position control
+	this->control.spi_path_rx_buffer = path_rx_buffer;
+	this->comm.callbacks.path_received.registerFunction(
+			&this->control, &BILBO_Control::position_spi_path_received);
+
+	// --- Motors ---
+
+#ifdef BILBO_DRIVE_SIMPLEXMOTION_CAN
+	simplexmotion_can_config_t config_motor_left = {
+			.can = &this->comm.can,
+			.id = 1, .direction = -1,
+			.torque_limit = BILBO_MOTOR_TORQUE_LIMIT };
+	this->motor_left = SimplexMotion_CAN();
+	this->motor_left.init(config_motor_left);
+
+	simplexmotion_can_config_t config_motor_right = {
+			.can = &this->comm.can,
+			.id = 2, .direction = 1,
+			.torque_limit = BILBO_MOTOR_TORQUE_LIMIT };
+	this->motor_right = SimplexMotion_CAN();
+	this->motor_right.init(config_motor_right);
+#endif
+
+#ifdef BILBO_DRIVE_SIMPLEXMOTION_RS485
+	simplexmotion_rs485_config_t config_motor_right = {
+			.modbus = &this->comm.modbus,
+			.id = 2, .direction = 1,
+			.torque_limit = BILBO_MOTOR_TORQUE_LIMIT };
+	this->motor_right.init(config_motor_right);
+
+	simplexmotion_rs485_config_t config_motor_left = {
+			.modbus = &this->comm.modbus,
+			.id = 1, .direction = -1,
+			.torque_limit = BILBO_MOTOR_TORQUE_LIMIT };
+	this->motor_left.init(config_motor_left);
+#endif
+
+	// --- Drive ---
+
+	bilbo_drive_config_t drive_config = {
+			.type      = BILBO_DRIVE_TYPE,
+			.torque_max = BILBO_MOTOR_TORQUE_LIMIT,
+			.task_time  = BILBO_DRIVE_TASK_TIME };
+	this->drive.init(drive_config, &this->motor_left, &this->motor_right);
+
+	// --- Safety ---
+
+	bilbo_supervisor_config_t supervisor_config = {
+			.estimation      = &this->estimation,
+			.drive           = &this->drive,
+			.control         = &this->control,
+			.communication   = &this->comm,
+			.off_button      = &off_button,
+			.max_wheel_speed = BILBO_SAFETY_MAX_WHEEL_SPEED,
+	};
+	this->supervisor.init(supervisor_config);
+
+	// --- Sequencer ---
+
+	bilbo_sequencer_config_t sequencer_config = {
+			.control = &this->control,
+			.comm    = &this->comm,
+	};
+	this->sequencer.init(sequencer_config);
+
+	// --- Logging ---
+
+	bilbo_logging_config_t logging_config = {
+			.firmware      = this,
+			.control       = &this->control,
+			.estimation    = &this->estimation,
+			.sensors       = &this->sensors,
+			.sequencer     = &this->sequencer,
+			.error_handler = &this->error_handler,
+	};
+	this->logging.init(logging_config);
+
+	this->debugData = bilbo_debug_sample_t { 0 };
+
+	return HAL_OK;
+}
+
+/* ================================================================
+ * START — launch all modules and spawn the control task
+ * ================================================================ */
+
+HAL_StatusTypeDef BILBO_Firmware::start() {
+	this->sensors.start();
+	this->estimation.start();
+
+	HAL_StatusTypeDef status = this->drive.start();
+	if (status) {
+		while (true) { nop(); }
+	}
+
+	this->control.start();
+	this->supervisor.start();
+	this->sequencer.start();
+
+	osThreadNew(start_firmware_control_task, (void*) &bilbo_firmware,
+			&control_task_attributes);
+
+	this->firmware_state = BILBO_FIRMWARE_STATE_RUNNING;
+	return HAL_OK;
+}
+
+/* ================================================================
+ * RESET — soft-restart without power cycle
+ * ================================================================ */
+
+bool BILBO_Firmware::reset() {
+	this->firmware_state = BILBO_FIRMWARE_STATE_NONE;
+	osDelay(20);
+
+	this->comm.resetSPI();
+	this->logging.reset();
+	this->control.stop();
+	osDelay(20);
+
+	this->tick = 0;
+	tick_global = 0;
+
+	rc_buzzer.setConfig(900, 250, 1);
+	rc_buzzer.start();
+
+	this->firmware_state = BILBO_FIRMWARE_STATE_RUNNING;
+	return true;
+}
+
+/* ================================================================
+ * TASK — 100 Hz control loop
+ * ================================================================ */
+
+static elapsedMillis activityTimer;
+static elapsedMillis infoTimer;
+
+void BILBO_Firmware::task() {
+	uint32_t osTick;
+	uint32_t loop_time;
+
+	while (true) {
+		osTick = osKernelGetTickCount();
+
+		// Activity LED heartbeat (250 ms toggle)
+		if (activityTimer > 250) {
+			activityTimer.reset();
+			rc_activity_led.toggle();
+		}
+
+		// Periodic debug output (every 10 s)
+		if (infoTimer >= 10000) {
+			infoTimer.reset();
+			send_debug("Firmware state: %d, Tick: %d",
+					this->firmware_state, this->tick);
+		}
+
+		// State machine
+		switch (this->firmware_state) {
+
+		case BILBO_FIRMWARE_STATE_RUNNING:
+			this->sequencer.update();
+			this->control.update();
+
+			sample_buffer_state = this->logging.collectSamples();
+			if (sample_buffer_state == BILBO_LOGGING_BUFFER_FULL) {
+				this->comm.provideSampleData(this->logging.sample_buffer);
+			}
+
+			rc_rgb_led_status.setColor(0, 60, 0);  // Green = running
+			this->tick++;
+			tick_global = this->tick;
+			break;
+
+		case BILBO_FIRMWARE_STATE_NONE:
+			rc_rgb_led_status.setColor(2, 2, 2);   // Dim white = idle
+			break;
+
+		case BILBO_FIRMWARE_STATE_ERROR:
+			rc_rgb_led_status.setColor(120, 0, 0);  // Red = error
+			extender.rgbLEDStrip_extern_setColor({ 100, 0, 0 });
+			break;
+
+		default:
+			rc_rgb_led_status.setColor(120, 0, 0);
+			break;
+		}
+
+		// Overrun detection
+		loop_time = osKernelGetTickCount() - osTick;
+		if (loop_time > (1000.0 / (float) BILBO_CONTROL_TASK_FREQ)) {
+			setError(BILBO_ERROR_CRITICAL, BILBO_ERROR_FIRMWARE_RACECONDITION);
+			send_error("Loop time exceeded %d ms. Shutdown", loop_time);
+			this->firmware_state = BILBO_FIRMWARE_STATE_ERROR;
+		}
+
+		osDelayUntil(osTick + (uint32_t) (1000.0 / (float) BILBO_CONTROL_TASK_FREQ));
+	}
+}
+
+/* ================================================================
+ * HELPER TASK — background housekeeping (LEDs, buzzer)
+ * ================================================================ */
+
+void BILBO_Firmware::helperTask() {
+	HAL_StatusTypeDef status = this->init();
 	if (status == HAL_ERROR) {
-		// Halt if initialization fails
 		setError(BILBO_ERROR_CRITICAL, BILBO_ERROR_INIT);
 		send_error("Error during initialization");
 		return;
@@ -335,403 +341,52 @@ void TWIPR_Firmware::helperTask() {
 		return;
 	}
 
-	// Signal successful initialization with a beep
 	rc_buzzer.setConfig(900, 250, 1);
 	rc_buzzer.start();
 
-	// Initialize LED states
 	rc_rgb_led_side_1.setColor(0, 0, 0);
 	rc_rgb_led_side_1.state(1);
-
-	elapsedMillis debug_timer;
-
 	this->updateExternalLedStrip(bilbo_control_mode_t::OFF);
 
-	// Main task loop
 	while (true) {
-		// Update control mode LED periodically as a refresh/fallback (100ms)
 		if (this->timer_control_mode_led >= 250) {
 			this->timer_control_mode_led.reset();
-//			this->setControlModeLed();
-////
-//			if (this->control.mode == bilbo_control_mode_t::OFF) {
-//
-//				// Pale white (very dim)
-//				extender.rgbLEDStrip_extern_setColor( { 3, 3, 3 });
-//
-//			} else if (this->control.mode == bilbo_control_mode_t::BALANCING) {
-//
-//				// Soft green
-//				extender.rgbLEDStrip_extern_setColor( { 0, 6, 0 });
-//
-//			} else if (this->control.mode == bilbo_control_mode_t::VELOCITY) {
-//
-//				// Soft turquoise (green + blue)
-//				extender.rgbLEDStrip_extern_setColor( { 0, 6, 6 });
-//
-//			} else if (this->control.mode == bilbo_control_mode_t::POSITION) {
-//
-//				// Soft purple (red + blue) - includes waypoint path following
-//				extender.rgbLEDStrip_extern_setColor( { 5, 0, 5 });
-//			}
-
-		}
-
-		// Debug timer reset every 1000ms
-		if (debug_timer >= 1000) {
-//        	info("STM32 Tick: %d", tick_global);
-			debug_timer.reset();
 		}
 		osDelay(100);
 	}
 }
 
-/**
- * @brief Initializes all firmware modules and configurations.
- *
- * Sets up robot control, peripherals, communication, sensors, estimation,
- * control, drive, safety, sequencer, and logging modules.
- *
- * @return HAL_OK if initialization succeeds, or an error status.
- */
-HAL_StatusTypeDef TWIPR_Firmware::init() {
-	// Initialize robot control and peripheral modules
-	robot_control_init();
-	robot_control_start();
-	io_start();
+/* ================================================================
+ * UTILITY FUNCTIONS
+ * ================================================================ */
 
-	// Setup RGB LED and buzzer for feedback
-	rc_rgb_led_status.setColor(120, 40, 0); // Orange color indicates startup
-	rc_rgb_led_status.state(1);
-	rc_buzzer.setConfig(800, 250, 1);
-	rc_buzzer.start();
-	osDelay(250); // Allow peripherals to initialize
-
-	bilbo_error_handler_config_t error_handler_config = { .firmware = this };
-	this->error_handler.init(error_handler_config);
-
-	// Communication module configuration
-	twipr_communication_config_t twipr_comm_config = { .huart = BOARD_CM4_UART,
-			.hspi = BOARD_SPI_CM4, .sample_notification_gpio = core_utils_GPIO(
-			CM4_SAMPLE_NOTIFICATION_PORT, CM4_SAMPLE_NOTIFICATION_PIN),
-			.sequence_rx_buffer = this->sequencer.rx_buffer,
-			.len_sequence_buffer = TWIPR_SEQUENCE_BUFFER_SIZE,
-			.path_rx_buffer = (uint8_t*) path_rx_buffer,
-			.len_path_buffer = BILBO_POSITION_CONTROL_MAX_PATH_POINTS,
-			.reset_uart_exti = CM4_UART_RESET_EXTI, .modbus_huart =
-			BOARD_RS485_UART, .modbus_gpio_port =
-			BOARD_RS485_UART_EN_GPIOx, .modbus_gpio_pin =
-			BOARD_RS485_UART_EN_GPIO_PIN };
-	this->comm.init(twipr_comm_config);
-	this->comm.start();
-
-	// Sensors initialization
-	twipr_sensors_config_t twipr_sensors_config = { .drive = &this->drive };
-	this->sensors.init(twipr_sensors_config);
-
-	// Estimation module configuration
-	twipr_estimation_config_t twipr_estimation_config = { .drive = &this->drive,
-			.sensors = &this->sensors };
-	this->estimation.init(twipr_estimation_config);
-
-	// Control module initialization
-	bilbo_control_init_config_t bilbo_control_config = { .estimation =
-			&this->estimation, .drive = &this->drive, .Ts =
-	BILBO_CONTROL_TASK_TIME, };
-	this->control.init(bilbo_control_config);
-
-	// Set up SPI path receive: give control the DMA buffer pointer and register callback
-	this->control.spi_path_rx_buffer = path_rx_buffer;
-	this->comm.callbacks.path_received.registerFunction(&this->control,
-			&BILBO_Control::position_spi_path_received);
-
-	// Register callback for immediate LED update on mode change
-//	this->control.callbacks.mode_change.registerFunction(this,
-//			&TWIPR_Firmware::updateExternalLedStrip);
-
-	// Drive configuration
-
-	// ------------------------------------------------------------------
-#ifdef BILBO_DRIVE_SIMPLEXMOTION_CAN
-	// Initialize both motors
-	simplexmotion_can_config_t config_motor_left = { .can = &this->comm.can,
-			.id = 1, .direction = -1, .torque_limit = 0.4 };
-
-	this->motor_left = SimplexMotion_CAN();
-	this->motor_left.init(config_motor_left);
-
-	simplexmotion_can_config_t config_motor_right = { .can = &this->comm.can,
-			.id = 2, .direction = 1, .torque_limit = 0.4 };
-
-	this->motor_right = SimplexMotion_CAN();
-	this->motor_right.init(config_motor_right);
-
-#endif
-
-	// ------------------------------------------------------------------
-#ifdef BILBO_DRIVE_SIMPLEXMOTION_RS485
-	simplexmotion_rs485_config_t config_motor_right = { .modbus =
-			&this->comm.modbus, .id = 2, .direction = 1, .torque_limit = 0.4 };
-	this->motor_right.init(config_motor_right);
-
-	simplexmotion_rs485_config_t config_motor_left = { .modbus =
-			&this->comm.modbus, .id = 1, .direction = -1, .torque_limit = 0.4 };
-	this->motor_left.init(config_motor_left);
-
-#endif
-
-	// ------------------------------------------------------------------
-
-	bilbo_drive_config_t drive_config = { .type = BILBO_DRIVE_TYPE,
-			.torque_max = 0.4, .task_time = BILBO_DRIVE_TASK_TIME };
-
-	this->drive.init(drive_config, &this->motor_left, &this->motor_right);
-
-	// Safety module initialization
-	twipr_supervisor_config_t supervisor_config = { .estimation =
-			&this->estimation, .drive = &this->drive, .control = &this->control,
-			.communication = &this->comm, .off_button = &off_button,
-			.max_wheel_speed = TWIPR_SAFETY_MAX_WHEEL_SPEED, };
-	this->supervisor.init(supervisor_config);
-
-	// Sequencer module setup
-	twipr_sequencer_config_t sequencer_config = { .control = &this->control,
-			.comm = &this->comm, };
-	this->sequencer.init(sequencer_config);
-
-	// Logging module configuration
-	twipr_logging_config_t logging_config = { .firmware = this, .control =
-			&this->control, .estimation = &this->estimation, .sensors =
-			&this->sensors, .sequencer = &this->sequencer, .error_handler =
-			&this->error_handler };
-	this->logging.init(logging_config);
-
-	// Initialize debug data
-	this->debugData = twipr_debug_sample_t { 0 };
-
-	return HAL_OK;
+bilbo_logging_general_t BILBO_Firmware::getSample() {
+	return { .state = this->firmware_state };
 }
 
-/**
- * @brief Starts the firmware components and control tasks.
- *
- * This function starts sensors, estimation, drive, control, safety,
- * sequencer modules, and creates the control task.
- *
- * @return HAL_OK if all modules start successfully.
- */
-HAL_StatusTypeDef TWIPR_Firmware::start() {
-	// Start sensors and estimation modules
-	this->sensors.start();
-	this->estimation.start();
-
-	HAL_StatusTypeDef status = this->drive.start();
-	if (status) {
-		while (true) {
-			nop();
-		}
-	}
-
-	// Start control and safety modules
-	this->control.start();
-
-	this->supervisor.start();
-
-	// Start sequencer module
-	this->sequencer.start();
-
-	// Create the control task thread
-	osThreadNew(start_firmware_control_task, (void*) &twipr_firmware,
-			&control_task_attributes);
-
-	// Set firmware state to running
-	this->firmware_state = TWIPR_FIRMWARE_STATE_RUNNING;
-	return HAL_OK;
-}
-
-bool TWIPR_Firmware::reset() {
-
-	this->firmware_state = TWIPR_FIRMWARE_STATE_NONE;
-	osDelay(20);
-
-	this->comm.resetSPI();
-	this->logging.reset();
-	this->control.stop();
-	osDelay(20);
-	this->tick = 0;
-	tick_global = 0;
-
-	rc_buzzer.setConfig(900, 250, 1);
-	rc_buzzer.start();
-
-	this->firmware_state = TWIPR_FIRMWARE_STATE_RUNNING;
-
-	return true;
-}
-
-/**
- * @brief Main control task function for the firmware.
- *
- * Ensures periodic execution of control logic and handles errors.
- * It measures loop time and triggers error handling if the loop overruns.
- */
-void TWIPR_Firmware::task() {
-
-	uint32_t osTick;  // Current system tick
-	uint32_t loop_time;    // Duration of one control loop
-
-	while (true) {
-		osTick = osKernelGetTickCount();  // Record start tick
-
-		// Toggle activity LED every 250ms
-		if (activityTimer > 250) {
-			activityTimer.reset();
-			rc_activity_led.toggle();
-		}
-		if (infoTimer >= 10000) {
-			infoTimer.reset();
-			send_debug("Firmware state: %d, Tick: %d", this->firmware_state,
-					this->tick);
-		}
-
-		switch (this->firmware_state) {
-
-		case TWIPR_FIRMWARE_STATE_RUNNING: {
-
-//			// Check safety module for errors
-//			bilbo_error_type_t error = this->supervisor.check();
-//
-//			if (error != TWIPR_ERROR_NONE) {
-//				this->errorHandler(error);
-//			}
-
-			// Update sequencer
-			this->sequencer.update();
-
-			// Update Control Module
-			this->control.update();
-
-			// Collect and send logging samples if buffer is full
-			sample_buffer_state = this->logging.collectSamples();
-
-			if (sample_buffer_state == TWIPR_LOGGING_BUFFER_FULL) {
-				this->comm.provideSampleData(this->logging.sample_buffer);
-			}
-
-			// Set status LED to green indicating normal operation
-			rc_rgb_led_status.setColor(0, 60, 0);
-
-			// Increment firmware tick counter
-			this->tick++;
-			tick_global = this->tick;
-
-			break;
-		}
-		case TWIPR_FIRMWARE_STATE_NONE: {
-			rc_rgb_led_status.setColor(2, 2, 2);
-			break;
-		}
-
-		case TWIPR_FIRMWARE_STATE_ERROR: {
-			// Set LED to red in error state
-			rc_rgb_led_status.setColor(120, 0, 0);
-			extender.rgbLEDStrip_extern_setColor( { 100, 0, 0 });
-			break;
-		}
-		default: {
-			// Fallback for undefined states
-			rc_rgb_led_status.setColor(120, 0, 0);
-			break;
-		}
-
-		}
-
-		// Calculate elapsed time for the loop
-		loop_time = osKernelGetTickCount() - osTick;
-
-		// If loop time exceeds allowed period, flag an error
-		if (loop_time > (1000.0 / (float) TWIPR_CONTROL_TASK_FREQ)) {
-			setError(BILBO_ERROR_MAJOR, BILBO_ERROR_FIRMWARE_RACECONDITION);
-			send_error("Loop time exceeded %d ms. Shutdown", loop_time);
-			this->firmware_state = TWIPR_FIRMWARE_STATE_ERROR;
-		}
-
-		// Delay until next cycle
-		osDelayUntil(
-				osTick + (uint32_t) (1000.0 / (float) TWIPR_CONTROL_TASK_FREQ));
+void BILBO_Firmware::setControlModeLed() {
+	if (this->firmware_state == BILBO_FIRMWARE_STATE_RUNNING) {
+		if (this->control.mode == bilbo_control_mode_t::OFF)
+			rc_rgb_led_side_1.setColor(2, 2, 2);     // White = OFF
+		else if (this->control.mode == bilbo_control_mode_t::BALANCING)
+			rc_rgb_led_side_1.setColor(0, 70, 0);    // Green = balancing
+		else if (this->control.mode == bilbo_control_mode_t::VELOCITY)
+			rc_rgb_led_side_1.setColor(0, 0, 60);    // Blue = velocity
+	} else if (this->firmware_state == BILBO_FIRMWARE_STATE_ERROR) {
+		rc_rgb_led_side_1.setColor(100, 0, 0);       // Red = error
 	}
 }
 
-/**
- * @brief Wrapper function to start the control task.
- *
- * This function casts the argument to a firmware pointer and calls controlTask().
- * @param argument Pointer to the firmware object.
- */
-void start_firmware_control_task(void *argument) {
-	TWIPR_Firmware *firmware = (TWIPR_Firmware*) argument;
-	firmware->task();
-}
-
-/**
- * @brief Retrieves a logging sample with the current firmware state.
- *
- * @return A logging structure containing the current tick, state, and error code.
- */
-twipr_logging_general_t TWIPR_Firmware::getSample() {
-	twipr_logging_general_t sample = { .state = this->firmware_state };
-	return sample;
-}
-
-/**
- * @brief Updates the side LED color based on the current control mode.
- *
- * Changes the LED color to represent:
- * - Red: OFF mode
- * - Amber: Balancing mode
- * - Green: Velocity mode
- */
-void TWIPR_Firmware::setControlModeLed() {
-	if (this->firmware_state == TWIPR_FIRMWARE_STATE_RUNNING) {
-		if (this->control.mode == bilbo_control_mode_t::OFF) {
-			rc_rgb_led_side_1.setColor(2, 2, 2); // White for OFF mode
-		} else if (this->control.mode == bilbo_control_mode_t::BALANCING) {
-			rc_rgb_led_side_1.setColor(0, 70, 0); // Amber for balancing
-		} else if (this->control.mode == bilbo_control_mode_t::VELOCITY) {
-			rc_rgb_led_side_1.setColor(0, 0, 60); // Blue
-		}
-	} else if (this->firmware_state == TWIPR_FIRMWARE_STATE_ERROR) {
-		rc_rgb_led_side_1.setColor(100, 0, 00); // Red
-	}
-
-}
-
-/**
- * @brief Updates the external WS2812 LED strip color immediately when mode changes.
- *
- * This callback is called whenever the control mode changes to provide
- * immediate visual feedback. Colors:
- * - White (dim): OFF mode
- * - Green: BALANCING mode
- * - Turquoise (cyan): VELOCITY mode
- * - Purple: POSITION mode
- *
- * @param mode The new control mode
- */
-void TWIPR_Firmware::updateExternalLedStrip(bilbo_control_mode_t mode) {
+void BILBO_Firmware::updateExternalLedStrip(bilbo_control_mode_t mode) {
 	switch (mode) {
 	case bilbo_control_mode_t::OFF:
-		extender.rgbLEDStrip_extern_setColor({ 3, 3, 3 });  // Pale white
-		break;
+		extender.rgbLEDStrip_extern_setColor({ 3, 3, 3 });    break;
 	case bilbo_control_mode_t::BALANCING:
-		extender.rgbLEDStrip_extern_setColor({ 0, 6, 0 });  // Soft green
-		break;
+		extender.rgbLEDStrip_extern_setColor({ 0, 6, 0 });    break;
 	case bilbo_control_mode_t::VELOCITY:
-		extender.rgbLEDStrip_extern_setColor({ 0, 6, 6 });  // Turquoise
-		break;
+		extender.rgbLEDStrip_extern_setColor({ 0, 6, 6 });    break;
 	case bilbo_control_mode_t::POSITION:
-		extender.rgbLEDStrip_extern_setColor({ 5, 0, 5 });  // Purple
-		break;
+		extender.rgbLEDStrip_extern_setColor({ 5, 0, 5 });    break;
 	default:
 		break;
 	}

@@ -1,0 +1,53 @@
+id: limbobar_dilc_test
+description: Template LimboBar DILC experiment
+
+# Number of learning trials.
+J: 5
+
+# Sample period in seconds. Must match the firmware control loop (100 Hz -> 0.01).
+Ts: 0.01
+
+# Desired output trajectory (theta/pitch angle profile).
+# Either a path to a .botrj file or an inline array of floats.
+reference: bumped_reference.botrj
+
+# Starting pose the robot navigates to before each trial.
+initial_conditions:
+  x: 0.0
+  y: 0.0
+  psi: 0.0
+
+# Limbo bar geometry for collision detection.
+# The bar is a horizontal line segment at the given height.
+# start_x/end_x and start_y/end_y define the endpoints of the bar in world coordinates.
+# height is the bar's elevation above the ground in meters.
+limbo_bar:
+  start_x: -0.5
+  end_x: 0.5
+  start_y: 0.3
+  end_y: 0.3
+  height: 0.25
+
+# ILC input Q-filter
+input_lowpass:
+  fc: 0.05
+  L: 41
+  window: hann
+
+# IML model Q-filter
+model_lowpass:
+  fc: 0.4
+  L: 41
+  window: hann
+
+# Parameters for random initial input trajectory generation (u0).
+u0_params:
+  f_cutoff: 1.5
+  sigma: 0.2
+  bias: -0.03
+
+meta:
+  automatic_initial_conditions_reset: true
+  check_if_robot_is_static: true
+  auto_start_trials: false
+  auto_accept_trials: false

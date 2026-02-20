@@ -32,6 +32,7 @@ import {CollapsibleContainer, ContainerWrapperWidget, GUI_Container, GUI_Contain
 import {JoystickAssignmentWidget} from "./js/joystick_assignment.js";
 import {BilboModeWidget} from "./js/bilbo_mode.js";
 import {CameraWidget} from "./js/camera.js";
+import {BilboLimboWidget} from "./js/bilbo_limbo.js";
 
 export let OBJECT_MAPPING = {
     'ButtonWidget': ButtonWidget,
@@ -76,5 +77,6 @@ export let OBJECT_MAPPING = {
     'digital_clock': DigitalClockWidget,
     'joystick_assignment': JoystickAssignmentWidget,
     'bilbo_mode': BilboModeWidget,
-    'camera': CameraWidget
+    'camera': CameraWidget,
+    'bilbo_limbo': BilboLimboWidget
 }

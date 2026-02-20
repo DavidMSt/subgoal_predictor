@@ -8,7 +8,7 @@
 #ifndef FIRMWARE_ADRESSES_H_
 #define FIRMWARE_ADRESSES_H_
 
-#define TWIPR_REGISTER_MAP_GENERAL 0x01
+#define BILBO_REGISTER_MAP_GENERAL 0x01
 
 // Register Maps and Messages on the CM4
 #define CM4_STANDARD_REGISTER_MAP 0x01
@@ -64,7 +64,10 @@
 #define REG_ADDRESS_F_SET_VELOCITY_INTEGRAL_CONTROL_CONFIG 0x39
 #define REG_ADDRESS_F_ENABLE_TIC                           0x3A
 #define REG_ADDRESS_F_ENABLE_VIC                           0x3B
-// 0x3C - 0x3F reserved
+#define REG_ADDRESS_F_CONTROL_SET_PSI_CONFIG               0x3C
+#define REG_ADDRESS_F_ENABLE_PSI                           0x3D
+#define REG_ADDRESS_F_SET_PSI_SETPOINT                     0x3E
+// 0x3F reserved
 
 // ================================
 // 0x40 - 0x4F : SEQUENCER
@@ -107,7 +110,10 @@
 #define REG_ADDRESS_F_ESTIMATION_GET_PSIDOT_LPF      0x56
 #define REG_ADDRESS_F_ESTIMATION_SET_PSIDOT_LPF      0x57
 #define REG_ADDRESS_F_ESTIMATION_SET_DEAD_RECKONING_ENABLE 0x58
-// 0x59 - 0x5F reserved
+#define REG_ADDRESS_F_ESTIMATION_GET_THETA_DOT_LPF       0x59
+#define REG_ADDRESS_F_ESTIMATION_SET_THETA_DOT_LPF       0x5A
+#define REG_ADDRESS_F_ESTIMATION_GET_CONFIG              0x5B
+#define REG_ADDRESS_F_ESTIMATION_SET_CONFIG              0x5C
 
 // ================================
 // 0xF0 - 0xFF : SYSTEM SPECIAL

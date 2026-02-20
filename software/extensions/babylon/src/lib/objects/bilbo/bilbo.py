@@ -52,6 +52,11 @@ class BabylonBilbo(BabylonObject):
         self.setOrientation(theta, psi)
 
     # ------------------------------------------------------------------------------------------------------------------
+    def set_color(self, color: list):
+        self.config['color'] = color
+        self.function('setColor', color=color)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def getConfig(self) -> dict:
         config = {
             **self.config,

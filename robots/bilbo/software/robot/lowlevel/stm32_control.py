@@ -1,9 +1,9 @@
 # stm32_control.py
 #
-# ctypes mirror of the STM32-side control types (BILBO / TWIPR)
+# ctypes mirror of the STM32-side control types (BILBO / BILBO)
 # Based on:
 #   - bilbo_control.h
-#   - twipr_balancing_control.h
+#   - bilbo_balancing_control.h
 #   - bilbo_velocity_control.h
 #   - bilbo_position_control.h
 #   - bilbo_vic_tic.h
@@ -51,15 +51,15 @@ class bilbo_control_status_t(enum.IntEnum):
     ERROR = -1
 
 
-class twipr_balancing_control_mode_t(enum.IntEnum):
-    # enum class twipr_balancing_control_mode_t : uint8_t
+class bilbo_balancing_control_mode_t(enum.IntEnum):
+    # enum class bilbo_balancing_control_mode_t : uint8_t
     OFF = 0
     DIRECT = 1
     ON = 2
 
 
-class twipr_balancing_control_status_t(enum.IntEnum):
-    # enum class twipr_balancing_control_status_t : int8_t
+class bilbo_balancing_control_status_t(enum.IntEnum):
+    # enum class bilbo_balancing_control_status_t : int8_t
     NONE = 0
     IDLE = 1
     ERROR = -1
@@ -109,6 +109,7 @@ class control_event_t(enum.IntEnum):
     CONTROL_CONFIG_CHANGED = 2
     VIC_CHANGED = 3
     TIC_CHANGED = 4
+    PSI_CHANGED = 5
 
 
 # =============================================================================
@@ -158,7 +159,7 @@ class bilbo_control_output_t(ctypes.Structure):
 
 
 @dataclass
-class twipr_balancing_control_config:
+class bilbo_balancing_control_config:
     K: List[float] = field(default_factory=lambda: _float_list(8))
     pitch_offset: float = 0.0
 
@@ -166,8 +167,8 @@ class twipr_balancing_control_config:
         _require_len("K", self.K, 8)
 
 
-class twipr_balancing_control_config_t(ctypes.Structure):
-    # typedef struct twipr_balancing_control_config_t { float K[8]; float pitch_offset; }
+class bilbo_balancing_control_config_t(ctypes.Structure):
+    # typedef struct bilbo_balancing_control_config_t { float K[8]; float pitch_offset; }
     _fields_ = [
         ("K", ctypes.c_float * 8),
         ("pitch_offset", ctypes.c_float),
@@ -175,13 +176,13 @@ class twipr_balancing_control_config_t(ctypes.Structure):
 
 
 @dataclass
-class twipr_balancing_control_input:
+class bilbo_balancing_control_input:
     u_1: float = 0.0
     u_2: float = 0.0
 
 
-class twipr_balancing_control_input_t(ctypes.Structure):
-    # typedef struct twipr_balancing_control_input_t { float u_1; float u_2; }
+class bilbo_balancing_control_input_t(ctypes.Structure):
+    # typedef struct bilbo_balancing_control_input_t { float u_1; float u_2; }
     _fields_ = [
         ("u_1", ctypes.c_float),
         ("u_2", ctypes.c_float),
@@ -189,13 +190,13 @@ class twipr_balancing_control_input_t(ctypes.Structure):
 
 
 @dataclass
-class twipr_balancing_control_output:
+class bilbo_balancing_control_output:
     u_1: float = 0.0
     u_2: float = 0.0
 
 
-class twipr_balancing_control_output_t(ctypes.Structure):
-    # typedef struct twipr_balancing_control_output_t { float u_1; float u_2; }
+class bilbo_balancing_control_output_t(ctypes.Structure):
+    # typedef struct bilbo_balancing_control_output_t { float u_1; float u_2; }
     _fields_ = [
         ("u_1", ctypes.c_float),
         ("u_2", ctypes.c_float),
@@ -245,6 +246,26 @@ class bilbo_vic_config_t(ctypes.Structure):
         ("max_torque", ctypes.c_float),
         ("v_limit", ctypes.c_float),
         ("theta_limit", ctypes.c_float),
+    ]
+
+
+@dataclass
+class bilbo_psi_config:
+    enabled: int = 0  # uint8_t
+    Ts: float = 0.0
+    kp: float = 0.0
+    ki: float = 0.0
+    max_torque: float = 0.0
+
+
+class bilbo_psi_config_t(ctypes.Structure):
+    # struct bilbo_psi_config_t { uint8_t enabled; float Ts; float kp; float ki; float max_torque; }
+    _fields_ = [
+        ("enabled", ctypes.c_uint8),
+        ("Ts", ctypes.c_float),
+        ("kp", ctypes.c_float),
+        ("ki", ctypes.c_float),
+        ("max_torque", ctypes.c_float),
     ]
 
 
@@ -447,7 +468,7 @@ class bilbo_velocity_control_sample_t(ctypes.Structure):
 # Position control (bilbo_position_control.h) - NEW PATH FOLLOWING IMPLEMENTATION
 # =============================================================================
 
-# --- Position state (from twipr_estimation.h) ---
+# --- Position state (from bilbo_estimation.h) ---
 
 @dataclass
 class bilbo_position_state:
@@ -722,6 +743,7 @@ class bilbo_control_config:
     state_feedback_gain: List[float] = field(default_factory=lambda: _float_list(8))
     tic_config: bilbo_tic_config = field(default_factory=bilbo_tic_config)
     vic_config: bilbo_vic_config = field(default_factory=bilbo_vic_config)
+    psi_config: bilbo_psi_config = field(default_factory=bilbo_psi_config)
     velocity_control_config: bilbo_velocity_control_config = field(default_factory=bilbo_velocity_control_config)
     position_control_config: bilbo_position_control_config = field(default_factory=bilbo_position_control_config)
     max_torque: float = 0.0
@@ -735,6 +757,7 @@ class bilbo_control_config_t(ctypes.Structure):
     #   float state_feedback_gain[8];
     #   bilbo_tic_config_t tic_config;
     #   bilbo_vic_config_t vic_config;
+    #   bilbo_psi_config_t psi_config;
     #   bilbo_velocity_control_config_t velocity_control_config;
     #   bilbo_position_control_config_t position_control_config;
     #   float max_torque;
@@ -743,6 +766,7 @@ class bilbo_control_config_t(ctypes.Structure):
         ("state_feedback_gain", ctypes.c_float * 8),
         ("tic_config", bilbo_tic_config_t),
         ("vic_config", bilbo_vic_config_t),
+        ("psi_config", bilbo_psi_config_t),
         ("velocity_control_config", bilbo_velocity_control_config_t),
         ("position_control_config", bilbo_position_control_config_t),
         ("max_torque", ctypes.c_float),
@@ -756,6 +780,7 @@ class bilbo_ll_control_data:
 
     vic_enabled: int = 0
     tic_enabled: int = 0
+    psi_enabled: int = 0
 
     position_control_data: bilbo_position_control_data = field(default_factory=bilbo_position_control_data)
 
@@ -763,7 +788,7 @@ class bilbo_ll_control_data:
     velocity_output: bilbo_velocity_control_output = field(default_factory=bilbo_velocity_control_output)
 
     input_ext: bilbo_control_input_ext = field(default_factory=bilbo_control_input_ext)
-    balancing_output: twipr_balancing_control_output = field(default_factory=twipr_balancing_control_output)
+    balancing_output: bilbo_balancing_control_output = field(default_factory=bilbo_balancing_control_output)
 
     output: bilbo_control_output = field(default_factory=bilbo_control_output)
 
@@ -776,6 +801,7 @@ class bilbo_ll_control_data_t(ctypes.Structure):
 
         ("vic_enabled", ctypes.c_uint8),
         ("tic_enabled", ctypes.c_uint8),
+        ("psi_enabled", ctypes.c_uint8),
 
         ("position_control_data", bilbo_position_control_data_t),
 
@@ -783,7 +809,7 @@ class bilbo_ll_control_data_t(ctypes.Structure):
         ("velocity_output", bilbo_velocity_control_output_t),
 
         ("input_ext", bilbo_control_input_ext_t),
-        ("balancing_output", twipr_balancing_control_output_t),
+        ("balancing_output", bilbo_balancing_control_output_t),
 
         ("output", bilbo_control_output_t),
     ]

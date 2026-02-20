@@ -2443,8 +2443,8 @@ class BILBO_ExperimentHandler:
 
         # Send the trajectory to the STM32
         success = self.communication.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_SequencerAddresses.LOAD,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_SequencerAddresses.LOAD,
             data=sequence_description,
             input_type=bilbo_sequence_description_t,  # type: ignore
             output_type=ctypes.c_bool,
@@ -2508,8 +2508,8 @@ class BILBO_ExperimentHandler:
     # ------------------------------------------------------------------------------------------------------------------
     def _read_loaded_trajectory_from_lowlevel(self) -> BILBO_Sequence_LL | None:
         trajectory_data_struct = self.communication.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_SequencerAddresses.READ,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_SequencerAddresses.READ,
             data=None,
             input_type=None,
             output_type=bilbo_sequence_description_t,
@@ -2527,8 +2527,8 @@ class BILBO_ExperimentHandler:
     # ------------------------------------------------------------------------------------------------------------------
     def _send_trajectory_start_signal_to_lowlevel(self, trajectory_id: int) -> bool:
         success = self.communication.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_SequencerAddresses.START,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_SequencerAddresses.START,
             data=trajectory_id,
             input_type=ctypes.c_uint16,
             output_type=ctypes.c_bool,
@@ -2540,8 +2540,8 @@ class BILBO_ExperimentHandler:
     # ------------------------------------------------------------------------------------------------------------------
     def _send_trajectory_stop_signal_to_lowlevel(self) -> bool:
         success = self.communication.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_SequencerAddresses.STOP,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_SequencerAddresses.STOP,
             data=None,
             input_type=None,
             output_type=None,

@@ -9,18 +9,18 @@
 #define CONTROL_BILBO_CONTROL_H_
 
 #include "core.h"
-#include "twipr_balancing_control.h"
+#include "bilbo_balancing_control.h"
 #include "bilbo_velocity_control.h"
 #include "bilbo_position_control.h"
 #include "bilbo_vic_tic.h"
 
 class BILBO_Sequencer;
-class TWIPR_Supervisor;
+class BILBO_Supervisor;
 extern core_utils_RegisterMap<256> register_map;
 
 /* ---------------------------------------------------------------------------------------- */
 struct bilbo_control_init_config_t {
-	TWIPR_Estimation *estimation;
+	BILBO_Estimation *estimation;
 	BILBO_Drive *drive;
 	float Ts;
 };
@@ -30,9 +30,10 @@ struct bilbo_control_config_t {
 	float state_feedback_gain[8];
 	bilbo_tic_config_t tic_config;
 	bilbo_vic_config_t vic_config;
+	bilbo_psi_config_t psi_config;
 	bilbo_velocity_control_config_t velocity_control_config;
 	bilbo_position_control_config_t position_control_config;
-	float max_torque;
+	float max_torque = 0.5;
 };
 
 /* ---------------------------------------------------------------------------------------- */
@@ -71,6 +72,7 @@ enum class control_event_t : uint8_t {
 	CONTROL_CONFIG_CHANGED = 2,
 	VIC_CHANGED = 3,
 	TIC_CHANGED = 4,
+	PSI_CHANGED = 5,
 };
 
 /* ---------------------------------------------------------------------------------------- */
@@ -79,6 +81,7 @@ struct bilbo_control_data_t {
 	bilbo_control_status_t status;
 	uint8_t vic_enabled;
 	uint8_t tic_enabled;
+	uint8_t psi_enabled;
 
 	bilbo_position_control_data_t position_control_data;
 
@@ -86,7 +89,7 @@ struct bilbo_control_data_t {
 	bilbo_velocity_control_output_t velocity_output;
 
 	bilbo_control_input_ext_t input_ext;
-	twipr_balancing_control_output_t balancing_output;
+	bilbo_balancing_control_output_t balancing_output;
 
 	bilbo_control_output_t output;
 };
@@ -124,6 +127,7 @@ public:
 
 	bool set_tic_config(bilbo_tic_config_t config);
 	bool set_vic_config(bilbo_vic_config_t config);
+	bool set_psi_config(bilbo_psi_config_t config);
 	bool set_max_torque(float max_torque);
 
 	// Position control configuration
@@ -164,6 +168,8 @@ public:
 
 	bool set_vic_enabled(bool state);
 	bool set_tic_enabled(bool state);
+	bool set_psi_enabled(bool state);
+	bool set_psi_setpoint(float psi);
 
 	bool enable_external_input();
 	bool disable_external_input();
@@ -177,17 +183,18 @@ public:
 	bilbo_control_callbacks_t callbacks;
 
 	// Controllers
-	TWIPR_BalancingControl balancing_control;
+	BILBO_BalancingControl balancing_control;
 	BILBO_VelocityControl velocity_control;
 	BILBO_PositionControl position_control;
 	BILBO_TIC_Controller tic_controller;
 	BILBO_VIC_Controller vic_controller;
+	BILBO_PSI_Controller psi_controller;
 
 	// Pointer to SPI path receive buffer (set by firmware.cpp, in DMA-accessible RAM)
 	path_point_t *spi_path_rx_buffer = nullptr;
 
 	friend class BILBO_Sequencer;
-	friend class TWIPR_Supervisor;
+	friend class BILBO_Supervisor;
 
 private:
 

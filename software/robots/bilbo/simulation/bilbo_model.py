@@ -53,8 +53,8 @@ DEFAULT_BILBO_MODEL = BilboModel(
     I_z=0.03,
     c_alpha=4.6302e-4,
     r_w=0.06,
-    tau_theta=0.4,
-    tau_x=0.4,
+    tau_theta=0.1,
+    tau_x=0.1,
     max_pitch=np.deg2rad(105)
 )
 

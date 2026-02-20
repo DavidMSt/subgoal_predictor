@@ -142,6 +142,21 @@ class StandaloneBabylon:
     def callbacks(self):
         return self._babylon.callbacks
 
+    def set_title(self, text: str):
+        """Update the title text shown in the top bar overlay."""
+        self._babylon.set_title(text)
+
+    def set_label(self, label_id: str, text: str, **kwargs):
+        """Create or update an overlay label. Set text to '' to hide it.
+
+        See BabylonVisualization.set_label for kwargs (x, y, font_size, color, background).
+        """
+        self._babylon.set_label(label_id, text, **kwargs)
+
+    def remove_label(self, label_id: str):
+        """Remove an overlay label."""
+        self._babylon.remove_label(label_id)
+
     def add_camera(self, camera: BabylonCamera):
         """Add a named camera view button to the UI."""
         self._babylon.add_camera(camera)

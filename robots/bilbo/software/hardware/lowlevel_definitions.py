@@ -36,7 +36,7 @@ class bilbo_all_external_leds_struct:
 
 
 @STRUCTURE
-class twipr_beep_struct:
+class bilbo_beep_struct:
     FIELDS = {
         'frequency': ctypes.c_float,
         'time': ctypes.c_uint16,

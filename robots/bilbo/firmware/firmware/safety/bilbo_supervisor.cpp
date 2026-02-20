@@ -1,5 +1,5 @@
 /*
- * twipr_safety.cpp
+ * bilbo_safety.cpp
  *
  *  Created on: Feb 22, 2023
  *      Author: lehmann_workstation
@@ -13,23 +13,23 @@ const osThreadAttr_t safety_task_attributes = { .name = "safety", .stack_size =
 elapsedMillis timerDriveTick;
 
 /* ============================================================================= */
-TWIPR_Supervisor::TWIPR_Supervisor() {
+BILBO_Supervisor::BILBO_Supervisor() {
 
 }
 
 /* ============================================================================= */
-void TWIPR_Supervisor::init(twipr_supervisor_config_t config) {
+void BILBO_Supervisor::init(bilbo_supervisor_config_t config) {
 	this->config = config;
 }
 
 /* ============================================================================= */
-void TWIPR_Supervisor::start() {
+void BILBO_Supervisor::start() {
 	osThreadNew(startTwiprSupervisorTask, (void*) this,
 			&safety_task_attributes);
 }
 
 /* ============================================================================= */
-void TWIPR_Supervisor::task() {
+void BILBO_Supervisor::task() {
 	timerDriveTick.reset();
 
 	while (true) {
@@ -38,19 +38,19 @@ void TWIPR_Supervisor::task() {
 
 //		// Check the motors
 //		error = this->checkMotors();
-//		if (error == TWIPR_SUPERVISOR_MOTOR_TIMEOUT) {
+//		if (error == BILBO_SUPERVISOR_MOTOR_TIMEOUT) {
 //
 //			// Stop the control module
 //			this->config.control->stop();
 //			this->setError(BILBO_ERROR_CRITICAL);
 //			send_error("Motor timeout");
 //		}
-//		if (error == TWIPR_SUPERVISOR_MOTOR_RACECONDITION_RESETS){
+//		if (error == BILBO_SUPERVISOR_MOTOR_RACECONDITION_RESETS){
 //			this->config.control->stop();
 //			this->setError(BILBO_ERROR_CRITICAL);
 //			send_error("Motor race conditions");
 //		}
-//		if (error == TWIPR_SUPERVISOR_MOTOR_ERROR){
+//		if (error == BILBO_SUPERVISOR_MOTOR_ERROR){
 //			this->config.control->stop();
 //			this->setError(BILBO_ERROR_CRITICAL);
 //			send_error("Motor Error");
@@ -62,7 +62,7 @@ void TWIPR_Supervisor::task() {
 		// Check the motors
 		this->checkMotors();
 
-//		if (error == TWIPR_SUPERVISOR_WHEEL_SPEED) {
+//		if (error == BILBO_SUPERVISOR_WHEEL_SPEED) {
 //			// Stop the control module
 //			this->config.control->stop();
 //			this->setError(BILBO_ERROR_WARNING);
@@ -72,7 +72,7 @@ void TWIPR_Supervisor::task() {
 
 		// Check the button
 		this->checkButton();
-//		if (error == TWIPR_SUPERVISOR_MANUAL_STOP) {
+//		if (error == BILBO_SUPERVISOR_MANUAL_STOP) {
 //			// Stop the control module
 //			this->config.control->stop();
 //			this->setError(BILBO_ERROR_WARNING);
@@ -81,15 +81,15 @@ void TWIPR_Supervisor::task() {
 
 // Check if the robot is stuck
 //		error = this->checkStuck();
-//		if (error == TWIPR_SUPERVISOR_STUCK) {
+//		if (error == BILBO_SUPERVISOR_STUCK) {
 //			// Stop the control module
 //			this->config.control->stop();
-//			this->setError(TWIPR_ERROR_WARNING);
+//			this->setError(BILBO_ERROR_WARNING);
 //		}
 
 // Check the controllers
 //		error = this->checkControllers();
-//		if (error == TWIPR_SUPERVISOR_ERROR_INTEGRATOR_OVERRUN) {
+//		if (error == BILBO_SUPERVISOR_ERROR_INTEGRATOR_OVERRUN) {
 //			// Stop the control module
 //			this->config.control->stop();
 //			this->setError(BILBO_ERROR_WARNING);
@@ -99,36 +99,36 @@ void TWIPR_Supervisor::task() {
 }
 
 /* ============================================================================= */
-void TWIPR_Supervisor::checkMotors() {
+void BILBO_Supervisor::checkMotors() {
 
 //	if (timerDriveTick > 1000) {
 //		timerDriveTick.reset();
 //
 //		if (this->config.drive->status == BILBO_DRIVE_STATUS_ERROR){
-//			return TWIPR_SUPERVISOR_MOTOR_ERROR;
+//			return BILBO_SUPERVISOR_MOTOR_ERROR;
 //		}
 //
 //
 //		if (!(this->config.drive->tick > this->lastDriveTick)) {
 //
 //			this->lastDriveTick = this->config.drive->tick;
-//			return TWIPR_SUPERVISOR_MOTOR_TIMEOUT;
+//			return BILBO_SUPERVISOR_MOTOR_TIMEOUT;
 //		} else {
 //			this->lastDriveTick = this->config.drive->tick;
-//			return TWIPR_SUPERVISOR_NONE;
+//			return BILBO_SUPERVISOR_NONE;
 //		}
 //
 //	}
 //	if (this->config.drive->race_conditions >=10){
-//		return TWIPR_SUPERVISOR_MOTOR_RACECONDITION_RESETS;
+//		return BILBO_SUPERVISOR_MOTOR_RACECONDITION_RESETS;
 //	}
 
-//	return TWIPR_SUPERVISOR_NONE;
+//	return BILBO_SUPERVISOR_NONE;
 //	return BILBO_SUPERVISOR_NONE;
 }
 
 /* ============================================================================= */
-void TWIPR_Supervisor::checkMotorSpeed() {
+void BILBO_Supervisor::checkMotorSpeed() {
 
 
 	if (this->config.control->mode == bilbo_control_mode_t::OFF) {
@@ -149,7 +149,7 @@ void TWIPR_Supervisor::checkMotorSpeed() {
 }
 
 /* ============================================================================= */
-void TWIPR_Supervisor::checkButton() {
+void BILBO_Supervisor::checkButton() {
 
 	if (this->config.off_button->check() == 0 && this->config.control->mode != bilbo_control_mode_t::OFF) {
 
@@ -160,14 +160,14 @@ void TWIPR_Supervisor::checkButton() {
 }
 
 /* ============================================================================= */
-//bilbo_supervisor_dings_t TWIPR_Supervisor::checkStuck() {
+//bilbo_supervisor_dings_t BILBO_Supervisor::checkStuck() {
 //
-//	if (this->config.control->mode != TWIPR_CONTROL_MODE_VELOCITY) {
+//	if (this->config.control->mode != BILBO_CONTROL_MODE_VELOCITY) {
 //		this->stuck_data.is_stuck = false;
 //		this->stuck_data.error_count = 0;
 //		this->stuck_data.last_pitch_angle = 0;
 //		this->stuck_data.last_velocity_error = 0;
-//		return TWIPR_SUPERVISOR_NONE;
+//		return BILBO_SUPERVISOR_NONE;
 //	}
 //
 //	float velocity_error = abs(
@@ -192,27 +192,27 @@ void TWIPR_Supervisor::checkButton() {
 //	if (this->stuck_data.error_count
 //			>= this->config.stuck_config.stuck_duration) {
 //		this->stuck_data.is_stuck = true;
-//		return TWIPR_SUPERVISOR_STUCK;
+//		return BILBO_SUPERVISOR_STUCK;
 //	}
 //	this->stuck_data.is_stuck = false;
-//	return TWIPR_SUPERVISOR_NONE;
+//	return BILBO_SUPERVISOR_NONE;
 //
 //}
 /* ============================================================================= */
-//bilbo_supervisor_dings_t TWIPR_Supervisor::checkControllers() {
+//bilbo_supervisor_dings_t BILBO_Supervisor::checkControllers() {
 //
-//	return TWIPR_SUPERVISOR_NONE;
+//	return BILBO_SUPERVISOR_NONE;
 //
 //}
 /* ============================================================================= */
-//bilbo_supervisor_dings_t TWIPR_Supervisor::check() {
+//bilbo_supervisor_dings_t BILBO_Supervisor::check() {
 //	bilbo_error_type_t output = this->error;
 //	this->error = BILBO_ERROR_NONE;
 //	return output;
 //}
 ///* ============================================================================= */
-//void TWIPR_Supervisor::sendWarning(twipr_supervisor_error_t id,
-//		twipr_error_t error, const char *message, uint8_t len) {
+//void BILBO_Supervisor::sendWarning(bilbo_supervisor_error_t id,
+//		bilbo_error_t error, const char *message, uint8_t len) {
 //
 //	warning_message.data->error = error;
 //	strncpy(warning_message.data->text, message, len);
@@ -220,7 +220,7 @@ void TWIPR_Supervisor::checkButton() {
 //	this->config.communication->sendMessage(warning_message);
 //}
 /* ============================================================================= */
-//void TWIPR_Supervisor::setError(bilbo_error_type_t error) {
+//void BILBO_Supervisor::setError(bilbo_error_type_t error) {
 //	if (error > this->error) {
 //		this->error = error;
 //	}
@@ -228,7 +228,7 @@ void TWIPR_Supervisor::checkButton() {
 /* ============================================================================= */
 void startTwiprSupervisorTask(void *args) {
 
-	TWIPR_Supervisor *argument = (TWIPR_Supervisor*) args;
+	BILBO_Supervisor *argument = (BILBO_Supervisor*) args;
 	argument->task();
 
 }

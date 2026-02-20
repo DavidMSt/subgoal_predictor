@@ -3,7 +3,7 @@ import ctypes
 from core.communication.serial.serial_interface import Serial_Interface, SerialMessage
 import robot.lowlevel.stm32_addresses as addresses
 from robot.communication.serial.bilbo_serial_messages import BILBO_SERIAL_MESSAGES
-from robot.lowlevel.stm32_general import twipr_firmware_revision
+from robot.lowlevel.stm32_general import bilbo_firmware_revision
 from core.utils.callbacks import callback_definition, CallbackContainer, OPTIONAL
 from core.utils.ctypes_utils import CType
 from core.utils.events import Event, event_definition, EventFlag
@@ -73,24 +73,24 @@ class BILBO_Serial_Communication:
 
     # ------------------------------------------------------------------------------------------------------------------
     def readTick(self):
-        tick = self.interface.read(module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-                                   address=addresses.TWIPR_SystemAddresses.FIRMWARE_TICK,
+        tick = self.interface.read(module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+                                   address=addresses.BILBO_SystemAddresses.FIRMWARE_TICK,
                                    type=ctypes.c_uint32)
 
         return tick
 
     # ------------------------------------------------------------------------------------------------------------------
     def readFirmwareRevision(self):
-        revision = self.interface.read(module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-                                       address=addresses.TWIPR_SystemAddresses.FIRMWARE_REVISION,
-                                       type=twipr_firmware_revision)
+        revision = self.interface.read(module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+                                       address=addresses.BILBO_SystemAddresses.FIRMWARE_REVISION,
+                                       type=bilbo_firmware_revision)
 
         return revision
 
     # ------------------------------------------------------------------------------------------------------------------
     def debug(self, state):
-        self.interface.function(module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-                                address=addresses.TWIPR_SystemAddresses.FIRMWARE_DEBUGFUNCTION,
+        self.interface.function(module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+                                address=addresses.BILBO_SystemAddresses.FIRMWARE_DEBUGFUNCTION,
                                 data=state,
                                 input_type=ctypes.c_uint8)
 

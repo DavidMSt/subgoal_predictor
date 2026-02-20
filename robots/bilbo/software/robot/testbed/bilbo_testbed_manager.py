@@ -1,5 +1,8 @@
 import dataclasses
 
+from core.communication.wifi.bilbolab_wifi_interface import (
+    wifi_event_definition, WifiEventContainer, WifiEvent,
+)
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.events import event_definition, Event
 from core.utils.files import file_exists
@@ -9,7 +12,7 @@ from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
 from robot.paths import CONTROL_PATH
-from robot.testbed.obstacles import Obstacle, CircleObstacle, BoxObstacle
+from robot.testbed.obstacles import Obstacle, CircleObstacle, BoxObstacle, LimboBar, LimboBarGeometry
 
 
 @dataclasses.dataclass
@@ -36,6 +39,12 @@ class TestbedConfig:
 @event_definition
 class TestbedEvents:
     config_received: Event = Event(id='testbed_config_received')
+    limbo_bar_hit: Event = Event(id='limbo_bar_hit')
+
+
+@wifi_event_definition
+class TestbedWifiEvents(WifiEventContainer):
+    limbo_bar_hit: WifiEvent = WifiEvent(data_type=dict)
 
 
 @dataclasses.dataclass
@@ -47,6 +56,7 @@ class BILBO_TestbedManager:
     testbed_config: TestbedConfig | None = None
 
     obstacles: list[Obstacle]
+    limbo_bars: list[LimboBar]
 
     # === INIT =========================================================================================================
     def __init__(self, common: BILBO_Common, communication: BILBO_Communication, control: BILBO_Control):
@@ -56,8 +66,13 @@ class BILBO_TestbedManager:
         self.communication = communication
         self.control = control
         self.events = TestbedEvents()
+        self.wifi_events = TestbedWifiEvents(wifi=communication.wifi.wifi, id='testbed')
         self.obstacles = []
+        self.limbo_bars = []
         self._register_wifi_commands()
+
+        # Subscribe to the SPI sample batch to check limbo bar collisions at 100 Hz
+        self.communication.spi.callbacks.rx_samples.register(self._on_sample_batch)
 
     # === METHODS ======================================================================================================
     def set_testbed_config(self, config: TestbedConfig | dict):
@@ -77,7 +92,7 @@ class BILBO_TestbedManager:
         data = TestbedData(config=self.testbed_config)
         return data
 
-    # ------------------------------------------------------------------------------------------------------------------
+    # --- OBSTACLES ----------------------------------------------------------------------------------------------------
     def add_obstacle(self, type: str, config: dict | None):
         if config is None:
             config = {}
@@ -133,7 +148,72 @@ class BILBO_TestbedManager:
                 obs.set_state(x=float(state['x']), y=float(state['y']),
                               psi=float(state['psi']) if 'psi' in state else None)
 
+    # --- LIMBO BARS ---------------------------------------------------------------------------------------------------
+    def add_limbo_bar(self, config: dict) -> str:
+        bar_id = config.get('id') or generate_uuid(prefix='limbo_')
+        if bar_id in [bar.id for bar in self.limbo_bars]:
+            self.logger.error(f"Limbo bar with ID '{bar_id}' already exists")
+            return bar_id
+        geometry_data = {k: v for k, v in config.items() if k not in ('id',)}
+        geometry = from_dict_auto(LimboBarGeometry, geometry_data)
+        bar = LimboBar(id=bar_id, geometry=geometry)
+        self.limbo_bars.append(bar)
+        self.logger.info(f"Added limbo bar '{bar_id}': height={geometry.height}")
+        return bar_id
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def remove_limbo_bar(self, bar_id: str):
+        for bar in self.limbo_bars:
+            if bar.id == bar_id:
+                self.limbo_bars.remove(bar)
+                self.logger.info(f"Removed limbo bar '{bar_id}'")
+                return
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def clear_limbo_bars(self):
+        self.limbo_bars.clear()
+        self.logger.info("Cleared all limbo bars")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def reset_limbo_bars(self):
+        for bar in self.limbo_bars:
+            bar.reset()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_limbo_bar_states(self) -> dict:
+        return {bar.id: {'hit': bar.hit} for bar in self.limbo_bars}
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def update_limbo_bar(self, bar_id: str, config: dict):
+        bar = next((b for b in self.limbo_bars if b.id == bar_id), None)
+        if bar is None:
+            self.logger.error(f"Limbo bar '{bar_id}' not found")
+            return
+        geometry_data = {k: v for k, v in config.items() if k not in ('id',)}
+        bar.geometry = from_dict_auto(LimboBarGeometry, geometry_data)
+
     # === PRIVATE METHODS ==============================================================================================
+    def _on_sample_batch(self, samples: list[dict]):
+        """Called with each batch of ~10 LL samples from the SPI.
+        Checks every sample in the batch against all limbo bars so that
+        brief collisions lasting only 2-3 ticks are not missed."""
+        if not self.limbo_bars:
+            return
+
+        config = self.common.config
+        for sample in samples:
+            est = sample['estimation']['state']
+            x, y = est['x'], est['y']
+            theta, psi = est['theta'], est['psi']
+            for bar in self.limbo_bars:
+                was_hit = bar.hit
+                bar.update(x, y, theta, psi, config)
+                if bar.hit and not was_hit:
+                    self.logger.info(f"Limbo bar '{bar.id}' hit!")
+                    self.events.limbo_bar_hit.set(data={'bar_id': bar.id})
+                    self.wifi_events.limbo_bar_hit.send(data={'bar_id': bar.id})
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _load_testbed_control_config(self, testbed_id: str):
         """Load and apply a control config matching the testbed ID.
 
@@ -188,3 +268,34 @@ class BILBO_TestbedManager:
                                            function=self.update_obstacle_states,
                                            arguments=['states'],
                                            description='Batch-update obstacle states: {id: {x, y, psi}, ...}')
+
+        # Limbo bar commands
+        self.communication.wifi.newCommand(identifier='add_limbo_bar',
+                                           function=self.add_limbo_bar,
+                                           arguments=['config'],
+                                           description='Adds a limbo bar: {start_x, end_x, start_y, end_y, height, [id]}')
+
+        self.communication.wifi.newCommand(identifier='remove_limbo_bar',
+                                           function=self.remove_limbo_bar,
+                                           arguments=['bar_id'],
+                                           description='Removes a limbo bar by ID')
+
+        self.communication.wifi.newCommand(identifier='clear_limbo_bars',
+                                           function=self.clear_limbo_bars,
+                                           arguments=[],
+                                           description='Removes all limbo bars')
+
+        self.communication.wifi.newCommand(identifier='reset_limbo_bars',
+                                           function=self.reset_limbo_bars,
+                                           arguments=[],
+                                           description='Resets hit state on all limbo bars')
+
+        self.communication.wifi.newCommand(identifier='get_limbo_bar_states',
+                                           function=self.get_limbo_bar_states,
+                                           arguments=[],
+                                           description='Returns hit state of all limbo bars')
+
+        self.communication.wifi.newCommand(identifier='update_limbo_bar',
+                                           function=self.update_limbo_bar,
+                                           arguments=['bar_id', 'config'],
+                                           description='Updates geometry of a limbo bar')

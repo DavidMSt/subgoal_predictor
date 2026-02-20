@@ -586,6 +586,14 @@ def _register_builtin_actions():
     ))
 
     register_action(ActionEntry(
+        type_name="set_psi_control",
+        parameters=[
+            ActionParameter("enabled", bool, default=True),
+        ],
+        description="Enable/disable PSI yaw angle control"
+    ))
+
+    register_action(ActionEntry(
         type_name="speak",
         parameters=[
             ActionParameter("text", str, default=""),

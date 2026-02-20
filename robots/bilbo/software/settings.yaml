@@ -1,5 +1,5 @@
 stm32:
-  reset: false
+  reset: true
 
 tracker:
   enabled: true

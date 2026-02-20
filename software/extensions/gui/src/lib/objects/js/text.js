@@ -353,8 +353,12 @@ export class InputWidget extends Widget {
             }
         });
         input.addEventListener('blur', () => {
-            const prev = this._prevValue;
-            input.value = (prev === null || prev === 'null') ? '' : prev;
+            if (this.configuration.commit_on_blur && input.value.trim() !== '') {
+                commit();
+            } else {
+                const prev = this._prevValue;
+                input.value = (prev === null || prev === 'null') ? '' : prev;
+            }
             this._hideTooltip();
         });
 
@@ -506,6 +510,10 @@ export class InputWidget extends Widget {
 
     initializeElement() {
     }
+
+    // InputWidget manages its own tooltip — disable the parent Widget hover tooltip
+    // to prevent duplicate tooltips on hover.
+    setupHoverTooltip() {}
 
     resize() {
     }

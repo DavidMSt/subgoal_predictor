@@ -127,6 +127,9 @@ class DILC_Experiment_Settings:
     initial_conditions: DILC_InitialConditions
     input_lowpass: FIR_Design_Params
     model_lowpass: FIR_Design_Params
+    initial_conditions_u0: DILC_InitialConditions | None = None
+    ilc_gain: float = 1.5
+    iml_gain: float = 1.5
     meta: DILC_Experiment_Meta_Settings = dataclasses.field(default_factory=DILC_Experiment_Meta_Settings)
     u0_params: DILC_U0_Params = dataclasses.field(default_factory=DILC_U0_Params)
     u0: np.ndarray | list | str | None = None
@@ -528,7 +531,6 @@ class DILC_Experiment:
         self.logger.info(f"Experiment run ID: {self._run_id}")
         self.logger.info("Sending experiment settings to robot...")
 
-        speak(self._run_id)
         self.device.executeFunction(
             function_name='run_dilc_experiment',
             arguments={'settings': settings_dict},
@@ -648,6 +650,7 @@ class DILC_Experiment:
         elif event_name == 'experiment_started':
             self.logger.info(f"Robot: experiment started")
             self.state = DILC_Experiment_State.RUNNING
+            speak(f"Starting DILC experiment with {total_trials} trials")
             self.events.experiment_started.set(data=data)
             self.callbacks.experiment_started.call()
 
@@ -686,6 +689,7 @@ class DILC_Experiment:
 
         elif event_name == 'trial_started':
             self.logger.info(f"Robot: trial {(trial_index or 0) + 1}/{total_trials} started")
+            speak(f"Trial {(trial_index or 0) + 1} of {total_trials}")
             self.events.trial_started.set(data=data)
             self.callbacks.trial_started.call()
 
@@ -719,6 +723,7 @@ class DILC_Experiment:
 
             self.logger.info(f"Robot: trial {(trial_index or 0) + 1}/{total_trials} finished "
                              f"(e_ilc={e_norm_ilc:.6f}, e_iml={e_norm_iml:.6f})")
+            speak(f"Trial {(trial_index or 0) + 1} finished")
             self.events.trial_finished.set(data=data)
             self.callbacks.trial_finished.call()
 

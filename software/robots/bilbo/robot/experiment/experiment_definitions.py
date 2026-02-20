@@ -260,7 +260,7 @@ ActionType = Literal[
 ]
 
 ALLOWED_ACTIONS: list[str] = [
-    "beep", "set_mode", "set_tic", "speak", "set_marker", "run_trajectory",
+    "beep", "set_mode", "set_tic", "set_psi_control", "speak", "set_marker", "run_trajectory",
     "wait_time", "wait_ticks", "wait_until_tick", "wait_event", "set_input",
     "set_velocity", "enable_external_input", "reset", "parallel", "group",
     "loop", "func", "set_feedback_gain", "reset_control",
@@ -292,6 +292,12 @@ class SetModeActionParams:
 @dataclasses.dataclass
 class SetTICActionParams:
     """Parameters for set_tic action (Torque Integral Control)."""
+    enabled: bool = True
+
+
+@dataclasses.dataclass
+class SetPSIActionParams:
+    """Parameters for set_psi action (Psi yaw angle control)."""
     enabled: bool = True
 
 
@@ -479,6 +485,7 @@ ACTION_PARAMS_MAPPING: dict[str, type] = {
     "beep": BeepActionParams,
     "set_mode": SetModeActionParams,
     "set_tic": SetTICActionParams,
+    "set_psi_control": SetPSIActionParams,
     "speak": SpeakActionParams,
     "set_marker": SetMarkerActionParams,
     "enable_external_input": EnableExternalInputActionParams,

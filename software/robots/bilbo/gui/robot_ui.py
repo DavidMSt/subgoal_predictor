@@ -1,6 +1,11 @@
+import copy
+import dataclasses
 import math
+import threading
 import time
 from typing import Dict
+
+import yaml
 
 import numpy as np
 
@@ -8,7 +13,7 @@ from core.utils.uuid_utils import generate_uuid
 from core.utils.colors import get_palette
 from core.utils.lipo import lipo_soc
 from core.utils.logging_utils import Logger
-from core.utils.time import set_timeout, setInterval
+from core.utils.time import set_timeout
 from extensions.gui.src.app import App, Folder, FolderPage
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.map.map import MapWidget
@@ -16,20 +21,21 @@ from extensions.gui.src.lib.map.map_objects import Agent, Point, Line, Rectangle
 from extensions.gui.src.lib.objects.objects import Widget_Group
 from extensions.gui.src.lib.objects.python.bilbo_mode import BilboModeWidget
 from extensions.gui.src.lib.objects.python.buttons import MultiStateButton, Button
-from extensions.gui.src.lib.objects.python.checkbox import CheckboxWidget
-from extensions.gui.src.lib.objects.python.dial import RotaryDialWidget
 from extensions.gui.src.lib.objects.python.indicators import (
     BatteryIndicatorWidget, ConnectionIndicator, InternetIndicator, JoystickIndicator,
+    ProgressIndicator,
 )
 from extensions.gui.src.lib.objects.python.joystick import JoystickWidget
 from extensions.gui.src.lib.objects.python.number import DigitalNumberWidget
-from extensions.gui.src.lib.objects.python.table import Table, TextColumn, TableGroup
+from extensions.gui.src.lib.objects.python.table import Table, TextColumn, TextInputColumn, TableGroup
 from extensions.gui.src.lib.objects.python.text import TextWidget, StatusWidget, StatusWidgetElement
+from extensions.gui.src.lib.objects.python.text_input import InputWidget
 from extensions.gui.src.lib.plot.realtime.rt_plot import TimeSeries, RT_Plot_Widget
 from robots.bilbo.gui.applications.dilc_app import DILC_APP
+from robots.bilbo.gui.applications.limbobar_dilc_app import LimboBar_DILC_APP
 from robots.bilbo.robot.bilbo import BILBO
 from robots.bilbo.robot.bilbo_data import BILBO_Sample
-from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode, BILBO_ControlConfig
 from robots.bilbo.robot.bilbo_position_control import MoveToPointCommand, TurnToHeadingCommand, PathData
 from robots.bilbo.robot.bilbo_utilities import CONTROL_MODE_COLORS
 from robots.bilbo.testbed.objects import BoxObstacle
@@ -71,11 +77,16 @@ class RobotUI:
         self.robot.experiment_handler.events.dilc_experiment_initialized.on(
             self.on_dilc_experiment_initialized, spawn_new_threads=True)
 
+        # Register LimboBar DILC experiment events
+        self.robot.experiment_handler.events.limbobar_dilc_experiment_initialized.on(
+            self.on_limbobar_dilc_experiment_initialized, spawn_new_threads=True)
+
         self.robot.device.callbacks.disconnected.register(self.close)
         # Handle Mode changes
         self.robot.core.events.control_mode_changed.on(self.on_control_mode_changed)
         self.robot.control.events.tic_mode_changed.on(self.on_tic_mode_changed)
         self.robot.control.events.vic_mode_changed.on(self.on_vic_mode_changed)
+        self.robot.control.events.psi_mode_changed.on(self.on_psi_mode_changed)
 
         # Build
         self.plots = []
@@ -107,8 +118,17 @@ class RobotUI:
     # ------------------------------------------------------------------------------------------------------------------
     def build_overview_page(self, page):
         # --- GENERAL GROUP --------------------------------------------------------------------------------------------
-        general_group = Widget_Group(group_id='general', title='General', rows=5, columns=11)
-        page.addWidget(general_group, row=1, column=1, width=11, height=6)
+        general_group = Widget_Group(group_id='general', title='General', rows=7, columns=11)
+        page.addWidget(general_group, row=1, column=1, width=11, height=8)
+
+        robot_id_label = TextWidget(
+            widget_id='robot_id_label',
+            text=self.robot.id,
+            font_size=14,
+            font_weight='bold',
+            horizontal_alignment='center',
+        )
+        general_group.addWidget(robot_id_label, row=1, column=1, width=11, height=1)
 
         self.general_status_widget = StatusWidget(
             widget_id='general_status_widget',
@@ -122,14 +142,9 @@ class RobotUI:
                                             color=CONTROL_MODE_COLORS[self.robot.control.mode],
                                             status=self.robot.control.mode.name,
                                             ),
-                'experiment': StatusWidgetElement(label='Experiment',
-                                                  color=[0.5, 0.5, 0.5],
-                                                  status='idle',
-                                                  )
-
             }
         )
-        general_group.addWidget(self.general_status_widget, row=1, column=1, width=11, height=3)
+        general_group.addWidget(self.general_status_widget, row=2, column=1, width=11, height=2)
 
         # Battery
         self.battery_indicator = BatteryIndicatorWidget(
@@ -151,6 +166,17 @@ class RobotUI:
         self.joystick_indicator = JoystickIndicator(widget_id='joystick_indicator')
         self.joystick_indicator.setValue(False)
         general_group.addWidget(self.joystick_indicator, row=4, column=6, width=3, height=2)
+
+        self.pi_status_widget = StatusWidget(
+            widget_id='pi_status_widget',
+            title='Pi Status',
+            elements={
+                'temp': StatusWidgetElement(label='Temp', color=[0.5, 0.5, 0.5], status="--"),
+                'throttle': StatusWidgetElement(label='Throttled', color=[0.5, 0.5, 0.5], status="--"),
+            }
+        )
+
+        general_group.addWidget(self.pi_status_widget, width=11, height=2)
 
         # # Context menu group
         # joystick_group = ContextMenuGroup(id='joystick_group', name='Joysticks')
@@ -226,8 +252,8 @@ class RobotUI:
         # self.joystick_indicator.callbacks.click.register(joystick_indicator_click_callback)
 
         # Control Group
-        control_group = Widget_Group(title='Control', rows=10, columns=10, show_title=True)
-        page.addWidget(control_group, column=1, width=11, height=12)
+        control_group = Widget_Group(title='Control', rows=8, columns=10, show_title=True)
+        page.addWidget(control_group, column=1, row=9, width=11, height=10)
 
         self.control_status_widget = StatusWidget(
             widget_id='control_status_widget',
@@ -247,6 +273,11 @@ class RobotUI:
                                                0, 0.5, 0],
                                            status='disabled' if not self.robot.core.data.control.vic_enabled else 'enabled',
                                            ),
+                'psi': StatusWidgetElement(label='Psi Ctrl',
+                                           color=[0.5, 0.5, 0.5] if not self.robot.core.data.control.psi_enabled else [
+                                               0, 0.5, 0],
+                                           status='disabled' if not self.robot.core.data.control.psi_enabled else 'enabled',
+                                           ),
                 'static': StatusWidgetElement(label='Static',
                                               color=[0.5, 0.5, 0.5],
                                               status='false',
@@ -254,7 +285,7 @@ class RobotUI:
 
             }
         )
-        control_group.addWidget(self.control_status_widget, row=1, column=1, width=10, height=4)
+        control_group.addWidget(self.control_status_widget, row=1, column=1, width=10, height=3)
 
         tic_button = MultiStateButton(
             id='tic_button',
@@ -286,7 +317,39 @@ class RobotUI:
         tic_button.callbacks.click.register(tic_button_clicked)
         self.robot.control.events.tic_mode_changed.on(on_tic_mode_changed)
 
-        control_group.addWidget(tic_button, column=1, row=8, width=2, height=2)
+        control_group.addWidget(tic_button, column=1, row=7, width=2, height=2)
+
+        psi_toggle_button = MultiStateButton(
+            id='psi_toggle_button',
+            title='PSI',
+            widget_id='psi_toggle_button',
+            states=[
+                'OFF', 'ON'
+            ],
+            current_state=self.robot.core.data.control.psi_enabled,
+            color=[
+                [0.5, 0.5, 0.5],
+                [0, 0.3, 0],
+            ]
+        )
+
+        def psi_button_clicked(state: str, *args, **kwargs):
+            match state:
+                case 'ON':
+                    self.robot.control.enablePSI(False)
+                case 'OFF':
+                    self.robot.control.enablePSI(True)
+
+        def on_psi_mode_changed(enabled: bool, *args, **kwargs):
+            if enabled:
+                psi_toggle_button.state = 'ON'
+            else:
+                psi_toggle_button.state = 'OFF'
+
+        psi_toggle_button.callbacks.click.register(psi_button_clicked)
+        self.robot.control.events.psi_mode_changed.on(on_psi_mode_changed)
+
+        control_group.addWidget(psi_toggle_button, column=3, row=7, width=2, height=2)
 
         self.mode_widget = BilboModeWidget(current_mode=self.robot.control.mode.name)
         control_group.addWidget(self.mode_widget, column=1, height=3, width=10)
@@ -816,9 +879,9 @@ class RobotUI:
         self.map_widget.map.events.double_click.on(map_double_click)
 
         # === POSITION CONTROL VISUALIZATION ===
-        STOP_POINT_COLOR = [1.0, 0.4, 0.2, 1.0]    # Orange for stop points
-        STOP_DIM_ALPHA = 0.3                         # Alpha for completed stop points
-        PATH_LINE_COLOR = [0.4, 0.7, 1.0, 0.6]      # Light blue for path lines
+        STOP_POINT_COLOR = [1.0, 0.4, 0.2, 1.0]  # Orange for stop points
+        STOP_DIM_ALPHA = 0.3  # Alpha for completed stop points
+        PATH_LINE_COLOR = [0.4, 0.7, 1.0, 0.6]  # Light blue for path lines
         MOVE_TO_POINT_COLOR = [0.9, 0.3, 0.9, 1.0]  # Magenta for move_to_point target
         TURN_TO_HEADING_COLOR = [0.2, 0.9, 0.5, 0.8]  # Green for turn_to_heading indicator
 
@@ -851,9 +914,9 @@ class RobotUI:
             self._planned_path_objects = []
 
         # --- Planning preview (shown immediately on path_planning_started) ---
-        PLANNING_START_COLOR = [0.3, 0.9, 0.3, 0.9]         # Green for start point
-        PLANNING_TARGET_COLOR = [1.0, 0.3, 0.3, 0.9]        # Red for target point
-        PLANNING_WAYPOINT_COLOR = [0.5, 0.6, 1.0, 0.8]      # Blue for waypoints
+        PLANNING_START_COLOR = [0.3, 0.9, 0.3, 0.9]  # Green for start point
+        PLANNING_TARGET_COLOR = [1.0, 0.3, 0.3, 0.9]  # Red for target point
+        PLANNING_WAYPOINT_COLOR = [0.5, 0.6, 1.0, 0.8]  # Blue for waypoints
         PLANNING_PREVIEW_SIZE = 0.04
         PLANNING_PREVIEW_BORDER = [1.0, 1.0, 1.0, 0.8]
 
@@ -1078,8 +1141,8 @@ class RobotUI:
         self.robot.position_control.events.turn_to_heading_timeout.on(_on_turn_to_heading_completed)
 
         # --- Obstacle visualization (from testbed) ---
-        OBSTACLE_FILL_COLOR = [0.9, 0.2, 0.2, 0.3]          # Transparent red fill
-        OBSTACLE_BORDER_COLOR = [1.0, 1.0, 1.0, 0.8]        # White border
+        OBSTACLE_FILL_COLOR = [0.9, 0.2, 0.2, 0.3]  # Transparent red fill
+        OBSTACLE_BORDER_COLOR = [1.0, 1.0, 1.0, 0.8]  # White border
         OBSTACLE_BORDER_WIDTH = 2
 
         def _add_obstacle_to_map(obstacle, *args, **kwargs):
@@ -1127,16 +1190,16 @@ class RobotUI:
         self.manager.testbed.events.obstacle_removed.on(_remove_obstacle_from_map)
 
         # --- Planned path visualization ---
-        PLANNED_PATH_COLOR = [0.4, 0.8, 1.0, 0.5]          # Light blue, semi-transparent
-        PLANNED_PATH_POINT_SIZE = 0.015                      # Small dots along path
+        PLANNED_PATH_COLOR = [0.4, 0.8, 1.0, 0.5]  # Light blue, semi-transparent
+        PLANNED_PATH_POINT_SIZE = 0.015  # Small dots along path
         PLANNED_PATH_LINE_WIDTH = 2
-        PLANNED_PATH_TARGET_COLOR = [0.2, 1.0, 0.4, 0.9]   # Green target point
+        PLANNED_PATH_TARGET_COLOR = [0.2, 1.0, 0.4, 0.9]  # Green target point
         PLANNED_PATH_TARGET_SIZE = 0.04
-        PLANNED_PATH_SUBSAMPLE = 5                           # Show every Nth point to avoid clutter
-        WAYPOINT_PASS_COLOR = [1.0, 0.8, 0.2, 0.9]         # Yellow for PASS waypoints
-        WAYPOINT_STOP_COLOR = [1.0, 0.3, 0.3, 0.9]         # Red for STOP waypoints
-        WAYPOINT_SIZE = 0.035                                # Waypoint marker size
-        WAYPOINT_BORDER_COLOR = [1.0, 1.0, 1.0, 0.9]       # White border
+        PLANNED_PATH_SUBSAMPLE = 5  # Show every Nth point to avoid clutter
+        WAYPOINT_PASS_COLOR = [1.0, 0.8, 0.2, 0.9]  # Yellow for PASS waypoints
+        WAYPOINT_STOP_COLOR = [1.0, 0.3, 0.3, 0.9]  # Red for STOP waypoints
+        WAYPOINT_SIZE = 0.035  # Waypoint marker size
+        WAYPOINT_BORDER_COLOR = [1.0, 1.0, 1.0, 0.9]  # White border
 
         def _draw_planned_path(path_data: PathData):
             """Draw a planned/loaded path as a polyline with target marker."""
@@ -1235,10 +1298,10 @@ class RobotUI:
         navigation_group = Widget_Group(widget_id='navigation_group',
                                         title='Navigation',
                                         columns=9,
-                                        rows=9,
+                                        rows=4,
                                         show_title=True,
                                         )
-        page.addWidget(navigation_group, column=22, row=9, width=9, height=10)
+        page.addWidget(navigation_group, column=22, row=9, width=9, height=5)
 
         self.nav_mode_button = MultiStateButton(
             id='nav_mode_button',
@@ -1265,384 +1328,321 @@ class RobotUI:
         psi_zero_button.callbacks.click.register(lambda *args, **kwargs: self.robot.position_control.turn_to(0))
         navigation_group.addWidget(psi_zero_button, row=1, column=5, width=2, height=2)
 
+        build_prm_button = Button(widget_id='build_prm_button', text='Build PRM', color=[0.4, 0.4, 0.4])
+        build_prm_button.callbacks.click.register(lambda *args, **kwargs: self.robot.position_control.build_prm())
+        navigation_group.addWidget(build_prm_button, row=1, column=7, width=3, height=2)
+
+        turn_to_input_field = InputWidget(
+            widget_id='turn_to_input_field',
+            title='Psi (deg)',
+            title_position='left',
+            datatype='float',
+            tooltip=None,
+            value=None,
+            commit_on_blur=True,
+        )
+        navigation_group.addWidget(turn_to_input_field, row=3, column=1, width=6, height=1)
+
+        x_input_field = InputWidget(
+            widget_id='x_input_field',
+            title='x',
+            title_position='left',
+            datatype='float',
+            tooltip=None,
+            commit_on_blur=True,
+        )
+
+        y_input_field = InputWidget(
+            widget_id='y_input_field',
+            title='y',
+            title_position='left',
+            datatype='float',
+            tooltip=None,
+            commit_on_blur=True,
+        )
+
+        navigation_group.addWidget(x_input_field, row=4, column=1, width=3, height=1)
+        navigation_group.addWidget(y_input_field, row=4, column=4, width=3, height=1)
+
+
+        move_to_button = Button(widget_id='move_to_button', text='Move To', color=[0.4, 0.4, 0.4])
+
+        navigation_group.addWidget(move_to_button, row=4, column=7, width=3, height=1)
+
+        turn_to_button = Button(widget_id='turn_to_button', text='Turn To', color=[0.4, 0.4, 0.4])
+
+        navigation_group.addWidget(turn_to_button, row=3, column=7, width=3, height=1)
+
+        def turn_to_button_clicked(*args, **kwargs):
+            psi = turn_to_input_field.value
+            if psi is None:
+                return
+            self.robot.position_control.turn_to(np.deg2rad(psi))
+            # turn_to_input_field.value = None
+
+        def move_to_button_clicked(*args, **kwargs):
+            x = x_input_field.value
+            y = y_input_field.value
+            if x is None or y is None:
+                return
+            self.robot.position_control.move_to(x, y)
+            # x_input_field.value = None
+            # y_input_field.value = None
+
+        move_to_button.callbacks.click.register(move_to_button_clicked)
+        turn_to_button.callbacks.click.register(turn_to_button_clicked)
+
+
+
         page.addWidget(self.map_widget, row=9, width=10, height=10)
+
+        experiment_group = Widget_Group(widget_id='exp_group',
+                                        title='Experiment',
+                                        columns=9,
+                                        rows=6,
+                                        show_title=True,
+                                        )
+        page.addWidget(experiment_group, column=22, row=14, width=9, height=5)
+
+        # --- Run experiment button ---
+        self.exp_run_button = Button(widget_id='exp_run_button', text='Run', color=[0.3, 0.5, 0.3])
+        experiment_group.addWidget(self.exp_run_button, row=1, column=1, width=3, height=2)
+
+        def on_run_experiment_clicked(*args, **kwargs):
+            threading.Thread(target=self._run_experiment_from_picker, daemon=True).start()
+
+        self.exp_run_button.callbacks.click.register(on_run_experiment_clicked)
+
+        # --- Stop experiment button ---
+        self.exp_stop_button = Button(widget_id='exp_stop_button', text='Stop', color=[0.6, 0.2, 0.2])
+        experiment_group.addWidget(self.exp_stop_button, row=1, column=4, width=3, height=2)
+        self.exp_stop_button.callbacks.click.register(
+            lambda *args, **kwargs: self.robot.experiment_handler.stop_experiment()
+        )
+
+        # --- Experiment status text ---
+        self.exp_status_text = TextWidget(widget_id='exp_status', text='Idle', font_size=11)
+        experiment_group.addWidget(self.exp_status_text, row=1, column=7, width=3, height=2)
+
+        # --- Experiment progress text ---
+        self.exp_progress_text = TextWidget(widget_id='exp_progress', text='', font_size=12)
+        experiment_group.addWidget(self.exp_progress_text, row=3, column=1, width=9, height=2)
+
+        # --- Experiment progress bar ---
+        self.exp_progress_bar = ProgressIndicator(
+            widget_id='exp_progress_bar',
+            value=0.0,
+            thickness=8,
+            thickness_mode='absolute',
+            track_fill_color=[0.2, 0.5, 0.7, 1],
+            title='',
+            label='',
+        )
+        experiment_group.addWidget(self.exp_progress_bar, row=5, column=1, width=9, height=2)
+        self._exp_max_action_idx = 0
 
     # ------------------------------------------------------------------------------------------------------------------
     def build_control_page(self, page):
-        palette = get_palette('pastel', 4)
-        input_plot = RT_Plot_Widget(
-            widget_id='input_plot',
-            plot_config={
-                'title': 'Input',
-                'show_title': True,
-                "legend_label_type": "point",
-            }
-        )
-        input_axis = input_plot.plot.add_y_axis(
-            'input',
-            {
-                "label": f"Input [Nm]",
-                "min": -0.5,
-                "max": 0.5,
-                "color": [0.5, 0.5, 0.5, 0.7],
-                "grid_color": [0.5, 0.5, 0.5, 0.4],
-                "precision": 1,
-                "highlight_zero": True,
-            }
-        )
-        self.input_left_timeseries = TimeSeries(
-            id='left',
-            y_axis=input_axis,  # can pass the object or its id
-            name='left',
-            unit='Nm',
-            color=palette[0],
-            fill=False,
-            tension=0.0,
-            precision=2,
-            width=2,
-        )
-        self.input_right_timeseries = TimeSeries(
-            id='right',
-            y_axis=input_axis,  # can pass the object or its id
-            name='right',
-            unit='Nm',
-            color=palette[1],
-            fill=False,
-            tension=0.0,
-            precision=2,
-            width=2,
-        )
-        input_plot.plot.add_timeseries(self.input_left_timeseries)
-        input_plot.plot.add_timeseries(self.input_right_timeseries)
-        page.addWidget(input_plot, column=1, row=1, width=16, height=14)
+        # Parameter registry: (row_key, display_name, description, config_path, setter_key)
+        # config_path is a dot-separated path into BILBO_ControlConfig
+        self._control_param_registry = [
+            # General
+            ('general', 'General', [0.3, 0.3, 0.5, 0.9], [
+                ('general.max_wheel_torque', 'Max Wheel Torque', 'Nm', 'general'),
+                ('general.max_wheel_speed', 'Max Wheel Speed', 'rad/s', 'general'),
+            ]),
+            # Balancing TIC
+            ('tic', 'Balancing TIC', [0.4, 0.3, 0.3, 0.9], [
+                ('balancing_control.tic.ki', 'Ki', 'Integral gain', 'tic'),
+                ('balancing_control.tic.max_torque', 'Max Torque', 'Nm', 'tic'),
+                ('balancing_control.tic.theta_limit', 'Theta Limit', 'rad', 'tic'),
+            ]),
+            # Balancing VIC
+            ('vic', 'Balancing VIC', [0.3, 0.4, 0.3, 0.9], [
+                ('balancing_control.vic.ki', 'Ki', 'Integral gain', 'vic'),
+                ('balancing_control.vic.max_torque', 'Max Torque', 'Nm', 'vic'),
+                ('balancing_control.vic.v_limit', 'V Limit', 'm/s', 'vic'),
+                ('balancing_control.vic.theta_limit', 'Theta Limit', 'rad', 'vic'),
+            ]),
+            # Balancing PSI
+            ('psi', 'Balancing PSI', [0.3, 0.3, 0.5, 0.9], [
+                ('balancing_control.psi.kp', 'Kp', 'Proportional gain', 'psi'),
+                ('balancing_control.psi.ki', 'Ki', 'Integral gain', 'psi'),
+                ('balancing_control.psi.max_torque', 'Max Torque', 'Nm', 'psi'),
+            ]),
+            # State Feedback
+            ('statefeedback', 'State Feedback K', [0.45, 0.25, 0.35, 0.9], [
+                ('balancing_control.K.0', 'K_v', 'Velocity gain', 'statefeedback'),
+                ('balancing_control.K.1', 'K_theta', 'Pitch angle gain', 'statefeedback'),
+                ('balancing_control.K.2', 'K_theta_dot', 'Pitch rate gain', 'statefeedback'),
+                ('balancing_control.K.3', 'K_psi_dot', 'Yaw rate gain', 'statefeedback'),
+            ]),
+            # Velocity Forward PID
+            ('vel_fwd_pid', 'Velocity Forward PID', [0.2, 0.5, 0.3, 0.9], [
+                ('velocity_control.v.pid.Kp', 'Kp', 'Proportional gain', 'vel_fwd_pid'),
+                ('velocity_control.v.pid.Ki', 'Ki', 'Integral gain', 'vel_fwd_pid'),
+                ('velocity_control.v.pid.Kd', 'Kd', 'Derivative gain', 'vel_fwd_pid'),
+                ('velocity_control.v.pid.i_term_limit', 'I-Term Limit', '', 'vel_fwd_pid'),
+                ('velocity_control.v.pid.output_limit', 'Output Limit', '', 'vel_fwd_pid'),
+                ('velocity_control.v.pid.Td_filter', 'D-Filter Td', 's', 'vel_fwd_pid'),
+                ('velocity_control.v.pid.rate_limit', 'Rate Limit', '', 'vel_fwd_pid'),
+                ('velocity_control.v.pid.setpoint_rate_limit', 'SP Rate Limit', '', 'vel_fwd_pid'),
+            ]),
+            # Velocity Forward FF
+            ('vel_fwd_ff', 'Velocity Forward FF', [0.2, 0.4, 0.5, 0.9], [
+                ('velocity_control.v.feedforward.Kv', 'Kv', 'Velocity gain', 'vel_fwd_ff'),
+                ('velocity_control.v.feedforward.Ka', 'Ka', 'Acceleration gain', 'vel_fwd_ff'),
+                ('velocity_control.v.feedforward.Kc', 'Kc', 'Constant gain', 'vel_fwd_ff'),
+                ('velocity_control.v.feedforward.vref_slew_rate', 'Vref Slew Rate', '', 'vel_fwd_ff'),
+                ('velocity_control.v.feedforward.Ta_filter', 'Accel Filter Ta', 's', 'vel_fwd_ff'),
+                ('velocity_control.v.feedforward.v0_stiction', 'Stiction V0', 'm/s', 'vel_fwd_ff'),
+                ('velocity_control.v.feedforward.v_decay_stiction', 'Stiction V Decay', '', 'vel_fwd_ff'),
+                ('velocity_control.v.feedforward.output_limit', 'Output Limit', '', 'vel_fwd_ff'),
+                ('velocity_control.v.feedforward.output_slew_rate', 'Output Slew Rate', '', 'vel_fwd_ff'),
+            ]),
+            # Velocity Turn PID
+            ('vel_turn_pid', 'Velocity Turn PID', [0.5, 0.3, 0.2, 0.9], [
+                ('velocity_control.psidot.pid.Kp', 'Kp', 'Proportional gain', 'vel_turn_pid'),
+                ('velocity_control.psidot.pid.Ki', 'Ki', 'Integral gain', 'vel_turn_pid'),
+                ('velocity_control.psidot.pid.Kd', 'Kd', 'Derivative gain', 'vel_turn_pid'),
+                ('velocity_control.psidot.pid.i_term_limit', 'I-Term Limit', '', 'vel_turn_pid'),
+                ('velocity_control.psidot.pid.output_limit', 'Output Limit', '', 'vel_turn_pid'),
+                ('velocity_control.psidot.pid.Td_filter', 'D-Filter Td', 's', 'vel_turn_pid'),
+                ('velocity_control.psidot.pid.rate_limit', 'Rate Limit', '', 'vel_turn_pid'),
+                ('velocity_control.psidot.pid.setpoint_rate_limit', 'SP Rate Limit', '', 'vel_turn_pid'),
+            ]),
+            # Velocity Turn FF
+            ('vel_turn_ff', 'Velocity Turn FF', [0.5, 0.2, 0.4, 0.9], [
+                ('velocity_control.psidot.feedforward.Kv', 'Kv', 'Velocity gain', 'vel_turn_ff'),
+                ('velocity_control.psidot.feedforward.Ka', 'Ka', 'Acceleration gain', 'vel_turn_ff'),
+                ('velocity_control.psidot.feedforward.Kc', 'Kc', 'Constant gain', 'vel_turn_ff'),
+                ('velocity_control.psidot.feedforward.vref_slew_rate', 'Vref Slew Rate', '', 'vel_turn_ff'),
+                ('velocity_control.psidot.feedforward.Ta_filter', 'Accel Filter Ta', 's', 'vel_turn_ff'),
+                ('velocity_control.psidot.feedforward.v0_stiction', 'Stiction V0', 'm/s', 'vel_turn_ff'),
+                ('velocity_control.psidot.feedforward.v_decay_stiction', 'Stiction V Decay', '', 'vel_turn_ff'),
+                ('velocity_control.psidot.feedforward.output_limit', 'Output Limit', '', 'vel_turn_ff'),
+                ('velocity_control.psidot.feedforward.output_slew_rate', 'Output Slew Rate', '', 'vel_turn_ff'),
+            ]),
+            # Position Control
+            ('position', 'Position Control', [0.4, 0.2, 0.5, 0.9], [
+                ('position_control.kp_angular', 'Kp Angular', 'rad/s per rad', 'position'),
+                ('position_control.ki_angular', 'Ki Angular', 'rad/s per rad*s', 'position'),
+                ('position_control.kp_linear', 'Kp Linear', '1/s', 'position'),
+                ('position_control.ki_linear', 'Ki Linear', '1/s^2', 'position'),
+                ('position_control.kd_linear', 'Kd Linear', '-', 'position'),
+                ('position_control.max_speed', 'Max Speed', 'm/s', 'position'),
+                ('position_control.max_turn_rate', 'Max Turn Rate', 'rad/s', 'position'),
+                ('position_control.lookahead_base', 'Lookahead Base', 'm', 'position'),
+                ('position_control.lookahead_min', 'Lookahead Min', 'm', 'position'),
+                ('position_control.arrival_tolerance', 'Arrival Tolerance', 'm', 'position'),
+                ('position_control.arrival_dwell_time', 'Arrival Dwell', 's', 'position'),
+                ('position_control.decel_limit', 'Decel Limit', 'm/s^2', 'position'),
+                ('position_control.curvature_gain', 'Curvature Gain', '-', 'position'),
+                ('position_control.curvature_lookahead', 'Curvature Lookahead', 'm', 'position'),
+            ]),
+        ]
 
-        # === VELOCITY PID CONTROL DIALS ===
-        # Forward Velocity PID Group
-        v_pid_group = Widget_Group(
-            group_id='v_pid_group',
-            title='Velocity PID (Forward)',
-            rows=8,
-            columns=12,
-            show_title=True
-        )
-        page.addWidget(v_pid_group, column=17, row=1, width=12, height=9)
-
-        # Kp dial for forward velocity (typical range: -0.1 to 0, default: -0.005)
-        self.v_kp_dial = RotaryDialWidget(
-            widget_id='v_kp_dial',
-            min_value=-0.1,
-            max_value=0.0,
-            increment=0.001,
-            value=-0.005,
-            title='Kp',
-            continuousUpdates=False,
-            dialColor=[0.2, 0.5, 0.8, 1.0],
-        )
-        v_pid_group.addWidget(self.v_kp_dial, row=1, column=1, width=4, height=4)
-
-        def on_v_kp_changed(value, *args, **kwargs):
-            self.robot.control.set_forward_pid(P=value)
-
-        self.v_kp_dial.callbacks.value_changed.register(on_v_kp_changed)
-
-        # Ki dial for forward velocity (typical range: -1 to 0, default: -0.05)
-        self.v_ki_dial = RotaryDialWidget(
-            widget_id='v_ki_dial',
-            min_value=-1.0,
-            max_value=0.0,
-            increment=0.01,
-            value=-0.05,
-            title='Ki',
-            continuousUpdates=False,
-            dialColor=[0.5, 0.2, 0.8, 1.0],
-        )
-        v_pid_group.addWidget(self.v_ki_dial, row=1, column=5, width=4, height=4)
-
-        def on_v_ki_changed(value, *args, **kwargs):
-            self.robot.control.set_forward_pid(I=value)
-
-        self.v_ki_dial.callbacks.value_changed.register(on_v_ki_changed)
-
-        # Kd dial for forward velocity (negative only: -0.01 to 0, default: 0)
-        self.v_kd_dial = RotaryDialWidget(
-            widget_id='v_kd_dial',
-            min_value=-0.01,
-            max_value=0.0,
-            increment=0.0001,
-            value=0.0,
-            title='Kd',
-            continuousUpdates=False,
-            dialColor=[0.8, 0.5, 0.2, 1.0],
-        )
-        v_pid_group.addWidget(self.v_kd_dial, row=1, column=9, width=4, height=4)
-
-        def on_v_kd_changed(value, *args, **kwargs):
-            self.robot.control.set_forward_pid(D=value)
-
-        self.v_kd_dial.callbacks.value_changed.register(on_v_kd_changed)
-
-        # Enable I-Limit checkbox
-        self.v_enable_i_limit_checkbox = CheckboxWidget(
-            widget_id='v_enable_i_limit',
-            value=False,
-            title='I-Limit:',
-            title_position='left',
-        )
-        v_pid_group.addWidget(self.v_enable_i_limit_checkbox, row=5, column=1, width=4, height=1)
-
-        # Enable Output Limit checkbox
-        self.v_enable_output_limit_checkbox = CheckboxWidget(
-            widget_id='v_enable_output_limit',
-            value=False,
-            title='Out-Limit:',
-            title_position='left',
-        )
-        v_pid_group.addWidget(self.v_enable_output_limit_checkbox, row=5, column=5, width=4, height=1)
-
-        # Enable D-Filter checkbox
-        self.v_enable_d_filter_checkbox = CheckboxWidget(
-            widget_id='v_enable_d_filter',
-            value=False,
-            title='D-Filter:',
-            title_position='left',
-        )
-        v_pid_group.addWidget(self.v_enable_d_filter_checkbox, row=5, column=9, width=4, height=1)
-
-        # Kv feedforward dial (smaller)
-        self.v_kv_dial = RotaryDialWidget(
-            widget_id='v_kv_dial',
-            min_value=-0.5,
-            max_value=0.0,
-            increment=0.01,
-            value=-0.1,
-            title='Kv (FF)',
-            continuousUpdates=False,
-            dialColor=[0.2, 0.7, 0.5, 1.0],
-        )
-        v_pid_group.addWidget(self.v_kv_dial, row=6, column=1, width=4, height=3)
-
-        def on_v_kv_changed(value, *args, **kwargs):
-            # TODO: Add method to set feedforward Kv
-            self.logger.debug(f"Forward Kv changed to {value}")
-
-        self.v_kv_dial.callbacks.value_changed.register(on_v_kv_changed)
-
-        # Reset to defaults button
-        self.v_reset_button = Button(
-            widget_id='v_reset_button',
-            text='Reset to Default',
-            color=[0.5, 0.3, 0.2],
-        )
-        v_pid_group.addWidget(self.v_reset_button, row=6, column=5, width=8, height=2)
-
-        def on_v_reset_clicked(*args, **kwargs):
-            self.logger.info("Resetting forward velocity PID to defaults")
-            self.robot.control.load_default_control_config()
-
-        self.v_reset_button.callbacks.click.register(on_v_reset_clicked)
-
-        # Turn Rate (Psi Dot) PID Group
-        psidot_pid_group = Widget_Group(
-            group_id='psidot_pid_group',
-            title='Velocity PID (Turn)',
-            rows=8,
-            columns=12,
-            show_title=True
-        )
-        page.addWidget(psidot_pid_group, column=17, row=10, width=12, height=9)
-
-        # Kp dial for turn rate (typical range: 0 to 0.1, default: 0.01)
-        self.psidot_kp_dial = RotaryDialWidget(
-            widget_id='psidot_kp_dial',
-            min_value=0.0,
-            max_value=0.1,
-            increment=0.001,
-            value=0.01,
-            title='Kp',
-            continuousUpdates=False,
-            dialColor=[0.2, 0.5, 0.8, 1.0],
-        )
-        psidot_pid_group.addWidget(self.psidot_kp_dial, row=1, column=1, width=4, height=4)
-
-        def on_psidot_kp_changed(value, *args, **kwargs):
-            self.robot.control.set_turn_pid(P=value)
-
-        self.psidot_kp_dial.callbacks.value_changed.register(on_psidot_kp_changed)
-
-        # Ki dial for turn rate (typical range: 0 to 1, default: 0.05)
-        self.psidot_ki_dial = RotaryDialWidget(
-            widget_id='psidot_ki_dial',
-            min_value=0.0,
-            max_value=1.0,
-            increment=0.01,
-            value=0.05,
-            title='Ki',
-            continuousUpdates=False,
-            dialColor=[0.5, 0.2, 0.8, 1.0],
-        )
-        psidot_pid_group.addWidget(self.psidot_ki_dial, row=1, column=5, width=4, height=4)
-
-        def on_psidot_ki_changed(value, *args, **kwargs):
-            self.robot.control.set_turn_pid(I=value)
-
-        self.psidot_ki_dial.callbacks.value_changed.register(on_psidot_ki_changed)
-
-        # Kd dial for turn rate (negative only: -0.01 to 0, default: 0)
-        self.psidot_kd_dial = RotaryDialWidget(
-            widget_id='psidot_kd_dial',
-            min_value=-0.01,
-            max_value=0.0,
-            increment=0.0001,
-            value=0.0,
-            title='Kd',
-            continuousUpdates=False,
-            dialColor=[0.8, 0.5, 0.2, 1.0],
-        )
-        psidot_pid_group.addWidget(self.psidot_kd_dial, row=1, column=9, width=4, height=4)
-
-        def on_psidot_kd_changed(value, *args, **kwargs):
-            self.robot.control.set_turn_pid(D=value)
-
-        self.psidot_kd_dial.callbacks.value_changed.register(on_psidot_kd_changed)
-
-        # Enable I-Limit checkbox
-        self.psidot_enable_i_limit_checkbox = CheckboxWidget(
-            widget_id='psidot_enable_i_limit',
-            value=False,
-            title='I-Limit:',
-            title_position='left',
-        )
-        psidot_pid_group.addWidget(self.psidot_enable_i_limit_checkbox, row=5, column=1, width=4, height=1)
-
-        # Enable Output Limit checkbox
-        self.psidot_enable_output_limit_checkbox = CheckboxWidget(
-            widget_id='psidot_enable_output_limit',
-            value=False,
-            title='Out-Limit:',
-            title_position='left',
-        )
-        psidot_pid_group.addWidget(self.psidot_enable_output_limit_checkbox, row=5, column=5, width=4, height=1)
-
-        # Enable D-Filter checkbox
-        self.psidot_enable_d_filter_checkbox = CheckboxWidget(
-            widget_id='psidot_enable_d_filter',
-            value=False,
-            title='D-Filter:',
-            title_position='left',
-        )
-        psidot_pid_group.addWidget(self.psidot_enable_d_filter_checkbox, row=5, column=9, width=4, height=1)
-
-        # Kv feedforward dial for turn (smaller)
-        self.psidot_kv_dial = RotaryDialWidget(
-            widget_id='psidot_kv_dial',
-            min_value=0.0,
-            max_value=0.5,
-            increment=0.01,
-            value=0.1,
-            title='Kv (FF)',
-            continuousUpdates=False,
-            dialColor=[0.2, 0.7, 0.5, 1.0],
-        )
-        psidot_pid_group.addWidget(self.psidot_kv_dial, row=6, column=1, width=4, height=3)
-
-        def on_psidot_kv_changed(value, *args, **kwargs):
-            # TODO: Add method to set feedforward Kv for turn
-            self.logger.debug(f"Turn Kv changed to {value}")
-
-        self.psidot_kv_dial.callbacks.value_changed.register(on_psidot_kv_changed)
-
-        # Reset to defaults button for turn PID
-        self.psidot_reset_button = Button(
-            widget_id='psidot_reset_button',
-            text='Reset to Default',
-            color=[0.5, 0.3, 0.2],
-        )
-        psidot_pid_group.addWidget(self.psidot_reset_button, row=6, column=5, width=8, height=2)
-
-        def on_psidot_reset_clicked(*args, **kwargs):
-            self.logger.info("Resetting turn velocity PID to defaults")
-            self.robot.control.load_default_control_config()
-
-        self.psidot_reset_button.callbacks.click.register(on_psidot_reset_clicked)
-
-        # === CONTROL CONFIG TABLE ===
+        # Build the table
         self.control_config_table = Table(widget_id='control_config_table')
         self.control_config_table.add_column(
-            TextColumn(id='parameter', title='Parameter', width=0.5, font_align='left'))
-        self.control_config_table.add_column(TextColumn(id='value', title='Value', width=0.5, font_align='right'))
+            TextColumn(id='name', title='Parameter', width=0.3, font_align='left',
+                       font_size=9, padding='1px 1px 1px 6px'))
+        self.control_config_table.add_column(
+            TextColumn(id='description', title='Description', width=0.3, font_align='left',
+                       text_color=[1, 1, 1, 0.5], font_size=8, padding='1px 1px 1px 6px'))
+        self.control_config_table.add_column(
+            TextInputColumn(id='value', title='Value', width=0.4, font_align='right', text_color=[1, 1, 1, 0.8]))
 
-        # Create table groups for organization
-        self.config_general_group = TableGroup(
-            id='config_general',
-            title='General',
-            collapsible=True,
-            group_color=[0.3, 0.3, 0.5, 0.9]
+        # Build groups and rows
+        self._control_row_map = {}  # row_key -> (row, config_path, setter_key)
+
+        for group_id, group_title, group_color, params in self._control_param_registry:
+            group = TableGroup(
+                id=f'ctrl_{group_id}',
+                title=group_title,
+                collapsible=True,
+                group_color=group_color,
+            )
+            self.control_config_table.items[group.id] = group
+            group._table = self.control_config_table
+
+            for config_path, display_name, desc, setter_key in params:
+                row_key = config_path  # use full path as unique key
+                row = group.make_row(
+                    name=display_name,
+                    description=desc,
+                    value='—',
+                )
+                self._control_row_map[row_key] = (row, config_path, setter_key)
+
+                # Register update_request callback on the value cell
+                value_cell = row.cells['value']
+                value_cell.callbacks.update_request.register(
+                    self._on_control_param_edit,
+                    inputs={'row_key': row_key, 'row_id': row.id},
+                )
+
+        page.addWidget(self.control_config_table, column=1, row=1, width=18, height=16)
+
+        # --- Auto/Manual write mode ---
+        self._control_auto_write = True  # True = AUTO, False = MANUAL
+        self._control_pending_changes = {}  # row_key -> float_value
+        self._control_initial_config = None  # snapshot taken on first fetch
+
+        self.control_write_mode_button = MultiStateButton(
+            id='control_write_mode',
+            states=['AUTO', 'MANUAL'],
+            current_state='AUTO',
+            color=[
+                [0.2, 0.5, 0.3],  # Green for AUTO
+                [0.6, 0.4, 0.2],  # Orange for MANUAL
+            ],
+            title='Write Mode',
         )
-        self.control_config_table.items[self.config_general_group.id] = self.config_general_group
-        self.config_general_group._table = self.control_config_table
+        page.addWidget(self.control_write_mode_button, column=1, row=17, width=3, height=2)
 
-        self.config_velocity_v_group = TableGroup(
-            id='config_velocity_v',
-            title='Velocity Control (Forward)',
-            collapsible=True,
-            group_color=[0.2, 0.5, 0.3, 0.9]
+        def on_write_mode_toggle(state, *args, **kwargs):
+            if state == 'AUTO':
+                self._control_auto_write = False
+                self.control_write_mode_button.state = 'MANUAL'
+                self.control_send_button.updateConfig(color=[0.5, 0.3, 0.2])
+            else:
+                # Switching back to AUTO: send any pending changes first
+                if self._control_pending_changes:
+                    self._send_pending_control_changes()
+                self._control_auto_write = True
+                self.control_write_mode_button.state = 'AUTO'
+                self.control_send_button.updateConfig(color=[0.3, 0.3, 0.3])
+
+        self.control_write_mode_button.callbacks.click.register(on_write_mode_toggle)
+
+        self.control_send_button = Button(
+            widget_id='control_send',
+            text='Send',
+            color=[0.3, 0.3, 0.3],
+            callback=lambda *a, **kw: self._send_pending_control_changes(),
         )
-        self.control_config_table.items[self.config_velocity_v_group.id] = self.config_velocity_v_group
-        self.config_velocity_v_group._table = self.control_config_table
+        page.addWidget(self.control_send_button, row=17, width=3, height=2)
 
-        self.config_velocity_psidot_group = TableGroup(
-            id='config_velocity_psidot',
-            title='Velocity Control (Turn)',
-            collapsible=True,
-            group_color=[0.5, 0.3, 0.2, 0.9]
+        self.control_restore_button = Button(
+            widget_id='control_restore',
+            text='Restore',
+            color=[0.4, 0.25, 0.25],
+            callback=lambda *a, **kw: self._restore_initial_control_config(),
         )
-        self.control_config_table.items[self.config_velocity_psidot_group.id] = self.config_velocity_psidot_group
-        self.config_velocity_psidot_group._table = self.control_config_table
+        page.addWidget(self.control_restore_button, row=17, width=3, height=2)
 
-        # Create placeholder rows that will be updated
-        self.config_rows = {}
+        self.control_copy_yaml_button = Button(
+            widget_id='control_copy_yaml',
+            text='Copy YAML',
+            color=[0.3, 0.3, 0.5],
+            callback=lambda *a, **kw: self._copy_control_config_yaml(),
+        )
+        page.addWidget(self.control_copy_yaml_button, row=17, width=3, height=2)
 
-        # General config rows
-        self.config_rows['max_wheel_speed'] = self.config_general_group.make_row(parameter='Max Wheel Speed',
-                                                                                 value='0.0')
-        self.config_rows['max_wheel_torque'] = self.config_general_group.make_row(parameter='Max Wheel Torque',
-                                                                                  value='0.0')
-        self.config_rows['enable_external_inputs'] = self.config_general_group.make_row(parameter='External Inputs',
-                                                                                        value='disabled')
-
-        # Velocity V PID rows
-        self.config_rows['v_kp'] = self.config_velocity_v_group.make_row(parameter='Kp', value='0.0')
-        self.config_rows['v_ki'] = self.config_velocity_v_group.make_row(parameter='Ki', value='0.0')
-        self.config_rows['v_kd'] = self.config_velocity_v_group.make_row(parameter='Kd', value='0.0')
-        self.config_rows['v_kv'] = self.config_velocity_v_group.make_row(parameter='Kv (FF)', value='0.0')
-        self.config_rows['v_ka'] = self.config_velocity_v_group.make_row(parameter='Ka (FF)', value='0.0')
-        self.config_rows['v_i_term_limit'] = self.config_velocity_v_group.make_row(parameter='I-Term Limit',
-                                                                                   value='0.0 (disabled)')
-        self.config_rows['v_output_limit'] = self.config_velocity_v_group.make_row(parameter='Output Limit',
-                                                                                   value='0.0 (disabled)')
-        self.config_rows['v_d_filter'] = self.config_velocity_v_group.make_row(parameter='D-Filter Td',
-                                                                               value='0.0 (disabled)')
-
-        # Velocity Psidot PID rows
-        self.config_rows['psidot_kp'] = self.config_velocity_psidot_group.make_row(parameter='Kp', value='0.0')
-        self.config_rows['psidot_ki'] = self.config_velocity_psidot_group.make_row(parameter='Ki', value='0.0')
-        self.config_rows['psidot_kd'] = self.config_velocity_psidot_group.make_row(parameter='Kd', value='0.0')
-        self.config_rows['psidot_kv'] = self.config_velocity_psidot_group.make_row(parameter='Kv (FF)', value='0.0')
-        self.config_rows['psidot_ka'] = self.config_velocity_psidot_group.make_row(parameter='Ka (FF)', value='0.0')
-        self.config_rows['psidot_i_term_limit'] = self.config_velocity_psidot_group.make_row(parameter='I-Term Limit',
-                                                                                             value='0.0 (disabled)')
-        self.config_rows['psidot_output_limit'] = self.config_velocity_psidot_group.make_row(parameter='Output Limit',
-                                                                                             value='0.0 (disabled)')
-        self.config_rows['psidot_d_filter'] = self.config_velocity_psidot_group.make_row(parameter='D-Filter Td',
-                                                                                         value='0.0 (disabled)')
-
-        page.addWidget(self.control_config_table, column=30, row=1, width=20, height=16)
-
-        # Initialize values from actual robot config
-        self._initialize_control_widgets_from_config()
-
-        # Start periodic update of the control config table
-        self._start_control_config_update()
+        # Initialize table and listen for config changes from robot
+        self._initialize_control_table_from_config()
+        self.robot.control.events.configuration_changed.on(self._on_control_config_changed)
 
     # ------------------------------------------------------------------------------------------------------------------
     def build_debug_page(self, page):
@@ -1833,6 +1833,13 @@ class RobotUI:
             else:
                 self.control_status_widget.elements['vic'].status = 'disabled'
                 self.control_status_widget.elements['vic'].color = [0.5, 0.5, 0.5]
+
+            if sample.control.psi_enabled:
+                self.control_status_widget.elements['psi'].status = 'enabled'
+                self.control_status_widget.elements['psi'].color = [0, 0.5, 0]
+            else:
+                self.control_status_widget.elements['psi'].status = 'disabled'
+                self.control_status_widget.elements['psi'].color = [0.5, 0.5, 0.5]
             self.control_status_widget.updateConfig()
 
             # Update estimation status (dead-reckoning vs tracked)
@@ -1844,6 +1851,45 @@ class RobotUI:
                 self.estimation_status_widget.elements['tracking'].status = 'Tracked'
                 self.estimation_status_widget.elements['tracking'].color = [0.2, 0.6, 0.2]  # Green
             self.estimation_status_widget.updateConfig()
+
+            # Update experiment status and progress
+            exp_status = sample.experiment.status
+            exp_def = self.robot.experiment_handler.current_experiment_definition
+            if exp_status and exp_status.lower() != 'idle' and exp_status != '':
+                exp_id = sample.experiment.experiment_id or sample.experiment.experiment.id
+                total = len(exp_def.actions) if exp_def else 0
+                self.exp_status_text.text = f"Running: {exp_id}"
+
+                # Build action ID -> index and type maps from the host-side definition
+                action_type_map = {}
+                action_index_map = {}
+                if exp_def:
+                    for i, a in enumerate(exp_def.actions):
+                        action_type_map[a.id] = a.type
+                        action_index_map[a.id] = i
+
+                # 'actions' contains the currently active action IDs
+                exp_sample = sample.experiment.experiment
+                active_actions = [a for a in (exp_sample.actions or []) if a]
+                if active_actions and total > 0:
+                    # Find highest action index among active actions
+                    max_idx = max(action_index_map.get(a, 0) for a in active_actions)
+                    self._exp_max_action_idx = max(self._exp_max_action_idx, max_idx)
+                    labels = [action_type_map.get(a, a) for a in active_actions]
+                    self.exp_progress_text.text = f"({self._exp_max_action_idx + 1}/{total}) {', '.join(labels)}"
+                    self.exp_progress_bar.value = (self._exp_max_action_idx + 1) / total
+                elif active_actions:
+                    self.exp_progress_text.text = ', '.join(active_actions)
+                else:
+                    self.exp_progress_text.text = ''
+            else:
+                self.exp_status_text.text = 'Idle'
+                self.exp_progress_text.text = ''
+                if self._exp_max_action_idx > 0:
+                    self.exp_progress_bar.value = 0.0
+                    self._exp_max_action_idx = 0
+            self.exp_status_text.updateConfig()
+            self.exp_progress_text.updateConfig()
 
         if self.robot.core.tick % 200 == 0:
             # Update the overview widgets
@@ -1860,6 +1906,31 @@ class RobotUI:
 
             # Internet
             self.internet_indicator.setValue(sample.general.internet_connected)
+
+            # Pi status (temperature + throttle)
+            temp = sample.general.rpi_temperature
+            throttle = sample.general.rpi_throttle
+            if temp > 0:
+                self.pi_status_widget.elements['temp'].status = f"{temp:.1f} °C"
+                if temp >= 80:
+                    self.pi_status_widget.elements['temp'].color = [0.7, 0.1, 0.1]
+                elif temp >= 70:
+                    self.pi_status_widget.elements['temp'].color = [0.7, 0.5, 0.0]
+                else:
+                    self.pi_status_widget.elements['temp'].color = [0, 0.5, 0]
+
+            if throttle > 0:
+                flags = []
+                if throttle & (1 << 0): flags.append("UV")
+                if throttle & (1 << 1): flags.append("Freq")
+                if throttle & (1 << 2): flags.append("Throttled")
+                if throttle & (1 << 3): flags.append("TempLim")
+                self.pi_status_widget.elements['throttle'].status = ', '.join(flags) if flags else 'OK'
+                self.pi_status_widget.elements['throttle'].color = [0.7, 0.1, 0.1] if flags else [0, 0.5, 0]
+            else:
+                self.pi_status_widget.elements['throttle'].status = 'OK'
+                self.pi_status_widget.elements['throttle'].color = [0, 0.5, 0]
+            self.pi_status_widget.updateConfig()
 
             # Joystick assigned?
             # if js_control is not None:
@@ -1900,9 +1971,6 @@ class RobotUI:
         self.psi_dot_timeseries.set_value(np.rad2deg(sample.estimation.state.psi_dot))
         self.x_timeseries.set_value(sample.estimation.state.x)
         self.y_timeseries.set_value(sample.estimation.state.y)
-
-        self.input_left_timeseries.set_value(sample.lowlevel.control.output.u_left)
-        self.input_right_timeseries.set_value(sample.lowlevel.control.output.u_right)
 
         # Update map agent position from robot estimation state
         tick = self.robot.core.tick
@@ -1958,6 +2026,25 @@ class RobotUI:
         self.control_status_widget.updateConfig()
 
     # ------------------------------------------------------------------------------------------------------------------
+    def on_psi_mode_changed(self, mode: bool, *args, **kwargs):
+        self.control_status_widget.elements['psi'].status = 'enabled' if mode else 'disabled'
+        self.control_status_widget.elements['psi'].color = [0, 0.5, 0] if mode else [0.5, 0.5, 0.5]
+        self.control_status_widget.updateConfig()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _run_experiment_from_picker(self):
+        """Open a native file picker and run the selected experiment (called in a background thread)."""
+        from core.utils.filepicker import pick_file
+        file_path = pick_file(
+            title="Select experiment file",
+            allowed_extensions=['.yaml', '.yml', '.json'],
+        )
+        if file_path is None:
+            return
+        self.logger.info(f"Running experiment from file: {file_path}")
+        self.robot.experiment_handler.run_experiment_from_file(file_path, blocking=True)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def on_dilc_experiment_initialized(self, data, *args, **kwargs):
         self.logger.info("DILC experiment initialized — opening DILC app")
         dilc_experiment = data.get('experiment')
@@ -1972,165 +2059,251 @@ class RobotUI:
         self.dilc_app.open(self.gui)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _initialize_control_widgets_from_config(self):
-        """Initialize dials and checkboxes with actual values from robot control config."""
-        try:
-            config = self.robot.control.get_control_config()
-            if config is None:
-                self.logger.warning("Could not read control config for initialization")
-                return
-
-            # Initialize forward velocity PID dials
-            self.v_kp_dial._value = config.velocity_control.v.pid.Kp
-            self.v_ki_dial._value = config.velocity_control.v.pid.Ki
-            self.v_kd_dial._value = config.velocity_control.v.pid.Kd
-            self.v_kv_dial._value = config.velocity_control.v.feedforward.Kv
-
-            # Initialize turn velocity PID dials
-            self.psidot_kp_dial._value = config.velocity_control.psidot.pid.Kp
-            self.psidot_ki_dial._value = config.velocity_control.psidot.pid.Ki
-            self.psidot_kd_dial._value = config.velocity_control.psidot.pid.Kd
-            self.psidot_kv_dial._value = config.velocity_control.psidot.feedforward.Kv
-
-            # Initialize forward velocity checkboxes
-            self.v_enable_i_limit_checkbox._value = config.velocity_control.v.pid.enable_i_limit
-            self.v_enable_output_limit_checkbox._value = config.velocity_control.v.pid.enable_output_limit
-            self.v_enable_d_filter_checkbox._value = config.velocity_control.v.pid.enable_d_filter
-
-            # Initialize turn velocity checkboxes
-            self.psidot_enable_i_limit_checkbox._value = config.velocity_control.psidot.pid.enable_i_limit
-            self.psidot_enable_output_limit_checkbox._value = config.velocity_control.psidot.pid.enable_output_limit
-            self.psidot_enable_d_filter_checkbox._value = config.velocity_control.psidot.pid.enable_d_filter
-
-            self.logger.debug("Initialized control widgets from robot config")
-
-        except Exception as e:
-            self.logger.warning(f"Failed to initialize control widgets from config: {e}")
+    def on_limbobar_dilc_experiment_initialized(self, data, *args, **kwargs):
+        self.logger.info("LimboBar DILC experiment initialized — opening LimboBar DILC app")
+        experiment = data.get('experiment')
+        if experiment is None:
+            self.logger.error("No LimboBar DILC experiment handle in event data")
+            return
+        self.limbobar_dilc_app = LimboBar_DILC_APP(
+            gui=self.gui,
+            robot=self.robot,
+            experiment=experiment,
+        )
+        self.limbobar_dilc_app.open(self.gui)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def _start_control_config_update(self):
-        """Start periodic update of the control config table every 1 second."""
-        return
-        self._control_config_timer = None
+    def _initialize_control_table_from_config(self):
+        """Populate all control table cells with current values from robot."""
 
-        def update_config():
-            self._update_control_config_table()
-
-        self._control_config_timer = setInterval(update_config, 1.0)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _format_value_with_enable(self, value: float, enabled: bool, precision: int = 4) -> str:
-        """Format a numeric value with enable status as text."""
-        status = 'enabled' if enabled else 'disabled'
-        return f"{value:.{precision}f} ({status})"
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _update_control_config_table(self):
-        """Fetch current control config from robot and update table values."""
-        try:
-            # Get the full control config from the robot
-            config = self.robot.control.get_control_config()
-            if config is None:
-                return
-
-            # Update general config values (as formatted text)
-            self.config_rows['max_wheel_speed']['value'] = f"{config.general.max_wheel_speed:.2f}"
-            self.config_rows['max_wheel_torque']['value'] = f"{config.general.max_wheel_torque:.3f}"
-            self.config_rows['enable_external_inputs'][
-                'value'] = 'enabled' if config.general.enable_external_inputs else 'disabled'
-
-            # Update velocity forward (v) PID values (as formatted text)
-            self.config_rows['v_kp']['value'] = f"{config.velocity_control.v.pid.Kp:.4f}"
-            self.config_rows['v_ki']['value'] = f"{config.velocity_control.v.pid.Ki:.4f}"
-            self.config_rows['v_kd']['value'] = f"{config.velocity_control.v.pid.Kd:.4f}"
-            self.config_rows['v_kv']['value'] = f"{config.velocity_control.v.feedforward.Kv:.4f}"
-            self.config_rows['v_ka']['value'] = f"{config.velocity_control.v.feedforward.Ka:.4f}"
-            self.config_rows['v_i_term_limit']['value'] = self._format_value_with_enable(
-                config.velocity_control.v.pid.i_term_limit, config.velocity_control.v.pid.enable_i_limit)
-            self.config_rows['v_output_limit']['value'] = self._format_value_with_enable(
-                config.velocity_control.v.pid.output_limit, config.velocity_control.v.pid.enable_output_limit)
-            self.config_rows['v_d_filter']['value'] = self._format_value_with_enable(
-                config.velocity_control.v.pid.Td_filter, config.velocity_control.v.pid.enable_d_filter)
-
-            # Update velocity turn (psidot) PID values (as formatted text)
-            self.config_rows['psidot_kp']['value'] = f"{config.velocity_control.psidot.pid.Kp:.4f}"
-            self.config_rows['psidot_ki']['value'] = f"{config.velocity_control.psidot.pid.Ki:.4f}"
-            self.config_rows['psidot_kd']['value'] = f"{config.velocity_control.psidot.pid.Kd:.4f}"
-            self.config_rows['psidot_kv']['value'] = f"{config.velocity_control.psidot.feedforward.Kv:.4f}"
-            self.config_rows['psidot_ka']['value'] = f"{config.velocity_control.psidot.feedforward.Ka:.4f}"
-            self.config_rows['psidot_i_term_limit']['value'] = self._format_value_with_enable(
-                config.velocity_control.psidot.pid.i_term_limit, config.velocity_control.psidot.pid.enable_i_limit)
-            self.config_rows['psidot_output_limit']['value'] = self._format_value_with_enable(
-                config.velocity_control.psidot.pid.output_limit, config.velocity_control.psidot.pid.enable_output_limit)
-            self.config_rows['psidot_d_filter']['value'] = self._format_value_with_enable(
-                config.velocity_control.psidot.pid.Td_filter, config.velocity_control.psidot.pid.enable_d_filter)
-
-            # Update the dial widgets to reflect current values
-            # Only update if significantly different to avoid feedback loops
-            if abs(self.v_kp_dial.value - config.velocity_control.v.pid.Kp) > 0.0001:
-                self.v_kp_dial._value = config.velocity_control.v.pid.Kp
-                self.v_kp_dial._sendValueToFrontend(self.v_kp_dial._value)
-            if abs(self.v_ki_dial.value - config.velocity_control.v.pid.Ki) > 0.001:
-                self.v_ki_dial._value = config.velocity_control.v.pid.Ki
-                self.v_ki_dial._sendValueToFrontend(self.v_ki_dial._value)
-            if abs(self.v_kd_dial.value - config.velocity_control.v.pid.Kd) > 0.00001:
-                self.v_kd_dial._value = config.velocity_control.v.pid.Kd
-                self.v_kd_dial._sendValueToFrontend(self.v_kd_dial._value)
-            if abs(self.v_kv_dial.value - config.velocity_control.v.feedforward.Kv) > 0.001:
-                self.v_kv_dial._value = config.velocity_control.v.feedforward.Kv
-                self.v_kv_dial._sendValueToFrontend(self.v_kv_dial._value)
-
-            if abs(self.psidot_kp_dial.value - config.velocity_control.psidot.pid.Kp) > 0.0001:
-                self.psidot_kp_dial._value = config.velocity_control.psidot.pid.Kp
-                self.psidot_kp_dial._sendValueToFrontend(self.psidot_kp_dial._value)
-            if abs(self.psidot_ki_dial.value - config.velocity_control.psidot.pid.Ki) > 0.001:
-                self.psidot_ki_dial._value = config.velocity_control.psidot.pid.Ki
-                self.psidot_ki_dial._sendValueToFrontend(self.psidot_ki_dial._value)
-            if abs(self.psidot_kd_dial.value - config.velocity_control.psidot.pid.Kd) > 0.00001:
-                self.psidot_kd_dial._value = config.velocity_control.psidot.pid.Kd
-                self.psidot_kd_dial._sendValueToFrontend(self.psidot_kd_dial._value)
-            if abs(self.psidot_kv_dial.value - config.velocity_control.psidot.feedforward.Kv) > 0.001:
-                self.psidot_kv_dial._value = config.velocity_control.psidot.feedforward.Kv
-                self.psidot_kv_dial._sendValueToFrontend(self.psidot_kv_dial._value)
-
-            # Update checkbox widgets to reflect current values
-            if self.v_enable_i_limit_checkbox._value != config.velocity_control.v.pid.enable_i_limit:
-                self.v_enable_i_limit_checkbox._value = config.velocity_control.v.pid.enable_i_limit
-                self.v_enable_i_limit_checkbox._sendValueToFrontend(self.v_enable_i_limit_checkbox._value)
-            if self.v_enable_output_limit_checkbox._value != config.velocity_control.v.pid.enable_output_limit:
-                self.v_enable_output_limit_checkbox._value = config.velocity_control.v.pid.enable_output_limit
-                self.v_enable_output_limit_checkbox._sendValueToFrontend(self.v_enable_output_limit_checkbox._value)
-            if self.v_enable_d_filter_checkbox._value != config.velocity_control.v.pid.enable_d_filter:
-                self.v_enable_d_filter_checkbox._value = config.velocity_control.v.pid.enable_d_filter
-                self.v_enable_d_filter_checkbox._sendValueToFrontend(self.v_enable_d_filter_checkbox._value)
-
-            if self.psidot_enable_i_limit_checkbox._value != config.velocity_control.psidot.pid.enable_i_limit:
-                self.psidot_enable_i_limit_checkbox._value = config.velocity_control.psidot.pid.enable_i_limit
-                self.psidot_enable_i_limit_checkbox._sendValueToFrontend(self.psidot_enable_i_limit_checkbox._value)
-            if self.psidot_enable_output_limit_checkbox._value != config.velocity_control.psidot.pid.enable_output_limit:
-                self.psidot_enable_output_limit_checkbox._value = config.velocity_control.psidot.pid.enable_output_limit
-                self.psidot_enable_output_limit_checkbox._sendValueToFrontend(
-                    self.psidot_enable_output_limit_checkbox._value)
-            if self.psidot_enable_d_filter_checkbox._value != config.velocity_control.psidot.pid.enable_d_filter:
-                self.psidot_enable_d_filter_checkbox._value = config.velocity_control.psidot.pid.enable_d_filter
-                self.psidot_enable_d_filter_checkbox._sendValueToFrontend(self.psidot_enable_d_filter_checkbox._value)
-
-        except Exception as e:
-            self.logger.warning(f"Failed to update control config table: {e}")
+        def do_init():
             try:
-                self._control_config_timer.stop()
+                config = self.robot.control.get_control_config()
+                if config is None:
+                    self.logger.warning("Could not read control config for initialization")
+                    return
+                self._control_initial_config = copy.deepcopy(config)
+                self._sync_control_table_values(config)
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize control table: {e}")
+
+        set_timeout(do_init, 1.0)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_control_config_changed(self, *args, **kwargs):
+        """Called when the robot signals that its control config has changed."""
+        try:
+            config = self.robot.control.get_control_config()
+            if config is not None:
+                self._sync_control_table_values(config)
+        except Exception as e:
+            self.logger.debug(f"Control config sync failed: {e}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _sync_control_table_values(self, config: BILBO_ControlConfig):
+        """Update all control table cells from a config object."""
+        for row_key, (row, config_path, _) in self._control_row_map.items():
+            # Skip cells with pending changes in manual mode
+            if not self._control_auto_write and row_key in self._control_pending_changes:
+                continue
+            try:
+                value = self._resolve_config_path(config, config_path)
+                formatted = f"{value:.6g}" if isinstance(value, float) else str(value)
+                row.cells['value'].set(formatted)
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _resolve_config_path(obj, path: str):
+        """Navigate a dot-separated path on a dataclass/object. Supports list indices (e.g. 'K.0')."""
+        for part in path.split('.'):
+            if isinstance(obj, (list, tuple)) and part.isdigit():
+                obj = obj[int(part)]
+            else:
+                obj = getattr(obj, part)
+        return obj
+
+    # ------------------------------------------------------------------------------------------------------------------
+    @staticmethod
+    def _set_config_path(obj, path: str, value):
+        """Set a value at a dot-separated path on a dataclass/object. Supports list indices."""
+        parts = path.split('.')
+        for part in parts[:-1]:
+            if isinstance(obj, (list, tuple)) and part.isdigit():
+                obj = obj[int(part)]
+            else:
+                obj = getattr(obj, part)
+        last = parts[-1]
+        if isinstance(obj, list) and last.isdigit():
+            obj[int(last)] = value
+        else:
+            setattr(obj, last, value)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _on_control_param_edit(self, value, row_key, row_id, *args, **kwargs):
+        """Called when user edits a value cell in the control config table."""
+        row, config_path, setter_key = self._control_row_map[row_key]
+
+        # Validate as float
+        try:
+            float_value = float(value)
+        except (ValueError, TypeError):
+            self.control_config_table.reject_cell(row_id, 'value')
+            return
+
+        formatted = f"{float_value:.6g}"
+
+        if not self._control_auto_write:
+            # MANUAL mode: buffer the change, mark cell dirty
+            self._control_pending_changes[row_key] = float_value
+            self.control_config_table.accept_cell(row_id, 'value', formatted)
+            self.control_config_table.mark_cell_dirty(row_id, 'value')
+            return
+
+        # AUTO mode: immediately write to robot
+        try:
+            config = self.robot.control.get_control_config()
+            if config is None:
+                self.control_config_table.reject_cell(row_id, 'value')
+                return
+
+            self._set_config_path(config, config_path, float_value)
+            self._dispatch_control_setter(config, setter_key)
+
+            self.control_config_table.accept_cell(row_id, 'value', formatted)
+
+        except Exception as e:
+            self.logger.warning(f"Failed to apply control param edit ({row_key}): {e}")
+            self.control_config_table.reject_cell(row_id, 'value')
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _dispatch_control_setter(self, config: BILBO_ControlConfig, setter_key: str):
+        """Dispatch a control config section to the appropriate robot setter."""
+        match setter_key:
+            case 'general':
+                self.robot.control.set_general_config(
+                    max_wheel_torque=config.general.max_wheel_torque,
+                    max_wheel_speed=config.general.max_wheel_speed,
+                )
+            case 'tic':
+                self.robot.control.set_tic_config(config.balancing_control.tic)
+            case 'vic':
+                self.robot.control.set_vic_config(config.balancing_control.vic)
+            case 'psi':
+                self.robot.control.set_psi_config(config.balancing_control.psi)
+            case 'statefeedback':
+                # Reconstruct full 8-element K: row 2 mirrors row 1 with negated psi_dot
+                K = config.balancing_control.K
+                k_v, k_theta, k_theta_dot, k_psi_dot = K[0], K[1], K[2], K[3]
+                full_K = [k_v, k_theta, k_theta_dot, k_psi_dot,
+                          k_v, k_theta, k_theta_dot, -k_psi_dot]
+                config.balancing_control.K = full_K
+                self.robot.control.set_statefeedback_gain(full_K)
+            case 'vel_fwd_pid':
+                self.robot.control.set_velocity_control_config_v(config.velocity_control.v.pid)
+            case 'vel_fwd_ff':
+                self.robot.control.set_velocity_ff_config_v(config.velocity_control.v.feedforward)
+            case 'vel_turn_pid':
+                self.robot.control.set_velocity_control_config_psi_dot(config.velocity_control.psidot.pid)
+            case 'vel_turn_ff':
+                self.robot.control.set_velocity_ff_config_psi_dot(config.velocity_control.psidot.feedforward)
+            case 'position':
+                self.robot.control.set_position_control_config(config.position_control)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _send_pending_control_changes(self):
+        """Send all buffered pending changes to the robot."""
+        if not self._control_pending_changes:
+            return
+
+        try:
+            config = self.robot.control.get_control_config()
+            if config is None:
+                self.logger.warning("Could not fetch control config for sending pending changes")
+                return
+
+            # Apply all pending values to the config
+            affected_setters = set()
+            for row_key, float_value in self._control_pending_changes.items():
+                row, config_path, setter_key = self._control_row_map[row_key]
+                self._set_config_path(config, config_path, float_value)
+                affected_setters.add(setter_key)
+
+            # Dispatch each affected setter once
+            for setter_key in affected_setters:
+                self._dispatch_control_setter(config, setter_key)
+
+            # Clear dirty marks
+            for row_key in self._control_pending_changes:
+                row, _, _ = self._control_row_map[row_key]
+                self.control_config_table.mark_cell_clean(row.id, 'value')
+
+            self._control_pending_changes.clear()
+            self.logger.info("Sent pending control config changes to robot")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to send pending control changes: {e}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _restore_initial_control_config(self):
+        """Restore the control config to the snapshot taken when the robot first connected."""
+        if self._control_initial_config is None:
+            self.logger.warning("No initial control config available to restore")
+            return
+
+        try:
+            config = copy.deepcopy(self._control_initial_config)
+
+            # Dispatch all setter keys to push the full initial config to the robot
+            for setter_key in {'general', 'statefeedback', 'tic', 'vic', 'psi', 'vel_fwd_pid', 'vel_fwd_ff',
+                               'vel_turn_pid', 'vel_turn_ff', 'position'}:
+                self._dispatch_control_setter(config, setter_key)
+
+            # Clear any pending changes and dirty marks
+            for row_key in list(self._control_pending_changes.keys()):
+                row, _, _ = self._control_row_map[row_key]
+                self.control_config_table.mark_cell_clean(row.id, 'value')
+            self._control_pending_changes.clear()
+
+            # Sync the table with the restored config
+            self._sync_control_table_values(config)
+            self.logger.info("Restored initial control config")
+
+        except Exception as e:
+            self.logger.warning(f"Failed to restore initial control config: {e}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _copy_control_config_yaml(self):
+        try:
+            config = self.robot.control.get_control_config()
+            if config is None:
+                self.logger.warning("Could not read control config from robot")
+                return
+            config_dict = dataclasses.asdict(config)
+
+            # Block style for dicts, flow style for lists of scalars (like K matrix)
+            class BlockDumper(yaml.SafeDumper):
+                pass
+
+            def represent_dict(dumper, data):
+                return dumper.represent_mapping('tag:yaml.org,2002:map', data.items(), flow_style=False)
+
+            def represent_list(dumper, data):
+                flow = all(isinstance(v, (int, float, bool, str)) for v in data)
+                return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=flow)
+
+            BlockDumper.add_representer(dict, represent_dict)
+            BlockDumper.add_representer(list, represent_list)
+
+            yaml_str = yaml.dump(config_dict, Dumper=BlockDumper, sort_keys=False)
+            self.gui.function(function_name='copyToClipboard', args={'text': yaml_str}, spread_args=False)
+            self.logger.info("Control config YAML copied to clipboard")
+        except Exception as e:
+            self.logger.warning(f"Failed to copy control config: {e}")
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
-        # Cancel the control config update timer
-        if hasattr(self, '_control_config_timer') and self._control_config_timer is not None:
-            try:
-                self._control_config_timer.stop()
-            except Exception:
-                pass
-
         try:
             self.gui.categories['robots'].removeCategory(self.category)
         except Exception:
@@ -2145,5 +2318,3 @@ class RobotUI:
             # plot.
             ...
         self.map_widget.onDelete()
-
-

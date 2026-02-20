@@ -37,7 +37,7 @@ from robot.logging.bilbo_logging import BILBO_Logging
 from robot.logging.bilbo_sample import BILBO_Sample_General
 from robot.sensors.bilbo_sensors import BILBO_Sensors
 from core.utils.logging_utils import Logger, setLoggerLevel
-from robot.supervisor.twipr_supervisor import TWIPR_Supervisor
+from robot.supervisor.bilbo_supervisor import BILBO_Supervisor
 from core.utils.revisions import get_versions, is_ll_version_compatible
 import robot.lowlevel.stm32_addresses as stm32_addresses
 from core.utils.exit import register_exit_callback
@@ -119,7 +119,7 @@ class BILBO(MainProvider):
 
     events: BILBO_Events
 
-    supervisor: TWIPR_Supervisor
+    supervisor: BILBO_Supervisor
     lock: SingletonLock
 
     loop_time: float
@@ -134,7 +134,7 @@ class BILBO(MainProvider):
         self.settings = _load_settings(settings_path)
         init_paths(self.settings.paths.main)
 
-        self.lock = SingletonLock(lock_file="/tmp/twipr.lock", timeout=10, override=True, override_timeout=5)
+        self.lock = SingletonLock(lock_file="/tmp/bilbo.lock", timeout=10, override=True, override_timeout=5)
         self.lock.__enter__()
 
         self.logger = Logger("BILBO")
@@ -179,7 +179,7 @@ class BILBO(MainProvider):
         self.control = BILBO_Control(common=self.common, comm=self.communication, estimation=self.estimation)
         self.drive = BILBO_Drive(comm=self.communication)
         self.sensors = BILBO_Sensors(comm=self.communication)
-        self.supervisor = TWIPR_Supervisor(comm=self.communication)
+        self.supervisor = BILBO_Supervisor(comm=self.communication)
 
         self.interfaces = BILBO_Interfaces(communication=self.communication,
                                            control=self.control,
@@ -322,8 +322,8 @@ class BILBO(MainProvider):
         # self.board.beep()
 
         return self.communication.serial.executeFunction(
-            module=stm32_addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=stm32_addresses.TWIPR_SystemAddresses.FIRMWARE_RESET,
+            module=stm32_addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=stm32_addresses.BILBO_SystemAddresses.FIRMWARE_RESET,
             input_type=None,
             output_type=ctypes.c_bool,
             timeout=1

@@ -34,7 +34,7 @@ from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control_definitions import PositionControl_Config, PlanningConfig, BILBO_Control_Mode
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
-from robot.lowlevel.stm32_addresses import TWIPR_AddressTables, TWIPR_PositionControlAddresses
+from robot.lowlevel.stm32_addresses import BILBO_AddressTables, BILBO_PositionControlAddresses
 from robot.lowlevel.stm32_control import (
     BILBO_PositionControl_Event_Message,
     position_control_event_t,
@@ -388,8 +388,8 @@ class BILBO_PositionControl:
     def set_config(self, config: PositionControl_Config) -> bool:
         """Set position control configuration on STM32"""
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.SET_CONFIG,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_PositionControlAddresses.SET_CONFIG,
             input_type=bilbo_position_control_config_t,
             output_type=ctypes.c_bool,
             data=position_control_config_to_ctypes(config)
@@ -509,8 +509,8 @@ class BILBO_PositionControl:
             return False
 
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.CLEAR_PATH,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_PositionControlAddresses.CLEAR_PATH,
             input_type=None,
             output_type=ctypes.c_bool,
         )
@@ -539,8 +539,8 @@ class BILBO_PositionControl:
             return False
 
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.ADD_STOP_INDEX,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_PositionControlAddresses.ADD_STOP_INDEX,
             input_type=ctypes.c_uint16,
             output_type=ctypes.c_bool,
             data=ctypes.c_uint16(index)
@@ -556,8 +556,8 @@ class BILBO_PositionControl:
     def get_path_point_count(self) -> int:
         """Get current number of path points on STM32"""
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.READ_PATH_POINT_COUNT,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_PositionControlAddresses.READ_PATH_POINT_COUNT,
             input_type=None,
             output_type=ctypes.c_uint16
         )
@@ -640,8 +640,8 @@ class BILBO_PositionControl:
         )
 
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.START_PATH,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_PositionControlAddresses.START_PATH,
             input_type=bilbo_path_start_cmd_t,
             output_type=ctypes.c_bool,
             data=cmd
@@ -670,8 +670,8 @@ class BILBO_PositionControl:
             return False
 
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.ABORT_PATH,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_PositionControlAddresses.ABORT_PATH,
             input_type=None,
             output_type=ctypes.c_bool,
         )
@@ -1258,8 +1258,8 @@ class BILBO_PositionControl:
         )
 
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.MOVE_TO_POINT,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_PositionControlAddresses.MOVE_TO_POINT,
             input_type=move_to_point_command_t,
             output_type=ctypes.c_bool,
             data=cmd
@@ -1338,8 +1338,8 @@ class BILBO_PositionControl:
         )
 
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.TURN_TO_HEADING,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_PositionControlAddresses.TURN_TO_HEADING,
             input_type=turn_to_heading_command_t,
             output_type=ctypes.c_bool,
             data=cmd
@@ -1383,8 +1383,8 @@ class BILBO_PositionControl:
     def reset(self) -> bool:
         """Reset position control to idle state"""
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.RESET,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_PositionControlAddresses.RESET,
             input_type=None,
             output_type=ctypes.c_bool,
         )
@@ -1410,8 +1410,8 @@ class BILBO_PositionControl:
     def get_data_from_stm32(self) -> PositionControlData | None:
         """Read current telemetry data from STM32"""
         data = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_PositionControlAddresses.READ_DATA,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_PositionControlAddresses.READ_DATA,
             input_type=None,
             output_type=bilbo_position_control_data_t
         )

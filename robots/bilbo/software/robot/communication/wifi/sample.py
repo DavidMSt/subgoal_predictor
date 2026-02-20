@@ -1,4 +1,4 @@
-twipr_wifi_sample = {
+bilbo_wifi_sample = {
     'general': {
         'status': "normal",  # str
         'configuration': 'default',  # str

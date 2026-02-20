@@ -21,6 +21,7 @@ class BILBO_PhysicalModel:
     distance_wheels: float
     l_cg: float
     theta_offset: float
+    trajectory_delta: float = 0.0  # Asymmetric torque split: left = u*(0.5+delta), right = u*(0.5-delta)
 
 
 @dataclasses.dataclass

@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+from core.utils.json_utils import writeJSON_mp
 from core.communication.wifi.bilbolab_wifi_interface import (
     wifi_event_definition, WifiEventContainer, WifiEvent,
 )
@@ -216,6 +217,20 @@ class BILBO_ExperimentHandler:
         )
 
         self.communication.wifi.newCommand(
+            identifier='run_limbobar_dilc_experiment',
+            function=self._run_limbobar_dilc_experiment_external,
+            arguments=[
+                CommandArgument(
+                    name='settings',
+                    type=dict,
+                    optional=False,
+                    description="LimboBar DILC experiment settings"
+                )
+            ],
+            description="Start a LimboBar DILC experiment (blocking, runs in thread)",
+        )
+
+        self.communication.wifi.newCommand(
             identifier='stop_experiment',
             function=self.stop_current_experiment,
             arguments=[
@@ -339,6 +354,36 @@ class BILBO_ExperimentHandler:
         from robot.experiment.trial_experiments.dilc import DILC_Experiment
 
         experiment = DILC_Experiment(
+            common=self.common,
+            estimation=self.estimation,
+            control=self.control,
+            communication=self.communication,
+            interfaces=self.interfaces,
+            experiment_handler=self,
+            settings=settings,
+        )
+        self._active_dilc_experiment = experiment
+        try:
+            return experiment.run()
+        finally:
+            self._active_dilc_experiment = None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def run_limbobar_dilc_experiment(self, settings):
+        """Run a LimboBar DILC experiment.
+
+        Same as run_dilc_experiment but with limbo bar collision detection.
+        A limbo bar is created in the testbed at start and removed on finish/error.
+
+        Args:
+            settings: LimboBar_DILC_Experiment_Settings with experiment configuration.
+
+        Returns:
+            LimboBar_DILC_Results on completion (includes partial data on error/abort), or None on failure.
+        """
+        from robot.experiment.trial_experiments.limbobar_dilc import LimboBar_DILC_Experiment
+
+        experiment = LimboBar_DILC_Experiment(
             common=self.common,
             estimation=self.estimation,
             control=self.control,
@@ -630,6 +675,34 @@ class BILBO_ExperimentHandler:
             self.status = BILBO_ExperimentHandler_Status.IDLE
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _run_limbobar_dilc_experiment_external(self, settings: dict) -> bool:
+        """Handle WiFi command to start a LimboBar DILC experiment (non-blocking)."""
+        if self.status != BILBO_ExperimentHandler_Status.IDLE:
+            self.logger.warning(f"Cannot start LimboBar DILC experiment: handler is {self.status}")
+            return False
+
+        from robot.experiment.trial_experiments.limbobar_dilc import LimboBar_DILC_Experiment_Settings
+
+        try:
+            settings_parsed = from_dict_auto(LimboBar_DILC_Experiment_Settings, settings)
+            self.logger.info(f"Received LimboBar DILC experiment request: {settings_parsed.id}")
+        except Exception as e:
+            self.logger.error(f"Failed to parse LimboBar DILC experiment settings: {e}")
+            return False
+
+        self.status = BILBO_ExperimentHandler_Status.EXPERIMENT
+        run_in_thread(self._run_limbobar_dilc_experiment_thread, settings_parsed)
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _run_limbobar_dilc_experiment_thread(self, settings):
+        """Thread target for LimboBar DILC experiment execution."""
+        try:
+            self.run_limbobar_dilc_experiment(settings)
+        finally:
+            self.status = BILBO_ExperimentHandler_Status.IDLE
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _run_trajectory_external(self, trajectory_data: dict) -> bool:
         try:
             trajectory = from_dict_auto(BILBO_InputTrajectory, trajectory_data)
@@ -713,8 +786,8 @@ class BILBO_ExperimentHandler:
 
         # Send the trajectory to the STM32
         success = self.communication.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_SequencerAddresses.LOAD,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_SequencerAddresses.LOAD,
             data=sequence_description,
             input_type=bilbo_sequence_description_t,  # type: ignore
             output_type=ctypes.c_bool,
@@ -776,8 +849,8 @@ class BILBO_ExperimentHandler:
     # ------------------------------------------------------------------------------------------------------------------
     def _read_loaded_trajectory_from_lowlevel(self) -> BILBO_Sequence_LL | None:
         trajectory_data_struct = self.communication.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_SequencerAddresses.READ,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_SequencerAddresses.READ,
             data=None,
             input_type=None,
             output_type=bilbo_sequence_description_t,
@@ -795,8 +868,8 @@ class BILBO_ExperimentHandler:
     # ------------------------------------------------------------------------------------------------------------------
     def _send_trajectory_start_signal_to_lowlevel(self, trajectory_id: int) -> bool:
         success = self.communication.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_SequencerAddresses.START,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_SequencerAddresses.START,
             data=trajectory_id,
             input_type=ctypes.c_uint16,
             output_type=ctypes.c_bool,
@@ -808,8 +881,8 @@ class BILBO_ExperimentHandler:
     # ------------------------------------------------------------------------------------------------------------------
     def _send_trajectory_stop_signal_to_lowlevel(self) -> bool:
         success = self.communication.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_SequencerAddresses.STOP,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_SequencerAddresses.STOP,
             data=None,
             input_type=None,
             output_type=None,
@@ -856,9 +929,9 @@ class BILBO_ExperimentHandler:
         filename = f"{data['id']}_{timestamp}.json"
         filepath = os.path.join(experiments_dir, filename)
 
-        # Write data to JSON file
-        with open(filepath, 'w') as f:
-            json.dump(data, f, indent=2)
+        # Write data to JSON file (in subprocess to avoid GIL blocking)
+        if not writeJSON_mp(filepath, data):
+            self.logger.error(f"Failed to write experiment data to {filepath}")
 
         self.logger.debug(f"Wrote experiment data to {filepath}")
 
@@ -894,9 +967,9 @@ class BILBO_ExperimentHandler:
             filename = f"{data['id']}_{timestamp}_{status}.json"
             filepath = os.path.join(experiments_dir, filename)
 
-            # Write data to JSON file
-            with open(filepath, 'w') as f:
-                json.dump(data, f, indent=2)
+            # Write data to JSON file (in subprocess to avoid GIL blocking)
+            if not writeJSON_mp(filepath, data):
+                self.logger.error(f"Failed to write experiment data to {filepath}")
 
             self.logger.debug(f"Wrote experiment data to {filepath}")
 

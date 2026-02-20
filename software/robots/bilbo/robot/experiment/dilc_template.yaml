@@ -25,6 +25,16 @@ initial_conditions:
   y: 0.0
   psi: 0.0
 
+# Optional: separate starting pose for the first trial (u0 trial) only.
+# When using a random u0, the robot may swing in an unpredictable direction.
+# Use this to position the robot with more room for the first trial, while
+# keeping the standard initial_conditions for subsequent trials.
+# If omitted (None), all trials use initial_conditions.
+# initial_conditions_u0:
+#   x: 0.0
+#   y: 0.0
+#   psi: 0.0
+
 # ILC input Q-filter: smooths the input trajectory update across trials.
 # Prevents high-frequency noise in the tracking error from amplifying in u_{j+1}.
 # Without this filter, the learned input can become jagged/oscillatory.
@@ -53,6 +63,28 @@ model_lowpass:
   fc: 0.4
   L: 41
   window: hann
+
+# ILC regularization gain. Higher = more regularization, slower but more stable learning.
+# Typical: 1.0-3.0.
+# ilc_gain: 1.5
+
+# IML regularization gain. Higher = more regularization, slower but more stable model updates.
+# Typical: 1.0-3.0.
+# iml_gain: 1.5
+
+# Initial input trajectory (u0).
+# If omitted, a random trajectory is generated using u0_params below.
+# Can be:
+#   - a path to a .bitrj file (relative to this YAML or absolute)
+#   - an inline array of floats (length must match reference)
+# u0: my_input.bitrj
+
+# Initial model / impulse response estimate (m0).
+# If omitted, starts with a zero model (no prior knowledge).
+# Can be:
+#   - a path to a .bmvec file (relative to this YAML or absolute)
+#   - an inline array of floats (length must match reference)
+# m0: my_model.bmvec
 
 # Parameters for random initial input trajectory generation (u0).
 # Used when u0 is not explicitly provided.

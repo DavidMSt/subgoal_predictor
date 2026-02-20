@@ -3,14 +3,14 @@ import dataclasses
 import enum
 
 
-class TWIPR_ErrorType(enum.IntEnum):
+class BILBO_ErrorType(enum.IntEnum):
     NONE = 0,
     MINOR = 1,
     MAJOR = 2,
     CRITICAL = 3,
 
 
-class TWIPR_ErrorCodes(enum.IntEnum):
+class BILBO_ErrorCodes(enum.IntEnum):
     UNSPECIFIED = 0,
     WHEEL_SPEED = 1,
     MANUAL_STOP = 2,
@@ -30,5 +30,5 @@ class bilbo_ll_log_entry_t(ctypes.Structure):
 @dataclasses.dataclass
 class BILBO_LL_Log_Entry:
     tick: int = 0
-    type: TWIPR_ErrorType = TWIPR_ErrorType.NONE
-    error: TWIPR_ErrorCodes = TWIPR_ErrorCodes.UNSPECIFIED
+    type: BILBO_ErrorType = BILBO_ErrorType.NONE
+    error: BILBO_ErrorCodes = BILBO_ErrorCodes.UNSPECIFIED

@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 # === TRAJECTORY =======================================================================================================
-def generate_trajectory_inputs(inputs: list | np.ndarray) -> list[BILBO_InputTrajectoryStep]:
+def generate_trajectory_inputs(inputs: list | np.ndarray, delta: float = 0.0) -> list[BILBO_InputTrajectoryStep]:
     from robot.experiment.definitions import BILBO_InputTrajectoryStep
     trajectory_inputs = []
 
@@ -27,8 +27,8 @@ def generate_trajectory_inputs(inputs: list | np.ndarray) -> list[BILBO_InputTra
             left = float(inp[0])
             right = float(inp[1])
         else:
-            left = float(inp) / 2
-            right = float(inp) / 2
+            left = float(inp) * (0.5 + delta)
+            right = float(inp) * (0.5 - delta)
 
         trajectory_inputs.append(BILBO_InputTrajectoryStep(
             step=i,

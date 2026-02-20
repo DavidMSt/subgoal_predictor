@@ -23,10 +23,10 @@ from robot.communication.serial.bilbo_serial_messages import (
 )
 from robot.communication.wifi.bilbo_wifi import BILBO_WIFI_Interface
 from robot.lowlevel.stm32_addresses import (
-    TWIPR_ControlAddresses,
-    TWIPR_PositionControlAddresses,
-    TWIPR_EstimationAddresses,
-    TWIPR_SystemAddresses,
+    BILBO_ControlAddresses,
+    BILBO_PositionControlAddresses,
+    BILBO_EstimationAddresses,
+    BILBO_SystemAddresses,
 )
 from robot.lowlevel.stm32_control import (
     BILBO_Control_Event_Message,
@@ -96,14 +96,14 @@ class SimulatedSerial:
 
     def readValue(self, address: int, module: int = 0, type=ctypes.c_uint8):
         """Read a register value from simulated firmware."""
-        if address == TWIPR_ControlAddresses.READ_MODE:
+        if address == BILBO_ControlAddresses.READ_MODE:
             return int(self._fw.mode)
         logger.warning(f"readValue: unhandled address 0x{address:02X}")
         return None
 
     def writeValue(self, module: int = 0, address: int | list = None, value=None, type=ctypes.c_uint8):
         """Write a register value to simulated firmware."""
-        if address == TWIPR_ControlAddresses.RW_MAX_WHEEL_SPEED:
+        if address == BILBO_ControlAddresses.RW_MAX_WHEEL_SPEED:
             # Not critical for simulation
             return
         logger.warning(f"writeValue: unhandled address 0x{address:02X}")
@@ -144,85 +144,85 @@ class SimulatedSerial:
         fw = self._fw
 
         # === SYSTEM ===
-        if address == TWIPR_SystemAddresses.FIRMWARE_RESET:
+        if address == BILBO_SystemAddresses.FIRMWARE_RESET:
             return fw.firmware_reset()
 
         # === CONTROL ===
-        if address == TWIPR_ControlAddresses.SET_MODE:
+        if address == BILBO_ControlAddresses.SET_MODE:
             fw.set_mode(_val(data, input_type))
             return True
 
-        if address == TWIPR_ControlAddresses.SET_K:
+        if address == BILBO_ControlAddresses.SET_K:
             K = _extract_k(data)
             fw.set_K(K)
             return True
 
-        if address == TWIPR_ControlAddresses.SET_BALANCING_INPUT:
+        if address == BILBO_ControlAddresses.SET_BALANCING_INPUT:
             u_left = _get(data, 'u_left', 0.0)
             u_right = _get(data, 'u_right', 0.0)
             fw.set_external_input(u_left, u_right)
             return True
 
-        if address == TWIPR_ControlAddresses.SET_SPEED_INPUT:
+        if address == BILBO_ControlAddresses.SET_SPEED_INPUT:
             v = _get(data, 'v', 0.0)
             psi_dot = _get(data, 'psi_dot', 0.0)
             fw.set_velocity_command(v, psi_dot)
             return True
 
-        if address == TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_V:
+        if address == BILBO_ControlAddresses.SET_VELOCITY_CONFIG_V:
             fw.set_velocity_config_v_pid(_pid_config(data))
             return True
 
-        if address == TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_V_FF:
+        if address == BILBO_ControlAddresses.SET_VELOCITY_CONFIG_V_FF:
             fw.set_velocity_config_v_ff(_ff_config(data))
             return True
 
-        if address == TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_PSIDOT:
+        if address == BILBO_ControlAddresses.SET_VELOCITY_CONFIG_PSIDOT:
             fw.set_velocity_config_psidot_pid(_pid_config(data))
             return True
 
-        if address == TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_PSIDOT_FF:
+        if address == BILBO_ControlAddresses.SET_VELOCITY_CONFIG_PSIDOT_FF:
             fw.set_velocity_config_psidot_ff(_ff_config(data))
             return True
 
-        if address == TWIPR_ControlAddresses.SET_POSITION_CONFIG:
+        if address == BILBO_ControlAddresses.SET_POSITION_CONFIG:
             fw.set_position_config(_pos_config(data))
             return True
 
-        if address == TWIPR_ControlAddresses.SET_TIC_CONFIG:
+        if address == BILBO_ControlAddresses.SET_TIC_CONFIG:
             fw.set_tic_config(_tic_config(data))
             return True
 
-        if address == TWIPR_ControlAddresses.SET_VIC_CONFIG:
+        if address == BILBO_ControlAddresses.SET_VIC_CONFIG:
             fw.set_vic_config(_vic_config(data))
             return True
 
-        if address == TWIPR_ControlAddresses.SET_MAX_TORQUE:
+        if address == BILBO_ControlAddresses.SET_MAX_TORQUE:
             fw.set_max_torque(float(_val(data, input_type)))
             return True
 
-        if address == TWIPR_ControlAddresses.ENABLE_TIC:
+        if address == BILBO_ControlAddresses.ENABLE_TIC:
             fw.set_tic_enabled(bool(_val(data, input_type)))
             return True
 
-        if address == TWIPR_ControlAddresses.ENABLE_VIC:
+        if address == BILBO_ControlAddresses.ENABLE_VIC:
             fw.set_vic_enabled(bool(_val(data, input_type)))
             return True
 
         # === POSITION CONTROL ===
-        if address == TWIPR_PositionControlAddresses.SET_CONFIG:
+        if address == BILBO_PositionControlAddresses.SET_CONFIG:
             fw.set_position_config(_pos_config(data))
             return True
 
-        if address == TWIPR_PositionControlAddresses.CLEAR_PATH:
+        if address == BILBO_PositionControlAddresses.CLEAR_PATH:
             fw.pc_clear_path()
             return True
 
-        if address == TWIPR_PositionControlAddresses.ADD_PATH_POINT:
+        if address == BILBO_PositionControlAddresses.ADD_PATH_POINT:
             fw.pc_add_path_point(_get(data, 'x', 0.0), _get(data, 'y', 0.0))
             return True
 
-        if address == TWIPR_PositionControlAddresses.ADD_PATH_BATCH:
+        if address == BILBO_PositionControlAddresses.ADD_PATH_BATCH:
             count = _get(data, 'count', 0)
             start_index = _get(data, 'start_index', 0)
             points_arr = getattr(data, 'points', None)
@@ -232,12 +232,12 @@ class SimulatedSerial:
                     fw.pc_add_path_point(float(pt.x), float(pt.y))
             return True
 
-        if address == TWIPR_PositionControlAddresses.ADD_STOP_INDEX:
+        if address == BILBO_PositionControlAddresses.ADD_STOP_INDEX:
             idx = int(_val(data, input_type))
             fw.pc_add_stop_index(idx)
             return True
 
-        if address == TWIPR_PositionControlAddresses.START_PATH:
+        if address == BILBO_PositionControlAddresses.START_PATH:
             fw.pc_start_path(
                 max_speed=_get(data, 'max_speed', 0.0),
                 max_spacing=_get(data, 'max_spacing', 0.0),
@@ -246,28 +246,28 @@ class SimulatedSerial:
             )
             return True
 
-        if address == TWIPR_PositionControlAddresses.PAUSE_PATH:
+        if address == BILBO_PositionControlAddresses.PAUSE_PATH:
             fw.pc_pause_path()
             return True
 
-        if address == TWIPR_PositionControlAddresses.RESUME_PATH:
+        if address == BILBO_PositionControlAddresses.RESUME_PATH:
             fw.pc_resume_path()
             return True
 
-        if address == TWIPR_PositionControlAddresses.ABORT_PATH:
+        if address == BILBO_PositionControlAddresses.ABORT_PATH:
             fw.pc_abort_path()
             return True
 
-        if address == TWIPR_PositionControlAddresses.READ_PATH_STATE:
+        if address == BILBO_PositionControlAddresses.READ_PATH_STATE:
             return int(fw.position_control.path_state)
 
-        if address == TWIPR_PositionControlAddresses.READ_DATA:
+        if address == BILBO_PositionControlAddresses.READ_DATA:
             return _pc_data_to_dict(fw.position_control.get_data())
 
-        if address == TWIPR_PositionControlAddresses.READ_PATH_POINT_COUNT:
+        if address == BILBO_PositionControlAddresses.READ_PATH_POINT_COUNT:
             return fw.position_control.path_point_count
 
-        if address == TWIPR_PositionControlAddresses.TURN_TO_HEADING:
+        if address == BILBO_PositionControlAddresses.TURN_TO_HEADING:
             fw.pc_turn_to_heading(
                 heading=_get(data, 'heading_ref', 0.0),
                 timeout=_get(data, 'timeout', 0.0),
@@ -276,7 +276,7 @@ class SimulatedSerial:
             )
             return True
 
-        if address == TWIPR_PositionControlAddresses.MOVE_TO_POINT:
+        if address == BILBO_PositionControlAddresses.MOVE_TO_POINT:
             fw.pc_move_to_point(
                 x=_get(data, 'x_target', 0.0),
                 y=_get(data, 'y_target', 0.0),
@@ -286,16 +286,16 @@ class SimulatedSerial:
             )
             return True
 
-        if address == TWIPR_PositionControlAddresses.RESET:
+        if address == BILBO_PositionControlAddresses.RESET:
             fw.pc_reset()
             return True
 
         # === ESTIMATION ===
-        if address == TWIPR_EstimationAddresses.SET_THETA_OFFSET:
+        if address == BILBO_EstimationAddresses.SET_THETA_OFFSET:
             fw.set_theta_offset(float(_val(data, input_type)))
             return True
 
-        if address == TWIPR_EstimationAddresses.SET_POSITION_STATE:
+        if address == BILBO_EstimationAddresses.SET_POSITION_STATE:
             fw.set_position_state(
                 x=_get(data, 'x', 0.0),
                 y=_get(data, 'y', 0.0),
@@ -303,7 +303,7 @@ class SimulatedSerial:
             )
             return True
 
-        if address == TWIPR_EstimationAddresses.SET_POSITION_UPDATE:
+        if address == BILBO_EstimationAddresses.SET_POSITION_UPDATE:
             fw.set_position_update(
                 x=_get(data, 'x', 0.0),
                 y=_get(data, 'y', 0.0),
@@ -311,21 +311,21 @@ class SimulatedSerial:
             )
             return True
 
-        if address == TWIPR_EstimationAddresses.RESET:
+        if address == BILBO_EstimationAddresses.RESET:
             fw.firmware_reset()
             return True
 
-        if address == TWIPR_EstimationAddresses.SET_DEAD_RECKONING_ENABLE:
+        if address == BILBO_EstimationAddresses.SET_DEAD_RECKONING_ENABLE:
             fw.set_dead_reckoning_enabled(bool(_val(data, input_type)))
             return True
 
-        if address in (TWIPR_EstimationAddresses.GET_VELOCITY_LPF,
-                       TWIPR_EstimationAddresses.GET_PSIDOT_LPF):
+        if address in (BILBO_EstimationAddresses.GET_VELOCITY_LPF,
+                       BILBO_EstimationAddresses.GET_PSIDOT_LPF):
             # Return a mock config - simulation doesn't use these filters
             return {'enable': False, 'cutoff_hz': 10.0, 'reset_on_start': False}
 
-        if address in (TWIPR_EstimationAddresses.SET_VELOCITY_LPF,
-                       TWIPR_EstimationAddresses.SET_PSIDOT_LPF):
+        if address in (BILBO_EstimationAddresses.SET_VELOCITY_LPF,
+                       BILBO_EstimationAddresses.SET_PSIDOT_LPF):
             # Accept but ignore - simulation doesn't use these filters
             return True
 

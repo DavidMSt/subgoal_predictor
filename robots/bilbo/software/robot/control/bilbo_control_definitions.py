@@ -30,10 +30,19 @@ class VIC_Config:
 
 
 @dataclasses.dataclass
-class TWIPR_Balancing_Control_Config:
+class PSI_Config:
+    enabled: bool = False
+    kp: float = 0.0
+    ki: float = 0.0
+    max_torque: float = 0.0
+
+
+@dataclasses.dataclass
+class BILBO_Balancing_Control_Config:
     K: list = dataclasses.field(default_factory=list)  # State Feedback Gain
     tic: TIC_Config = dataclasses.field(default_factory=TIC_Config)
     vic: VIC_Config = dataclasses.field(default_factory=VIC_Config)
+    psi: PSI_Config = dataclasses.field(default_factory=PSI_Config)
 
 
 @dataclasses.dataclass
@@ -199,8 +208,8 @@ class BILBO_ControlConfig:
     description: str = ''
     general: General_Control_Config = dataclasses.field(default_factory=General_Control_Config)
     inputs: ExternalInputsConfig = dataclasses.field(default_factory=ExternalInputsConfig)
-    balancing_control: TWIPR_Balancing_Control_Config = dataclasses.field(
-        default_factory=TWIPR_Balancing_Control_Config)
+    balancing_control: BILBO_Balancing_Control_Config = dataclasses.field(
+        default_factory=BILBO_Balancing_Control_Config)
     velocity_control: VelocityControl_Config = dataclasses.field(default_factory=VelocityControl_Config)
     position_control: PositionControl_Config = dataclasses.field(default_factory=PositionControl_Config)
     planning: PlanningConfig = dataclasses.field(default_factory=PlanningConfig)
@@ -263,6 +272,7 @@ class BILBO_Control_Sample:
     input: BILBO_Control_Inputs = dataclasses.field(default_factory=BILBO_Control_Inputs)
     tic_enabled: bool = False
     vic_enabled: bool = False
+    psi_enabled: bool = False
     input_enabled: bool = False
     position_control: BILBO_PositionControl_Sample = dataclasses.field(default_factory=BILBO_PositionControl_Sample)
 
@@ -273,5 +283,6 @@ class BILBO_Control_Event_Type(enum.IntEnum):
     CONFIGURATION_CHANGED = 2
     VIC_CHANGED = 3
     TIC_CHANGED = 4
-    POSITION_ELEMENT_FINISHED = 5
-    POSITION_ELEMENT_TIMEOUT = 6
+    PSI_CHANGED = 5
+    POSITION_ELEMENT_FINISHED = 6
+    POSITION_ELEMENT_TIMEOUT = 7

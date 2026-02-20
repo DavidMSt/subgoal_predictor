@@ -596,6 +596,11 @@ def generate_dilc_report(
             display_settings['Initial Conditions'] = (
                 f"x={ic.get('x', 0)}, y={ic.get('y', 0)}, psi={ic.get('psi', 0)}"
             )
+        ic_u0 = settings_dict.get('initial_conditions_u0')
+        if ic_u0:
+            display_settings['Initial Conditions (u0 trial)'] = (
+                f"x={ic_u0.get('x', 0)}, y={ic_u0.get('y', 0)}, psi={ic_u0.get('psi', 0)}"
+            )
         ilp = settings_dict.get('input_lowpass', {})
         if ilp:
             display_settings['ILC Q-filter'] = (
@@ -606,6 +611,10 @@ def generate_dilc_report(
             display_settings['IML Q-filter'] = (
                 f"fc={mlp.get('fc', '?')}, L={mlp.get('L', '?')}, window={mlp.get('window', '?')}"
             )
+        if 'ilc_gain' in settings_dict:
+            display_settings['ILC Gain'] = settings_dict['ilc_gain']
+        if 'iml_gain' in settings_dict:
+            display_settings['IML Gain'] = settings_dict['iml_gain']
     u0_params = settings_dict.get('u0_params', {})
     if u0_params:
         display_settings['u0 Cutoff Freq'] = f"{u0_params.get('f_cutoff', '?')} Hz"

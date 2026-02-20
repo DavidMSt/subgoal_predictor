@@ -27,6 +27,7 @@ class BILBO_PhysicalModel:
     distance_wheels: float
     l_cg: float
     theta_offset: float
+    trajectory_delta: float = 0.0
 
 
 @dataclasses.dataclass
@@ -145,10 +146,19 @@ class VIC_Config:
 
 
 @dataclasses.dataclass
+class PSI_Config:
+    enabled: bool = False
+    kp: float = 0.0
+    ki: float = 0.0
+    max_torque: float = 0.0
+
+
+@dataclasses.dataclass
 class TWIPR_Balancing_Control_Config:
     K: list = dataclasses.field(default_factory=list)  # State Feedback Gain
     tic: TIC_Config = dataclasses.field(default_factory=TIC_Config)
     vic: VIC_Config = dataclasses.field(default_factory=VIC_Config)
+    psi: PSI_Config = dataclasses.field(default_factory=PSI_Config)
 
 
 @dataclasses.dataclass

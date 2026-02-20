@@ -1,6 +1,8 @@
 import enum
 import time
 
+import numpy as np
+
 
 # ======================================================================================================================
 def copy_dict(dict_from, dict_to, structure_cache=None):
@@ -74,6 +76,10 @@ def optimized_deepcopy(d, structure=None):
                 copied_v, sub_struct = optimized_deepcopy(v)
                 new_dict[k] = copied_v
                 struct[k] = sub_struct
+            elif isinstance(v, np.ndarray):
+                new_dict[k] = v.copy()
+            elif isinstance(v, list):
+                new_dict[k] = v.copy()
             else:
                 new_dict[k] = v  # elementary types are immutable
         return new_dict, struct
@@ -83,6 +89,10 @@ def optimized_deepcopy(d, structure=None):
             if k in structure:
                 # The cached structure tells us that v is a dict.
                 new_dict[k] = optimized_deepcopy(v, structure[k])
+            elif isinstance(v, np.ndarray):
+                new_dict[k] = v.copy()
+            elif isinstance(v, list):
+                new_dict[k] = v.copy()
             else:
                 new_dict[k] = v
         return new_dict

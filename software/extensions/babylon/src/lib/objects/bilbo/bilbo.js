@@ -166,11 +166,21 @@ export class BabylonSimpleBilbo extends BabylonObject {
 
         this.pivotPointWheels.parent = this.bilboRoot;
         this.pivotPointBody.parent = this.bilboRoot;
+        this.bilboRoot.parent = this.root;
         this.scene.shadowGenerator.addShadowCaster(this.bilboRoot, true);
         this.scene.shadowGenerator2.addShadowCaster(this.bilboRoot, true);
 
         this._tagAllMeshes(this.bilboRoot, true);
 
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+
+    setColor(color) {
+        this.config.color = color;
+        this.materialBody.diffuseColor = getBabylonColor(color);
+        this.materialBodyFront.diffuseColor = getBabylonColor(shadeColorArray(color, -60));
+        this.materialBattery.diffuseColor = getBabylonColor(shadeColorArray(color, -30));
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -441,6 +451,7 @@ export class BabylonBilboRealistic extends BabylonObject {
         this.setOrientation(this.config.orientation);
         this.setPosition(this.config.position);
 
+        this.mesh.parent = this.root;
         this.scene.shadowGenerator.addShadowCaster(this.mesh);
         // this.scene.shadowGenerator2.addShadowCaster(this.mesh);
 
@@ -525,6 +536,14 @@ export class BabylonBilboRealistic extends BabylonObject {
         this.textPlane.metadata.object = this;
         this.textPlane.isPickable = true;
         //
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    setColor(color) {
+        this.config.color = color;
+        if (this.material) {
+            this.material.diffuseColor = getBabylonColor3(color);
+        }
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -811,6 +830,7 @@ export class BabylonBilbo extends BabylonObject {
         this.highlight(this._isHighlighted);
 
 
+        this.mesh.parent = this.root;
         this.scene.shadowGenerator.addShadowCaster(this.mesh);
         // this.scene.shadowGenerator2.addShadowCaster(this.mesh);
 
@@ -956,6 +976,14 @@ export class BabylonBilbo extends BabylonObject {
     /* -------------------------------------------------------------------------------------------------------------- */
     update(data) {
         this.setState(data.x, data.y, data.theta, data.psi);
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    setColor(color) {
+        this.config.color = color;
+        if (this.material) {
+            this.material.diffuseColor = getBabylonColor3(color);
+        }
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */

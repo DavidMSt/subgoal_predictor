@@ -315,24 +315,16 @@ class BILBO_Logging(LoggingProvider):
                 # Get the tick from the low-level sample (authoritative source)
                 ll_tick = batch[0]['tick']
 
-                # Check for tick mismatch (indicates buffering/lag)
-                if ll_tick != self.tick:
-                    self.logger.debug(
-                        f"Sample tick sync: adjusting HL tick from {self.tick} to {ll_tick} "
-                        f"(batch {sample_batch}, queue_size={self._samples_queue.qsize()})"
-                    )
-                    # Sync self.tick to the LL tick to stay in sync
-                    self.tick = ll_tick
-
                 # Always use ll_tick for the sample (it's the authoritative source)
                 # Update both top-level and general.tick to keep sample consistent
                 sample_dict['tick'] = ll_tick
                 sample_dict['general']['tick'] = ll_tick
+                self.tick = ll_tick
 
                 # Append the sample to the lowlevel logger
                 self._h5_logger_lowlevel.append_multiple_samples(batch)
 
-                # Append the highlevel sample to the highlevel logger. TODO: this is not really correct for sample_batch>1
+                # Append the highlevel sample to the highlevel logger
                 sample_dict['lowlevel'] = batch[0]
                 self._h5_logger_sample.append_sample(sample_dict)
 
@@ -341,8 +333,6 @@ class BILBO_Logging(LoggingProvider):
 
                 self._send_samples_to_host([sample_dict])
                 self.sample = from_dict_auto(BILBO_Sample, sample_dict)
-
-                self.tick += 10  # TODO: Magic number
 
                 self.common.events.sample.set(data=self.sample)
 

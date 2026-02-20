@@ -11,7 +11,7 @@ from hardware.board_config import getBoardConfig
 from hardware.io_extension.io_extension import RobotControl_IO_Extension
 from core.utils.logging_utils import Logger
 from hardware.lowlevel_definitions import bilbo_external_rgb_struct, BILBO_AddressTables, BILBO_GeneralAddresses, \
-    twipr_beep_struct, bilbo_all_external_leds_struct
+    bilbo_beep_struct, bilbo_all_external_leds_struct
 from core.utils.exit import register_exit_callback
 import core.hardware.eeprom as eeprom
 from hardware.shields.shields import SHIELDS, SHIELD_ID_ADDRESS
@@ -180,7 +180,7 @@ class RobotControl_Board:
             address=BILBO_GeneralAddresses.ADDRESS_FIRMWARE_BEEP,
             module=0x01,
             data=beep_data,
-            input_type=twipr_beep_struct
+            input_type=bilbo_beep_struct
         )
 
     # ------------------------------------------------------------------------------------------------------------------

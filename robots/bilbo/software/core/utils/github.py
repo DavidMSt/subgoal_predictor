@@ -13,7 +13,7 @@ def download_folder_from_github(repo_url, folder_path, destination):
 
     :param repo_url: The URL of the GitHub repository.
     :param folder_path: The path to the folder within the repo to download
-                       (e.g., "software/robot/software/TWIPR-Software").
+                       (e.g., "software/robot/software/BILBO-Software").
     :param destination: The destination directory where the folder will be saved.
     """
     # Create a temporary directory for the repository

@@ -8,10 +8,7 @@
 #ifndef ROBOT_CONTROL_BOARD_H_
 #define ROBOT_CONTROL_BOARD_H_
 
-//#define BOARD_REV_3
-#define BOARD_REV_4
-
-
+#include "firmware_settings.h"
 
 #ifdef BOARD_REV_3
 	#define _RAM_D2 __attribute__(( section(".ramd2block") ))

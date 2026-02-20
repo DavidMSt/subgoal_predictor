@@ -256,6 +256,7 @@ class TextColumn(Column):
     font_size: int | None = 8
     font_family: str | None = "sans-serif"
     font_align: str = "center"  # 'center', 'left', 'right'
+    padding: str | None = None
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -637,7 +638,44 @@ class Table(Widget):
 
     # ------------------------------------------------------------------------------------------------------------------
     def handleEvent(self, message, sender=None) -> None:
-        self.logger.important(f"TableWidget received event {message}")
+        event_name = message.get('event') if isinstance(message, dict) else None
+        if event_name == 'cell_edit':
+            data = message.get('data', {})
+            row_id = data.get('row_id')
+            column_id = data.get('column_id')
+            value = data.get('value')
+            row = self._find_row(row_id)
+            if row is not None and column_id in row.cells:
+                row.cells[column_id].update_request(value)
+            else:
+                self.logger.warning(f"cell_edit: row '{row_id}' or column '{column_id}' not found")
+        else:
+            self.logger.important(f"TableWidget received event {message}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _find_row(self, row_id: str) -> Row | None:
+        if row_id in self.items and isinstance(self.items[row_id], Row):
+            return self.items[row_id]
+        for item in self.items.values():
+            if isinstance(item, TableGroup) and row_id in item.rows:
+                return item.rows[row_id]
+        return None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def accept_cell(self, row_id: str, column_id: str, value) -> None:
+        self.function('accept_cell', {'row_id': row_id, 'column_id': column_id, 'value': value})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def reject_cell(self, row_id: str, column_id: str) -> None:
+        self.function('reject_cell', {'row_id': row_id, 'column_id': column_id})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def mark_cell_dirty(self, row_id: str, column_id: str) -> None:
+        self.function('mark_cell_dirty', {'row_id': row_id, 'column_id': column_id})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def mark_cell_clean(self, row_id: str, column_id: str) -> None:
+        self.function('mark_cell_clean', {'row_id': row_id, 'column_id': column_id})
 
     # ------------------------------------------------------------------------------------------------------------------
     def update_cell(self, cell: Cell):

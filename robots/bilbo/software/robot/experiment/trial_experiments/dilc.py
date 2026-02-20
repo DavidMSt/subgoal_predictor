@@ -28,10 +28,9 @@ import enum
 import os
 import time
 from datetime import datetime
-from typing import Any
 
 import numpy as np
-import multiprocessing as mp
+
 
 from core.communication.wifi.bilbolab_wifi_interface import (
     wifi_event_definition, WifiEventContainer, WifiEvent, WifiEventFlag,
@@ -41,9 +40,7 @@ from core.utils.control.lib_control.il.q_filter import FIR_Design_Params, design
 from core.utils.control.lib_control.lifted_systems import vec2liftedMatrix
 from core.utils.data import generate_time_vector_by_length, generate_random_input
 from core.utils.events import event_definition, Event, wait_for_events, OR, TIMEOUT
-from core.utils.json_utils import writeJSON
 from core.utils.logging_utils import Logger, enable_redirection, disable_redirection
-from core.utils.sound.sound import speak, playSound
 from core.utils.time import wait_until
 from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
@@ -139,6 +136,9 @@ class DILC_Experiment_Settings:
     initial_conditions: DILC_InitialConditions
     input_lowpass: FIR_Design_Params
     model_lowpass: FIR_Design_Params
+    initial_conditions_u0: DILC_InitialConditions | None = None
+    ilc_gain: float = 1.5
+    iml_gain: float = 1.5
     meta: DILC_Experiment_Meta_Settings = dataclasses.field(default_factory=DILC_Experiment_Meta_Settings)
     u0_params: DILC_U0_Params = dataclasses.field(default_factory=DILC_U0_Params)
     u0: np.ndarray | None = None
@@ -528,6 +528,8 @@ class DILC_Experiment:
         self.logger.info(f"  Auto initial conditions: {self.settings.meta.automatic_initial_conditions_reset}")
         self.logger.info(f"  Auto start trials: {self._auto_start_trials}")
         self.logger.info(f"  Auto accept trials: {self._auto_accept_trials}")
+        self.logger.info(f"  ILC gain: {self.settings.ilc_gain}")
+        self.logger.info(f"  IML gain: {self.settings.iml_gain}")
         self.logger.info(f"  u0: {self._u}")
         self.logger.info("=" * 60)
 
@@ -542,7 +544,6 @@ class DILC_Experiment:
             'duration_s': self.N * self.settings.Ts,
             'auto_initial_conditions': self.settings.meta.automatic_initial_conditions_reset,
         }, flags=self._WIFI_FLAGS)
-        speak(f"Starting DILC experiment with {self.settings.J} trials")
 
         # --- Main trial loop ---
         while self.j < self.settings.J:
@@ -667,7 +668,6 @@ class DILC_Experiment:
             self.logger.info("=" * 60)
             self.logger.info(f"Trial {self.j + 1}/{self.settings.J}")
             self.logger.info("=" * 60)
-            speak(f"Trial {self.j + 1} of {self.settings.J}")
 
             self.events.trial_started.set(data={
                 'trial_index': self.j,
@@ -697,10 +697,12 @@ class DILC_Experiment:
                 vector=self._u,
                 name=f"Trial {self.j + 1}",
                 id=self.j + 1,
+                delta=self.common.config.model.trajectory_delta,
             )
 
             self.logger.info(f"Trajectory loaded: {input_trajectory.length} steps, "
-                             f"u range: [{self._u.min():.4f}, {self._u.max():.4f}]")
+                             f"u range: [{self._u.min():.4f}, {self._u.max():.4f}], "
+                             f"delta: {self.common.config.model.trajectory_delta}")
             self.events.trajectory_loaded.set(data={
                 'trajectory': input_trajectory,
                 'trial_index': self.j,
@@ -794,7 +796,7 @@ class DILC_Experiment:
             # Retrieve all logged samples for the trajectory tick range.
             # These are stored in the trial data and saved to file, but NOT
             # sent over WiFi (too large).
-            trial_samples = None
+            trial_samples: list | None = None
             try:
                 lp = get_logging_provider()
                 start_tick = trajectory_data.meta.start_tick
@@ -823,7 +825,7 @@ class DILC_Experiment:
                     callback=_on_samples,
                 )
                 samples_ready.wait(timeout=10.0)
-                trial_samples = samples_container[0]
+                trial_samples: list = samples_container[0]  # type: ignore
 
                 if trial_samples is not None:
                     self.logger.info(f"Collected {len(trial_samples)} samples "
@@ -1012,7 +1014,6 @@ class DILC_Experiment:
                 'reference': self.settings.reference,
             }, flags=self._WIFI_FLAGS)
 
-            speak(f"Trial {self.j + 1} finished.")
             self.j += 1
             return TrialResult.FINISHED
 
@@ -1064,7 +1065,12 @@ class DILC_Experiment:
             self.control.set_mode(BILBO_Control_Mode.POSITION)
             time.sleep(1)
 
-            ic = self.settings.initial_conditions
+            # Use separate initial conditions for the first trial (u0 trial) if provided
+            if self.j == 0 and self.settings.initial_conditions_u0 is not None:
+                ic = self.settings.initial_conditions_u0
+                self.logger.info("Using u0-specific initial conditions for first trial")
+            else:
+                ic = self.settings.initial_conditions
             self.logger.info(f"Navigating to initial conditions: "
                              f"x={ic.x:.3f}m, y={ic.y:.3f}m, psi={np.rad2deg(ic.psi):.1f}deg")
 
@@ -1094,10 +1100,11 @@ class DILC_Experiment:
                 return False
             self.logger.info("Reached initial heading")
 
+            time.sleep(1)
             self.control.set_mode(BILBO_Control_Mode.BALANCING)
             time.sleep(0.25)
-            self.control.set_mode(BILBO_Control_Mode.POSITION)
-            time.sleep(0.25)
+            # self.control.set_mode(BILBO_Control_Mode.POSITION)
+            # time.sleep(0.25)
             # Make a tiny last pass to the desired position. Turning can lead to position errors
             # result = self.control.position_control.move_to_point(
             #     x=ic.x,
@@ -1113,9 +1120,6 @@ class DILC_Experiment:
         else:
             self.logger.info("Skipping automatic positioning (disabled in meta settings)")
 
-        # Enable TIC (Tilt-Integral-Control) for steady upright balancing
-        self.control.set_mode(BILBO_Control_Mode.BALANCING)
-        time.sleep(0.1)
         self.control.enable_tic_control(True)
 
         # Wait for the robot to be stationary before injecting the trajectory
@@ -1132,8 +1136,11 @@ class DILC_Experiment:
                 return False
             self.logger.info("Robot is static and ready")
 
-        self.control.set_mode(BILBO_Control_Mode.BALANCING)
-        ic = self.settings.initial_conditions
+        # Use separate initial conditions for the first trial (u0 trial) if provided
+        if self.j == 0 and self.settings.initial_conditions_u0 is not None:
+            ic = self.settings.initial_conditions_u0
+        else:
+            ic = self.settings.initial_conditions
         self.events.trial_prepared.set(data={
             'trial_index': self.j,
             'initial_conditions': ic,
@@ -1249,15 +1256,6 @@ class DILC_Experiment:
             trials=self.trials,
         )
 
-    # ----------------------------------------------------------------------------------------------------------
-    @staticmethod
-    def _save_results_worker(results: 'DILC_Results', filepath: str) -> None:
-        """Subprocess target: serialize and write results (releases GIL)."""
-        import dataclasses as dc
-        from core.utils.json_utils import writeJSON
-        results_dict = dc.asdict(results)
-        writeJSON(filepath, results_dict)
-
     def _save_results_to_file(self, results: DILC_Results) -> str | None:
         """Save experiment results to a JSON file on the robot.
 
@@ -1269,6 +1267,8 @@ class DILC_Experiment:
         Returns:
             The file path if saved successfully, None otherwise.
         """
+        from core.utils.json_utils import writeJSON_mp
+
         experiments_dir = os.path.expanduser("~/robot/experiments")
         os.makedirs(experiments_dir, exist_ok=True)
 
@@ -1276,26 +1276,12 @@ class DILC_Experiment:
         filename = f"dilc_{self.settings.id}_{timestamp}.json"
         filepath = os.path.join(experiments_dir, filename)
 
-        try:
-            proc = mp.Process(
-                target=self._save_results_worker,
-                args=(results, filepath),
-                daemon=True,
-            )
-            proc.start()
-            self.logger.info(f"Saving DILC results to {filepath} ...")
-            proc.join(timeout=60)
-            if proc.is_alive():
-                self.logger.error("DILC results save timed out (60s), killing")
-                proc.kill()
-                return None
-            if proc.exitcode != 0:
-                self.logger.error(f"DILC results save failed (exit code {proc.exitcode})")
-                return None
+        self.logger.info(f"Saving DILC results to {filepath} ...")
+        if writeJSON_mp(filepath, results, convert_dataclass=True):
             self.logger.info(f"Saved DILC results to {filepath}")
             return filepath
-        except Exception as e:
-            self.logger.error(f"Failed to save DILC results: {e}")
+        else:
+            self.logger.error(f"Failed to save DILC results to {filepath}")
             return None
 
     # ----------------------------------------------------------------------------------------------------------
@@ -1349,7 +1335,7 @@ class DILC_Experiment:
         """
         U = vec2liftedMatrix(u_j)
         W = np.eye(self.N)
-        S = 1.5 * (U.T @ U + 1e-6 * np.eye(self.N))  # Regularization
+        S = self.settings.iml_gain * (U.T @ U + 1e-6 * np.eye(self.N))  # Regularization
         jitter = 1e-8 * np.eye(self.N)  # Numerical stability
         A = U @ W @ U.T + S + jitter
         gain = np.linalg.solve(A, U @ W)
@@ -1375,7 +1361,7 @@ class DILC_Experiment:
         """
         M = vec2liftedMatrix(m_j)
         W = np.eye(self.N)
-        S = 1.5 * (M.T @ M + 1e-6 * np.eye(self.N))  # Regularization
+        S = self.settings.ilc_gain * (M.T @ M + 1e-6 * np.eye(self.N))  # Regularization
         jitter = 1e-8 * np.eye(self.N)  # Numerical stability
         A = M @ W @ M.T + S + jitter
         gain = np.linalg.solve(A, M @ W)

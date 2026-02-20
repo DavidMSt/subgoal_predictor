@@ -2707,7 +2707,14 @@ export class TextInputCell extends TableCell {
             cell_id: this.id,
         };
 
-        this.accept(next);
+        if (this.table) {
+            this.table.callbacks.get('event').call({
+                id: this.table.id,
+                event: 'cell_edit',
+                data: payload,
+            });
+        }
+
         this.input.blur();
     }
 
@@ -5083,6 +5090,34 @@ export class Table extends Widget {
 
         } else {
             console.warn(`Cell ${row}.${column} not found.`);
+        }
+    }
+
+    accept_cell({row_id, column_id, value}) {
+        const cell = this.get_cell_by_row_and_column(row_id, column_id);
+        if (cell && typeof cell.accept === 'function') {
+            cell.accept(value);
+        }
+    }
+
+    reject_cell({row_id, column_id}) {
+        const cell = this.get_cell_by_row_and_column(row_id, column_id);
+        if (cell && typeof cell.reject === 'function') {
+            cell.reject();
+        }
+    }
+
+    mark_cell_dirty({row_id, column_id}) {
+        const cell = this.get_cell_by_row_and_column(row_id, column_id);
+        if (cell && cell.input) {
+            cell.input.classList.add("dirty");
+        }
+    }
+
+    mark_cell_clean({row_id, column_id}) {
+        const cell = this.get_cell_by_row_and_column(row_id, column_id);
+        if (cell && cell.input) {
+            cell.input.classList.remove("dirty");
         }
     }
 

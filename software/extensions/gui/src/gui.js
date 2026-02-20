@@ -1688,6 +1688,27 @@ export class GUI {
     }
 
     // =================================================================================================================
+    /**
+     * Copies text to the clipboard.
+     * Called from Python via gui.function('copyToClipboard', {...})
+     *
+     * @param {Object} options
+     * @param {string} options.text - The text to copy
+     */
+    copyToClipboard(options = {}) {
+        const text = options.text || '';
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        console.log('Copied to clipboard');
+    }
+
+    // =================================================================================================================
     _onWindowKeyDown(e) {
 
         if (document.activeElement !== document.body) return;

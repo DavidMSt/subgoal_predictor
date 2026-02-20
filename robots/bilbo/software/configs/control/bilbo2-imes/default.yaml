@@ -31,6 +31,11 @@ balancing_control:
     max_torque: 0.02                  # [Nm] Output saturation
     v_limit: 0.05                     # [m/s] Only active below this speed
     theta_limit: 0.16                 # [rad] Auto-disable above this pitch
+  psi:
+    enabled: false                    # Enable yaw angle PI controller (heading drift compensation)
+    kp: 0.0                           # [Nm/rad] Proportional gain
+    ki: 0.0                           # [Nm/(rad*s)] Integral gain
+    max_torque: 0.05                  # [Nm] Output saturation (differential)
 velocity_control:
   v: # Forward velocity controller
     pid:

@@ -286,6 +286,13 @@ void WS2812_Strand::init() {
 void WS2812_Strand::update() {
 	this->data_index = 0;
 
+	// Preamble: force data line low for ~20 us before first LED bit.
+	// This prevents the DMA/timer startup glitch from being interpreted
+	// as a '1' bit by the first LED (common green-tint-on-LED-0 issue).
+	for (uint16_t i = 0; i < WS2812_PREAMBLE_SLOTS; i++) {
+		this->pwm_data[this->data_index++] = 0;
+	}
+
 	// Update each LED's internal GRB data
 	for (uint8_t i = 0; i < this->num_led; i++) {
 		this->led[i].update();

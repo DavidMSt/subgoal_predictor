@@ -1,12 +1,12 @@
 import ctypes
 
 from core.utils.ctypes_utils import STRUCTURE
-import robot.communication.bilbo_communication as twipr_communication
-from robot.lowlevel.stm32_addresses import TWIPR_SystemAddresses
+import robot.communication.bilbo_communication as bilbo_communication
+from robot.lowlevel.stm32_addresses import BILBO_SystemAddresses
 
 
 @STRUCTURE
-class twipr_beep_struct:
+class bilbo_beep_struct:
     FIELDS = {
         'frequency': ctypes.c_float,
         'time': ctypes.c_uint16,
@@ -34,11 +34,11 @@ def beep(frequency: str | float = None, time_ms: int = 500, repeats: int = 1):
         'repeats': repeats
     }
 
-    if twipr_communication.handler is not None:
-        twipr_communication.handler.serial.executeFunction(
-            address=TWIPR_SystemAddresses.FIRMWARE_BEEP,
+    if bilbo_communication.handler is not None:
+        bilbo_communication.handler.serial.executeFunction(
+            address=BILBO_SystemAddresses.FIRMWARE_BEEP,
             data=beep_data,
-            input_type=twipr_beep_struct
+            input_type=bilbo_beep_struct
         )
     else:
         print("hmmm")

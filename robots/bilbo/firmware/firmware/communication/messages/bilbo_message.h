@@ -1,15 +1,15 @@
 /*
- * twipr_messages.h
+ * bilbo_messages.h
  *
  *  Created on: 3 Mar 2023
  *      Author: lehmann_workstation
  */
 
-#ifndef COMMUNICATION_TWIPR_MESSAGES_H_
-#define COMMUNICATION_TWIPR_MESSAGES_H_
+#ifndef COMMUNICATION_BILBO_MESSAGES_H_
+#define COMMUNICATION_BILBO_MESSAGES_H_
 
 #include "core.h"
-#include "twipr_uart_communication.h"
+#include "bilbo_uart_communication.h"
 
 //
 //
@@ -144,4 +144,4 @@ public:
 private:alignas(max_align_t) uint8_t _buffer[sizeof(data_type_t)];
 };
 
-#endif /* COMMUNICATION_TWIPR_MESSAGES_H_ */
+#endif /* COMMUNICATION_BILBO_MESSAGES_H_ */

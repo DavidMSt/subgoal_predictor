@@ -2,7 +2,7 @@ import ctypes
 import dataclasses
 
 from robot.lowlevel.stm32_control import bilbo_ll_control_data_t, bilbo_ll_control_data
-from robot.lowlevel.stm32_errors import bilbo_ll_log_entry_t, BILBO_LL_Log_Entry, TWIPR_ErrorType
+from robot.lowlevel.stm32_errors import bilbo_ll_log_entry_t, BILBO_LL_Log_Entry, BILBO_ErrorType
 
 # Samples LL
 SAMPLE_BUFFER_LL_SIZE = 10
@@ -26,7 +26,7 @@ class bilbo_ll_sample_errors_struct(ctypes.Structure):
 
 @dataclasses.dataclass
 class BILBO_LL_Sample_Errors:
-    state: TWIPR_ErrorType = TWIPR_ErrorType.NONE
+    state: BILBO_ErrorType = BILBO_ErrorType.NONE
     last_entry: BILBO_LL_Log_Entry = dataclasses.field(default_factory=BILBO_LL_Log_Entry)
 
 
@@ -121,6 +121,21 @@ class VelocityLowpassFilterConfig:
     reset_on_start: bool = True
 
 
+class theta_dot_lowpass_filter_config_t(ctypes.Structure):
+    _fields_ = [
+        ("enable", ctypes.c_bool),
+        ("cutoff_hz", ctypes.c_float),
+        ("reset_on_start", ctypes.c_bool),
+    ]
+
+
+@dataclasses.dataclass
+class ThetaDotLowpassFilterConfig:
+    enable: bool = True
+    cutoff_hz: float = 30.0
+    reset_on_start: bool = True
+
+
 class psi_dot_lowpass_filter_config_t(ctypes.Structure):
     _fields_ = [
         ("enable", ctypes.c_bool),
@@ -134,6 +149,52 @@ class PsiDotLowpassFilterConfig:
     enable: bool = True
     cutoff_hz: float = 30.0
     reset_on_start: bool = True
+
+
+class position_ekf_config_t(ctypes.Structure):
+    _fields_ = [
+        ("enable", ctypes.c_bool),
+        ("std_dev_position", ctypes.c_float),
+        ("std_dev_psi", ctypes.c_float),
+        ("sigma_v_base", ctypes.c_float),
+        ("sigma_v_scale", ctypes.c_float),
+        ("sigma_psi_dot_base", ctypes.c_float),
+        ("sigma_psi_dot_scale", ctypes.c_float),
+        ("min_position_variance", ctypes.c_float),
+        ("min_psi_variance", ctypes.c_float),
+        ("dead_reckoning_timeout", ctypes.c_uint16),
+    ]
+
+
+@dataclasses.dataclass
+class PositionEkfConfig:
+    enable: bool = True
+    std_dev_position: float = 0.0005
+    std_dev_psi: float = 0.005
+    sigma_v_base: float = 0.10
+    sigma_v_scale: float = 0.10
+    sigma_psi_dot_base: float = 0.15
+    sigma_psi_dot_scale: float = 0.15
+    min_position_variance: float = 0.0001
+    min_psi_variance: float = 0.001
+    dead_reckoning_timeout: int = 10
+
+
+class bilbo_estimation_config_t(ctypes.Structure):
+    _fields_ = [
+        ("velocity_filter_config", velocity_lowpass_filter_config_t),
+        ("theta_dot_filter_config", theta_dot_lowpass_filter_config_t),
+        ("psi_dot_filter_config", psi_dot_lowpass_filter_config_t),
+        ("position_ekf_config", position_ekf_config_t),
+    ]
+
+
+@dataclasses.dataclass
+class EstimationConfig:
+    velocity_filter_config: VelocityLowpassFilterConfig = dataclasses.field(default_factory=VelocityLowpassFilterConfig)
+    theta_dot_filter_config: ThetaDotLowpassFilterConfig = dataclasses.field(default_factory=ThetaDotLowpassFilterConfig)
+    psi_dot_filter_config: PsiDotLowpassFilterConfig = dataclasses.field(default_factory=PsiDotLowpassFilterConfig)
+    position_ekf_config: PositionEkfConfig = dataclasses.field(default_factory=PositionEkfConfig)
 
 
 class bilbo_ll_sample_sequence_struct(ctypes.Structure):

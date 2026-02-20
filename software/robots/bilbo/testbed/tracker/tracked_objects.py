@@ -70,9 +70,10 @@ class OptiTrackOutlierFilter:
 class Origin_OptiTrack_Config:
     id: str
     points: list
-    origin: int
-    x_axis_end: int
-    y_axis_end: int
+    x_start: int
+    x_end: int
+    y_start: int
+    y_end: int
     marker_size: float
     offset_x: float = 0.0
     offset_y: float = 0.0
@@ -134,15 +135,18 @@ class TrackedOrigin:
         # Check if tracking is valid
         if not data.valid:
             self.tracking_valid = False
-            self.tracking_valid = False
             return
 
-        origin = data.markers[self.definition.origin]
-        x_axis_end = data.markers[self.definition.x_axis_end]
-        y_axis_end = data.markers[self.definition.y_axis_end]
+        x_start = np.asarray(data.markers[self.definition.x_start])
+        x_end = np.asarray(data.markers[self.definition.x_end])
+        y_start = np.asarray(data.markers[self.definition.y_start])
+        y_end = np.asarray(data.markers[self.definition.y_end])
 
-        x_axis = x_axis_end - origin
-        y_axis = y_axis_end - origin
+        # Origin is the intersection of the two axes
+        origin = calculate_intersection(x_start, x_end, y_start, y_end)
+
+        x_axis = x_end - origin
+        y_axis = y_end - origin
 
         orientation = qmt.quatFrom2Axes(
             x=x_axis,
@@ -172,7 +176,6 @@ class TrackedOrigin:
             orientation=orientation
         )
         self.tracking_valid = True
-        self.state = TrackedOrigin_State(x=position[0], y=position[1], z=position[2], orientation=orientation)
 
 
 # === LIMBO BAR ========================================================================================================

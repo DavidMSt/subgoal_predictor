@@ -4,7 +4,7 @@ from core.utils.exit import register_exit_callback
 from hardware.control_board import RobotControl_Board
 from robot.bilbo_common import BILBO_Common
 from robot.communication.serial.bilbo_comm_serial import BILBO_Serial_Communication
-from robot.communication.spi.twipr_comm_spi import BILBO_SPI_Interface
+from robot.communication.spi.bilbo_comm_spi import BILBO_SPI_Interface
 from robot.communication.wifi.bilbo_wifi import BILBO_WIFI_Interface
 from core.utils.events import Event, event_definition
 from core.utils.logging_utils import Logger, enable_redirection, setLoggerLevel, disable_redirection

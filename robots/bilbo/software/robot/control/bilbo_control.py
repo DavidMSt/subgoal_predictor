@@ -20,12 +20,12 @@ from robot.control.bilbo_control_config import load_config_by_name
 from robot.control.bilbo_control_definitions import BILBO_Control_Mode, BILBO_ControlConfig, PID_Config, \
     BILBO_Control_Status, \
     BILBO_Control_Event_Type, BILBO_Control_Inputs, VelocityControl_Config, PositionControl_Config, TIC_Config, \
-    VIC_Config, BILBO_Control_Sample, Feedforward_Config
+    VIC_Config, PSI_Config, BILBO_Control_Sample, Feedforward_Config
 from robot.control.bilbo_position_control import BILBO_PositionControl
 from robot.estimation.bilbo_estimation import BILBO_Estimation
-from robot.lowlevel.stm32_addresses import TWIPR_AddressTables, TWIPR_ControlAddresses
+from robot.lowlevel.stm32_addresses import BILBO_AddressTables, BILBO_ControlAddresses
 from robot.lowlevel.stm32_control import bilbo_velocity_control_command_t, bilbo_control_input_ext_t, \
-    bilbo_control_config_t, bilbo_tic_config_t, bilbo_vic_config_t, \
+    bilbo_control_config_t, bilbo_tic_config_t, bilbo_vic_config_t, bilbo_psi_config_t, \
     bilbo_velocity_control_config_t, pid_control_config_t, feedforward_config_t
 from robot.lowlevel.stm32_general import LOOP_TIME_CONTROL
 from robot.lowlevel.stm32_sample import BILBO_LL_Sample
@@ -58,6 +58,7 @@ class BILBO_Control_Events:
     status_change: Event = Event(flags=EventFlag('status', str))
     vic_change: Event
     tic_change: Event
+    psi_change: Event
     lowlevel_mode_change: Event = Event(flags=EventFlag('mode', BILBO_Control_Mode))
 
 
@@ -69,6 +70,8 @@ class ControlWifiEvents(WifiEventContainer):
     mode_change: WifiEvent = _CONTROL_WIFI_EVENT
     vic_change: WifiEvent = _CONTROL_WIFI_EVENT
     tic_change: WifiEvent = _CONTROL_WIFI_EVENT
+    psi_change: WifiEvent = _CONTROL_WIFI_EVENT
+    configuration_change: WifiEvent = _CONTROL_WIFI_EVENT
 
 
 # TODO: this needs to be initially set somehow
@@ -76,6 +79,7 @@ class ControlWifiEvents(WifiEventContainer):
 class BILBO_Control_Controller_Status:
     vic_enabled: bool = False
     tic_enabled: bool = False
+    psi_enabled: bool = False
 
 
 # === BILBO Control ====================================================================================================
@@ -141,6 +145,7 @@ class BILBO_Control:
         self.position_control.reset()
         self.controller_status.vic_enabled = False
         self.controller_status.tic_enabled = False
+        self.controller_status.psi_enabled = False
         self.logger.info("Control initialized successfully")
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -416,6 +421,7 @@ class BILBO_Control:
         if result:
             self._config.balancing_control.K = K
             self.logger.info(f"State feedback gain set to {K}")
+            self._notify_config_changed()
         return result
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -425,7 +431,9 @@ class BILBO_Control:
 
         self.logger.info(f"Setting forward velocity PID config to {config}")
         self._config.velocity_control.v.pid = config
-        return self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+        result = self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+        self._notify_config_changed()
+        return result
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_forward_velocity_ff_config(self, config: Feedforward_Config | dict):
@@ -434,7 +442,9 @@ class BILBO_Control:
 
         self.logger.info(f"Setting forward velocity FF config to {config}")
         self._config.velocity_control.v.feedforward = config
-        return self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+        result = self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+        self._notify_config_changed()
+        return result
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_turn_velocity_pid_config(self, config: PID_Config | dict) -> bool:
@@ -443,7 +453,9 @@ class BILBO_Control:
 
         self.logger.info(f"Setting turn velocity PID config to {config}")
         self._config.velocity_control.psidot.pid = config
-        return self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+        result = self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+        self._notify_config_changed()
+        return result
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_turn_velocity_ff_config(self, config: Feedforward_Config | dict):
@@ -452,7 +464,9 @@ class BILBO_Control:
 
         self.logger.info(f"Setting turn velocity FF config to {config}")
         self._config.velocity_control.psidot.feedforward = config
-        return self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+        result = self._set_lowlevel_velocity_control_config(self._config.velocity_control)
+        self._notify_config_changed()
+        return result
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_position_control_config(self, config: PositionControl_Config | dict):
@@ -461,7 +475,9 @@ class BILBO_Control:
 
         self.logger.info(f"Setting position control config to {config}")
         self._config.position_control = config
-        return self._set_lowlevel_position_control_config(self._config.position_control)
+        result = self._set_lowlevel_position_control_config(self._config.position_control)
+        self._notify_config_changed()
+        return result
 
     # ------------------------------------------------------------------------------------------------------------------
     def set_max_wheel_speed(self, speed: float):
@@ -486,6 +502,14 @@ class BILBO_Control:
         self._set_lowlevel_tic_enabled(enable)
 
     # ------------------------------------------------------------------------------------------------------------------
+    def enable_psi_control(self, enable: bool = True):
+        self._set_lowlevel_psi_enabled(enable)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_psi_setpoint(self, psi: float):
+        self._set_lowlevel_psi_setpoint(psi)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def get_sample(self) -> BILBO_Control_Sample:
         sample = BILBO_Control_Sample(
             status=self.status,
@@ -493,6 +517,7 @@ class BILBO_Control:
             input=self.inputs,
             tic_enabled=self.controller_status.tic_enabled,
             vic_enabled=self.controller_status.vic_enabled,
+            psi_enabled=self.controller_status.psi_enabled,
             input_enabled=self.inputs.enabled
         )
         return sample
@@ -505,6 +530,7 @@ class BILBO_Control:
             'input': dataclasses.asdict(self.inputs),
             'tic_enabled': self.controller_status.tic_enabled,
             'vic_enabled': self.controller_status.vic_enabled,
+            'psi_enabled': self.controller_status.psi_enabled,
             'input_enabled': self.inputs.enabled,
             'position_control': self.position_control.get_sample_dict()
         }
@@ -581,12 +607,105 @@ class BILBO_Control:
                                            arguments=[],
                                            description='Loads and applies the default control config')
 
+        self.communication.wifi.newCommand(identifier='set_velocity_ff_config_forward',
+                                           function=self.set_forward_velocity_ff_config,
+                                           arguments=['config'],
+                                           description='Sets the forward velocity feedforward config')
+
+        self.communication.wifi.newCommand(identifier='set_velocity_ff_config_turn',
+                                           function=self.set_turn_velocity_ff_config,
+                                           arguments=['config'],
+                                           description='Sets the turn velocity feedforward config')
+
+        self.communication.wifi.newCommand(identifier='set_tic_config',
+                                           function=self._set_tic_config_from_wifi,
+                                           arguments=['config'],
+                                           description='Sets the TIC config')
+
+        self.communication.wifi.newCommand(identifier='set_vic_config',
+                                           function=self._set_vic_config_from_wifi,
+                                           arguments=['config'],
+                                           description='Sets the VIC config')
+
+        self.communication.wifi.newCommand(identifier='enable_psi',
+                                           function=self.enable_psi_control,
+                                           arguments=['enable'],
+                                           description='Enables or disables the PSI control')
+
+        self.communication.wifi.newCommand(identifier='set_psi_config',
+                                           function=self._set_psi_config_from_wifi,
+                                           arguments=['config'],
+                                           description='Sets the PSI config')
+
+        self.communication.wifi.newCommand(identifier='set_psi_setpoint',
+                                           function=self.set_psi_setpoint,
+                                           arguments=['psi'],
+                                           description='Sets the PSI controller setpoint')
+
+        self.communication.wifi.newCommand(identifier='set_general_config',
+                                           function=self._set_general_config_from_wifi,
+                                           arguments=['max_wheel_torque', 'max_wheel_speed'],
+                                           description='Sets general control config (max torque/speed)')
+
+        self.communication.wifi.newCommand(identifier='set_statefeedback_gain',
+                                           function=self._set_statefeedback_gain_from_wifi,
+                                           arguments=['K'],
+                                           description='Sets the state feedback gain K (flat list of 8)')
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _notify_config_changed(self):
+        """Send a configuration_change WiFi event to the host."""
+        try:
+            self.wifi_events.configuration_change.send(data={})
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_statefeedback_gain_from_wifi(self, K: list):
+        self.logger.info(f"Setting state feedback gain: {K}")
+        return self.set_statefeedback_gain(K)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_tic_config_from_wifi(self, config: dict):
+        tic = from_dict_auto(TIC_Config, config)
+        self._config.balancing_control.tic = tic
+        result = self._set_lowlevel_tic_config(tic)
+        self._notify_config_changed()
+        return result
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_vic_config_from_wifi(self, config: dict):
+        vic = from_dict_auto(VIC_Config, config)
+        self._config.balancing_control.vic = vic
+        result = self._set_lowlevel_vic_config(vic)
+        self._notify_config_changed()
+        return result
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_psi_config_from_wifi(self, config: dict):
+        psi = from_dict_auto(PSI_Config, config)
+        self._config.balancing_control.psi = psi
+        result = self._set_lowlevel_psi_config(psi)
+        self._notify_config_changed()
+        return result
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_general_config_from_wifi(self, max_wheel_torque: float, max_wheel_speed: float):
+        self.logger.info(f"Setting general config: max_torque={max_wheel_torque:.3f} Nm, max_speed={max_wheel_speed:.3f} rad/s")
+        self._config.general.max_wheel_torque = max_wheel_torque
+        self._config.general.max_wheel_speed = max_wheel_speed
+        self._set_lowlevel_max_torque(max_wheel_torque)
+        self._lowlevel_set_max_wheel_speed(max_wheel_speed)
+        self._notify_config_changed()
+        return True
+
     # ------------------------------------------------------------------------------------------------------------------
     def _lowlevel_sample_callback(self, sample: BILBO_LL_Sample):
 
         # Update the controller status
         self.controller_status.vic_enabled = bool(sample.control.vic_enabled)
         self.controller_status.tic_enabled = bool(sample.control.tic_enabled)
+        self.controller_status.psi_enabled = bool(sample.control.psi_enabled)
 
         # Mode mismatch detection from samples (safeguard against missed UART events)
         ll_mode = BILBO_Control_Mode(sample.control.mode)
@@ -644,6 +763,27 @@ class BILBO_Control:
         self.logger.debug(f"TIC enabled state changed to {tic_enabled}")
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _lowlevel_psi_change_event(self, data: dict, *args, **kwargs):
+        control_data = data.get('data', None)
+        if control_data is None:
+            self.logger.warning("Failed to read control data from LL. Something is wrong.")
+            return
+        psi_enabled = control_data.get('psi_enabled', None)
+        if psi_enabled is None:
+            self.logger.warning("Failed to read PSI enabled state from LL. Something is wrong.")
+            return
+
+        self.controller_status.psi_enabled = bool(psi_enabled)
+        self.events.psi_change.set(psi_enabled)
+        self.wifi_events.psi_change.send(data={'psi_enabled': self.controller_status.psi_enabled})
+
+        if psi_enabled:
+            current_psi = self.estimation.state.psi
+            self.logger.info(f"PSI control enabled. Tracking psi = {current_psi:.4f} rad ({np.degrees(current_psi):.2f} deg)")
+        else:
+            self.logger.info("PSI control disabled")
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_control_config(self, config: BILBO_ControlConfig) -> bool:
 
         result = self._set_lowlevel_velocity_control_config(config.velocity_control)
@@ -658,6 +798,9 @@ class BILBO_Control:
         if not result: return False
 
         result = self._set_lowlevel_vic_config(config.balancing_control.vic)
+        if not result: return False
+
+        result = self._set_lowlevel_psi_config(config.balancing_control.psi)
         if not result: return False
 
         result = self._set_lowlevel_max_torque(config.general.max_wheel_torque)
@@ -689,8 +832,8 @@ class BILBO_Control:
             setpoint_rate_limit=config.v.pid.setpoint_rate_limit,
         )
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_V,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_VELOCITY_CONFIG_V,
             input_type=pid_control_config_t,
             output_type=ctypes.c_bool,
             data=pid_config_v
@@ -719,8 +862,8 @@ class BILBO_Control:
         )
 
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_V_FF,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_VELOCITY_CONFIG_V_FF,
             input_type=feedforward_config_t,
             output_type=ctypes.c_bool,
             data=ff_config_v
@@ -748,8 +891,8 @@ class BILBO_Control:
         )
 
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_PSIDOT,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_VELOCITY_CONFIG_PSIDOT,
             input_type=pid_control_config_t,
             output_type=ctypes.c_bool,
             data=pid_config_psi_dot
@@ -777,8 +920,8 @@ class BILBO_Control:
             output_slew_rate=config.psidot.feedforward.output_slew_rate,
         )
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_VELOCITY_CONFIG_PSIDOT_FF,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_VELOCITY_CONFIG_PSIDOT_FF,
             input_type=feedforward_config_t,
             output_type=ctypes.c_bool,
             data=ff_config_psi_dot
@@ -805,8 +948,8 @@ class BILBO_Control:
             theta_limit=config.theta_limit
         )
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_TIC_CONFIG,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_TIC_CONFIG,
             input_type=bilbo_tic_config_t,
             output_type=ctypes.c_bool,
             data=tic_config
@@ -826,8 +969,8 @@ class BILBO_Control:
             v_limit=config.v_limit
         )
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_VIC_CONFIG,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_VIC_CONFIG,
             input_type=bilbo_vic_config_t,
             output_type=ctypes.c_bool,
             data=vic_config
@@ -838,10 +981,64 @@ class BILBO_Control:
         return True
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_psi_config(self, config: PSI_Config) -> bool:
+        psi_config = bilbo_psi_config_t(
+            enabled=config.enabled,
+            Ts=LOOP_TIME_CONTROL,
+            kp=config.kp,
+            ki=config.ki,
+            max_torque=config.max_torque,
+        )
+        result = self.communication.serial.executeFunction(
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_PSI_CONFIG,
+            input_type=bilbo_psi_config_t,
+            output_type=ctypes.c_bool,
+            data=psi_config
+        )
+        self.logger.info(f"Setting PSI config: Kp: {psi_config.kp:.3f}, Ki: {psi_config.ki:.3f}, enabled: {psi_config.enabled}")
+        if result is None or not result:
+            self.logger.error("Failed to set PSI config")
+            return False
+        return True
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_psi_enabled(self, enabled: bool):
+        result = self.communication.serial.executeFunction(
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.ENABLE_PSI,
+            input_type=ctypes.c_bool,
+            output_type=ctypes.c_bool,
+            data=enabled
+        )
+        if result is None:
+            self.logger.warning("Failed to set PSI enabled state")
+            return
+        if not result:
+            self.logger.warning("Failed to set PSI enabled state. Return value: false")
+            return
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _set_lowlevel_psi_setpoint(self, psi: float):
+        result = self.communication.serial.executeFunction(
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_PSI_SETPOINT,
+            input_type=ctypes.c_float,
+            output_type=ctypes.c_bool,
+            data=psi
+        )
+        if result is None:
+            self.logger.warning("Failed to set PSI setpoint")
+            return
+        if not result:
+            self.logger.warning("Failed to set PSI setpoint. Return value: false")
+            return
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_max_torque(self, torque: float) -> bool:
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_MAX_TORQUE,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_MAX_TORQUE,
             input_type=ctypes.c_float,
             output_type=ctypes.c_bool,
             data=torque
@@ -858,8 +1055,8 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_control_mode(self, mode: BILBO_Control_Mode) -> bool:
         self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_MODE,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_MODE,
             input_type=ctypes.c_uint8,
             output_type=None,
             data=mode.value
@@ -875,8 +1072,8 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def _get_lowlevel_control_mode(self) -> BILBO_Control_Mode | None:
         mode = self.communication.serial.readValue(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.READ_MODE,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.READ_MODE,
             type=ctypes.c_uint8,
         )
         if mode is None:
@@ -887,8 +1084,8 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_vic_enabled(self, enabled: bool):
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.ENABLE_VIC,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.ENABLE_VIC,
             input_type=ctypes.c_bool,
             output_type=ctypes.c_bool,
             data=enabled
@@ -903,8 +1100,8 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_tic_enabled(self, enabled: bool):
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.ENABLE_TIC,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.ENABLE_TIC,
             input_type=ctypes.c_bool,
             output_type=ctypes.c_bool,
             data=enabled
@@ -919,8 +1116,8 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_external_input(self, left: float, right: float):
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_BALANCING_INPUT,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_BALANCING_INPUT,
             input_type=bilbo_control_input_ext_t,
             data={
                 'u_left': left,
@@ -938,8 +1135,8 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def _set_lowlevel_velocity_command(self, forward: float, turn: float):
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_SPEED_INPUT,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_SPEED_INPUT,
             input_type=bilbo_velocity_control_command_t,
             data={
                 'v': forward,
@@ -960,8 +1157,8 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def _lowlevel_set_max_wheel_speed(self, speed: float):
         self.communication.serial.writeValue(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.RW_MAX_WHEEL_SPEED,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.RW_MAX_WHEEL_SPEED,
             value=float(speed),
             type=ctypes.c_float
         )
@@ -975,8 +1172,8 @@ class BILBO_Control:
         assert (all(isinstance(elem, (float, int)) for elem in gain))
 
         result = self.communication.serial.executeFunction(
-            module=TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=TWIPR_ControlAddresses.SET_K,
+            module=BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=BILBO_ControlAddresses.SET_K,
             data=gain,
             input_type=ctypes.c_float * 8,  # type: Ignore
             output_type=ctypes.c_bool,
@@ -1002,6 +1199,8 @@ class BILBO_Control:
                 self._lowlevel_vic_change_event(message.data)
             case BILBO_Control_Event_Type.TIC_CHANGED:
                 self._lowlevel_tic_change_event(message.data)
+            case BILBO_Control_Event_Type.PSI_CHANGED:
+                self._lowlevel_psi_change_event(message.data)
             case _:
                 self.logger.warning(f"Unhandled control event: {event}")
     # ------------------------------------------------------------------------------------------------------------------

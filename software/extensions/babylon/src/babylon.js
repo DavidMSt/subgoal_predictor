@@ -1066,8 +1066,29 @@ export class Babylon extends Scene {
 
     /* --------------------------------------------------------------------------------------------------------------- */
     _handleObjectFunctionMessage(msg) {
-        this.log(`Received object function message:`);
-        this.log(msg);
+        const id = msg.id;
+        const fnName = msg.function;
+        const args = msg.arguments || {};
+
+        if (!id || !fnName) {
+            this.log(`objectFunction: missing id or function name`, "error");
+            return;
+        }
+
+        const object = this.getObjectByUID(id);
+        if (!object) {
+            this.log(`objectFunction: unknown object ${id}`, "error");
+            return;
+        }
+
+        if (typeof object[fnName] !== 'function') {
+            this.log(`objectFunction: ${fnName} is not a function on ${id}`, "error");
+            return;
+        }
+
+        // Call with keyword args as positional args (ordered by the arguments dict)
+        const argValues = Object.values(args);
+        object[fnName](...argValues);
     }
 
     /* --------------------------------------------------------------------------------------------------------------- */
@@ -1081,9 +1102,73 @@ export class Babylon extends Scene {
             case 'stopRecording':
                 this.stopRecording();
                 break;
+            case 'close':
+                this.websocket.options.reconnect = false;
+                this.websocket.socket?.close();
+                window.close();
+                break;
+            case 'setTitle':
+                if (this.container?.top_bar_title) {
+                    this.container.top_bar_title.textContent = params.text ?? '';
+                }
+                break;
+            case 'setLabel':
+                this._handleSetLabel(params);
+                break;
+            case 'removeLabel':
+                this._handleRemoveLabel(params);
+                break;
             default:
                 this.log(`Unknown command: ${command}`, "warning");
                 break;
+        }
+    }
+
+    /* --------------------------------------------------------------------------------------------------------------- */
+    _handleSetLabel(params) {
+        const id = params.id;
+        const text = params.text ?? '';
+        if (!id || !this.container?._overlayLabels) return;
+
+        let entry = this.container._overlayLabels.get(id);
+        if (!entry) {
+            const el = document.createElement('div');
+            el.style.cssText =
+                'position:absolute; background:rgba(0,0,0,0.6); color:#fff; font-family:sans-serif; ' +
+                'font-size:14px; padding:4px 10px; border-radius:4px; white-space:pre;';
+            this.container._overlayLabelsContainer.appendChild(el);
+            entry = { el, x: 0.05, y: 0.95, fontSize: 14 };
+            this.container._overlayLabels.set(id, entry);
+        }
+        // Update position/style if provided
+        if (params.x != null) entry.x = params.x;
+        if (params.y != null) entry.y = params.y;
+        if (params.fontSize != null) entry.fontSize = params.fontSize;
+        if (params.color) entry.el.style.color = params.color;
+        if (params.background) entry.el.style.background = params.background;
+        entry.el.style.fontSize = entry.fontSize + 'px';
+
+        // Position the DOM element using normalized coords (x: 0=left..1=right, y: 0=top..1=bottom)
+        // Use CSS transform to anchor the element at the correct point
+        const xPct = (entry.x * 100).toFixed(2);
+        const yPct = (entry.y * 100).toFixed(2);
+        entry.el.style.left = xPct + '%';
+        entry.el.style.top = yPct + '%';
+        entry.el.style.transform = `translate(-${xPct}%, -${yPct}%)`;
+
+        entry.el.textContent = text;
+        entry.el.style.display = text ? '' : 'none';
+    }
+
+    /* --------------------------------------------------------------------------------------------------------------- */
+    _handleRemoveLabel(params) {
+        const id = params.id;
+        if (!id || !this.container?._overlayLabels) return;
+
+        const entry = this.container._overlayLabels.get(id);
+        if (entry) {
+            entry.el.remove();
+            this.container._overlayLabels.delete(id);
         }
     }
 
@@ -2366,6 +2451,13 @@ export class BabylonContainer {
         this.top_bar_title = top_bar_title;
         this.top_bar_time = top_bar_time;
 
+        // Overlay labels container (fills parent, labels are individually positioned)
+        this._overlayLabelsContainer = document.createElement('div');
+        this._overlayLabelsContainer.style.cssText =
+            'position:absolute; inset:0; pointer-events:none; z-index:50;';
+        element.appendChild(this._overlayLabelsContainer);
+        this._overlayLabels = new Map(); // id -> { el, x, y, fontSize }
+
         this._setConnectionStatus(false, '');
 
         this.container.appendChild(element);
@@ -2763,6 +2855,19 @@ export class BabylonContainer {
         const scaleDown = 1 / upscale;
         engine.setHardwareScalingLevel(Math.max(0.25, this.babylon._prevScaling * scaleDown));
 
+        // -------- capture WebGL canvas via video element ----------
+        // WebGL canvases have preserveDrawingBuffer=false by default, so reading
+        // from the canvas at arbitrary times (setInterval) yields blank frames.
+        // Piping through captureStream → <video> keeps the latest decoded frame.
+        const srcVideo = document.createElement('video');
+        srcVideo.muted = true;
+        srcVideo.playsInline = true;
+        srcVideo.style.display = 'none';
+        document.body.appendChild(srcVideo);
+        const srcStream = src.captureStream(fps);
+        srcVideo.srcObject = srcStream;
+        srcVideo.play().catch(() => {});
+
         // -------- build mix canvas ----------
         const mix = document.createElement('canvas');
         const ctx = mix.getContext('2d', {alpha: true});
@@ -2770,7 +2875,7 @@ export class BabylonContainer {
         syncSize();
 
         // -------- per-frame composer ----------
-        let rafId = 0;
+        let drawIntervalId = null;
         const draw = () => {
             if (mix.width !== src.width || mix.height !== src.height) syncSize();
 
@@ -2779,7 +2884,7 @@ export class BabylonContainer {
             const cssToVideo = rect.width ? (src.width / rect.width) : (window.devicePixelRatio || 1);
 
             ctx.clearRect(0, 0, mix.width, mix.height);
-            ctx.drawImage(src, 0, 0);
+            ctx.drawImage(srcVideo, 0, 0, mix.width, mix.height);
 
             // draw a "pill" for a DOM element at left or right edge
             const drawPill = (el, anchor = "left") => {
@@ -2858,9 +2963,43 @@ export class BabylonContainer {
             drawPill(this.top_bar_title, "left");
             drawPill(this.top_bar_time, "right");
 
-            rafId = requestAnimationFrame(draw);
+            // Draw custom overlay labels at their configured positions
+            if (this._overlayLabels?.size > 0) {
+                for (const [, entry] of this._overlayLabels) {
+                    const labelEl = entry.el;
+                    if (labelEl.style.display === 'none' || !labelEl.textContent) continue;
+                    const cs = getComputedStyle(labelEl);
+                    const fontSize = (entry.fontSize || 14) * cssToVideo;
+                    const padL = Math.round(fontSize * 0.6);
+                    const padR = padL;
+                    const padT = Math.round(fontSize * 0.35);
+                    const padB = padT;
+                    const font = `600 ${fontSize}px ${cs.fontFamily || 'sans-serif'}`;
+                    ctx.font = font;
+                    const textW = ctx.measureText(labelEl.textContent).width;
+                    const boxW = padL + textW + padR;
+                    const boxH = padT + fontSize + padB;
+                    const radius = 6 * cssToVideo;
+                    // Position from normalized coords (x: 0=left, 1=right; y: 0=top, 1=bottom)
+                    const nx = entry.x ?? 0.05;
+                    const ny = entry.y ?? 0.95;
+                    const px = nx * mix.width - boxW * nx;  // anchor shifts with x: 0→left-aligned, 1→right-aligned
+                    const py = ny * mix.height - boxH * ny;
+                    ctx.save();
+                    ctx.globalAlpha = 0.8;
+                    roundRectPath(ctx, px, py, boxW, boxH, radius);
+                    ctx.fillStyle = cs.backgroundColor || 'rgba(0,0,0,0.6)';
+                    ctx.fill();
+                    ctx.shadowColor = 'transparent';
+                    ctx.fillStyle = cs.color || '#fff';
+                    ctx.fillText(labelEl.textContent, px + padL, py + padT);
+                    ctx.restore();
+                }
+            }
+
         };
-        rafId = requestAnimationFrame(draw);
+        const drawIntervalMs = Math.max(1, Math.round(1000 / fps));
+        drawIntervalId = setInterval(draw, drawIntervalMs);
 
         // -------- start recording the mix canvas ----------
         const mime = _chooseBestMime();
@@ -2877,8 +3016,14 @@ export class BabylonContainer {
         };
 
         rec.onstop = () => {
-            cancelAnimationFrame(rafId);
+            clearInterval(drawIntervalId);
             stopTick();
+
+            // Clean up the video element used for canvas capture
+            srcVideo.pause();
+            srcVideo.srcObject = null;
+            srcStream.getTracks().forEach(t => t.stop());
+            srcVideo.remove();
 
             const blob = new Blob(chunks, {type: mime});
 

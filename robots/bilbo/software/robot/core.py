@@ -1,5 +1,5 @@
 # core/providers.py
-from typing import Protocol, Any, Optional
+from typing import Protocol, Any, Optional, Callable
 
 
 # ----- Contracts (what Core/others rely on) -----
@@ -13,7 +13,8 @@ class LoggingProvider(Protocol):
                  start: int | None = None,
                  end: int | None = None,
                  signals: list[str] | None = None,
-                 add_intermediate_samples: bool = False) -> dict | None: ...
+                 add_intermediate_samples: bool = False,
+                 callback: Callable[[dict | list | None], None] | None = None) -> dict | None: ...
 
     def get_lowlevel_data(self,
                           index: int | None = None,

@@ -668,6 +668,26 @@ class SetTICAction(ExperimentAction):
 
 # ----------------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass(kw_only=True)
+class SetPSIAction(ExperimentAction):
+    enabled: bool
+
+    def execute(self) -> bool:
+        self._on_started()
+        self.experiment.experiment_handler.control.enable_psi_control(self.enabled)
+        self._on_finished()
+        return True
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> SetPSIAction:
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(
+            **kwargs,
+            enabled=definition.parameters.get('enabled', True),
+        )
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass(kw_only=True)
 class SpeakAction(ExperimentAction):
     text: str
 
@@ -1558,6 +1578,15 @@ class FollowPathAction(ExperimentAction):
             self._on_error(f"Failed to plan and follow path to {target_str} - position control rejected command")
             return
 
+        # Save path data (settings + computed path points) into action output
+        self.data = {
+            'start': {'x': position_control._current_path_points[0][0],
+                      'y': position_control._current_path_points[0][1]} if position_control._current_path_points else None,
+            'target': {'x': self.target_x, 'y': self.target_y},
+            'settings': dict(position_control._current_path_settings),
+            'path_points': [{'x': p[0], 'y': p[1]} for p in position_control._current_path_points],
+        }
+
         if self.wait:
             self._wait_for_completion()
         else:
@@ -1699,6 +1728,7 @@ EXPERIMENT_ACTION_TYPE_MAPPING = {
     "beep": BeepAction,
     "set_mode": SetModeAction,
     "set_tic": SetTICAction,
+    "set_psi_control": SetPSIAction,
     "speak": SpeakAction,
     "set_marker": SetMarkerAction,
     "run_trajectory": RunTrajectoryAction,

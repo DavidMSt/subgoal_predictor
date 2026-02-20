@@ -10,7 +10,7 @@ MAX_STEPS_TRAJECTORY = 3000
 
 
 @STRUCTURE
-class twipr_firmware_revision:
+class bilbo_firmware_revision:
     FIELDS = {
         'major': ctypes.c_uint8,
         'minor': ctypes.c_uint8,

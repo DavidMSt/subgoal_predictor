@@ -1,4 +1,6 @@
 import dataclasses
+import os
+import subprocess
 import threading
 import time
 from typing import Callable
@@ -93,6 +95,8 @@ class BILBO_Common:
 
         self.connection_strength = 0
         self.internet_connected = False
+        self.rpi_temperature = 0.0
+        self.rpi_throttle = 0x0
 
         self.logger = Logger("CORE", "INFO")
         self.timecode_listener = TimecodeClient()
@@ -101,6 +105,9 @@ class BILBO_Common:
 
         self._thread = threading.Thread(target=self._connection_check_task)
         self._thread.start()
+
+        self._throttle_thread = threading.Thread(target=self._throttle_check_task)
+        self._throttle_thread.start()
 
         register_exit_callback(self.stop)
 
@@ -122,6 +129,8 @@ class BILBO_Common:
         self._exit = True
         if self._thread.is_alive():
             self._thread.join()
+        if self._throttle_thread.is_alive():
+            self._throttle_thread.join()
 
     # ------------------------------------------------------------------------------------------------------------------
     def get_data(self,
@@ -184,7 +193,9 @@ class BILBO_Common:
             'connection_strength': self.connection_strength,
             'internet_connected': self.internet_connected,
             'timecode': current_timecode.to_string() if current_timecode is not None else '00:00:00:00',
-            'timecode_fps': current_timecode.fps if current_timecode is not None else 0
+            'timecode_fps': current_timecode.fps if current_timecode is not None else 0,
+            'rpi_temperature': self.rpi_temperature,
+            'rpi_throttle': self.rpi_throttle,
         }
 
         return sample
@@ -259,6 +270,61 @@ class BILBO_Common:
                 return
             self.internet_connected = check_internet(timeout=1)
             time.sleep(2)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _throttle_check_task(self):
+        # Check if vcgencmd is available (only on Raspberry Pi)
+        if not os.path.exists('/usr/bin/vcgencmd'):
+            return
+
+        while not self._exit:
+            try:
+                # Read CPU temperature
+                temp_result = subprocess.run(
+                    ['vcgencmd', 'measure_temp'],
+                    capture_output=True, text=True, timeout=2
+                )
+                temp_str = temp_result.stdout.strip()  # e.g. "temp=55.3'C"
+                temperature = float(temp_str.split('=')[1].split("'")[0])
+
+                # Read throttle status
+                throttle_result = subprocess.run(
+                    ['vcgencmd', 'get_throttled'],
+                    capture_output=True, text=True, timeout=2
+                )
+                throttle_str = throttle_result.stdout.strip()  # e.g. "throttled=0x50005"
+                throttle_hex = int(throttle_str.split('=')[1], 16)
+
+                self.rpi_temperature = temperature
+                self.rpi_throttle = throttle_hex
+
+                # Bit flags (currently active):
+                #   0: Under-voltage detected
+                #   1: Arm frequency capped
+                #   2: Currently throttled
+                #   3: Soft temperature limit active
+                warnings = []
+                if throttle_hex & (1 << 0):
+                    warnings.append("UNDER-VOLTAGE")
+                if throttle_hex & (1 << 1):
+                    warnings.append("FREQ CAPPED")
+                if throttle_hex & (1 << 2):
+                    warnings.append("THROTTLED")
+                if throttle_hex & (1 << 3):
+                    warnings.append("SOFT TEMP LIMIT")
+
+                if warnings:
+                    now = time.time()
+                    if now - getattr(self, '_last_throttle_log', 0) >= 10:
+                        self._last_throttle_log = now
+                        # self.logger.warning(
+                        #     f"RPi THROTTLING: {', '.join(warnings)} | Temp: {temperature:.1f}°C | Flags: {throttle_str}"
+                        # )
+
+            except Exception:
+                return
+
+            time.sleep(1)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _get_testbed_config(self) -> BILBO_TestbedConfig:

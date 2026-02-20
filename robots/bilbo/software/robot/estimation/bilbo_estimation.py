@@ -14,8 +14,14 @@ from robot.lowlevel.stm32_sample import (
     BILBO_LL_Sample,
     velocity_lowpass_filter_config_t,
     VelocityLowpassFilterConfig,
+    theta_dot_lowpass_filter_config_t,
+    ThetaDotLowpassFilterConfig,
     psi_dot_lowpass_filter_config_t,
     PsiDotLowpassFilterConfig,
+    position_ekf_config_t,
+    PositionEkfConfig,
+    bilbo_estimation_config_t,
+    EstimationConfig,
 )
 from core.utils.logging_utils import Logger
 
@@ -249,8 +255,8 @@ class BILBO_Estimation:
         }
 
         self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_EstimationAddresses.SET_POSITION_UPDATE,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.SET_POSITION_UPDATE,
             data=data,
             input_type=bilbo_position_state_t,
             output_type=None
@@ -278,8 +284,8 @@ class BILBO_Estimation:
     def setThetaOffset(self, offset: float):
         self.logger.info(f'Setting theta offset to {np.rad2deg(offset):.2f} deg')
         success = self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_EstimationAddresses.SET_THETA_OFFSET,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.SET_THETA_OFFSET,
             data=offset,
             input_type=ctypes.c_float,
             output_type=ctypes.c_bool
@@ -293,8 +299,8 @@ class BILBO_Estimation:
         """Reset the lowlevel estimation (EKF, filters, position state)."""
         self.logger.info('Resetting lowlevel estimation')
         self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_EstimationAddresses.RESET,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.RESET,
             data=None,
             input_type=None,
             output_type=None
@@ -305,8 +311,8 @@ class BILBO_Estimation:
     def get_velocity_lpf_config(self) -> VelocityLowpassFilterConfig | None:
         """Get the velocity low-pass filter configuration from the lowlevel."""
         result = self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_EstimationAddresses.GET_VELOCITY_LPF,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.GET_VELOCITY_LPF,
             data=None,
             input_type=None,
             output_type=velocity_lowpass_filter_config_t
@@ -330,8 +336,8 @@ class BILBO_Estimation:
             'reset_on_start': config.reset_on_start,
         }
         self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_EstimationAddresses.SET_VELOCITY_LPF,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.SET_VELOCITY_LPF,
             data=data,
             input_type=velocity_lowpass_filter_config_t,
             output_type=None
@@ -341,8 +347,8 @@ class BILBO_Estimation:
     def get_psi_dot_lpf_config(self) -> PsiDotLowpassFilterConfig | None:
         """Get the psi_dot low-pass filter configuration from the lowlevel."""
         result = self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_EstimationAddresses.GET_PSIDOT_LPF,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.GET_PSIDOT_LPF,
             data=None,
             input_type=None,
             output_type=psi_dot_lowpass_filter_config_t
@@ -366,10 +372,46 @@ class BILBO_Estimation:
             'reset_on_start': config.reset_on_start,
         }
         self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_EstimationAddresses.SET_PSIDOT_LPF,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.SET_PSIDOT_LPF,
             data=data,
             input_type=psi_dot_lowpass_filter_config_t,
+            output_type=None
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_theta_dot_lpf_config(self) -> ThetaDotLowpassFilterConfig | None:
+        """Get the theta_dot low-pass filter configuration from the lowlevel."""
+        result = self._comm.serial.executeFunction(
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.GET_THETA_DOT_LPF,
+            data=None,
+            input_type=None,
+            output_type=theta_dot_lowpass_filter_config_t
+        )
+        if result is None:
+            self.logger.error('Could not get theta_dot LPF config')
+            return None
+        return ThetaDotLowpassFilterConfig(
+            enable=result.enable,
+            cutoff_hz=result.cutoff_hz,
+            reset_on_start=result.reset_on_start
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_theta_dot_lpf_config(self, config: ThetaDotLowpassFilterConfig):
+        """Set the theta_dot low-pass filter configuration on the lowlevel."""
+        self.logger.info(f'Setting theta_dot LPF: enable={config.enable}, cutoff_hz={config.cutoff_hz:.1f}')
+        data = {
+            'enable': config.enable,
+            'cutoff_hz': config.cutoff_hz,
+            'reset_on_start': config.reset_on_start,
+        }
+        self._comm.serial.executeFunction(
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.SET_THETA_DOT_LPF,
+            data=data,
+            input_type=theta_dot_lowpass_filter_config_t,
             output_type=None
         )
 
@@ -378,10 +420,94 @@ class BILBO_Estimation:
         """Enable or disable dead-reckoning EKF on the lowlevel."""
         self.logger.info(f'Setting dead-reckoning EKF enable={enable}')
         self._comm.serial.executeFunction(
-            module=addresses.TWIPR_AddressTables.REGISTER_TABLE_GENERAL,
-            address=addresses.TWIPR_EstimationAddresses.SET_DEAD_RECKONING_ENABLE,
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.SET_DEAD_RECKONING_ENABLE,
             data=enable,
             input_type=ctypes.c_bool,
+            output_type=None
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def get_config(self) -> EstimationConfig | None:
+        """Get the full estimation configuration from the lowlevel."""
+        result = self._comm.serial.executeFunction(
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.GET_CONFIG,
+            data=None,
+            input_type=None,
+            output_type=bilbo_estimation_config_t
+        )
+        if result is None:
+            self.logger.error('Could not get estimation config')
+            return None
+        return EstimationConfig(
+            velocity_filter_config=VelocityLowpassFilterConfig(
+                enable=result.velocity_filter_config.enable,
+                cutoff_hz=result.velocity_filter_config.cutoff_hz,
+                reset_on_start=result.velocity_filter_config.reset_on_start,
+            ),
+            theta_dot_filter_config=ThetaDotLowpassFilterConfig(
+                enable=result.theta_dot_filter_config.enable,
+                cutoff_hz=result.theta_dot_filter_config.cutoff_hz,
+                reset_on_start=result.theta_dot_filter_config.reset_on_start,
+            ),
+            psi_dot_filter_config=PsiDotLowpassFilterConfig(
+                enable=result.psi_dot_filter_config.enable,
+                cutoff_hz=result.psi_dot_filter_config.cutoff_hz,
+                reset_on_start=result.psi_dot_filter_config.reset_on_start,
+            ),
+            position_ekf_config=PositionEkfConfig(
+                enable=result.position_ekf_config.enable,
+                std_dev_position=result.position_ekf_config.std_dev_position,
+                std_dev_psi=result.position_ekf_config.std_dev_psi,
+                sigma_v_base=result.position_ekf_config.sigma_v_base,
+                sigma_v_scale=result.position_ekf_config.sigma_v_scale,
+                sigma_psi_dot_base=result.position_ekf_config.sigma_psi_dot_base,
+                sigma_psi_dot_scale=result.position_ekf_config.sigma_psi_dot_scale,
+                min_position_variance=result.position_ekf_config.min_position_variance,
+                min_psi_variance=result.position_ekf_config.min_psi_variance,
+                dead_reckoning_timeout=result.position_ekf_config.dead_reckoning_timeout,
+            ),
+        )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_config(self, config: EstimationConfig):
+        """Set the full estimation configuration on the lowlevel."""
+        self.logger.info(f'Setting estimation config')
+        data = {
+            'velocity_filter_config': {
+                'enable': config.velocity_filter_config.enable,
+                'cutoff_hz': config.velocity_filter_config.cutoff_hz,
+                'reset_on_start': config.velocity_filter_config.reset_on_start,
+            },
+            'theta_dot_filter_config': {
+                'enable': config.theta_dot_filter_config.enable,
+                'cutoff_hz': config.theta_dot_filter_config.cutoff_hz,
+                'reset_on_start': config.theta_dot_filter_config.reset_on_start,
+            },
+            'psi_dot_filter_config': {
+                'enable': config.psi_dot_filter_config.enable,
+                'cutoff_hz': config.psi_dot_filter_config.cutoff_hz,
+                'reset_on_start': config.psi_dot_filter_config.reset_on_start,
+            },
+            'position_ekf_config': {
+                'enable': config.position_ekf_config.enable,
+                'std_dev_position': config.position_ekf_config.std_dev_position,
+                'std_dev_psi': config.position_ekf_config.std_dev_psi,
+                'sigma_v_base': config.position_ekf_config.sigma_v_base,
+                'sigma_v_scale': config.position_ekf_config.sigma_v_scale,
+                'sigma_psi_dot_base': config.position_ekf_config.sigma_psi_dot_base,
+                'sigma_psi_dot_scale': config.position_ekf_config.sigma_psi_dot_scale,
+                'min_position_variance': config.position_ekf_config.min_position_variance,
+                'min_psi_variance': config.position_ekf_config.min_psi_variance,
+                'dead_reckoning_timeout': config.position_ekf_config.dead_reckoning_timeout,
+            },
+        }
+        self._comm.serial.executeFunction(
+            module=addresses.BILBO_AddressTables.REGISTER_TABLE_GENERAL,
+            address=addresses.BILBO_EstimationAddresses.SET_CONFIG,
+            data=data,
+            input_type=bilbo_estimation_config_t,
             output_type=None
         )
 
@@ -458,6 +584,20 @@ class BILBO_Estimation:
             function=self.reset,
             arguments=[],
             description='Resets the lowlevel estimation (EKF, filters, position state)'
+        )
+
+        self._comm.wifi.newCommand(
+            identifier='get_estimation_config',
+            function=self.get_config,
+            arguments=[],
+            description='Gets the full estimation configuration from lowlevel'
+        )
+
+        self._comm.wifi.newCommand(
+            identifier='set_estimation_config',
+            function=self.set_config,
+            arguments=['config'],
+            description='Sets the full estimation configuration on lowlevel'
         )
 
     # ------------------------------------------------------------------------------------------------------------------

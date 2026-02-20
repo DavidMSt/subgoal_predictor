@@ -54,6 +54,7 @@ class PyCamera:
             version: PyCameraType,
             resolution: tuple,
             auto_focus: bool = False,
+            lens_position: float = 0.0,
             exposure_time: int = None,
             gain: int | float = None,
             image_format: str = "rgb",
@@ -69,6 +70,7 @@ class PyCamera:
         self.gain = gain
         self.exposure_time = exposure_time
         self.auto_focus = auto_focus
+        self.lens_position = lens_position
 
         if self.image_format not in ("rgb", "gray"):
             raise ValueError('image_format must be "rgb" or "gray"')
@@ -117,6 +119,9 @@ class PyCamera:
             new_controls["AnalogueGain"] = gain
         if auto_focus:
             new_controls["AfMode"] = controls.AfModeEnum.Continuous
+        else:
+            new_controls["AfMode"] = controls.AfModeEnum.Manual
+            new_controls["LensPosition"] = lens_position
 
         if frame_rate is not None:
             new_controls["FrameRate"] = frame_rate

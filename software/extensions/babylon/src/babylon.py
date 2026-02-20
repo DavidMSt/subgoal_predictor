@@ -129,6 +129,11 @@ class BabylonObject(abc.ABC):
             )
 
     # ------------------------------------------------------------------------------------------------------------------
+    def set_visible(self, visible: bool):
+        """Show or hide this object in the 3D scene."""
+        self.function('setVisibility', visible=visible)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def setConfig(self, key, value):
         self.config[key] = value
         self.updateConfig()
@@ -585,6 +590,15 @@ class BabylonVisualization:
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self):
+        # Tell browser to disable reconnect and close
+        try:
+            self.send({'type': 'command', 'command': 'close'})
+        except Exception:
+            pass
+
+        import time
+        time.sleep(0.5)
+
         self._exit = True
 
         if hasattr(self, '_thread') and self._thread is not None and self._thread.is_alive():
@@ -640,6 +654,46 @@ class BabylonVisualization:
         }
         self.send(message)
         self.logger.info(f"Sent start recording command: {filename}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_title(self, text: str):
+        """Update the title text shown in the top bar overlay."""
+        self.send({'type': 'command', 'command': 'setTitle', 'params': {'text': text}})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_label(self, label_id: str, text: str, *,
+                  x: float | None = None, y: float | None = None,
+                  font_size: float | None = None,
+                  color: str | None = None,
+                  background: str | None = None):
+        """Create or update an overlay label. Set text to '' to hide it.
+
+        Args:
+            label_id: Unique identifier for the label.
+            text: Label text. Empty string hides the label.
+            x: Horizontal position (0.0 = left, 1.0 = right). Default 0.05.
+            y: Vertical position (0.0 = top, 1.0 = bottom). Default 0.95.
+            font_size: Font size in px. Default 14.
+            color: Text color CSS string. Default '#fff'.
+            background: Background color CSS string. Default 'rgba(0,0,0,0.6)'.
+        """
+        params = {'id': label_id, 'text': text}
+        if x is not None:
+            params['x'] = x
+        if y is not None:
+            params['y'] = y
+        if font_size is not None:
+            params['fontSize'] = font_size
+        if color is not None:
+            params['color'] = color
+        if background is not None:
+            params['background'] = background
+        self.send({'type': 'command', 'command': 'setLabel', 'params': params})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def remove_label(self, label_id: str):
+        """Remove an overlay label."""
+        self.send({'type': 'command', 'command': 'removeLabel', 'params': {'id': label_id}})
 
     # ------------------------------------------------------------------------------------------------------------------
     def stop_recording(self):
