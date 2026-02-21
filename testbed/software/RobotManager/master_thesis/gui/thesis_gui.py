@@ -39,7 +39,7 @@ from master_thesis.general.general_obstacle import GeneralObstacle
 from master_thesis.general.general_task import GeneralTask
 from master_thesis.scenarios.base import ScenarioConfig, _resolve_agent_class
 from master_thesis.scenarios.door_scenario import door_scenario_config
-from master_thesis.scenarios.maze_scenarios import maze_2x2_config, maze_4x4_config
+from master_thesis.scenarios.maze_scenarios import maze_2x2_config, maze_4x4_config, maze_4x4_reactive_config
 
 from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyType
 
@@ -617,6 +617,12 @@ class ThesisGUI:
         page1.addWidget(Button(text="4x4_maze", callback=Callback(
             function=self.loadScenario,
             inputs={'config': maze_4x4_config()},
+            discard_inputs=True,
+        )), height=2, width=4)
+
+        page1.addWidget(Button(text="4x4 Reactive", callback=Callback(
+            function=self.loadScenario,
+            inputs={'config': maze_4x4_reactive_config()},
             discard_inputs=True,
         )), height=2, width=4)
 

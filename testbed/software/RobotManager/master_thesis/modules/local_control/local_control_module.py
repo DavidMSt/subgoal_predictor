@@ -46,7 +46,7 @@ class LocalControlModule:
         self._current_goal: Optional[np.ndarray] = None
 
         # Goal reached threshold
-        self.goal_threshold = 0.2  # meters
+        self.goal_threshold = 0.02  # meters
 
         self.logger.info(f"LocalControlModule initialized with {controller.__class__.__name__}")
 
@@ -91,8 +91,8 @@ class LocalControlModule:
         Returns:
             Control input [v, psi_dot]
         """
-        if self._current_goal is None:
-            return np.zeros(2)  # Idle
+        if self._current_goal is None or self.is_goal_reached():
+            return np.zeros(2)  # Idle or arrived
 
         # Get current state from agent container
         state = np.array([
@@ -130,8 +130,9 @@ class LocalControlModule:
         Extract obstacle positions from local world container.
 
         Rectangular obstacles (walls) are decomposed into a chain of
-        overlapping circles along the wall centerline so that MPPI
-        samples cannot pass through them.
+        circles along the wall centerline.  Only circles within
+        ``obstacle_range`` of the agent are returned so that distant
+        walls don't dominate the cost landscape.
 
         Returns:
             List of [x, y, radius] arrays
@@ -141,7 +142,17 @@ class LocalControlModule:
         if lwr_cont is None:
             return obstacles
 
-        # Get obstacles from local world
+        # Proximity filter: only include circles reachable within the
+        # MPPI horizon (v_max * H * dt) plus a generous buffer.
+        ax, ay = self.agent_cont.x, self.agent_cont.y
+        cfg = getattr(self.controller, 'config', None)
+        if cfg is not None and cfg.control_limits is not None:
+            v_max = max(abs(cfg.control_limits[0][0]), abs(cfg.control_limits[0][1]))
+            horizon_reach = v_max * getattr(cfg, 'horizon', 20) * cfg.dt
+        else:
+            horizon_reach = 2.0
+        obs_range = horizon_reach + 0.5  # extra buffer
+
         if hasattr(lwr_cont, 'obstacles') and lwr_cont.obstacles is not None:
             for obs_id, obs_cont in lwr_cont.obstacles.items():
                 if not (hasattr(obs_cont, 'x') and hasattr(obs_cont, 'y')):
@@ -152,17 +163,23 @@ class LocalControlModule:
                 width = getattr(obs_cont, 'width', 0.0)
 
                 if shape == 'box' and length > 0 and width > 0:
-                    # Decompose rectangular wall into chain of circles
                     psi = getattr(obs_cont, 'psi', 0.0)
                     cx, cy = obs_cont.x, obs_cont.y
+
+                    # Quick reject: skip walls whose center is way out of range
+                    if np.hypot(cx - ax, cy - ay) > obs_range + length / 2 + 0.5:
+                        continue
+
                     radius = width / 2.0
-                    spacing = radius  # overlap by half a diameter
+                    # Space circles so that adjacent margin zones overlap:
+                    # gap = spacing - 2*radius;  margin covers the gap when
+                    # spacing <= 2*radius + 2*obstacle_margin.  Use 0.25m
+                    # as a good trade-off between coverage and count.
+                    spacing = 0.25
 
-                    # Direction along the wall long axis
-                    dx = np.cos(psi)
-                    dy = np.sin(psi)
+                    dx_dir = np.cos(psi)
+                    dy_dir = np.sin(psi)
 
-                    # Number of circles to cover the full length
                     n_circles = max(1, int(np.ceil(length / spacing)) + 1)
                     half_length = length / 2.0
 
@@ -170,11 +187,14 @@ class LocalControlModule:
                         t = -half_length + i * spacing
                         if t > half_length:
                             t = half_length
-                        obstacles.append(np.array([cx + t * dx, cy + t * dy, radius]))
+                        px = cx + t * dx_dir
+                        py = cy + t * dy_dir
+                        if (px - ax) ** 2 + (py - ay) ** 2 <= obs_range ** 2:
+                            obstacles.append(np.array([px, py, radius]))
                 else:
-                    # Circular or unknown shape — single circle
                     radius = getattr(obs_cont, 'radius', 0.3)
-                    obstacles.append(np.array([obs_cont.x, obs_cont.y, radius]))
+                    if np.hypot(obs_cont.x - ax, obs_cont.y - ay) <= obs_range + radius:
+                        obstacles.append(np.array([obs_cont.x, obs_cont.y, radius]))
 
         return obstacles
 

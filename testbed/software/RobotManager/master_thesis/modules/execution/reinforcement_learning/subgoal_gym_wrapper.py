@@ -20,7 +20,7 @@ from gymnasium import spaces
 from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.modules.local_control.local_control_module import LocalControlModule
-from master_thesis.modules.local_control.mppi_controller import create_frodo_mppi
+from master_thesis.modules.local_control.mppi_controller import MPPIController, MPPIConfig
 from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 
@@ -105,11 +105,11 @@ class SubgoalRLEnv(gym.Env):
         self._goal = np.array([task.container.x, task.container.y, task.container.psi])
 
         # Build MPPI controller for this agent
-        mppi = create_frodo_mppi(
+        mppi = MPPIController(MPPIConfig(
             dt=self.sim.Ts,
             horizon=self._mppi_horizon,
             n_samples=self._mppi_n_samples,
-        )
+        ))
         self._lcm = LocalControlModule(
             agent_cont=agent.container,
             controller=mppi,

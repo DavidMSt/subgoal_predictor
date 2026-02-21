@@ -43,7 +43,6 @@ class FRODOReactiveAgent(FRODOUniversalAgent):
             dt=self.container.Ts,
             horizon=self._mppi_horizon,
             n_samples=self._mppi_n_samples,
-            control_limits=((-1.0, 1.0), (-2.0, 2.0)),
         )
         executor = ReactiveExecutor(
             agent_cont=self.container,

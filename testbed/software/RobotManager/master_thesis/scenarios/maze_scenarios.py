@@ -52,6 +52,13 @@ def maze_2x2_config(
     )
 
 
+def maze_4x4_reactive_config(
+    wall_thickness: float = 0.1,
+) -> ScenarioConfig:
+    """4x4 maze with reactive (MPPI) agents instead of offline planners."""
+    return maze_4x4_config(wall_thickness=wall_thickness, agent_class="FRODOReactiveAgent")
+
+
 def maze_4x4_config(
     wall_thickness: float = 0.1,
     agent_class: str = "FRODOOfflineAgent",
