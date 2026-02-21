@@ -26,12 +26,6 @@ from robot.paths import CONFIG_PATH, ROBOT_PATH
 
 
 # ======================================================================================================================
-def error_handler(severity, message):
-    print(
-        f"[{severity}] {message}"
-    )
-
-
 @event_definition
 class BILBO_Common_Interaction_Events:
     resume: Event

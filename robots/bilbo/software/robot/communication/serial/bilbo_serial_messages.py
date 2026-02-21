@@ -81,6 +81,22 @@ class BILBO_Error_Message(SerialMessage):
 
 
 # ======================================================================================================================
+class drive_event_message_data_t(ctypes.Structure):
+    _fields_ = [
+        ("status", ctypes.c_uint8),
+        ("tick", ctypes.c_uint32),
+    ]
+
+
+class BILBO_Drive_Event_Message(SerialMessage):
+    module = 1
+    address = BILBO_LL_MESSAGE_DRIVE_EVENT
+    command = SerialCommandType.UART_CMD_EVENT
+    data_type = drive_event_message_data_t
+
+
+# ======================================================================================================================
 BILBO_SERIAL_MESSAGES = [BILBO_Debug_Message,
                          BILBO_Sequencer_Event_Message,
-                         BILBO_Control_Event_Message, BILBO_PositionControl_Event_Message]
+                         BILBO_Control_Event_Message, BILBO_PositionControl_Event_Message,
+                         BILBO_Drive_Event_Message]

@@ -119,7 +119,8 @@
 // 0xF0 - 0xFF : SYSTEM SPECIAL
 // ================================
 #define REG_ADDRESS_F_FIRMWARE_RESET          0xF0
-// 0xF1 - 0xFF reserved
+#define REG_ADDRESS_F_DRIVE_RESET            0xF1
+// 0xF2 - 0xFF reserved
 
 // Messages
 #define BILBO_MESSAGE_PRINT 0xDD
@@ -128,5 +129,6 @@
 #define BILBO_MESSAGE_CONTROL_EVENT 0x51
 #define BILBO_MESSAGE_WAYPOINT_EVENT 0x52
 #define BILBO_MESSAGE_POSITION_CONTROL_EVENT 0x53
+#define BILBO_MESSAGE_DRIVE_EVENT 0x54
 
 #endif /* FIRMWARE_ADRESSES_H_ */

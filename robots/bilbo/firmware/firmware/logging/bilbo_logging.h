@@ -31,6 +31,7 @@ typedef struct bilbo_logging_sample_t {
 	bilbo_control_data_t control;
 	bilbo_logging_estimation_t estimation;
 	bilbo_sensors_data_t sensors;
+	bilbo_logging_drive_t drive;
 	bilbo_sequencer_sample_t sequence;
 	bilbo_debug_sample_t debug;
 } bilbo_logging_sample_t;
@@ -40,6 +41,7 @@ typedef struct bilbo_logging_config_t {
 	BILBO_Control *control;
 	BILBO_Estimation *estimation;
 	BILBO_Sensors *sensors;
+	BILBO_Drive *drive;
 	BILBO_Sequencer *sequencer;
 	BILBO_ErrorHandler* error_handler;
 } bilbo_logging_config_t;

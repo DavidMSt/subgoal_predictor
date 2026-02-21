@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <title>LinePlot.js Demo Suite (Dark Mode)</title>
+    <style>
+        /* Reset box-sizing */
+        *, *::before, *::after {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            margin: 0;
+            background: #2b2b2b;
+            color: #a9b7c6;
+        }
+
+        h1, h3 {
+            color: #a9b7c6;
+            text-align: center;
+        }
+
+        h1 {
+            margin-bottom: 40px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 30px;
+        }
+
+        .demo {
+            background: #3c3f41;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+            min-width: 0;
+        }
+
+        .lineplot-container {
+            width: 100%;
+            max-width: 100%;
+            height: 250px;
+            margin-bottom: 10px;
+            border: 1px solid #5c5c5c;
+            position: relative;
+            min-width: 0;
+        }
+
+        .lineplot-container canvas {
+            width: 100% !important;
+            height: 100% !important;
+            box-sizing: border-box;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .controls button,
+        .controls label {
+            margin: 2px;
+            cursor: pointer;
+            color: #a9b7c6;
+        }
+
+        .controls button {
+            background: #4e5254;
+            border: 1px solid #5c5c5c;
+            border-radius: 4px;
+            padding: 4px 8px;
+        }
+
+        .controls input {
+            margin-right: 4px;
+        }
+    </style>
+    <script type="module">
+        import {Chart} from 'https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.esm.js';
+        Chart.defaults.color = '#a9b7c6';
+        Chart.defaults.font.family = 'Arial, sans-serif';
+        Chart.defaults.font.size = 12;
+    </script>
+    <script type="module" src="lineplot.js"></script>
+</head>
+<body>
+
+<h1>LinePlot.js Demo Suite (Dark Mode)</h1>
+
+<div class="grid">
+    <!-- Demo 1: Sine & Cosine with dynamic add/remove -->
+    <div class="demo">
+        <h3>1. Sine &amp; Cosine</h3>
+        <div id="plot1" class="lineplot-container"></div>
+        <div class="controls">
+            <button id="p1-add">Add Random Series</button>
+            <button id="p1-remove">Remove Last Series</button>
+        </div>
+    </div>
+    <!-- Demo 2: Hide/Show Series via Checkboxes -->
+    <div class="demo">
+        <h3>2. Toggle Series Visibility</h3>
+        <div id="plot2" class="lineplot-container"></div>
+        <div id="controls2" class="controls"></div>
+    </div>
+    <!-- Demo 3: Adding Custom Lines -->
+    <div class="demo">
+        <h3>3. Threshold &amp; Event Lines</h3>
+        <div id="plot3" class="lineplot-container"></div>
+        <div class="controls">
+            <button id="p3-add-hline">Add H‑Line @ y=0</button>
+            <button id="p3-add-vline">Add V‑Line @ x=5</button>
+            <button id="p3-clear-lines">Clear All Lines</button>
+        </div>
+    </div>
+    <!-- Demo 4: Dual Y‑Axes & Filled Series -->
+    <div class="demo">
+        <h3>4. Temp vs Precipitation</h3>
+        <div id="plot4" class="lineplot-container"></div>
+        <div class="controls">
+            <button id="p4-toggle-prec">Toggle Precipitation</button>
+            <button id="p4-toggle-temp">Toggle Temperature Legend</button>
+        </div>
+    </div>
+    <!-- Demo 5: Exponential Decay -->
+    <div class="demo">
+        <h3>5. Exponential Decay</h3>
+        <div id="plot5" class="lineplot-container"></div>
+        <div class="controls">
+            <button id="p5-add">Add Data Point</button>
+        </div>
+    </div>
+    <!-- Demo 6: Random Sine Variations -->
+    <div class="demo">
+        <h3>6. Random Sine Variations</h3>
+        <div id="plot6" class="lineplot-container"></div>
+        <div class="controls">
+            <button id="p6-add">Add Sine Plot</button>
+        </div>
+    </div>
+</div>
+
+<script type="module">
+    import {LinePlot} from './lineplot.js';
+
+    // Dark mode theme settings
+    const darkTheme = {
+        background_color: [0.12, 0.12, 0.12, 1],    // #1f1f1f
+        plot_background_color: [0.21, 0.21, 0.21, 1], // #363636
+        grid_color: [0.3, 0.3, 0.3, 1],               // #4d4d4d
+        border_color: [0.4, 0.4, 0.4, 1],             // #666666
+        border_width: 1,
+        legend_font_color: [0.67, 0.72, 0.78, 1],     // #abb8c8
+        title_font_color: [0.67, 0.72, 0.78, 1],      // #abb8c8
+        legend_font_size: 10,
+        title_font_size: 14,
+        legend_font_family: 'Roboto, sans-serif',
+        title_font_family: 'Roboto, sans-serif'
+    };
+
+    // --- Demo 1 ---
+    const p1 = new LinePlot('p1', document.getElementById('plot1'), {
+        ...darkTheme,
+        title: 'Dynamic Sine & Cosine',
+        legend_position: 'top',
+        grid_line_style: 'dotted',
+    });
+    p1.addYAxis({
+        id: 'main1',
+        min: -1.5,
+        max: 1.5,
+        step_size: 0.2,
+        auto_skip: true,
+        unit: 'A',
+        label: 'Amplitude',
+        color: [0.7, 0.7, 0.7, 1]
+    });
+    p1.x_axis.config.ticks_mode = 'custom';
+    p1.x_axis.config.ticks = Array.from({length: 13}, (_, i) => i);
+    p1.x_axis.config.min = 0;
+    p1.x_axis.config.max = 12;
+    p1.updateXAxis();
+
+    const sinS = p1.addSeriesFromConfig({
+        id: 'sin', y_axis: 'main1',
+        color: [1, 0, 0, 1], width: 2,
+        line_style: 'solid', marker: 'circle', marker_size: 4
+    });
+    const cosS = p1.addSeriesFromConfig({
+        id: 'cos', y_axis: 'main1',
+        color: [0, 0, 1, 1], width: 2,
+        line_style: 'dashed', marker: 'square', marker_size: 4
+    });
+    for (let x = 0; x <= 12; x += 0.5) {
+        sinS.addValue(x, Math.sin(x));
+        cosS.addValue(x, Math.cos(x));
+    }
+    document.getElementById('p1-add').onclick = () => {
+        const id = 'rnd' + Date.now();
+        const rnd = p1.addSeriesFromConfig({
+            id, y_axis: 'main1',
+            color: [Math.random(), Math.random(), Math.random(), 1],
+            width: 2, line_style: 'dotted'
+        });
+        for (let x = 0; x <= 12; x += 1) {
+            rnd.addValue(x, Math.random() * 2 - 1);
+        }
+    };
+    document.getElementById('p1-remove').onclick = () => {
+        const keys = Object.keys(p1.series);
+        if (keys.length > 2) p1.removeSeries(keys.pop());
+    };
+
+    // --- Demo 2 ---
+    const p2 = new LinePlot('p2', document.getElementById('plot2'), {
+        ...darkTheme,
+        title: 'Toggle Visibility',
+        legend_position: 'bottom'
+    });
+    p2.addYAxis({id: 'y2', min: 0, max: 100});
+    const sA = p2.addSeriesFromConfig({
+        id: 'A', y_axis: 'y2',
+        color: [0.2, 0.6, 0.2, 1], width: 2, line_style: 'solid'
+    });
+    const sB = p2.addSeriesFromConfig({
+        id: 'B', y_axis: 'y2',
+        color: [0.8, 0.2, 0.2, 1], width: 2, line_style: 'dashed'
+    });
+    for (let x = 0; x <= 10; x++) {
+        sA.addValue(x, x * 10);
+        sB.addValue(x, 100 - x * 10);
+    }
+    const ctrl2 = document.getElementById('controls2');
+    [sA, sB].forEach(s => {
+        const lbl = document.createElement('label');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        cb.onchange = () => s.show(cb.checked);
+        lbl.append(cb, ` ${s.id}`);
+        ctrl2.append(lbl);
+    });
+
+    // --- Demo 3 ---
+    const p3 = new LinePlot('p3', document.getElementById('plot3'), {
+        ...darkTheme,
+        title: 'Event Lines',
+        legend_position: 'right'
+    });
+    p3.addYAxis({id: 'main3', min: -2, max: 2});
+    const wave = p3.addSeriesFromConfig({
+        id: 'wave', y_axis: 'main3',
+        color: [0, 0, 0.8, 1], width: 2,
+        line_style: 'solid', tension: 0.5
+    });
+    for (let x = 0; x <= 10; x += 0.2) wave.addValue(x, Math.sin(x));
+    let lines3 = [];
+    document.getElementById('p3-add-hline').onclick = () => {
+        lines3.push(p3.addLine(0, 0, 10, 0, [1, 0, 0, 1], 2, 'dashed', 'y=0'));
+    };
+    document.getElementById('p3-add-vline').onclick = () => {
+        lines3.push(p3.addLine(5, -2, 5, 2, [0, 0.5, 0, 1], 2, 'dotted'));
+    };
+    document.getElementById('p3-clear-lines').onclick = () => {
+        lines3.forEach(id => p3.removeSeries(id));
+        lines3 = [];
+    };
+
+    // {x_axis: {
+    //         label: 'Month',
+    //     }}
+
+    // --- Demo 4 ---
+    const p4 = new LinePlot('p4', document.getElementById('plot4'), {
+        ...darkTheme,
+        title: 'Temp vs Precipitation',
+        legend_position: 'top',
+    });
+    p4.addYAxis({
+        id: 'temp',
+        position: 'left',
+        min: -20,
+        max: 40,
+        label: 'Temperature',
+        label_font_color: [1, 0, 0, 1]
+    });
+    p4.addYAxis({id: 'prec', position: 'right', min: 0, max: 200});
+
+    const temp = p4.addSeriesFromConfig({
+        id: 'Temp', y_axis: 'temp',
+        color: [1, 0.5, 0, 1], width: 2,
+        fill: true, fill_color: [1, 0.5, 0, 0.3]
+    });
+
+    const prec = p4.addSeriesFromConfig({
+        id: 'Precip', y_axis: 'prec',
+        color: [0, 0.5, 1, 1], width: 2,
+        fill: true, fill_color: [0, 0.5, 1, 0.3], line_style: 'dotted'
+    });
+
+    p4.x_axis.config.label = 'Month';
+    p4.x_axis.config.min = 1; // Does not work, adds the weird 0 tick
+    p4.updateXAxis();
+
+    for (let m = 1; m <= 12; m++) {
+        temp.addValue(m, 5 + 20 * Math.sin((m / 12) * 2 * Math.PI));
+        prec.addValue(m, 50 + 50 * Math.cos((m / 12) * 2 * Math.PI));
+    }
+    document.getElementById('p4-toggle-prec').onclick = () => prec.show(!prec.config.visible);
+    document.getElementById('p4-toggle-temp').onclick = () => temp.showInLegend(!temp.config.show_in_legend);
+
+    // --- Demo 5 ---
+    const p5 = new LinePlot('p5', document.getElementById('plot5'), {
+        ...darkTheme,
+        title: 'Exponential Decay',
+        legend_position: 'top',
+        grid_line_style: 'dotted',
+    });
+    // p5.addYAxis({ id: 'y5', min: -0.2, max: 1.2, step_size: 0.2 });
+    p5.addYAxis({
+        id: 'y5',
+        min: -0.2,
+        max: 1.2,
+        color: [1, 0, 0, 1],
+        step_size: 0.1,
+        auto_skip: true,
+        ticks_mode: 'custom',
+        ticks: [0, 0.2, 0.4, 0.6, 0.8, 1],
+        major_ticks: [0, 1],
+        major_ticks_width: 3,
+        major_ticks_force_label: true,
+    });
+    p5.x_axis.config.ticks_mode = 'custom';
+    p5.x_axis.config.ticks = Array.from({length: 21}, (_, i) => i);
+    p5.x_axis.config.min = -1;
+    p5.x_axis.config.max = 20;
+    p5.x_axis.config.major_ticks = [0];
+    p5.x_axis.config.major_ticks_width = 5;
+    p5.updateXAxis();
+
+    // p5.x_axis.config.min = 1;
+    // p5.updateXAxis();
+
+    const expS = p5.addSeriesFromConfig({
+        id: 'exp', y_axis: 'y5',
+        color: [1, 0.6, 0, 1], width: 2,
+        line_style: 'solid', marker: 'circle', marker_size: 4, show_in_legend: false,
+    });
+    let p5_x = 0;
+    document.getElementById('p5-add').onclick = () => {
+        if (p5_x <= 20) {
+            expS.addValue(p5_x, Math.exp(-p5_x));
+            p5_x++;
+        }
+    };
+
+    // --- Demo 6 ---
+    const p6 = new LinePlot('p6', document.getElementById('plot6'), {
+        ...darkTheme,
+        title: 'Random Sine Variations',
+        legend_position: 'right'
+    });
+    p6.addYAxis({id: 'y6', min: -2, max: 2});
+    p6.x_axis.config.min = 0;
+    p6.x_axis.config.max = 2 * Math.PI;
+    p6.updateXAxis();
+    document.getElementById('p6-add').onclick = () => {
+        const id = `sine${Date.now()}`;
+        const amp = Math.random() * 1.5 + 0.1;
+        const freq = Math.random() * 3 + 0.5;
+        const phase = Math.random() * 2 * Math.PI;
+        const color = [Math.random(), Math.random(), Math.random(), 1];
+        const s = p6.addSeriesFromConfig({
+            id,
+            y_axis: 'y6',
+            color,
+            width: 2,
+            line_style: 'solid',
+            show_in_legend: false
+        });
+        for (let x = 0; x <= 2 * Math.PI; x += 0.1) {
+            let y = amp * Math.sin(freq * x + phase);
+            if (y > 2) y = 2;
+            if (y < -2) y = -2;
+            s.addValue(x, y);
+        }
+    };
+
+</script>
+
+</body>
+</html>

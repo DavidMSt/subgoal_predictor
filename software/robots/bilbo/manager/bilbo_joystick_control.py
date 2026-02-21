@@ -22,7 +22,7 @@ logger = Logger('joystickcontrol')
 
 
 @callback_definition
-class TWIPRJoystickControlCallbacks:
+class BILBOJoystickControlCallbacks:
     new_assignment: CallbackContainer
     assigment_removed: CallbackContainer
     new_joystick: CallbackContainer
@@ -30,7 +30,7 @@ class TWIPRJoystickControlCallbacks:
 
 
 @event_definition
-class TWIPRJoystickControlEvents:
+class BILBOJoystickControlEvents:
     new_assignment: Event
     assigment_removed: Event
     new_joystick: Event
@@ -49,7 +49,7 @@ class BILBO_JoystickControl:
     limits: dict
     assignments: dict[str, JoystickAssignment]
 
-    callbacks: TWIPRJoystickControlCallbacks
+    callbacks: BILBOJoystickControlCallbacks
 
     _run_in_thread: bool
     _thread: threading.Thread | None
@@ -79,8 +79,8 @@ class BILBO_JoystickControl:
 
         self.assignments = {}
 
-        self.callbacks = TWIPRJoystickControlCallbacks()
-        self.events = TWIPRJoystickControlEvents()
+        self.callbacks = BILBOJoystickControlCallbacks()
+        self.events = BILBOJoystickControlEvents()
 
         self.cli_command_set = BILBO_JoystickManager_CommandSet(self)
 

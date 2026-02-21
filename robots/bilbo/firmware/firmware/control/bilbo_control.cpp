@@ -159,6 +159,7 @@ bool BILBO_Control::set_balancing_gain(float K[8]) {
 /* -------------------------------------------------------------------------------------- */
 void BILBO_Control::stop() {
 	this->set_mode(bilbo_control_mode_t::OFF);
+	this->_set_torque({ 0.0f, 0.0f });
 }
 /* -------------------------------------------------------------------------------------- */
 void BILBO_Control::reset() {
@@ -173,6 +174,14 @@ void BILBO_Control::reset() {
 /* -------------------------------------------------------------------------------------- */
 bool BILBO_Control::set_mode(bilbo_control_mode_t mode) {
 	if (this->status != bilbo_control_status_t::RUNNING) {
+		return false;
+	}
+
+	// Block any active mode when the drive is in error state
+	if (mode != bilbo_control_mode_t::OFF
+			&& this->config.drive->status == BILBO_DRIVE_STATUS_ERROR) {
+		send_error("Cannot set mode to %d while drive is in error state. Tick: %d",
+				(int) mode, tick_global);
 		return false;
 	}
 
@@ -344,6 +353,10 @@ bool BILBO_Control::set_tic_enabled(bool state) {
 }
 /* -------------------------------------------------------------------------------------- */
 bool BILBO_Control::set_psi_enabled(bool state) {
+	if (state == this->psi_controller.is_enabled()) {
+		return true;
+	}
+
 	this->psi_controller.set_enabled(state);
 	this->_data.psi_enabled = this->psi_controller.is_enabled();
 

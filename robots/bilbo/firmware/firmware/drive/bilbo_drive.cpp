@@ -3,6 +3,30 @@
 #include "firmware_settings.h"
 #include "robot-control_board.h"
 
+static const char* sm_mode_name(simplexmotion_mode_t mode) {
+	switch (mode) {
+	case SM_MODE_OFF:            return "Off";
+	case SM_MODE_RESET:          return "Reset";
+	case SM_MODE_SHUTDOWN:       return "Shutdown";
+	case SM_MODE_QUICKSTOP:      return "Quickstop";
+	case SM_MODE_FIRMWARE:       return "Firmware";
+	case SM_MODE_PWM:            return "PWM";
+	case SM_MODE_FREEWHEEL:      return "Freewheel";
+	case SM_MODE_POSITION:       return "Position";
+	case SM_MODE_POSITION_RAMP:  return "PositionRamp";
+	case SM_MODE_SPEED:          return "Speed";
+	case SM_MODE_SPEED_RAMP:     return "SpeedRamp";
+	case SM_MODE_SPEED_LOW:      return "SpeedLow";
+	case SM_MODE_SPEED_LOW_RAMP: return "SpeedLowRamp";
+	case SM_MODE_TORQUE:         return "Torque";
+	case SM_MODE_BEEP:           return "Beep";
+	case SM_MODE_HOMING:         return "Homing";
+	case SM_MODE_COGGING:        return "Cogging";
+	case SM_MODE_UNKNOWN:        return "Unknown";
+	default:                     return "Unknown";
+	}
+}
+
 static const osThreadAttr_t drive_task_attributes = { .name = "drive",
 		.stack_size = 2000 * 4, .priority = (osPriority_t) osPriorityNormal, };
 
@@ -74,6 +98,53 @@ HAL_StatusTypeDef BILBO_Drive::stop() {
 }
 
 /* ======================================================================= */
+bool BILBO_Drive::resetDrive() {
+	if (this->status != BILBO_DRIVE_STATUS_ERROR) {
+		send_info("Drive reset requested but not in error state");
+		return true;
+	}
+
+	// Signal the drive task to perform the reset from within its thread
+	// (avoids bus contention — the task owns the CAN/RS485 bus)
+	this->_reset_requested = true;
+
+	// Wait for the task to process the reset (with timeout)
+	uint32_t timeout = 500; // ms
+	uint32_t start = osKernelGetTickCount();
+	while (this->_reset_requested && (osKernelGetTickCount() - start) < timeout) {
+		osDelay(5);
+	}
+
+	if (this->status == BILBO_DRIVE_STATUS_OK) {
+		drive_event_message_data_t event_data = { .status = (uint8_t)BILBO_DRIVE_STATUS_OK, .tick = tick_global };
+		BILBO_Message_Drive_Event message(event_data);
+		sendMessage(message);
+		send_info("Drive reset successful (tick %lu)", (unsigned long)tick_global);
+		return true;
+	} else {
+		send_error("Drive reset failed (timeout or motor restart failed)");
+		return false;
+	}
+}
+
+/* ======================================================================= */
+HAL_StatusTypeDef BILBO_Drive::emergencyStop() {
+	// Only set the flag here — do NOT call CAN/RS485 directly.
+	// The drive task owns the bus and will execute the actual
+	// motor shutdown on its next iteration.
+	this->status = BILBO_DRIVE_STATUS_ERROR;
+	this->motor_left->emergencyStop();
+	osDelay(1);
+	this->motor_right->emergencyStop();
+
+	drive_event_message_data_t event_data = { .status = (uint8_t)BILBO_DRIVE_STATUS_ERROR, .tick = tick_global };
+	BILBO_Message_Drive_Event message(event_data);
+	sendMessage(message);
+
+	return HAL_OK;
+}
+
+/* ======================================================================= */
 bilbo_drive_speed_t BILBO_Drive::getSpeed() {
 	osSemaphoreAcquire(speed_semaphore, portMAX_DELAY);
 	bilbo_drive_speed_t speed = this->_speed;
@@ -114,11 +185,41 @@ void BILBO_Drive::task() {
 #ifdef BILBO_DRIVE_SIMPLEXMOTION_RS485
 	uint8_t taskmode = 0;
 	uint32_t consecutive_errors = 0;
+	elapsedMillis mode_check_timer = 0;
 
 	while (true){
 		current_tick = osKernelGetTickCount();
 		if (this->status == BILBO_DRIVE_STATUS_OK) {
 			bool cycle_ok = true;
+
+#if BILBO_DRIVE_WATCHDOG_ENABLE
+			this->motor_left->feedWatchdog();
+			osDelay(1);
+			this->motor_right->feedWatchdog();
+			osDelay(1);
+#endif
+
+			// Periodically read motor modes (~every 2s)
+			if (mode_check_timer > 2000) {
+				mode_check_timer.reset();
+				simplexmotion_mode_t mode_left, mode_right;
+
+				if (this->motor_left->readMotorMode(mode_left) == HAL_OK) {
+					if (mode_left != this->_motor_mode_left) {
+						send_info("Motor left mode changed: %s -> %s",
+								sm_mode_name(this->_motor_mode_left), sm_mode_name(mode_left));
+						this->_motor_mode_left = mode_left;
+					}
+				}
+				osDelay(1);
+				if (this->motor_right->readMotorMode(mode_right) == HAL_OK) {
+					if (mode_right != this->_motor_mode_right) {
+						send_info("Motor right mode changed: %s -> %s",
+								sm_mode_name(this->_motor_mode_right), sm_mode_name(mode_right));
+						this->_motor_mode_right = mode_right;
+					}
+				}
+			}
 
 			if (taskmode == 0){
 
@@ -189,8 +290,28 @@ void BILBO_Drive::task() {
 				}
 			}
 
-		} else {
-			nop();
+		} else if (this->status == BILBO_DRIVE_STATUS_ERROR) {
+			if (this->_reset_requested) {
+				// Perform reset from within the drive task (owns the bus)
+				HAL_StatusTypeDef s1 = this->motor_left->start();
+				osDelay(10);
+				HAL_StatusTypeDef s2 = this->motor_right->start();
+
+				if (s1 == HAL_OK && s2 == HAL_OK) {
+					consecutive_errors = 0;
+					osSemaphoreAcquire(speed_semaphore, portMAX_DELAY);
+					this->_speed = {0, 0};
+					osSemaphoreRelease(speed_semaphore);
+					this->status = BILBO_DRIVE_STATUS_OK;
+				} else {
+					send_error("Drive reset failed: motor restart failed in task");
+				}
+				this->_reset_requested = false;
+			} else {
+				this->motor_left->emergencyStop();
+				osDelay(1);
+				this->motor_right->emergencyStop();
+			}
 		}
 
 		osDelayUntil(current_tick + this->config.task_time);
@@ -199,6 +320,7 @@ void BILBO_Drive::task() {
 #ifdef BILBO_DRIVE_SIMPLEXMOTION_CAN
 	osDelay(100);
 	uint32_t consecutive_errors = 0;
+	elapsedMillis mode_check_timer = 0;
 
 	while (true) {
 		current_tick = osKernelGetTickCount();
@@ -206,6 +328,13 @@ void BILBO_Drive::task() {
 		if (this->status == BILBO_DRIVE_STATUS_OK) {
 
 			bool cycle_ok = true;
+
+#if BILBO_DRIVE_WATCHDOG_ENABLE
+			this->motor_left->feedWatchdog();
+			osDelay(2);
+			this->motor_right->feedWatchdog();
+			osDelay(2);
+#endif
 
 			// Read the voltage (non-critical, no retry needed)
 			if (voltage_timer > 2000) {
@@ -218,6 +347,29 @@ void BILBO_Drive::task() {
 					osSemaphoreRelease(voltage_semaphore);
 				}
 				// Voltage read failure is non-critical, don't count as error
+				continue;
+			}
+
+			// Periodically read motor modes (~every 2s)
+			if (mode_check_timer > 2000) {
+				mode_check_timer.reset();
+				simplexmotion_mode_t mode_left, mode_right;
+
+				if (this->motor_left->readMotorMode(mode_left) == HAL_OK) {
+					if (mode_left != this->_motor_mode_left) {
+						send_info("Motor left mode changed: %s -> %s",
+								sm_mode_name(this->_motor_mode_left), sm_mode_name(mode_left));
+						this->_motor_mode_left = mode_left;
+					}
+				}
+				osDelay(2);
+				if (this->motor_right->readMotorMode(mode_right) == HAL_OK) {
+					if (mode_right != this->_motor_mode_right) {
+						send_info("Motor right mode changed: %s -> %s",
+								sm_mode_name(this->_motor_mode_right), sm_mode_name(mode_right));
+						this->_motor_mode_right = mode_right;
+					}
+				}
 				continue;
 			}
 
@@ -299,9 +451,12 @@ void BILBO_Drive::task() {
 				consecutive_errors = 0;
 			} else {
 				consecutive_errors++;
-				setError(BILBO_ERROR_WARNING, BILBO_ERROR_MOTOR_COMM);
-				send_error("Motor comm error (attempt %lu/%d)",
-						consecutive_errors, BILBO_DRIVE_MAX_CONSECUTIVE_ERRORS);
+
+				if (consecutive_errors >= 2) {
+					setError(BILBO_ERROR_WARNING, BILBO_ERROR_MOTOR_COMM);
+					send_error("Motor comm error (attempt %lu/%d)",
+							consecutive_errors, BILBO_DRIVE_MAX_CONSECUTIVE_ERRORS);
+				}
 
 				if (consecutive_errors >= BILBO_DRIVE_MAX_CONSECUTIVE_ERRORS) {
 					setError(BILBO_ERROR_MAJOR, BILBO_ERROR_MOTOR_COMM);
@@ -319,13 +474,30 @@ void BILBO_Drive::task() {
 			}
 
 		} else if (this->status == BILBO_DRIVE_STATUS_ERROR) {
-			// Keep trying to zero the motors every loop iteration.
-			// The SimplexMotion controllers retain the last commanded
-			// torque target until explicitly overwritten. A CAN read
-			// timeout does not necessarily mean writes will also fail.
-			this->motor_left->stop();
-			osDelay(2);
-			this->motor_right->stop();
+			if (this->_reset_requested) {
+				// Perform reset from within the drive task (owns the bus)
+				HAL_StatusTypeDef s1 = this->motor_left->start();
+				osDelay(10);
+				HAL_StatusTypeDef s2 = this->motor_right->start();
+
+				if (s1 == HAL_OK && s2 == HAL_OK) {
+					consecutive_errors = 0;
+					osSemaphoreAcquire(speed_semaphore, portMAX_DELAY);
+					this->_speed = {0, 0};
+					osSemaphoreRelease(speed_semaphore);
+					this->status = BILBO_DRIVE_STATUS_OK;
+				} else {
+					send_error("Drive reset failed: motor restart failed in task");
+				}
+				this->_reset_requested = false;
+			} else {
+				// Set motors to OFF mode so they release torque.
+				// Called from the drive task thread to avoid CAN bus
+				// contention with the supervisor thread.
+				this->motor_left->emergencyStop();
+				osDelay(2);
+				this->motor_right->emergencyStop();
+			}
 		}
 
 		ticks_loop = osKernelGetTickCount() - current_tick;
@@ -338,6 +510,15 @@ void BILBO_Drive::task() {
 		osDelayUntil(current_tick + this->config.task_time);
 	}
 #endif
+}
+
+/* ======================================================================= */
+bilbo_logging_drive_t BILBO_Drive::getSample() {
+	return {
+		.status = (uint8_t)this->status,
+		.motor_mode_left = (uint8_t)this->_motor_mode_left,
+		.motor_mode_right = (uint8_t)this->_motor_mode_right,
+	};
 }
 
 /* ======================================================================= */

@@ -25,7 +25,7 @@ class BILBO_NetworkScanner:
 
     def __init__(self, robot_ids, scan_interval=3, failure_threshold=40):
         """
-        Initializes the TWIPR_Scanner class.
+        Initializes the BILBO_NetworkScanner class.
 
         :param robot_ids: List of robot hostnames to scan.
         :param scan_interval: Time interval (in seconds) between scans.

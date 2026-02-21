@@ -40,6 +40,18 @@
 
 #define SIMPLEXMOTION_CAN_REG_SPEED_FILTER 121
 #define SIMPLEXMOTION_CAN_REG_MOTOR_OPTIONS 212
+#define SIMPLEXMOTION_CAN_REG_RAMP_SPEED_MAX 351
+
+// Event registers (20 events available, indices 0..19)
+#define SIMPLEXMOTION_CAN_REG_EVENT_CONTROL  680
+#define SIMPLEXMOTION_CAN_REG_EVENT_TRG_REG  700
+#define SIMPLEXMOTION_CAN_REG_EVENT_TRG_DATA 720
+#define SIMPLEXMOTION_CAN_REG_EVENT_SRC_REG  740
+#define SIMPLEXMOTION_CAN_REG_EVENT_SRC_DATA 760
+#define SIMPLEXMOTION_CAN_REG_EVENT_DST_REG  780
+
+// Application data registers (general-purpose int16, R/W)
+#define SIMPLEXMOTION_CAN_REG_APPLDATA0 620
 
 
 typedef enum simplexmotion_can_mode_t {
@@ -88,21 +100,25 @@ public:
 	HAL_StatusTypeDef setMode(simplexmotion_can_mode_t mode);
 	HAL_StatusTypeDef readMode(simplexmotion_can_mode_t &mode);
 	HAL_StatusTypeDef stop();
+	HAL_StatusTypeDef emergencyStop();
 
 
 	HAL_StatusTypeDef setTorqueLimit(float maxTorque);
 	HAL_StatusTypeDef setSpeedFilter(uint16_t value);
 	HAL_StatusTypeDef setEncoderResolution(uint16_t bits);
+	HAL_StatusTypeDef setSpeedLimit(uint16_t max_rpm);
 	HAL_StatusTypeDef configureShutdownInput();
+	HAL_StatusTypeDef configureWatchdog() override;
+	HAL_StatusTypeDef feedWatchdog() override;
+	HAL_StatusTypeDef readMotorMode(simplexmotion_mode_t &mode) override;
 
 	void resetBus() override;
 
 	simplexmotion_can_config_t config;
 	simplexmotion_can_mode_t mode;
 
-
-
 private:
+
 	HAL_StatusTypeDef setTarget(int32_t target);
 
 	HAL_StatusTypeDef write(uint16_t reg, uint8_t* data, uint8_t length);

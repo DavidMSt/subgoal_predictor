@@ -19,7 +19,7 @@ from simulation.core.dynamics import LinearDynamics
 from simulation.core.environment import BASE_ENVIRONMENT_ACTIONS
 from simulation.core.scheduling import ScheduledObject
 from core.utils.control import lib_control
-from simulation.utils.orientations import twiprToRotMat, twiprFromRotMat
+from simulation.utils.orientations import bilboToRotMat, bilboFromRotMat
 from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 
 DEFAULT_SAMPLE_TIME = 0.01

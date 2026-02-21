@@ -195,6 +195,7 @@ HAL_StatusTypeDef BILBO_Firmware::init() {
 			.control       = &this->control,
 			.estimation    = &this->estimation,
 			.sensors       = &this->sensors,
+			.drive         = &this->drive,
 			.sequencer     = &this->sequencer,
 			.error_handler = &this->error_handler,
 	};

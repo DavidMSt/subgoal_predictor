@@ -397,6 +397,12 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                          description='Number of iterations to test')
                                      ])
 
+        reset_drive_command = Command(
+            name='resetDrive',
+            function=self.core.reset_drive,
+            description='Reset motor drive after error state',
+            arguments=[])
+
         external_input_command = Command(
             name='extInput',
             function=self._set_external_input,
@@ -721,7 +727,8 @@ class BILBO_CLI_CommandSet(CommandSet):
                                                            stop_command,
                                                            stable_command,
                                                            test_communication,
-                                                           external_input_command],
+                                                           external_input_command,
+                                                           reset_drive_command],
 
                          children=[control_command_set, experiment_command_set, navigation_command_set])
 

@@ -26,13 +26,13 @@ def psiFromRotMat(rotmat):
     return angles[0]
 
 
-def twiprToRotMat(theta, psi):
+def bilboToRotMat(theta, psi):
     q = qmt.quatFromEulerAngles(np.asarray([psi, theta, 0]), 'zyx')
     out = qmt.quatToRotMat(q)
     return out
 
 
-def twiprFromRotMat(rotmat):
+def bilboFromRotMat(rotmat):
     q = qmt.quatFromRotMat(rotmat)
     angles = qmt.eulerAngles(q, 'zyx')
     out = angles[0], angles[1]

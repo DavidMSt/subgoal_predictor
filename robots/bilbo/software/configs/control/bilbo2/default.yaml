@@ -1,7 +1,7 @@
 name: 'bilbo2 default control'
 description: ''
 general:
-  max_wheel_speed: 100.0              # [rad/s] Motor speed limit
+  max_wheel_speed: 60.0              # [rad/s] Motor speed limit
   max_wheel_torque: 0.5               # [Nm] Motor torque limit
   enable_external_inputs: true        # Allow external torque inputs in balancing mode
   torque_offset: [ 0,0 ]              # [Nm] Static torque offset [left, right]

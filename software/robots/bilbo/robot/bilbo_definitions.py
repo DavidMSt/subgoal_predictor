@@ -154,7 +154,7 @@ class PSI_Config:
 
 
 @dataclasses.dataclass
-class TWIPR_Balancing_Control_Config:
+class BILBO_Balancing_Control_Config:
     K: list = dataclasses.field(default_factory=list)  # State Feedback Gain
     tic: TIC_Config = dataclasses.field(default_factory=TIC_Config)
     vic: VIC_Config = dataclasses.field(default_factory=VIC_Config)
@@ -290,8 +290,8 @@ class BILBO_ControlConfig:
     description: str = ''
     general: General_Control_Config = dataclasses.field(default_factory=General_Control_Config)
     inputs: ExternalInputsConfig = dataclasses.field(default_factory=ExternalInputsConfig)
-    balancing_control: TWIPR_Balancing_Control_Config = dataclasses.field(
-        default_factory=TWIPR_Balancing_Control_Config)
+    balancing_control: BILBO_Balancing_Control_Config = dataclasses.field(
+        default_factory=BILBO_Balancing_Control_Config)
     velocity_control: VelocityControl_Config = dataclasses.field(default_factory=VelocityControl_Config)
     position_control: PositionControl_Config = dataclasses.field(default_factory=PositionControl_Config)
 

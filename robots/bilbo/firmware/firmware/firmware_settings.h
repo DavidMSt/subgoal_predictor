@@ -43,10 +43,32 @@
 // Higher resolution improves low-speed measurement but adds position noise.
 #define SIMPLEXMOTION_ENCODER_RESOLUTION 13
 
+// Motor-internal speed limit for torque mode (RPM). Written to the
+// RampSpeedMax register during init. The motor clamps wheel speed to
+// this value while in torque control mode. Set to 0 to disable.
+#define SIMPLEXMOTION_OVERSPEED_RPM 700
+
 // Hardware safety line: STM32 GPIO drives motor IN1 HIGH during operation,
 // pulls LOW on error to trigger motor quickstop independent of CAN/RS485.
 // Requires physical wiring from STM32 GPIO to IN1 on both motors.
 #define ENABLE_MOTOR_SHUTDOWN_LINE 0
+
+// Motor watchdog: uses SimplexMotion Events system to trigger Quickstop
+// if the STM32 stops communicating with the motors (brownout/crash protection).
+// A counter in ApplData[0] is decremented every 64ms by a motor-internal event.
+// If the counter reaches zero, another event writes Quickstop to the Mode register.
+// The STM32 periodically reloads the counter to prevent timeout.
+// Set to 0 to disable.
+#define BILBO_DRIVE_WATCHDOG_ENABLE 1
+
+// Watchdog counter reload value, written by STM32 each drive task cycle.
+// Timeout = reload × 64ms. Default 10 → 640ms.
+#define BILBO_DRIVE_WATCHDOG_RELOAD 10
+
+// Initial counter value written during motor init. Must be large enough
+// to survive the time between motor init and the first drive task cycle.
+// Default 100 → 6.4s.
+#define BILBO_DRIVE_WATCHDOG_INITIAL 100
 
 /* ================================================================
  * CONTROL LOOP

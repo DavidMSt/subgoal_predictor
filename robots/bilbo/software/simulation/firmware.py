@@ -42,6 +42,7 @@ from robot.lowlevel.stm32_sample import (
     BILBO_LL_Sensor_Data,
     BILBO_LL_Acc_Data,
     BILBO_LL_GYR_Data,
+    BILBO_LL_Sample_Drive,
     BILBO_LL_Sample_Sequence,
     BILBO_LL_Sample_Debug,
 )
@@ -493,6 +494,11 @@ class SimulatedFirmware:
                 acc=BILBO_LL_Acc_Data(x=acc_x, y=acc_y, z=acc_z),
                 gyr=BILBO_LL_GYR_Data(x=gyr_x, y=gyr_y, z=gyr_z),
                 battery_voltage=self._battery_voltage,
+            ),
+            drive=BILBO_LL_Sample_Drive(
+                status=1,
+                motor_mode_left=40,  # SM_MODE_TORQUE
+                motor_mode_right=40,  # SM_MODE_TORQUE
             ),
             sequence=BILBO_LL_Sample_Sequence(),
             debug=BILBO_LL_Sample_Debug(),

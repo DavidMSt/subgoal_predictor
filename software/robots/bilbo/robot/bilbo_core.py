@@ -114,6 +114,11 @@ class BILBO_Core:
         self.device.executeFunction(function_name='speak', arguments={'message': text})
 
     # ------------------------------------------------------------------------------------------------------------------
+    def reset_drive(self):
+        self.logger.info("Resetting drive")
+        self.device.executeFunction(function_name='reset_drive', arguments={})
+
+    # ------------------------------------------------------------------------------------------------------------------
     def setResumeEvent(self):
         self.logger.info(f"Set Resume Event")
         self.interface_events.resume.set()

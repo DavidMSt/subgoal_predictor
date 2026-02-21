@@ -1,0 +1,579 @@
+/*!* joystick_tester.css (compact version) *!*/
+/*:root {*/
+/*    --bg: #0b0f14;*/
+/*    --card: #121821;*/
+/*    --muted: #9aa4b2;*/
+/*    --text: #e5edf5;*/
+/*    --accent: #4cc9f0;*/
+/*    --ok: #22c55e;*/
+/*    --ring: rgba(76, 201, 240, .35);*/
+/*}*/
+
+/** {*/
+/*    box-sizing: border-box*/
+/*}*/
+
+/*body {*/
+/*    margin: 0;*/
+/*    background: radial-gradient(1200px 800px at 10% -10%, #0c1520 10%, var(--bg) 60%), radial-gradient(1200px 800px at 110% 120%, #0c1420 10%, var(--bg) 60%);*/
+/*    color: var(--text);*/
+/*    font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial*/
+/*}*/
+
+/*.jt-header {*/
+/*    padding: 12px 14px;*/
+/*    display: flex;*/
+/*    justify-content: space-between;*/
+/*    align-items: center;*/
+/*    border-bottom: 1px solid #1c2532;*/
+/*    background: linear-gradient(180deg, rgba(11, 15, 20, .96), rgba(11, 15, 20, .86));*/
+/*}*/
+
+/*.jt-title {*/
+/*    margin: 0;*/
+/*    font-size: 18px*/
+/*}*/
+
+/*.jt-accent {*/
+/*    color: var(--accent)*/
+/*}*/
+
+/*.jt-actions {*/
+/*    display: flex;*/
+/*    gap: 8px*/
+/*}*/
+
+/*.jt-btn {*/
+/*    background: #0f1722;*/
+/*    color: var(--text);*/
+/*    border: 1px solid #223043;*/
+/*    padding: 6px 10px;*/
+/*    border-radius: 8px;*/
+/*    cursor: pointer;*/
+/*    font-size: 13px*/
+/*}*/
+
+/*.jt-primary {*/
+/*    background: linear-gradient(180deg, #34b4e6, #1993c4);*/
+/*    color: #061019;*/
+/*    border: none*/
+/*}*/
+
+/*.jt-main {*/
+/*    padding: 12px*/
+/*}*/
+
+/*.jt-status {*/
+/*    display: flex;*/
+/*    gap: 6px;*/
+/*    align-items: center;*/
+/*    font-size: 13px;*/
+/*    color: var(--muted)*/
+/*}*/
+
+/*.jt-dot {*/
+/*    width: 8px;*/
+/*    height: 8px;*/
+/*    border-radius: 50%;*/
+/*    background: #475569;*/
+/*    box-shadow: 0 0 0 2px rgba(71, 85, 105, .3)*/
+/*}*/
+
+/*.jt-dot.on {*/
+/*    background: var(--ok);*/
+/*    box-shadow: 0 0 0 2px rgba(34, 197, 94, .25)*/
+/*}*/
+
+/*.jt-grid {*/
+/*    display: grid;*/
+/*    gap: 12px;*/
+/*    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));*/
+/*    margin-top: 12px*/
+/*}*/
+
+/*.jt-card {*/
+/*    background: var(--card);*/
+/*    border: 1px solid #192433;*/
+/*    border-radius: 12px;*/
+/*    padding: 10px;*/
+/*    box-shadow: 0 6px 20px rgba(0, 0, 0, .25)*/
+/*}*/
+
+/*.jt-h2 {*/
+/*    margin: 0 0 4px;*/
+/*    font-size: 15px*/
+/*}*/
+
+/*.jt-meta {*/
+/*    font-size: 11px;*/
+/*    color: var(--muted);*/
+/*    display: flex;*/
+/*    gap: 10px;*/
+/*    flex-wrap: wrap;*/
+/*    margin-bottom: 6px*/
+/*}*/
+
+/*.jt-section {*/
+/*    margin-top: 8px*/
+/*}*/
+
+/*.jt-h3 {*/
+/*    font-size: 12px;*/
+/*    margin: 0 0 4px;*/
+/*    color: #cbd5e1;*/
+/*    opacity: .85*/
+/*}*/
+
+/*!* Sticks smaller *!*/
+/*.jt-sticks {*/
+/*    display: grid;*/
+/*    grid-template-columns: repeat(2, minmax(120px, 1fr));*/
+/*    gap: 8px*/
+/*}*/
+
+/*.jt-stick {*/
+/*    background: #0e1520;*/
+/*    border: 1px solid #1a2635;*/
+/*    border-radius: 10px;*/
+/*    padding: 8px*/
+/*}*/
+
+/*.jt-pad {*/
+/*    position: relative;*/
+/*    height: 100px;*/
+/*    border-radius: 8px;*/
+/*    background: linear-gradient(0deg, transparent 49.5%, #223047 49.5%, #223047 50.5%, transparent 50.5%),*/
+/*    linear-gradient(90deg, transparent 49.5%, #223047 49.5%, #223047 50.5%, transparent 50.5%),*/
+/*    radial-gradient(60% 60% at 50% 50%, rgba(76, 201, 240, .1), transparent 70%)*/
+/*}*/
+
+/*.jt-dot2 {*/
+/*    position: absolute;*/
+/*    width: 14px;*/
+/*    height: 14px;*/
+/*    border-radius: 50%;*/
+/*    background: var(--accent);*/
+/*    box-shadow: 0 0 0 5px var(--ring);*/
+/*    left: 50%;*/
+/*    top: 50%;*/
+/*    transform: translate(-50%, -50%)*/
+/*}*/
+
+/*.jt-caption {*/
+/*    font-size: 11px;*/
+/*    color: var(--muted);*/
+/*    margin-top: 4px;*/
+/*    display: flex;*/
+/*    justify-content: space-between*/
+/*}*/
+
+/*!* Buttons grid — just below sticks *!*/
+/*.jt-buttons {*/
+/*    display: grid;*/
+/*    grid-template-columns: repeat(auto-fit, minmax(28px, 1fr));*/
+/*    gap: 6px*/
+/*}*/
+
+/*.jt-btncell {*/
+/*    --val: 0;*/
+/*    height: 28px;*/
+/*    background: #0d1420;*/
+/*    border: 1px solid #1a2635;*/
+/*    border-radius: 8px;*/
+/*    display: flex;*/
+/*    align-items: center;*/
+/*    justify-content: center;*/
+/*    font-size: 11px;*/
+/*    color: #aab6c4;*/
+/*    position: relative;*/
+/*    overflow: hidden*/
+/*}*/
+
+/*.jt-btncell.active {*/
+/*    color: #061019*/
+/*}*/
+
+/*.jt-btncell::after {*/
+/*    content: "";*/
+/*    position: absolute;*/
+/*    inset: 0;*/
+/*    background: radial-gradient(circle at 50% 50%, rgba(76, 201, 240, .8), transparent 60%);*/
+/*    opacity: var(--val);*/
+/*    transition: opacity .05s linear*/
+/*}*/
+
+/*!* Axes indicators compact & vertical *!*/
+/*.jt-axes {*/
+/*    display: grid;*/
+/*    gap: 6px*/
+/*}*/
+
+/*.jt-axis {*/
+/*    background: #0e1520;*/
+/*    border: 1px solid #1a2635;*/
+/*    border-radius: 8px;*/
+/*    padding: 6px 8px*/
+/*}*/
+
+/*.jt-label {*/
+/*    font-size: 11px;*/
+/*    color: var(--muted);*/
+/*    display: flex;*/
+/*    justify-content: space-between*/
+/*}*/
+
+/*.jt-bar {*/
+/*    height: 6px;*/
+/*    background: #0a0f16;*/
+/*    border: 1px solid #182335;*/
+/*    border-radius: 999px;*/
+/*    margin-top: 4px;*/
+/*    position: relative*/
+/*}*/
+
+/*.jt-thumb {*/
+/*    position: absolute;*/
+/*    top: 50%;*/
+/*    left: 50%;*/
+/*    width: 12px;*/
+/*    height: 12px;*/
+/*    border-radius: 50%;*/
+/*    background: var(--accent);*/
+/*    transform: translate(-50%, -50%);*/
+/*    box-shadow: 0 0 0 4px var(--ring)*/
+/*}*/
+
+/*.jt-zero {*/
+/*    position: absolute;*/
+/*    top: 50%;*/
+/*    left: 50%;*/
+/*    width: 2px;*/
+/*    height: 6px;*/
+/*    background: #223047;*/
+/*    transform: translate(-50%, -50%);*/
+/*    opacity: .7*/
+/*}*/
+
+/*.jt-muted {*/
+/*    color: var(--muted)*/
+/*}*/
+
+/*.jt-footnote {*/
+/*    margin-top: 8px;*/
+/*    font-size: 11px;*/
+/*    color: var(--muted)*/
+/*}*/
+
+/* joystick_tester.css (compact version, tabbed) */
+:root {
+    --bg: #0b0f14;
+    --card: #121821;
+    --muted: #9aa4b2;
+    --text: #e5edf5;
+    --accent: #4cc9f0;
+    --ok: #22c55e;
+    --ring: rgba(76, 201, 240, .35);
+}
+
+* {
+    box-sizing: border-box
+}
+
+body {
+    margin: 0;
+    background: radial-gradient(1200px 800px at 10% -10%, #0c1520 10%, var(--bg) 60%),
+    radial-gradient(1200px 800px at 110% 120%, #0c1420 10%, var(--bg) 60%);
+    color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Arial
+}
+
+.jt-header {
+    padding: 12px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #1c2532;
+    background: linear-gradient(180deg, rgba(11, 15, 20, .96), rgba(11, 15, 20, .86));
+}
+
+.jt-title {
+    margin: 0;
+    font-size: 18px
+}
+
+.jt-accent {
+    color: var(--accent)
+}
+
+.jt-actions {
+    display: flex;
+    gap: 8px
+}
+
+.jt-btn {
+    background: #0f1722;
+    color: var(--text);
+    border: 1px solid #223043;
+    padding: 6px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px
+}
+
+.jt-primary {
+    background: linear-gradient(180deg, #34b4e6, #1993c4);
+    color: #061019;
+    border: none
+}
+
+.jt-main {
+    padding: 12px
+}
+
+.jt-status {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font-size: 13px;
+    color: var(--muted)
+}
+
+.jt-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #475569;
+    box-shadow: 0 0 0 2px rgba(71, 85, 105, .3)
+}
+
+.jt-dot.on {
+    background: var(--ok);
+    box-shadow: 0 0 0 2px rgba(34, 197, 94, .25)
+}
+
+/* Tabs for multiple joysticks */
+.jt-tabs {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 12px;
+    padding: 6px 0;
+    border-bottom: 1px solid #1c2532;
+    overflow-x: auto;
+}
+
+.jt-tab {
+    background: #0f1722;
+    color: var(--text);
+    border: 1px solid #223043;
+    padding: 6px 12px;
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.jt-tab:hover {
+    border-color: #2a3a52
+}
+
+.jt-tab.active {
+    background: linear-gradient(180deg, #34b4e6, #1993c4);
+    color: #061019;
+    border-color: transparent;
+    box-shadow: 0 0 0 3px rgba(76, 201, 240, .2)
+}
+
+/* Single active panel; no side-by-side crowding */
+.jt-panels {
+    margin-top: 12px
+}
+
+.jt-panels .jt-card {
+    display: none
+}
+
+.jt-panels .jt-card.active {
+    display: block
+}
+
+/* (Old multi-card grid kept for compatibility, unused with tabs) */
+.jt-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    margin-top: 12px
+}
+
+.jt-card {
+    background: var(--card);
+    border: 1px solid #192433;
+    border-radius: 12px;
+    padding: 10px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .25)
+}
+
+.jt-h2 {
+    margin: 0 0 4px;
+    font-size: 15px
+}
+
+.jt-meta {
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 6px
+}
+
+.jt-section {
+    margin-top: 8px
+}
+
+.jt-h3 {
+    font-size: 12px;
+    margin: 0 0 4px;
+    color: #cbd5e1;
+    opacity: .85
+}
+
+/* Sticks smaller */
+.jt-sticks {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(120px, 1fr));
+    gap: 8px
+}
+
+.jt-stick {
+    background: #0e1520;
+    border: 1px solid #1a2635;
+    border-radius: 10px;
+    padding: 8px
+}
+
+.jt-pad {
+    position: relative;
+    height: 100px;
+    border-radius: 8px;
+    background: linear-gradient(0deg, transparent 49.5%, #223047 49.5%, #223047 50.5%, transparent 50.5%),
+    linear-gradient(90deg, transparent 49.5%, #223047 49.5%, #223047 50.5%, transparent 50.5%),
+    radial-gradient(60% 60% at 50% 50%, rgba(76, 201, 240, .1), transparent 70%)
+}
+
+.jt-dot2 {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 5px var(--ring);
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%)
+}
+
+.jt-caption {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+    display: flex;
+    justify-content: space-between
+}
+
+/* Buttons grid — just below sticks */
+.jt-buttons {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(28px, 1fr));
+    gap: 6px
+}
+
+.jt-btncell {
+    --val: 0;
+    height: 28px;
+    background: #0d1420;
+    border: 1px solid #1a2635;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    color: #aab6c4;
+    position: relative;
+    overflow: hidden
+}
+
+.jt-btncell.active {
+    color: #061019
+}
+
+.jt-btncell::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 50% 50%, rgba(76, 201, 240, .8), transparent 60%);
+    opacity: var(--val);
+    transition: opacity .05s linear
+}
+
+/* Axes indicators compact & vertical (after buttons) */
+.jt-axes {
+    display: grid;
+    gap: 6px
+}
+
+.jt-axis {
+    background: #0e1520;
+    border: 1px solid #1a2635;
+    border-radius: 8px;
+    padding: 6px 8px
+}
+
+.jt-label {
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between
+}
+
+.jt-bar {
+    height: 6px;
+    background: #0a0f16;
+    border: 1px solid #182335;
+    border-radius: 999px;
+    margin-top: 4px;
+    position: relative
+}
+
+.jt-thumb {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 4px var(--ring)
+}
+
+.jt-zero {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 6px;
+    background: #223047;
+    transform: translate(-50%, -50%);
+    opacity: .7
+}
+
+.jt-muted {
+    color: var(--muted)
+}
+
+.jt-footnote {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--muted)
+}

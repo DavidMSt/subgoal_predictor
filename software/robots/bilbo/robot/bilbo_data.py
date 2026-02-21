@@ -16,14 +16,14 @@ class BILBO_LL_Sample_General:
     status: int = 0
 
 
-class TWIPR_ErrorType(enum.IntEnum):
+class BILBO_ErrorType(enum.IntEnum):
     NONE = 0,
     MINOR = 1,
     MAJOR = 2,
     CRITICAL = 3,
 
 
-class TWIPR_ErrorCodes(enum.IntEnum):
+class BILBO_ErrorCodes(enum.IntEnum):
     UNSPECIFIED = 0,
     WHEEL_SPEED = 1,
     MANUAL_STOP = 2,
@@ -37,13 +37,13 @@ class TWIPR_ErrorCodes(enum.IntEnum):
 @dataclasses.dataclass
 class BILBO_LL_Log_Entry:
     tick: int = 0
-    type: TWIPR_ErrorType = TWIPR_ErrorType.NONE
-    error: TWIPR_ErrorCodes = TWIPR_ErrorCodes.UNSPECIFIED
+    type: BILBO_ErrorType = BILBO_ErrorType.NONE
+    error: BILBO_ErrorCodes = BILBO_ErrorCodes.UNSPECIFIED
 
 
 @dataclasses.dataclass
 class BILBO_LL_Sample_Errors:
-    state: TWIPR_ErrorType = TWIPR_ErrorType.NONE
+    state: BILBO_ErrorType = BILBO_ErrorType.NONE
     last_entry: BILBO_LL_Log_Entry = dataclasses.field(default_factory=BILBO_LL_Log_Entry)
 
 
@@ -140,7 +140,7 @@ class bilbo_control_input_ext:
 
 
 @dataclasses.dataclass
-class twipr_balancing_control_output:
+class bilbo_balancing_control_output:
     u_1: float = 0.0
     u_2: float = 0.0
 
@@ -166,9 +166,16 @@ class bilbo_ll_control_data:
     velocity_output: bilbo_velocity_control_output = dataclasses.field(default_factory=bilbo_velocity_control_output)
 
     input_ext: bilbo_control_input_ext = dataclasses.field(default_factory=bilbo_control_input_ext)
-    balancing_output: twipr_balancing_control_output = dataclasses.field(default_factory=twipr_balancing_control_output)
+    balancing_output: bilbo_balancing_control_output = dataclasses.field(default_factory=bilbo_balancing_control_output)
 
     output: bilbo_control_output = dataclasses.field(default_factory=bilbo_control_output)
+
+
+@dataclasses.dataclass
+class BILBO_LL_Sample_Drive:
+    status: int = 0
+    motor_mode_left: int = 0
+    motor_mode_right: int = 0
 
 
 @dataclasses.dataclass
@@ -196,6 +203,7 @@ class BILBO_LL_Sample:
     control: bilbo_ll_control_data = dataclasses.field(default_factory=bilbo_ll_control_data)
     estimation: BILBO_LL_Sample_Estimation = dataclasses.field(default_factory=BILBO_LL_Sample_Estimation)
     sensors: BILBO_LL_Sensor_Data = dataclasses.field(default_factory=BILBO_LL_Sensor_Data)
+    drive: BILBO_LL_Sample_Drive = dataclasses.field(default_factory=BILBO_LL_Sample_Drive)
     sequence: BILBO_LL_Sample_Sequence = dataclasses.field(default_factory=BILBO_LL_Sample_Sequence)
     debug: BILBO_LL_Sample_Debug = dataclasses.field(default_factory=BILBO_LL_Sample_Debug)
 
@@ -214,50 +222,6 @@ class BILBO_Sample_General:
     rpi_throttle: int = 0
 
 
-class TWIPR_Control_Status(enum.IntEnum):
-    TWIPR_CONTROL_STATE_ERROR = 0
-    TWIPR_CONTROL_STATE_NORMAL = 1
-
-
-class TWIPR_Control_Status_LL(enum.IntEnum):
-    TWIPR_CONTROL_STATE_LL_ERROR = 0
-    TWIPR_CONTROL_STATE_LL_NORMAL = 1
-
-
-class TWIPR_Control_Mode_LL(enum.IntEnum):
-    TWIPR_CONTROL_MODE_LL_OFF = 0,
-    TWIPR_CONTROL_MODE_LL_DIRECT = 1,
-    TWIPR_CONTROL_MODE_LL_BALANCING = 2,
-    TWIPR_CONTROL_MODE_LL_VELOCITY = 3
-
-
-@dataclasses.dataclass
-class TWIPR_ControlInput:
-    @dataclasses.dataclass
-    class velocity:
-        forward: float = 0
-        turn: float = 0
-
-    class balancing:
-        u_left: float = 0
-        u_right: float = 0
-
-    class direct:
-        u_left: float = 0
-        u_right: float = 0
-
-
-@dataclasses.dataclass
-class TWIPR_Control_Sample:
-    status: TWIPR_Control_Status = dataclasses.field(
-        default=TWIPR_Control_Status(TWIPR_Control_Status.TWIPR_CONTROL_STATE_ERROR))
-    mode: BILBO_Control_Mode = dataclasses.field(default=BILBO_Control_Mode(BILBO_Control_Mode.OFF))
-    vic_enabled: bool = False
-    tic_enabled: bool = False
-    configuration: str = ''
-    input: TWIPR_ControlInput = dataclasses.field(default_factory=TWIPR_ControlInput)
-
-
 @dataclasses.dataclass
 class BILBO_ConfigurationState:
     x: float = 0.0
@@ -267,75 +231,58 @@ class BILBO_ConfigurationState:
     psi: float = 0.0
 
 
-class TWIPR_Estimation_Status(enum.IntEnum):
+class BILBO_Estimation_Status(enum.IntEnum):
     ERROR = 0,
     NORMAL = 1,
 
 
 @dataclasses.dataclass(frozen=True)
-class TWIPR_Estimation_Sample:
-    status: TWIPR_Estimation_Status = TWIPR_Estimation_Status.ERROR
+class BILBO_Estimation_Sample:
+    status: BILBO_Estimation_Status = BILBO_Estimation_Status.ERROR
     state: BILBO_DynamicState = dataclasses.field(default_factory=BILBO_DynamicState)
     state_optitrack: BILBO_ConfigurationState | None = dataclasses.field(default_factory=BILBO_ConfigurationState)
     static: bool = False
     is_dead_reckoning: bool = True
 
 
-class TWIPR_Drive_Status(enum.IntEnum):
-    TWIPR_DRIVE_STATUS_OFF = 1,
-    TWIPR_DRIVE_STATUS_ERROR = 0
-    TWIPR_DRIVE_STATUS_NORMAL = 2
+class BILBO_Drive_Status(enum.IntEnum):
+    BILBO_DRIVE_STATUS_OFF = 1,
+    BILBO_DRIVE_STATUS_ERROR = 0
+    BILBO_DRIVE_STATUS_NORMAL = 2
 
 
 @dataclasses.dataclass
-class TWIPR_Drive_Data:
-    status: TWIPR_Drive_Status = TWIPR_Drive_Status.TWIPR_DRIVE_STATUS_OFF
+class BILBO_Drive_Data:
+    status: BILBO_Drive_Status = BILBO_Drive_Status.BILBO_DRIVE_STATUS_OFF
     torque: float = 0
     speed: float = 0
     input: float = 0
+    motor_mode: int = 255
 
 
 @dataclasses.dataclass
-class TWIPR_Drive_Sample:
-    left: TWIPR_Drive_Data = dataclasses.field(default_factory=TWIPR_Drive_Data)
-    right: TWIPR_Drive_Data = dataclasses.field(default_factory=TWIPR_Drive_Data)
+class BILBO_Drive_Sample:
+    status: BILBO_Drive_Status = BILBO_Drive_Status.BILBO_DRIVE_STATUS_OFF
+    left: BILBO_Drive_Data = dataclasses.field(default_factory=BILBO_Drive_Data)
+    right: BILBO_Drive_Data = dataclasses.field(default_factory=BILBO_Drive_Data)
 
 
 @dataclasses.dataclass
-class TWIPR_Sensors_IMU:
+class BILBO_Sensors_IMU:
     gyr: dict = dataclasses.field(default_factory=dict)
     acc: dict = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
-class TWIPR_Sensors_Power:
+class BILBO_Sensors_Power:
     bat_voltage: float = 0
     bat_current: float = 0
 
 
-@dataclasses.dataclass
-class TWIPR_Sensors_Drive_Data:
-    speed: float = 0
-    torque: float = 0
-    slip: bool = False
-
-
-@dataclasses.dataclass
-class TWIPR_Sensors_Drive:
-    left: TWIPR_Sensors_Drive_Data = dataclasses.field(default_factory=TWIPR_Sensors_Drive_Data)
-    right: TWIPR_Sensors_Drive_Data = dataclasses.field(default_factory=TWIPR_Sensors_Drive_Data)
-
-
-@dataclasses.dataclass
-class TWIPR_Sensors_Distance:
-    front: float = 0
-    back: float = 0
-
-
 @dataclasses.dataclass(frozen=True)
 class BILBO_Sensors_Sample:
-    imu: TWIPR_Sensors_IMU = dataclasses.field(default_factory=TWIPR_Sensors_IMU)
-    power: TWIPR_Sensors_Power = dataclasses.field(default_factory=TWIPR_Sensors_Power)
+    imu: BILBO_Sensors_IMU = dataclasses.field(default_factory=BILBO_Sensors_IMU)
+    power: BILBO_Sensors_Power = dataclasses.field(default_factory=BILBO_Sensors_Power)
 
 
 @dataclasses.dataclass
@@ -385,8 +332,8 @@ class BILBO_Sample:
     time: float = 0.0
     general: BILBO_Sample_General = dataclasses.field(default_factory=BILBO_Sample_General)
     control: BILBO_Control_Sample = dataclasses.field(default_factory=BILBO_Control_Sample)
-    estimation: TWIPR_Estimation_Sample = dataclasses.field(default_factory=TWIPR_Estimation_Sample)
-    drive: TWIPR_Drive_Sample = dataclasses.field(default_factory=TWIPR_Drive_Sample)
+    estimation: BILBO_Estimation_Sample = dataclasses.field(default_factory=BILBO_Estimation_Sample)
+    drive: BILBO_Drive_Sample = dataclasses.field(default_factory=BILBO_Drive_Sample)
     sensors: BILBO_Sensors_Sample = dataclasses.field(default_factory=BILBO_Sensors_Sample)
     lowlevel: BILBO_LL_Sample = dataclasses.field(default_factory=BILBO_LL_Sample)
     experiment: BILBO_ExperimentHandler_Sample = dataclasses.field(default_factory=BILBO_ExperimentHandler_Sample)
@@ -394,13 +341,11 @@ class BILBO_Sample:
 
 type_hooks = {
     BILBO_Control_Mode: BILBO_Control_Mode,
-    TWIPR_Control_Status: TWIPR_Control_Status,
-    TWIPR_Control_Status_LL: TWIPR_Control_Status_LL,
-    TWIPR_Control_Mode_LL: TWIPR_Control_Mode_LL,
-    TWIPR_Estimation_Status: TWIPR_Estimation_Status,
-    TWIPR_Drive_Status: TWIPR_Drive_Status,
-    TWIPR_ErrorType: TWIPR_ErrorType,
-    TWIPR_ErrorCodes: TWIPR_ErrorCodes
+    BILBO_Control_Status: BILBO_Control_Status,
+    BILBO_Estimation_Status: BILBO_Estimation_Status,
+    BILBO_Drive_Status: BILBO_Drive_Status,
+    BILBO_ErrorType: BILBO_ErrorType,
+    BILBO_ErrorCodes: BILBO_ErrorCodes
 }
 
 

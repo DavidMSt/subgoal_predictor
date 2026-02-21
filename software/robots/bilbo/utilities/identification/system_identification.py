@@ -442,7 +442,7 @@ def validate_model(
 
 
 def get_test_system(dt: float = 0.01) -> Tuple[np.ndarray, np.ndarray]:
-    """Return a plausible TWIPR discrete-time model for testing.
+    """Return a plausible BILBO discrete-time model for testing.
 
     Continuous-time dynamics (linearized at theta=0):
       v_dot       = -2v + 4*theta                  + 8*(u_l + u_r)

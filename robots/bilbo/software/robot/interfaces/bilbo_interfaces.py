@@ -12,6 +12,7 @@ from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
 from core.utils.exit import register_exit_callback
 from robot.control.bilbo_control_definitions import BILBO_Control_Mode
+from robot.drive.bilbo_drive import BILBO_Drive
 from robot.interfaces.bilbo_display import BILBO_Display
 
 
@@ -57,13 +58,18 @@ class BILBO_Interfaces:
     _input_thread: threading.Thread
     _exit_input_task: bool
 
-    def __init__(self, core: BILBO_Common, communication: BILBO_Communication, control: BILBO_Control,
+    def __init__(self, core: BILBO_Common,
+                 communication: BILBO_Communication,
+                 drive: BILBO_Drive,
+                 control: BILBO_Control,
                  joystick_enabled: bool = True):
         self.logger = Logger('interfaces')
         self.logger.setLevel('DEBUG')
         self.core = core
         self.communication = communication
         self.control = control
+        self.drive = drive
+
         self.joystick_enabled = joystick_enabled
 
         config = self.core.config
@@ -244,18 +250,7 @@ class BILBO_Interfaces:
         self._joystick.hat['up'].callbacks.pressed.register(self.control.enable_tic_control, enable=True)
         self._joystick.hat['down'].callbacks.pressed.register(self.control.enable_tic_control, enable=False)
         self._joystick.hat['right'].callbacks.pressed.register(self.core.setResumeEvent, data=True)
-
-
-        # joystick.setButtonCallback(button="A", event='down', function=self._onJoystickPress)
-        # joystick.setButtonCallback(button="B", event='down', function=self._onJoystickPress)
-        # joystick.setButtonCallback(button="X", event='down', function=self._onJoystickPress)
-        # joystick.setButtonCallback(button="Y", event='down', function=self._onJoystickPress)
-        #
-        # joystick.setButtonCallback(button="DPAD_UP", event='down', function=self._onJoystickPress)
-        # joystick.setButtonCallback(button="DPAD_DOWN", event='down', function=self._onJoystickPress)
-        #
-        # joystick.setButtonCallback(button=JOYSTICK_MAPPING['ACCEPT'], event='down', function=self._onJoystickPress)
-        # joystick.setButtonCallback(button=JOYSTICK_MAPPING['CANCEL'], event='down', function=self._onJoystickPress)
+        self._joystick.buttons['L1'].callbacks.pressed.register(self.drive.reset)
 
     # ------------------------------------------------------------------------------------------------------------------
     def _onJoystickDisconnected(self, joystick, *args, **kwargs):
@@ -266,27 +261,6 @@ class BILBO_Interfaces:
             self.core.joystick_connected = False
             self.core.events.joystick_disconnected.set()
             self.input_source = InputSource.NONE
-
-    # ------------------------------------------------------------------------------------------------------------------
-    # def _onJoystickPress(self, button=None, *args, **kwargs):
-    # self.logger.debug(f'Joystick button pressed: {button}')
-    # if button == JOYSTICK_MAPPING['CONTROL_MODE_BALANCING']:
-    #     self.control.set_mode(self.control.mode.BALANCING)
-    # elif button == JOYSTICK_MAPPING['CONTROL_MODE_OFF']:
-    #     self.control.set_mode(self.control.mode.OFF)
-    # elif button == JOYSTICK_MAPPING['TIC_ENABLE']:
-    #     self.control.enable_tic_control(True)
-    # elif button == JOYSTICK_MAPPING['TIC_DISABLE']:
-    #     self.control.enable_tic_control(False)
-    # elif button == JOYSTICK_MAPPING['ACCEPT']:
-    #     self.logger.debug('Joystick button pressed: ACCEPT')
-    # elif button == JOYSTICK_MAPPING['CANCEL']:
-    #     self.logger.debug('Joystick button pressed: CANCEL')
-    # elif button == JOYSTICK_MAPPING['CONTROL_MODE_VELOCITY']:
-    #     self.control.set_mode(self.control.mode.VELOCITY)
-    # else:
-    #     self.logger.debug(f'Joystick button pressed: {button} not recognized')
-    #     return
 
     # ------------------------------------------------------------------------------------------------------------------
     def _input_task(self):

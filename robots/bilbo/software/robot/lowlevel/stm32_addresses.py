@@ -23,6 +23,7 @@ class BILBO_SystemAddresses(enum.IntEnum):
 
     # 0xF0 - 0xFF : SYSTEM SPECIAL
     FIRMWARE_RESET = 0xF0
+    DRIVE_RESET = 0xF1
 
 
 class BILBO_ControlAddresses(enum.IntEnum):

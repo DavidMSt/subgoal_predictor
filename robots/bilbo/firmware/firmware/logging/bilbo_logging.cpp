@@ -37,6 +37,8 @@ bilbo_logging_buffer_status_t BILBO_Logging::collectSamples() {
 			this->config.estimation->getSample();
 	this->sample_buffer[this->sample_index].sensors =
 			this->config.sensors->getData();
+	this->sample_buffer[this->sample_index].drive =
+			this->config.drive->getSample();
 	this->sample_buffer[this->sample_index].sequence =
 			this->config.sequencer->getSample();
 	this->sample_buffer[this->sample_index].debug =

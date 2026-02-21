@@ -61,6 +61,11 @@ class BILBO_Communication:
         self.wifi.callbacks.connected.register(self._wifi_connected_callback)
         self.wifi.callbacks.disconnected.register(self._wifi_disconnected_callback)
 
+        self.wifi.newCommand(identifier='test',
+                        function=self.test,
+                        arguments=['input'],
+                        description='Test the communication')
+
         register_exit_callback(self.close)
         # Configure Logging Redirect
         enable_redirection(self._log_redirection)
@@ -88,6 +93,10 @@ class BILBO_Communication:
         disable_redirection(self._log_redirection)
         logger.info("Closing BILBO Communication")
         self.spi.close()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def test(self, input):
+        return input
 
     # === PRIVATE METHODS ==============================================================================================
     def _stm32_rx_sample_callback(self, sample, *args, **kwargs):

@@ -10,7 +10,7 @@ SAMPLE_BUFFER_LL_SIZE = 10
 
 class bilbo_ll_sample_general_struct(ctypes.Structure):
     _fields_ = [
-        ("status", ctypes.c_int8)
+        ("status", ctypes.c_int8),
     ]
 
 
@@ -197,6 +197,21 @@ class EstimationConfig:
     position_ekf_config: PositionEkfConfig = dataclasses.field(default_factory=PositionEkfConfig)
 
 
+class bilbo_ll_sample_drive_struct(ctypes.Structure):
+    _fields_ = [
+        ("status", ctypes.c_uint8),
+        ("motor_mode_left", ctypes.c_uint8),
+        ("motor_mode_right", ctypes.c_uint8),
+    ]
+
+
+@dataclasses.dataclass
+class BILBO_LL_Sample_Drive:
+    status: int = 0
+    motor_mode_left: int = 0
+    motor_mode_right: int = 0
+
+
 class bilbo_ll_sample_sequence_struct(ctypes.Structure):
     _fields_ = [("sequence_id", ctypes.c_uint16),
                 ("sequence_tick", ctypes.c_uint32)
@@ -241,6 +256,7 @@ class bilbo_ll_sample_struct(ctypes.Structure):
         ("control", bilbo_ll_control_data_t),
         ("estimation", bilbo_ll_sample_estimation_struct),
         ("sensors", bilbo_ll_sensor_data_struct),
+        ("drive", bilbo_ll_sample_drive_struct),
         ("sequence", bilbo_ll_sample_sequence_struct),
         ("debug", bilbo_ll_sample_debug_struct),
     ]
@@ -254,5 +270,6 @@ class BILBO_LL_Sample:
     control: bilbo_ll_control_data = dataclasses.field(default_factory=bilbo_ll_control_data)
     estimation: BILBO_LL_Sample_Estimation = dataclasses.field(default_factory=BILBO_LL_Sample_Estimation)
     sensors: BILBO_LL_Sensor_Data = dataclasses.field(default_factory=BILBO_LL_Sensor_Data)
+    drive: BILBO_LL_Sample_Drive = dataclasses.field(default_factory=BILBO_LL_Sample_Drive)
     sequence: BILBO_LL_Sample_Sequence = dataclasses.field(default_factory=BILBO_LL_Sample_Sequence)
     debug: BILBO_LL_Sample_Debug = dataclasses.field(default_factory=BILBO_LL_Sample_Debug)

@@ -6,6 +6,7 @@
  */
 
 #include "simplexmotion_rs485.h"
+#include "firmware_settings.h"
 
 SimplexMotion_RS485::SimplexMotion_RS485(){
 
@@ -59,10 +60,25 @@ HAL_StatusTypeDef SimplexMotion_RS485::init(
 		return HAL_ERROR;
 	}
 
+	// Set maximum speed in torque mode (motor-internal soft limit via RampSpeedMax)
+#if SIMPLEXMOTION_OVERSPEED_RPM > 0
+	status = this->setSpeedLimit(SIMPLEXMOTION_OVERSPEED_RPM);
+	if (status) {
+		return HAL_ERROR;
+	}
+#endif
+
 #if ENABLE_MOTOR_SHUTDOWN_LINE
 	// Configure IN1 as hardware quickstop trigger.
 	// STM32 GPIO holds the line HIGH; LOW triggers motor quickstop.
 	status = this->configureShutdownInput();
+	if (status) {
+		return HAL_ERROR;
+	}
+#endif
+
+#if BILBO_DRIVE_WATCHDOG_ENABLE
+	status = this->configureWatchdog();
 	if (status) {
 		return HAL_ERROR;
 	}
@@ -249,11 +265,13 @@ HAL_StatusTypeDef SimplexMotion_RS485::stop() {
 	if (status) {
 		return HAL_ERROR;
 	}
-	//	status = this->setMode(SIMPLEXMOTION_CAN_MODE_OFF);
-	//	if (status) {
-	//		return HAL_ERROR;
-	//	}
 	return HAL_OK;
+}
+
+/* ================================================================================= */
+HAL_StatusTypeDef SimplexMotion_RS485::emergencyStop() {
+	this->setTarget(0);
+	return this->setMode(SIMPLEXMOTION_RS485_MODE_OFF);
 }
 
 /* ================================================================================= */
@@ -347,6 +365,29 @@ HAL_StatusTypeDef SimplexMotion_RS485::setEncoderResolution(uint16_t bits) {
 }
 
 /* ================================================================================= */
+HAL_StatusTypeDef SimplexMotion_RS485::setSpeedLimit(uint16_t max_rpm) {
+	// RampSpeedMax: motor-internal speed limit for torque mode.
+	// Unit: positions/second / 16. Formula: value = rpm * 4096 / 960.
+	uint16_t value = (uint16_t)((uint32_t)max_rpm * 4096 / 960);
+
+	HAL_StatusTypeDef status = this->writeRegisters(
+			SIMPLEXMOTION_RS485_REG_RAMP_SPEED_MAX, 1, &value);
+	if (status != HAL_OK) {
+		return HAL_ERROR;
+	}
+
+	// Read back and verify
+	uint16_t readback = 0;
+	status = this->readRegisters(
+			SIMPLEXMOTION_RS485_REG_RAMP_SPEED_MAX, 1, &readback);
+	if (status != HAL_OK || readback != value) {
+		return HAL_ERROR;
+	}
+
+	return HAL_OK;
+}
+
+/* ================================================================================= */
 /**
  * @brief Configures the motor's IN1 as a hardware quickstop trigger.
  *
@@ -394,6 +435,125 @@ HAL_StatusTypeDef SimplexMotion_RS485::configureShutdownInput() {
 	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_TORQUE_STOP, 1, &stop_torque);
 	if (status != HAL_OK) return HAL_ERROR;
 
+	return HAL_OK;
+}
+
+/* ================================================================================= */
+/**
+ * @brief Configures motor-internal watchdog using the Events system.
+ *
+ * Programs two events (slots 2 and 3) that run at 2kHz inside the motor
+ * controller, independent of the STM32:
+ *
+ *   Event 2: Countdown — decrements ApplData[0] by 1 every ~64ms.
+ *            Trigger: ApplData[0] != 0 (stops at zero, no underflow).
+ *            Type: Repeat (fires once per filter period).
+ *            Action: ApplData[0] = ApplData[0] - 1
+ *
+ *   Event 3: Quickstop — triggers when counter reaches zero.
+ *            Trigger: ApplData[0] == 0
+ *            Type: Edge (fires once on false→true transition).
+ *            Action: Mode = Quickstop (5)
+ *
+ * The STM32 must call feedWatchdog() periodically to reload the counter.
+ * If communication stops (e.g., STM32 brownout), the counter reaches zero
+ * and the motor autonomously enters Quickstop mode.
+ */
+HAL_StatusTypeDef SimplexMotion_RS485::configureWatchdog() {
+	HAL_StatusTypeDef status;
+
+	// Event slot indices (slots 0-1 used by overspeed protection)
+	const uint16_t ev_countdown = 2;
+	const uint16_t ev_quickstop = 3;
+
+	// EventControl word layout (SimplexMotion Manual §4.7):
+	//   bits 0..3:   trigger operation (1=Equal, 2=NotEqual)
+	//   bits 4..7:   trigger filter (7 = 128 evals at 2kHz = 64ms)
+	//   bits 8..9:   trigger type (1=Edge, 2=Repeat)
+	//   bits 10..13: data operation (3=Subtract, 15=Value)
+
+	// Event 2: Repeat, ApplData[0] != 0, Subtract 1
+	uint16_t ctrl_countdown = (3 << 10) | (2 << 8) | (7 << 4) | 2;   // 0x0E72
+	// Event 3: Edge, ApplData[0] == 0, write Quickstop value
+	uint16_t ctrl_quickstop = (15 << 10) | (1 << 8) | (3 << 4) | 1;  // 0x3D31
+
+	// Event data values use internal motor register numbers (not Modbus addresses)
+	uint16_t reg_appldata0 = SIMPLEXMOTION_INTERNAL_REG_APPLDATA0;
+	uint16_t reg_mode = SIMPLEXMOTION_INTERNAL_REG_MODE;
+	uint16_t quickstop_val = (uint16_t)SIMPLEXMOTION_RS485_MODE_QUICKSTOP;
+	uint16_t zero = 0;
+	uint16_t one = 1;
+
+	// --- Disable events 2 and 3 first ---
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_CONTROL + ev_countdown, 1, &zero);
+	if (status != HAL_OK) return HAL_ERROR;
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_CONTROL + ev_quickstop, 1, &zero);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// --- Event 2: Countdown (ApplData[0] = ApplData[0] - 1 every 64ms) ---
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_TRG_REG + ev_countdown, 1, &reg_appldata0);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_TRG_DATA + ev_countdown, 1, &zero);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_SRC_REG + ev_countdown, 1, &reg_appldata0);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_SRC_DATA + ev_countdown, 1, &one);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_DST_REG + ev_countdown, 1, &reg_appldata0);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// --- Event 3: Quickstop when counter == 0 ---
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_TRG_REG + ev_quickstop, 1, &reg_appldata0);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_TRG_DATA + ev_quickstop, 1, &zero);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_SRC_DATA + ev_quickstop, 1, &quickstop_val);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_DST_REG + ev_quickstop, 1, &reg_mode);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// Ensure quickstop braking torque is configured
+	uint16_t stop_torque = (uint16_t)(this->config.torque_limit * 1000 * 0.8);
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_TORQUE_STOP, 1, &stop_torque);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// --- Write initial counter value before arming events ---
+	uint16_t initial = BILBO_DRIVE_WATCHDOG_INITIAL;
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_APPLDATA0, 1, &initial);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	// --- Arm events (write EventControl last) ---
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_CONTROL + ev_countdown, 1, &ctrl_countdown);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	status = this->writeRegisters(SIMPLEXMOTION_RS485_REG_EVENT_CONTROL + ev_quickstop, 1, &ctrl_quickstop);
+	if (status != HAL_OK) return HAL_ERROR;
+
+	return HAL_OK;
+}
+
+/* ================================================================================= */
+HAL_StatusTypeDef SimplexMotion_RS485::feedWatchdog() {
+	uint16_t reload = BILBO_DRIVE_WATCHDOG_RELOAD;
+	return this->writeRegisters(SIMPLEXMOTION_RS485_REG_APPLDATA0, 1, &reload);
+}
+
+/* ================================================================================= */
+HAL_StatusTypeDef SimplexMotion_RS485::readMotorMode(simplexmotion_mode_t &mode) {
+	simplexmotion_rs485_mode_t rs485_mode;
+	HAL_StatusTypeDef status = this->readMode(rs485_mode);
+	if (status != HAL_OK) {
+		mode = SM_MODE_UNKNOWN;
+		return HAL_ERROR;
+	}
+	mode = (simplexmotion_mode_t)rs485_mode;
 	return HAL_OK;
 }
 

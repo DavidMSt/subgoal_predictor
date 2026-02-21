@@ -8,7 +8,7 @@
 #include "bilbo_supervisor.h"
 
 const osThreadAttr_t safety_task_attributes = { .name = "safety", .stack_size =
-		256 * 4, .priority = (osPriority_t) osPriorityNormal, };
+		1024 * 4, .priority = (osPriority_t) osPriorityNormal, };
 
 elapsedMillis timerDriveTick;
 
@@ -131,7 +131,11 @@ void BILBO_Supervisor::checkMotors() {
 void BILBO_Supervisor::checkMotorSpeed() {
 
 
-	if (this->config.control->mode == bilbo_control_mode_t::OFF) {
+//	if (this->config.control->mode == bilbo_control_mode_t::OFF) {
+//		return;
+//	}
+
+	if (this->config.drive->status == BILBO_DRIVE_STATUS_ERROR) {
 		return;
 	}
 
@@ -139,12 +143,15 @@ void BILBO_Supervisor::checkMotorSpeed() {
 	if (std::fabs(speed.left) > this->config.max_wheel_speed
 			|| std::fabs(speed.right) > this->config.max_wheel_speed) {
 
-		// Stop the controller
+		send_warning("Max wheel speed detected. Emergency Stop.");
+		// Stop the controller and disable the motors
+		this->config.drive->emergencyStop();
+		osDelay(2);
 		this->config.control->stop();
 
 		// Set a warning in the Error Handler
 		setError(BILBO_ERROR_WARNING, BILBO_WARNING_WHEEL_SPEED);
-		send_warning("Max wheel speed detected");
+
 	}
 }
 

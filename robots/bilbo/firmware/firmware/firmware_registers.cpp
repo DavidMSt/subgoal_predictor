@@ -58,6 +58,10 @@ core_utils_RegisterEntry<bool, void> reg_f_reset(
 		&register_map, REG_ADDRESS_F_FIRMWARE_RESET,
 		&bilbo_firmware, &BILBO_Firmware::reset);
 
+core_utils_RegisterEntry<bool, void> reg_drive_reset(
+		&register_map, REG_ADDRESS_F_DRIVE_RESET,
+		&bilbo_firmware.drive, &BILBO_Drive::resetDrive);
+
 /* ================================================================
  * CONTROL — CORE  (0x20 – 0x2F)
  * ================================================================ */

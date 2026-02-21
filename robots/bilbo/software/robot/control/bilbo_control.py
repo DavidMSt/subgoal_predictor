@@ -10,7 +10,6 @@ from core.communication.wifi.data_link import CommandArgument
 from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.events import event_definition, EventFlag, Event, pred_flag_equals, TIMEOUT
-from core.utils.exit import exit_program
 from core.utils.logging_utils import Logger
 from core.utils.time import setTimeout
 from robot.bilbo_common import BILBO_Common
@@ -131,22 +130,22 @@ class BILBO_Control:
         self._mode_mismatch_count = 0
 
     # === METHODS ======================================================================================================
-    def init(self):
+    def init(self) -> bool:
         config = self.load_config("default")
         if config is None:
             self.logger.error("Failed to load default control config. Control will not work!")
-            exit_program(1)
-            return
+            return False
         result = self.set_config(config)
         if not result:
             self.logger.error("Failed to set default control config. Control will not work!")
-            return
+            return False
         # Reset position control to clear any stale firmware state from a previous run
         self.position_control.reset()
         self.controller_status.vic_enabled = False
         self.controller_status.tic_enabled = False
         self.controller_status.psi_enabled = False
         self.logger.info("Control initialized successfully")
+        return True
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
@@ -192,6 +191,7 @@ class BILBO_Control:
     # ------------------------------------------------------------------------------------------------------------------
     def disable_external_input(self):
         self.external_input_enabled = False
+
     # ------------------------------------------------------------------------------------------------------------------
     def set_mode(self, mode: BILBO_Control_Mode | int, *, wait_for_change: bool = True) -> bool:
         if isinstance(mode, int):
@@ -268,9 +268,6 @@ class BILBO_Control:
             self.status = BILBO_Control_Status.ERROR
             return False
 
-        self.common.board.setRGBLEDExtern(
-            CONTROL_MODE_COLORS[mode]
-        )
         # Reset the external inputs
         self.inputs.reset()
 
@@ -286,6 +283,9 @@ class BILBO_Control:
                 self.mode = previous_mode
                 return False
 
+        self.common.board.setRGBLEDExtern(
+            CONTROL_MODE_COLORS[mode]
+        )
         self.callbacks.mode_change.call(mode, forced_change=False)
         self.events.mode_change.set(mode)
         self.common.events.control_mode_change.set(mode)
@@ -691,7 +691,8 @@ class BILBO_Control:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _set_general_config_from_wifi(self, max_wheel_torque: float, max_wheel_speed: float):
-        self.logger.info(f"Setting general config: max_torque={max_wheel_torque:.3f} Nm, max_speed={max_wheel_speed:.3f} rad/s")
+        self.logger.info(
+            f"Setting general config: max_torque={max_wheel_torque:.3f} Nm, max_speed={max_wheel_speed:.3f} rad/s")
         self._config.general.max_wheel_torque = max_wheel_torque
         self._config.general.max_wheel_speed = max_wheel_speed
         self._set_lowlevel_max_torque(max_wheel_torque)
@@ -725,7 +726,8 @@ class BILBO_Control:
     def _lowlevel_mode_change_event(self, mode_ll: BILBO_Control_Mode, *args, **kwargs):
         self.logger.debug(f"LL Mode changed to {mode_ll}")
         if mode_ll != self.mode:
-            self.logger.info(f"LL Mode changed to {mode_ll.name}, local mode is {self.mode.name}. Syncing to firmware mode.")
+            self.logger.info(
+                f"LL Mode changed to {mode_ll.name}, local mode is {self.mode.name}. Syncing to firmware mode.")
             self.set_mode(mode_ll, wait_for_change=False)
 
         self.events.lowlevel_mode_change.set(mode_ll, flags={'mode': mode_ll})
@@ -779,7 +781,8 @@ class BILBO_Control:
 
         if psi_enabled:
             current_psi = self.estimation.state.psi
-            self.logger.info(f"PSI control enabled. Tracking psi = {current_psi:.4f} rad ({np.degrees(current_psi):.2f} deg)")
+            self.logger.info(
+                f"PSI control enabled. Tracking psi = {current_psi:.4f} rad ({np.degrees(current_psi):.2f} deg)")
         else:
             self.logger.info("PSI control disabled")
 
@@ -996,7 +999,8 @@ class BILBO_Control:
             output_type=ctypes.c_bool,
             data=psi_config
         )
-        self.logger.info(f"Setting PSI config: Kp: {psi_config.kp:.3f}, Ki: {psi_config.ki:.3f}, enabled: {psi_config.enabled}")
+        self.logger.info(
+            f"Setting PSI config: Kp: {psi_config.kp:.3f}, Ki: {psi_config.ki:.3f}, enabled: {psi_config.enabled}")
         if result is None or not result:
             self.logger.error("Failed to set PSI config")
             return False

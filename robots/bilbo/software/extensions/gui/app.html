@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0 maximum-scale=1.0, user-scalable=no"/>
+    <title>BILBOLab App</title>
+    <link rel="icon" href="./src/lib/assets/bilbo_icon.png" type="image/x-icon"/>
+    <link rel="stylesheet" href="./src/lib/styles/app_styles.css"/>
+    <link rel="stylesheet" href="./src/lib/styles/objects.css"/>
+    <link rel="stylesheet" href="./src/lib/styles/widget-styles.css"/>
+<!--    <link rel="stylesheet" href="./src/lib/terminal/terminal.css"/>-->
+    <link rel="stylesheet" href="./src/lib/map/map.css"/>
+</head>
+<body>
+<!-- just the one container -->
+<div id="app"></div>
+
+<script type="module">
+    import {App} from './src/app.js';
+
+    window.addEventListener('DOMContentLoaded', () => {
+        // pass ONLY the single root div id + any config flags:
+        const controlApp = new App(window.document.getElementById('app'), {});
+    });
+</script>
+<!--<script type="module" src="/main.js"></script>-->
+
+</body>
+</html>
