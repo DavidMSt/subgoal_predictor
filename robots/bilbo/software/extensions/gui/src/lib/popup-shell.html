@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <title>Loading…</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <link rel="icon" href="assets/bilbo_icon.png" type="image/x-icon"/>
+    <link rel="stylesheet" href="./styles/popup.css">
+    <link rel="stylesheet" href="./styles/objects.css">
+    <link rel="stylesheet" href="./styles/styles.css">
+    <link rel="stylesheet" href="./styles/widget-styles.css">
+    <link rel="stylesheet" href="./cli_terminal/cli_terminal.css">
+    <link rel="stylesheet" href="./plot/lineplot/lineplot.css">
+    <script>
+        (function () {
+            const p = new URLSearchParams(location.search);
+            const t = p.get('t') && p.get('t').trim() ? p.get('t').trim() : 'Popup';
+            document.title = t;
+            window.opener && window.opener.postMessage({type: 'popup-shell-ready'}, '*');
+        })();
+    </script>
+    <style>html, body, #popup-root {
+        height: 100%
+    }
+
+    html, body {
+        margin: 0
+    }</style>
+</head>
+<body>
+<div id="popup-root" style="height:100%; display:flex; flex-direction:column;"></div>
+</body>
+</html>

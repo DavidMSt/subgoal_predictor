@@ -1,0 +1,15 @@
+stm32:
+  reset: false
+
+tracker:
+  enabled: true
+  server: palantir.lan
+
+joystick:
+  enabled: true
+
+paths:
+  main: '~/robot'
+
+misc:
+  warn_on_sample_batching: true

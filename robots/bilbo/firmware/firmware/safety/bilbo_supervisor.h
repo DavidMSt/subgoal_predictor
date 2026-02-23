@@ -1,47 +1,47 @@
 /*
- * twipr_safety.h
+ * bilbo_safety.h
  *
  *  Created on: Feb 22, 2023
  *      Author: lehmann_workstation
  */
 
-#ifndef SAFETY_TWIPR_SAFETY_H_
-#define SAFETY_TWIPR_SAFETY_H_
+#ifndef SAFETY_BILBO_SAFETY_H_
+#define SAFETY_BILBO_SAFETY_H_
 
 #include "core.h"
 #include "firmware_core.h"
-#include "twipr_control.h"
-#include "twipr_communication.h"
+#include "bilbo_control.h"
+#include "bilbo_communication.h"
 #include "bilbo_drive.h"
 
-typedef struct twipr_supervisor_stuck_config_t {
+typedef struct bilbo_supervisor_stuck_config_t {
 	float max_velocity_error = 0.1;
 	float max_pitch_angle_deviation = 0.05;
 	int stuck_duration = 50;
-} twipr_supervisor_stuck_config_t;
+} bilbo_supervisor_stuck_config_t;
 
-typedef struct twipr_supervisor_stuck_data_t {
+typedef struct bilbo_supervisor_stuck_data_t {
 	bool is_stuck = false;
 	float last_velocity_error = 0;
 	float last_pitch_angle = 0;
 	float error_count = 0;
-} twipr_supervisor_stuck_data_t;
+} bilbo_supervisor_stuck_data_t;
 
-typedef struct twipr_supervisor_controller_config_t {
+typedef struct bilbo_supervisor_controller_config_t {
 	float max_forward_pid_integrator = 0.2;
 	float max_turn_pid_integrator = 0.2;
-} twipr_supervisor_controller_config_t;
+} bilbo_supervisor_controller_config_t;
 
-typedef struct twipr_supervisor_config_t {
-	TWIPR_Estimation *estimation;
+typedef struct bilbo_supervisor_config_t {
+	BILBO_Estimation *estimation;
 	BILBO_Drive *drive;
-	TWIPR_ControlManager *control;
-	TWIPR_CommunicationManager *communication;
+	BILBO_Control *control;
+	BILBO_CommunicationManager *communication;
 	core_hardware_Button *off_button;
 	float max_wheel_speed;
-	twipr_supervisor_stuck_config_t stuck_config;
-	twipr_supervisor_controller_config_t controller_config;
-} twipr_supervisor_config_t;
+	bilbo_supervisor_stuck_config_t stuck_config;
+	bilbo_supervisor_controller_config_t controller_config;
+} bilbo_supervisor_config_t;
 
 
 typedef enum bilbo_supervisor_dings_t {
@@ -53,18 +53,18 @@ typedef enum bilbo_supervisor_dings_t {
 
 
 
-class TWIPR_Supervisor {
+class BILBO_Supervisor {
 public:
-	TWIPR_Supervisor();
+	BILBO_Supervisor();
 
-	void init(twipr_supervisor_config_t config);
+	void init(bilbo_supervisor_config_t config);
 	void start();
 
 //	bilbo_error_type_t getState();
 	void task();
 
 
-	twipr_supervisor_config_t config;
+	bilbo_supervisor_config_t config;
 
 private:
 
@@ -74,7 +74,7 @@ private:
 
 
 //	bilbo_error_t checkStuck();
-//	twipr_supervisor_stuck_data_t stuck_data;
+//	bilbo_supervisor_stuck_data_t stuck_data;
 
 //	bilbo_supervisor_dings_t checkControllers();
 
@@ -92,4 +92,4 @@ private:
 
 void startTwiprSupervisorTask(void *args);
 
-#endif /* SAFETY_TWIPR_SAFETY_H_ */
+#endif /* SAFETY_BILBO_SAFETY_H_ */

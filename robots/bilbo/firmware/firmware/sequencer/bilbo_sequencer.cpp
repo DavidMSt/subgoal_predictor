@@ -6,33 +6,33 @@
  */
 
 /*
- * twipr_sequencer.cpp
+ * bilbo_sequencer.cpp
  *
  *  Created on: Nov 20, 2024
  *      Author: Dustin Lehmann
  */
 
 #include "bilbo_sequencer.h"
-#include "twipr_communication.h"
+#include "bilbo_communication.h"
 #include "robot-control_std.h"
 
-_RAM_D2 twipr_sequence_input_t rx_sequence_buffer[TWIPR_SEQUENCE_BUFFER_SIZE ];
-_RAM_D2 twipr_sequence_input_t sequence_buffer[TWIPR_SEQUENCE_BUFFER_SIZE ];
+_RAM_D2 bilbo_sequence_input_t rx_sequence_buffer[BILBO_SEQUENCE_BUFFER_SIZE ];
+_RAM_D2 bilbo_sequence_input_t sequence_buffer[BILBO_SEQUENCE_BUFFER_SIZE ];
 
 // Global pointer used by C-style DMA callback.
 BILBO_Sequencer *sequencer = nullptr;
 
 /* =============================================================== */
 BILBO_Sequencer::BILBO_Sequencer() :
-		mode(TWIPR_SEQUENCER_MODE_IDLE), sequence_tick(0), config { }, loaded_sequence { }, _start_requested(
+		mode(BILBO_SEQUENCER_MODE_IDLE), sequence_tick(0), config { }, loaded_sequence { }, _start_requested(
 				false), _start_requested_id(0), _start_request_tick(0) {
 }
 
 /* =============================================================== */
-void BILBO_Sequencer::init(twipr_sequencer_config_t cfg) {
+void BILBO_Sequencer::init(bilbo_sequencer_config_t cfg) {
 	this->config = cfg;
 	this->sequence_tick = 0;
-	this->mode = TWIPR_SEQUENCER_MODE_IDLE;
+	this->mode = BILBO_SEQUENCER_MODE_IDLE;
 
 	sequencer = this;
 
@@ -47,7 +47,7 @@ void BILBO_Sequencer::init(twipr_sequencer_config_t cfg) {
 
 	// Register DMA completion callback for trajectory transfer
 	HAL_DMA_RegisterCallback(
-	TWIPR_FIRMWARE_TRAJECTORY_DMA_STREAM, HAL_DMA_XFER_CPLT_CB_ID,
+	BILBO_FIRMWARE_TRAJECTORY_DMA_STREAM, HAL_DMA_XFER_CPLT_CB_ID,
 			trajectory_dma_transfer_cmplt_callback);
 }
 
@@ -62,7 +62,7 @@ void BILBO_Sequencer::update() {
 	// ---------------------------------------------------------------------
 	// 1) Handle delayed start on a 10 Hz grid (tick_global divisible by 10)
 	// ---------------------------------------------------------------------
-	if (this->mode == TWIPR_SEQUENCER_MODE_IDLE && this->_start_requested) {
+	if (this->mode == BILBO_SEQUENCER_MODE_IDLE && this->_start_requested) {
 		if ((tick_global % START_ALIGNMENT_TICKS) == 0U) {
 			// Try to actually start. If it fails, internal function clears the flag.
 			this->_startSequenceInternal();
@@ -72,7 +72,7 @@ void BILBO_Sequencer::update() {
 	// ---------------------------------------------------------------------
 	// 2) If not running after the potential start, nothing to do.
 	// ---------------------------------------------------------------------
-	if (this->mode != TWIPR_SEQUENCER_MODE_RUNNING) {
+	if (this->mode != BILBO_SEQUENCER_MODE_RUNNING) {
 		return;
 	}
 
@@ -90,8 +90,8 @@ void BILBO_Sequencer::update() {
 		sendMessage(msg);
 
 		// Disable Theta Integral Control and Velocity Integral Control during the sequence
-		this->config.control->enableTIC(false);
-		this->config.control->enableVIC(false);
+		this->config.control->set_tic_enabled(false);
+		this->config.control->set_vic_enabled(false);
 	}
 
 	// Check if we have reached the end of the sequence
@@ -99,20 +99,23 @@ void BILBO_Sequencer::update() {
 		this->finishSequence();
 
 		// Re-Enable VIC. TIC has to be manually enabled from the host
-		this->config.control->enableVIC(true);
+		this->config.control->set_vic_enabled(true);
 
 		return;
 	}
 
 	// Get the input from the sequence
-	twipr_sequence_input_t current_input = sequence_buffer[this->sequence_tick];
+	bilbo_sequence_input_t current_input = sequence_buffer[this->sequence_tick];
 
-	// Apply the input to the controller depending on control mode
-	if (this->loaded_sequence.control_mode == TWIPR_CONTROL_MODE_BALANCING) {
-		twipr_balancing_control_input_t balancing_input = { .u_1 =
-				current_input.u_1, .u_2 = current_input.u_2 };
-		this->config.control->_setBalancingInput(balancing_input);
+	// Apply the input to the controller depending on control mode.
+	// Write _external_input directly (friend access) because the sequencer
+	// disables the external-input gate to block joystick/UI during playback,
+	// so the gated set_external_input() would silently drop these values.
+	if (this->loaded_sequence.control_mode == bilbo_control_mode_t::BALANCING) {
+		this->config.control->_external_input = { .u_left =
+				current_input.u_1, .u_right = current_input.u_2 };
 	}
+
 
 	this->sequence_tick++;
 }
@@ -125,7 +128,7 @@ bool BILBO_Sequencer::startSequence(uint16_t id) {
 	this->sequence_tick = 0;
 
 	// Do not allow new starts while running
-	if (this->mode == TWIPR_SEQUENCER_MODE_RUNNING) {
+	if (this->mode == BILBO_SEQUENCER_MODE_RUNNING) {
 		send_error(
 				"Sequence %d is currently running. Cannot start a new sequence",
 				this->loaded_sequence.sequence_id);
@@ -180,6 +183,7 @@ bool BILBO_Sequencer::_startSequenceInternal() {
 		send_error("Cannot start sequence %d. Sequence data not loaded",
 				this->_start_requested_id);
 		this->_start_requested = false;
+		this->_sendStartFailedAbort();
 		return false;
 	}
 
@@ -188,6 +192,7 @@ bool BILBO_Sequencer::_startSequenceInternal() {
 		send_error("Cannot start sequence %d. Other sequence loaded: %d",
 				this->_start_requested_id, this->loaded_sequence.sequence_id);
 		this->_start_requested = false;
+		this->_sendStartFailedAbort();
 		return false;
 	}
 
@@ -198,14 +203,15 @@ bool BILBO_Sequencer::_startSequenceInternal() {
 				this->loaded_sequence.sequence_id, this->config.control->mode,
 				this->loaded_sequence.control_mode);
 		this->_start_requested = false;
+		this->_sendStartFailedAbort();
 		return false;
 	}
 
 	this->sequence_tick = 0;
-	this->mode = TWIPR_SEQUENCER_MODE_RUNNING;
+	this->mode = BILBO_SEQUENCER_MODE_RUNNING;
 
 	// Disable External Inputs to the controller
-	this->config.control->disableExternalInput();
+	this->config.control->disable_external_input();
 
 	send_info("Start Sequence %d with length %d (aligned start at tick %lu)",
 			this->loaded_sequence.sequence_id, this->loaded_sequence.length,
@@ -228,12 +234,12 @@ void BILBO_Sequencer::abortSequence() {
 	// TODO: reflect in the sample if the sequence was finished or aborted
 
 	// Enable external inputs to the controller
-	this->config.control->enableExternalInput();
+	this->config.control->enable_external_input();
 
-	this->config.control->_resetExternalInput();
+	this->config.control->reset_external_input();
 
 	// Set the mode
-	this->mode = TWIPR_SEQUENCER_MODE_ERROR;
+	this->mode = BILBO_SEQUENCER_MODE_ERROR;
 
 	send_warning("Sequence %d has been aborted",
 			this->loaded_sequence.sequence_id);
@@ -250,6 +256,9 @@ void BILBO_Sequencer::abortSequence() {
 				(uint16_t) this->loaded_sequence.sequence_id);
 	}
 
+	// Re-enable VIC (TIC has to be manually re-enabled from the host)
+	this->config.control->set_vic_enabled(true);
+
 	// Clear any pending start requests
 	this->_start_requested = false;
 	this->_start_requested_id = 0;
@@ -261,7 +270,7 @@ void BILBO_Sequencer::abortSequence() {
 void BILBO_Sequencer::finishSequence() {
 
 	// Set the sequencer mode mode
-	this->mode = TWIPR_SEQUENCER_MODE_IDLE;
+	this->mode = BILBO_SEQUENCER_MODE_IDLE;
 
 	send_info("Sequence %d finished", this->loaded_sequence.sequence_id);
 
@@ -279,25 +288,25 @@ void BILBO_Sequencer::finishSequence() {
 	}
 
 	// Set the control mode to the desired mode
-	this->config.control->setMode(this->loaded_sequence.control_mode_end);
+	this->config.control->set_mode(this->loaded_sequence.control_mode_end);
 
 	this->resetSequenceData();
 
 	// Enable external inputs to the controller
-	this->config.control->enableExternalInput();
+	this->config.control->enable_external_input();
 
 	// Set the controller inputs to zero
-	this->config.control->_resetExternalInput();
+	this->config.control->reset_external_input();
 }
 
 /* =============================================================== */
 bool BILBO_Sequencer::loadSequence(
-		twipr_sequencer_sequence_data_t sequence_data) {
+		bilbo_sequencer_sequence_data_t sequence_data) {
 
 	send_debug("Load sequence %d with length %d", sequence_data.sequence_id,
 			sequence_data.length);
 
-	if (this->mode == TWIPR_SEQUENCER_MODE_RUNNING) {
+	if (this->mode == BILBO_SEQUENCER_MODE_RUNNING) {
 		send_error("Sequence %d currently running. Cannot load new sequence",
 				this->loaded_sequence.sequence_id);
 		return false;
@@ -309,15 +318,15 @@ bool BILBO_Sequencer::loadSequence(
 		return false;
 	}
 
-	if (sequence_data.length > TWIPR_SEQUENCE_BUFFER_SIZE) {
+	if (sequence_data.length > BILBO_SEQUENCE_BUFFER_SIZE) {
 		send_error("Sequence %d too long: %d samples (%d max)",
 				sequence_data.sequence_id, sequence_data.length,
-				TWIPR_SEQUENCE_BUFFER_SIZE);
+				BILBO_SEQUENCE_BUFFER_SIZE);
 		return false;
 	}
 
 	// Check the required control mode. For now, we only accept balancing. TODO
-	if (sequence_data.control_mode != TWIPR_CONTROL_MODE_BALANCING) {
+	if (sequence_data.control_mode != bilbo_control_mode_t::BALANCING) {
 		send_error("Sequence with control mode %d is not yet supported",
 				sequence_data.control_mode);
 		return false;
@@ -325,7 +334,7 @@ bool BILBO_Sequencer::loadSequence(
 
 	this->loaded_sequence = sequence_data;
 	this->loaded_sequence.loaded = false;
-	this->mode = TWIPR_SEQUENCER_MODE_IDLE;
+	this->mode = BILBO_SEQUENCER_MODE_IDLE;
 
 	// Clear any pending start requests to avoid stale requests
 	this->_start_requested = false;
@@ -335,8 +344,18 @@ bool BILBO_Sequencer::loadSequence(
 }
 
 /* =============================================================== */
-twipr_sequencer_sequence_data_t BILBO_Sequencer::readSequence() {
+bilbo_sequencer_sequence_data_t BILBO_Sequencer::readSequence() {
 	return this->loaded_sequence;
+}
+
+/* =============================================================== */
+void BILBO_Sequencer::_sendStartFailedAbort() {
+	sequencer_event_message_data_t event_message_data = { .event =
+			TRAJECTORY_ABORTED,
+			.sequence_id = this->loaded_sequence.sequence_id, .sequence_tick =
+					0, .tick = tick_global };
+	BILBO_Message_Sequencer_Event msg(event_message_data);
+	sendMessage(msg);
 }
 
 /* =============================================================== */
@@ -347,8 +366,8 @@ void BILBO_Sequencer::resetSequenceData() {
 		.require_control_mode = true,
 		.wait_time_beginning = 0,
 		.wait_time_end = 0,
-		.control_mode = TWIPR_CONTROL_MODE_OFF,
-		.control_mode_end = TWIPR_CONTROL_MODE_OFF,
+		.control_mode = bilbo_control_mode_t::OFF,
+		.control_mode_end = bilbo_control_mode_t::OFF,
 		.loaded = true   // no sequence pending / invalid
 	};
 
@@ -356,12 +375,12 @@ void BILBO_Sequencer::resetSequenceData() {
 }
 
 /* =============================================================== */
-twipr_sequencer_sample_t BILBO_Sequencer::getSample() {
+bilbo_sequencer_sample_t BILBO_Sequencer::getSample() {
 	// Value-initialize to get deterministic defaults
-	twipr_sequencer_sample_t sample { };
+	bilbo_sequencer_sample_t sample { };
 	sample.mode = this->mode;
 
-	if (this->mode == TWIPR_SEQUENCER_MODE_RUNNING) {
+	if (this->mode == BILBO_SEQUENCER_MODE_RUNNING) {
 		sample.sequence_id = this->loaded_sequence.sequence_id;
 		sample.sequence_tick = this->sequence_tick;
 	} else {
@@ -386,13 +405,13 @@ void BILBO_Sequencer::spiSequenceReceived_callback(uint16_t trajectory_length) {
 		return;
 	}
 
-	// NOTE: We still transfer TWIPR_SEQUENCE_BUFFER_SIZE elements here.
+	// NOTE: We still transfer BILBO_SEQUENCE_BUFFER_SIZE elements here.
 	// If you want to strictly use trajectory_length, you may want to
 	// clamp it here to avoid copying unused data.
 	HAL_DMA_Start_IT(
-	TWIPR_FIRMWARE_TRAJECTORY_DMA_STREAM, (uint32_t) &rx_sequence_buffer,
+	BILBO_FIRMWARE_TRAJECTORY_DMA_STREAM, (uint32_t) &rx_sequence_buffer,
 			(uint32_t) &sequence_buffer,
-			sizeof(twipr_sequence_input_t) * TWIPR_SEQUENCE_BUFFER_SIZE);
+			sizeof(bilbo_sequence_input_t) * BILBO_SEQUENCE_BUFFER_SIZE);
 }
 
 /* =============================================================== */
@@ -408,9 +427,9 @@ void BILBO_Sequencer::sequenceReceivedAndTransferred_callback() {
 }
 
 /* =============================================================== */
-void BILBO_Sequencer::modeChange_callback(twipr_control_mode_t /*mode*/) {
+void BILBO_Sequencer::modeChange_callback(bilbo_control_mode_t /*mode*/) {
 	// If there is an active sequence, abort it on mode change.
-	if (this->mode != TWIPR_SEQUENCER_MODE_RUNNING) {
+	if (this->mode != BILBO_SEQUENCER_MODE_RUNNING) {
 		return;
 	}
 

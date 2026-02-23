@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Terminal Demo</title>
+  <!-- Your terminal styles -->
+  <link rel="stylesheet" href="./terminal.css" />
+  <style>
+    /* fill viewport and center the wrapper */
+    html, body {
+      height: 100%;
+      margin: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      background: #1e1e1e;
+    }
+    /* fixed-size centered box */
+    #terminal-wrapper {
+      width: 800px;
+      height: 200px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.5);
+      background: #000;
+      border-radius: 8px;
+      overflow: auto;
+      display: flex;
+    }
+    /* the actual terminal will fill the wrapper */
+    #terminal-container {
+      flex: 1;
+      display: grid;
+    }
+  </style>
+</head>
+<body>
+  <div id="terminal-wrapper">
+    <div id="terminal-container"></div>
+  </div>
+
+  <!-- Your terminal implementation -->
+  <script type="module" src="cli_terminal.js"></script>
+  <script type="module">
+    import { CLI_Terminal } from './cli_terminal.js';
+
+    // Wait for DOM ready
+    document.addEventListener('DOMContentLoaded', () => {
+      const container = document.getElementById('terminal-container');
+      // instantiate your terminal; id can be anything unique
+      const term = new CLI_Terminal('term1', container, {
+        mode: 'widget',
+        show_hint_window: true
+      });
+    });
+  </script>
+</body>
+</html>

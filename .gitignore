@@ -1,5 +1,6 @@
 __pycache__
 .DS_Store
+*SFConflict*
 .idea
 workspace.xml
 *.launch
@@ -8,6 +9,9 @@ node_modules/
 package-lock.json
 Debug/
 *.mp3
-testbed/software/RobotManager/utils/sound/tts_files/index.json
+*.mp4
+testbed/software/RobotManager/
 *.parcel-cache/
-CLAUDE.MD
+CLAUDE.md
+.claude/
+software/research/

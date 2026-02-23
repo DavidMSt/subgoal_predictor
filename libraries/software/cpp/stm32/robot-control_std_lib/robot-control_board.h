@@ -8,10 +8,7 @@
 #ifndef ROBOT_CONTROL_BOARD_H_
 #define ROBOT_CONTROL_BOARD_H_
 
-//#define BOARD_REV_3
-#define BOARD_REV_4
-
-
+#include "firmware_settings.h"
 
 #ifdef BOARD_REV_3
 	#define _RAM_D2 __attribute__(( section(".ramd2block") ))
@@ -62,6 +59,14 @@
 
 	#define CM4_SAMPLE_NOTIFICATION_PORT GPIOE
 	#define CM4_SAMPLE_NOTIFICATION_PIN GPIO_PIN_9
+
+	// Motor shutdown safety lines: STM32 drives HIGH during normal operation.
+	// On error, pulled LOW to trigger quickstop on SimplexMotion motors via IN1.
+	// TODO: Set actual port/pin after configuring in CubeMX (push-pull output, pullup, default HIGH)
+	#define MOTOR_SHUTDOWN_LINE_LEFT_PORT GPIOD
+	#define MOTOR_SHUTDOWN_LINE_LEFT_PIN GPIO_PIN_0
+	#define MOTOR_SHUTDOWN_LINE_RIGHT_PORT GPIOD
+	#define MOTOR_SHUTDOWN_LINE_RIGHT_PIN GPIO_PIN_1
 #endif
 
 

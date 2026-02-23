@@ -9,12 +9,12 @@
 #define FIRMWARE_HPP_
 
 #include "firmware_core.h"
-#include "twipr_communication.h"
-#include "twipr_control.h"
+#include "bilbo_communication.h"
+#include "bilbo_control.h"
 #include "robot-control_std.h"
-#include "twipr_estimation.h"
+#include "bilbo_estimation.h"
 
-#include "twipr_logging.h"
+#include "bilbo_logging.h"
 #include "bilbo_supervisor.h"
 #include "bilbo_sequencer.h"
 #include "io.h"
@@ -23,12 +23,13 @@
 #include "simplexmotion_can.h"
 #include "simplexmotion_rs485.h"
 
-#include "twipr_errors.h"
+#include "bilbo_errors.h"
 
-class TWIPR_Firmware {
+class BILBO_Firmware {
 
 public:
-	TWIPR_Firmware();
+	BILBO_Firmware(){
+	};
 	HAL_StatusTypeDef init();
 	HAL_StatusTypeDef start();
 
@@ -40,26 +41,26 @@ public:
 	void task();
 
 
-	twipr_logging_general_t getSample();
+	bilbo_logging_general_t getSample();
 
 	void errorHandler(bilbo_error_type_t error);
 
-	twipr_debug_sample_t getDebugSample();
+	bilbo_debug_sample_t getDebugSample();
 
-	twipr_firmware_state_t firmware_state = TWIPR_FIRMWARE_STATE_NONE;
+	bilbo_firmware_state_t firmware_state = BILBO_FIRMWARE_STATE_NONE;
 
-	twipr_firmware_revision_t revision = { .major =
-			TWIPR_FIRMWARE_REVISION_MAJOR, .minor =
-			TWIPR_FIRMWARE_REVISION_MINOR };
+	bilbo_firmware_revision_t revision = { .major =
+			BILBO_FIRMWARE_REVISION_MAJOR, .minor =
+			BILBO_FIRMWARE_REVISION_MINOR };
 	uint32_t tick = 0;
 
-	TWIPR_CommunicationManager comm;
-	TWIPR_ControlManager control;
+	BILBO_CommunicationManager comm;
+	BILBO_Control control;
 	BILBO_Sequencer sequencer;
-	TWIPR_Estimation estimation;
-	TWIPR_Supervisor supervisor;
-	TWIPR_Sensors sensors;
-	TWIPR_Logging logging;
+	BILBO_Estimation estimation;
+	BILBO_Supervisor supervisor;
+	BILBO_Sensors sensors;
+	BILBO_Logging logging;
 	BILBO_Drive drive;
 	BILBO_ErrorHandler error_handler;
 
@@ -73,15 +74,16 @@ public:
 	SimplexMotion_RS485 motor_right;
 #endif
 
-	twipr_debug_sample_t debugData;
+	bilbo_debug_sample_t debugData;
 
 private:
 
-	twipr_logging_buffer_status_t sample_buffer_state = TWIPR_LOGGING_BUFFER_NOT_FULL;
+	bilbo_logging_buffer_status_t sample_buffer_state = BILBO_LOGGING_BUFFER_NOT_FULL;
 
 	elapsedMillis timer_control_mode_led;
 
 	void setControlModeLed();
+	void updateExternalLedStrip(bilbo_control_mode_t mode);
 };
 
 void start_firmware_task(void *argument);

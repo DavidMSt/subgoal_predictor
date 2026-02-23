@@ -1,39 +1,104 @@
 /*
- * firmware_setting.h
+ * firmware_settings.h
  *
- *  Created on: 3 Mar 2023
- *      Author: lehmann_workstation
+ * Central configuration for BILBO firmware.
+ * Edit this file to build for different robot variants.
+ *
+ * Created on: 3 Mar 2023
+ * Author: Dustin Lehmann
  */
 
 #ifndef FIRMWARE_SETTINGS_H_
 #define FIRMWARE_SETTINGS_H_
 
-/* USER SETTINGS */
+/* ================================================================
+ * ROBOT VARIANT — uncomment ONE option per group
+ * ================================================================ */
+
+// Board hardware revision
+//#define BOARD_REV_3
+#define BOARD_REV_4
+
+// Robot model (sets wheel diameter and wheel distance in bilbo_model.h)
+#define BILBO_MODEL_NORMAL
+//#define BILBO_MODEL_SMALL
+//#define BILBO_MODEL_BIG
+
+/* ================================================================
+ * MOTOR INTERFACE — uncomment ONE
+ * ================================================================ */
+
+// SimplexMotion communication bus
 //#define BILBO_DRIVE_SIMPLEXMOTION_RS485
 #define BILBO_DRIVE_SIMPLEXMOTION_CAN
 
-#define BILBO_MODEL_NORMAL // Define one of these: BILBO_MODEL_NORMAL, BILBO_MODEL_SMALL, BILBO_MODEL_BIG
-//#define BILBO_MODEL_BIG
-//#define BILBO_MODEL_SMALL
+// Motor torque limit (Nm). Clamps all motor commands to this value.
+#define BILBO_MOTOR_TORQUE_LIMIT 0.5
 
-// REVISION
-#define TWIPR_FIRMWARE_REVISION_MAJOR 0x02
-#define TWIPR_FIRMWARE_REVISION_MINOR 0x02
+// Motor speed measurement filter (0 = none, 4 = default, 15 = max).
+// Higher values smooth low-speed noise but add measurement lag.
+#define SIMPLEXMOTION_SPEED_FILTER 5
 
-// FIRMWARE MODES
-#define TWIPR_FIRMWARE_USE_MOTORS 1
+// Motor encoder resolution in bits (12 = 4096, 13 = 8192, 14 = 16384 counts/rev).
+// Higher resolution improves low-speed measurement but adds position noise.
+#define SIMPLEXMOTION_ENCODER_RESOLUTION 13
 
-// Main Task Frequency
-#define TWIPR_CONTROL_TASK_FREQ 100
+// Motor-internal speed limit for torque mode (RPM). Written to the
+// RampSpeedMax register during init. The motor clamps wheel speed to
+// this value while in torque control mode. Set to 0 to disable.
+#define SIMPLEXMOTION_OVERSPEED_RPM 700
 
-// Control
-#define TWIPR_CONTROL_MAX_TORQUE 0.3
-#define TWIPR_SAFETY_MAX_WHEEL_SPEED 75
+// Hardware safety line: STM32 GPIO drives motor IN1 HIGH during operation,
+// pulls LOW on error to trigger motor quickstop independent of CAN/RS485.
+// Requires physical wiring from STM32 GPIO to IN1 on both motors.
+#define ENABLE_MOTOR_SHUTDOWN_LINE 0
 
-// Control - Trajectories
-#define TWIPR_SEQUENCE_TIME 30 // seconds
+// Motor watchdog: uses SimplexMotion Events system to trigger Quickstop
+// if the STM32 stops communicating with the motors (brownout/crash protection).
+// A counter in ApplData[0] is decremented every 64ms by a motor-internal event.
+// If the counter reaches zero, another event writes Quickstop to the Mode register.
+// The STM32 periodically reloads the counter to prevent timeout.
+// Set to 0 to disable.
+#define BILBO_DRIVE_WATCHDOG_ENABLE 1
 
-// Logging
-#define TWIPR_FIRMWARE_SAMPLE_BUFFER_TIME 0.1 // seconds
+// Watchdog counter reload value, written by STM32 each drive task cycle.
+// Timeout = reload × 64ms. Default 10 → 640ms.
+#define BILBO_DRIVE_WATCHDOG_RELOAD 10
+
+// Initial counter value written during motor init. Must be large enough
+// to survive the time between motor init and the first drive task cycle.
+// Default 100 → 6.4s.
+#define BILBO_DRIVE_WATCHDOG_INITIAL 100
+
+/* ================================================================
+ * CONTROL LOOP
+ * ================================================================ */
+
+// Main control loop frequency (Hz). Estimation runs at the same rate.
+#define BILBO_CONTROL_TASK_FREQ 100
+
+// Max wheel speed before safety shutdown (rad/s)
+#define BILBO_SAFETY_MAX_WHEEL_SPEED 75
+
+// Enable/disable motor output (0 = dry-run, useful for testing without motors)
+#define BILBO_FIRMWARE_USE_MOTORS 1
+
+/* ================================================================
+ * TRAJECTORIES & LOGGING
+ * ================================================================ */
+
+// Maximum trajectory duration (seconds). Determines pre-allocated buffer size.
+#define BILBO_SEQUENCE_TIME 30
+
+// Sample buffer aggregation time (seconds). Samples are collected for this
+// duration before being sent to the host.
+#define BILBO_FIRMWARE_SAMPLE_BUFFER_TIME 0.1
+
+/* ================================================================
+ * FIRMWARE REVISION — update when flashing new versions
+ * ================================================================ */
+
+#define BILBO_FIRMWARE_REVISION_MAJOR 0x03
+#define BILBO_FIRMWARE_REVISION_MINOR 0x00
 
 #endif /* FIRMWARE_SETTINGS_H_ */

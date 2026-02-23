@@ -1,0 +1,66 @@
+paths:
+  experiments: ./experiments/
+  reference_trajectories: ./experiments/references/
+
+testbed:
+  id: lab
+  size:
+    x: [ 0 , 3 ]
+    y: [ 0 , 3 ]
+
+
+robots:
+  autostart: false
+  autostop: false
+
+extensions:
+  display: false
+  limbobar: false
+  timecode: false
+
+simulation:
+  enabled: true
+  Ts: 0.01
+  obstacles:
+    - id: box-1
+      type: box
+      size: [ 0.1 , 2 ]
+      state: [ 2 , 1.5 , 0 ]
+    - id: box-2
+      type: box
+      size: [ 1 , 0.1 ]
+      state: [ 1.5 , 2.5 , 0 ]
+    - id: box-3
+      type: box
+      size: [ 0.1 , 0.5 ]
+      state: [ 1 , 2.25 , 0 ]
+    - id: box-4
+      type: box
+      size: [ 1 , 0.1 ]
+      state: [ 0.5 , 2 , 0 ]
+    # --- Internal vertical walls (along Y axis) ---
+  robots: null
+
+tracker:
+  enabled: true
+  server: palantir.lan
+  sample_rate: 50
+  outlier_filter:
+    enabled: true
+    window_size: 3
+
+tracked_objects:
+  origin: bilbo-origin
+#  limbo_bar: bilbo-limbo-bar
+  boxes: []
+#    - box-1
+#    - box-2
+  robots:
+    - bilbo2
+
+mdns:
+  enabled: true
+  hostname: bilbolab  # Will be accessible as bilbolab.local
+  # To access without port (bilbolab.local/gui instead of bilbolab.local:8400/gui),
+  # set use_port_80 to true. This requires running the application with sudo.
+  use_port_80: true

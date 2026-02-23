@@ -1,0 +1,768 @@
+:root {
+    --border-width: 1px;
+    --input-font-size: 10pt;
+    --send-button-size: 32px;
+}
+
+/* === TERMINAL GRID ================================================================================================ */
+.terminal {
+    display: grid;
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    overflow: auto;
+    box-sizing: border-box;
+    grid-template-columns: 1fr;
+    grid-template-rows: var(--terminal-grid-rows);
+    grid-template-areas: var(--terminal-grid-areas);
+    /*padding: 2px;*/
+    padding-bottom: 2px;
+    background-color: transparent;
+    min-height: 0;
+    /*background: red;*/
+}
+
+/* === OUTPUT ======================================================================================================= */
+.terminal-output {
+    grid-area: output;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    font-family: monospace;
+    white-space: pre-wrap;
+    color: white;
+    font-size: 10pt;
+    width: 100%;
+    max-height: 100%;
+    box-sizing: border-box;
+    border: var(--border-width) solid grey;
+    border-radius: 10px;
+    font-variant-ligatures: none;
+    line-height: normal;
+    padding-left: 2px;
+    padding-bottom: 2px;
+    padding-top: 2px;
+    margin: 0;
+    background-clip: padding-box; /* Makes scrollbar respect border radius */
+    scrollbar-width: thin; /* Slim scrollbar for Firefox */
+    scrollbar-color: rgba(255, 255, 255, 0.6) transparent; /* Thumb and track colors for Firefox */
+    min-height: 0;
+    /*background: red;*/
+}
+
+/* WebKit-based browsers (Chrome, Safari, Edge) */
+.terminal-output::-webkit-scrollbar {
+    width: 8px; /* Vertical scrollbar width */
+    height: 8px; /* Horizontal scrollbar height */
+}
+
+.terminal-output::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3); /* Thumb color */
+    border-radius: 4px; /* Rounded scrollbar thumb */
+    border: 2px solid transparent; /* Space around the thumb */
+    background-clip: content-box; /* Prevents thumb background from touching edges */
+}
+
+.terminal-output::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.5); /* Slightly brighter on hover */
+}
+
+.terminal-output::-webkit-scrollbar-track {
+    background: transparent; /* Transparent track */
+}
+
+.terminal-output .terminal-line {
+    width: 100%;
+}
+
+/* === MIDDLE AREA =================================================================================================== */
+.middle-container {
+    grid-area: hints;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-rows: 1fr;
+    grid-template-areas: "hints buttons";
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    position: relative;
+}
+
+.terminal-hints {
+    grid-area: hints;
+    display: flex; /* Make child elements align horizontally */
+    flex-wrap: wrap; /* Allow wrapping if there are too many items */
+    gap: 5px; /* Adds horizontal (and vertical) space between hints */
+    overflow: auto;
+    padding: 3px;
+    font-family: monospace;
+    font-size: 10pt;
+    width: 100%;
+    box-sizing: border-box;
+    /*border: 2px solid darkcyan;*/
+    border-radius: 10px;
+    margin-top: 1px;
+    margin-bottom: 1px;
+    color: white;
+}
+
+.terminal-hint {
+    display: flex;
+    align-items: center; /* Vertical centering */
+    justify-content: center; /* Horizontal centering */
+    padding: 2px 4px;
+    border-radius: 4px;
+    background-color: rgba(255, 255, 255, 0.2);
+    white-space: nowrap;
+    text-align: center;
+    box-sizing: border-box;
+    cursor: pointer;
+    min-width: 40px;
+}
+
+.terminal-hint-hover-box {
+    position: absolute;
+    display: block;
+    width: 200px;
+    transform: translateY(-0px);
+    opacity: 0;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    height: 120px;
+    padding: 8px;
+    background-color: rgba(60, 60, 60, 0.8);
+    color: white;
+    font-size: 8pt;
+    font-family: monospace;
+    border: 1px solid #888;
+    border-radius: 6px;
+    pointer-events: none; /* so it doesn't block mouse events */
+    z-index: 1000;
+}
+
+.terminal-hint-hover-box.visible {
+    opacity: 1;
+    transform: translateY(0);
+    visibility: visible;
+}
+
+.terminal-hint-hover-box.visible {
+    opacity: 1;
+    transform: translateY(0);
+    visibility: visible;
+}
+
+.terminal-hint:hover {
+    filter: brightness(1.2);
+    outline: 1px solid;
+}
+
+.input-hint {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px 8px;
+    /*margin: 2px;*/
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 8pt;
+    transition: filter 0.2s ease;
+    cursor: pointer;
+}
+
+.input-hint.required {
+    background-color: rgba(0, 128, 0, 0.6); /* solid greenish */
+    color: white;
+}
+
+.input-hint.optional {
+    background-color: rgba(128, 128, 128, 0.4); /* muted grey */
+    color: #eee;
+}
+
+.input-hint.flag {
+    background-color: rgba(255, 134, 17, 0.4); /* muted grey */
+    color: #eee;
+}
+
+.input-hint:hover {
+    filter: brightness(1.2);
+    outline: 1px solid;
+}
+
+/* centered “no inputs” card */
+.no-inputs {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: left;
+    border-radius: 6px;
+    padding: 8px;
+    color: orange;
+    font-style: italic;
+    font-size: 9pt;
+    width: 100%;
+    box-sizing: border-box;
+    height: 100%;
+}
+
+.input-hover-title {
+    font-weight: bold;
+    margin-bottom: 6px;
+    color: #aaffaa;
+    font-size: 9pt;
+}
+
+.input-hover-row {
+    margin-bottom: 4px;
+}
+
+.input-hover-label {
+    font-weight: bold;
+    color: #ffa;
+}
+
+/* === BUTTONS ====================================================================================================== */
+.buttons-container {
+    grid-area: buttons;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end; /* Align buttons to the right */
+    padding: 2px;
+    gap: 5px; /* Space between buttons */
+}
+
+.buttons-container .toolbar-button {
+    /*width: 30px;*/
+    height: 100%;
+    aspect-ratio: 1; /* Make it square */
+    padding: 0;
+    margin: 0;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12pt;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    border-radius: 4px;
+}
+
+/* Hover feedback */
+.buttons-container .toolbar-button:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Optional: give the cancel button a little red tint */
+.buttons-container .cancel-button {
+    color: #ff5555;
+}
+
+/* === INPUT ======================================================================================================== */
+.terminal-input-container {
+    grid-area: input;
+    display: grid;
+    grid-template-columns: max-content 1fr var(--send-button-size);
+    grid-template-rows: 1fr;
+    grid-template-areas: "path input-field send-button";
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    box-sizing: border-box;
+    position: relative;
+    gap: 4px; /* tighter gap between path and input */
+}
+
+/* Middle column: input + highlight stacked */
+.terminal-input-stack {
+    grid-area: input-field;
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-width: 0; /* allow shrink when path grows */
+}
+
+.terminal-path {
+    grid-area: path;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px; /* tighter gap between tokens */
+    min-width: 0;
+    white-space: nowrap; /* column expands as needed */
+    padding: 0 2px;
+    padding-left: 4px;
+    font-family: monospace;
+    font-size: var(--input-font-size);
+    line-height: 1.2;
+    letter-spacing: 0;
+    font-variant-ligatures: none;
+    height: 100%;
+}
+
+.terminal-input-container .terminal-input-field {
+    position: relative;
+    z-index: 2; /* above highlight */
+    outline: none;
+    width: 100%;
+    height: 100%;
+    padding: 8px; /* caret sits where first char would begin */
+    padding-top: 0;
+    padding-bottom: 0;
+    box-sizing: border-box;
+    background: transparent;
+    border: var(--border-width) solid grey;
+    border-radius: 8px;
+    color: transparent; /* hide text; caret visible */
+    caret-color: white;
+    font-family: monospace;
+    font-size: var(--input-font-size);
+    line-height: 1.2; /* match highlight to keep caret/alignment perfect */
+    letter-spacing: 0;
+    font-variant-ligatures: none;
+}
+
+.terminal-input-field:focus {
+    border-color: #00ddff;
+    box-shadow: 0 0 0 2px rgba(0, 221, 255, 0.4);
+}
+
+
+/* Right column: send button */
+.terminal-send-button {
+    grid-area: send-button;
+    width: var(--send-button-size);
+    height: 100%;
+    border: none;
+    background: transparent;
+    color: white;
+    font-size: 90%;
+    cursor: pointer;
+    transition: transform 0.1s ease, filter 0.1s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.terminal-send-button:hover {
+    filter: brightness(1.2);
+}
+
+.terminal-input-container .terminal-input-highlight {
+    position: absolute;
+    inset: 0;
+    padding: 8px; /* match input padding */
+    padding-top: 0;
+    padding-bottom: 0;
+    box-sizing: border-box;
+    font-family: monospace;
+    font-size: var(--input-font-size);
+    line-height: 1.2;
+    letter-spacing: 0;
+    font-variant-ligatures: none;
+    white-space: pre;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    color: white;
+    z-index: 1;
+    pointer-events: none;
+}
+
+
+/* placeholder still shows */
+.terminal-input-field::placeholder {
+    color: rgba(200, 200, 200, 0.6);
+}
+
+.path-token {
+    display: inline-block;
+    padding: 2px 5px; /* slightly tighter */
+    border-radius: 5px;
+    background-color: rgba(255, 165, 0, 0.8);
+    color: rgba(36, 36, 36, 0.9);
+    user-select: none;
+    cursor: pointer;
+    transition: transform .08s ease, box-shadow .12s ease, filter .12s ease;
+    min-width: 35px;
+    text-align: center;
+
+}
+
+.path-token:hover {
+    filter: brightness(1.12);
+    /*box-shadow: 0 0 0 1px rgba(255, 255, 255, .45) inset;*/
+    /*box-shadow: 0 0 0 1px rgba(255, 255, 255, .45) inset;*/
+    outline: 1px solid rgba(255, 255, 255, 0.75);
+}
+
+.path-token:active {
+    transform: translateY(1px) scale(0.98);
+}
+
+.path-separator {
+    display: inline-block;
+    width: 0.15em;
+}
+
+
+/* gray ghost text */
+/* Grey/green ghost text */
+.suggestion-text {
+    color: rgba(200, 200, 200, 0.3);
+    font-family: monospace;
+    font-size: var(--input-font-size);
+}
+
+
+/* let us measure the entire prompt as a block */
+.prompt-container {
+    display: inline-block;
+}
+
+/* (optional) remove any hard‑coded padding-left that conflicts—
+   your JS will drive it dynamically from now on */
+.terminal-input-field {
+    padding-left: 0;
+}
+
+
+.terminal-input-container.history-command::after {
+    content: '🕒';
+    grid-area: input-field; /* put it in the first column */
+    justify-self: end; /* hug the right edge of that cell */
+    align-self: center; /* vertical centering */
+    pointer-events: none;
+    margin-right: 8px; /* space from the border/text */
+    font-size: 11pt; /* match your input’s font-size */
+    max-height: 100%;
+}
+
+/* push the text over so it never runs under the clock */
+.terminal-input-container.history-command .terminal-input-field {
+    padding-right: 1.5em; /* tweak as needed */
+}
+
+
+/* === OUTPUT ADDITIONAL THINGS ===================================================================================== */
+.user-prompt-container {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.user-prompt-token {
+    display: inline-block;
+    padding: 1px 4px;
+    margin-right: 2px;
+    border-radius: 4px;
+    background: rgba(255, 165, 0, 0.8);
+    color: black;
+    font-family: monospace;
+    font-size: 9pt; /* slightly smaller than 10pt body */
+}
+
+/* tiny spacer */
+.user-prompt-separator {
+    display: inline-block;
+    width: 0.3em;
+}
+
+/* the user’s actual command text */
+.user-command {
+    display: inline-block;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background-color: cyan;
+    color: black;
+    font-family: monospace;
+    font-size: 8pt;
+}
+
+/* style for the whole user‑input line */
+.terminal-user-line {
+    /* if you want to override the default .terminal-line font-size */
+    line-height: 1.2;
+    white-space: pre-wrap;
+    display: flex;
+    align-items: center;
+}
+
+
+/* small path‑prompt tokens */
+.user-prompt-container {
+    display: inline-block;
+    vertical-align: middle;
+}
+
+.user-prompt-separator {
+    display: inline-block;
+    width: 0.1em;
+}
+
+.user-command {
+    display: inline-block;
+    padding: 1px 4px;
+    margin-left: 4px;
+    border-radius: 4px;
+    background: cyan;
+    color: black;
+    font-family: monospace;
+    font-size: 10pt;
+}
+
+/* the raw input text */
+.user-input-text {
+    display: inline-block;
+    /*margin-left: 0px;*/
+    font-family: monospace;
+    font-size: 10pt;
+    color: white;
+}
+
+/* timestamp span */
+.user-ts {
+    font-family: monospace;
+    font-size: 10pt;
+}
+
+.user-prompt-container,
+.user-prompt-token,
+.user-prompt-separator,
+.user-ts,
+.user-command,
+.user-input-text {
+    vertical-align: middle;
+}
+
+
+/* === OVERLAYS       =============================================================================================== */
+.terminal-overlay {
+    grid-area: output;
+    position: relative; /* Overlay stays over terminal but doesn't shift layout */
+    background-color: rgba(0, 0, 0, 0.9);
+    display: flex; /* For centering content inside */
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    border-radius: 10px;
+    opacity: 0;
+    pointer-events: none; /* No blocking when hidden */
+    max-height: 100%;
+    overflow: auto;
+    /*transition: opacity 0.3s ease;*/
+    /*visibility: hidden; !* Hidden by default *!*/
+    border: 2px solid rgba(255, 255, 255, 0.2); /* Optional border for visibility */
+    color: white; /* Text color for content inside */
+    font-size: 8pt;
+}
+
+.terminal-close-button {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    border-radius: 4px;
+    padding: 2px;
+    width: 30px; /* Fixed size for the button */
+    aspect-ratio: 1; /* Make it square */
+    text-align: center;
+
+}
+
+/* Hover feedback */
+.terminal-close-button:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.terminal-overlay.active {
+    opacity: 1;
+    pointer-events: auto; /* Re-enable interaction when visible */
+    visibility: visible; /* Ensure it is visible */
+}
+
+
+/* ------------------------------------------------------------------------------------------------------------------ */
+/* the green “ghost” text for history */
+
+.history-suggestion {
+    color: #7CFC00;
+    font-family: monospace;
+    font-size: var(--input-font-size);
+}
+
+/* b) when in global history mode, make your prompt tokens green */
+.terminal-input-container.history-global .path-token {
+    background-color: rgba(124, 252, 0, 0.85);
+    color: rgba(36, 36, 36, 0.9);
+}
+
+.terminal-input-container.history-local .path-token {
+    background-color: rgba(30, 144, 255, 0.85);
+    color: rgba(36, 36, 36, 0.9);
+}
+
+
+/* ─── HELP OVERLAY CONTENT ───────────────────────────────────────────────────────── */
+.help-content {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    column-gap: 24px;
+    row-gap: 24px;
+    max-width: 800px; /* widen as needed */
+    max-height: 90%;
+    padding: 16px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 8pt;
+    color: white;
+}
+
+.help-section {
+    break-inside: avoid;
+    margin-bottom: 24px;
+}
+
+@media (max-width: 600px) {
+    /* fallback to one column on small viewports */
+    .help-content {
+        grid-template-columns: 1fr;
+    }
+}
+
+.help-section h2 {
+    margin-bottom: 8px;
+    font-size: 12pt;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    padding-bottom: 4px;
+}
+
+/* ─── FLEX CONTAINERS FOR INLINE BLOBS ───────────────────────────── */
+.help-example {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    padding: 8px;
+    margin-top: 4px;
+}
+
+/* ─── LEGEND STYLING ───────────────────────────────────────────────────── */
+.help-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 8px 0;
+}
+
+.help-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10pt;
+    flex: 0 0 auto; /* don’t stretch full width */
+}
+
+.help-legend-item span {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* specific colors for each legend‑bullet */
+.help-legend-item.set span {
+    background-color: rgba(255, 165, 0, 0.8);
+}
+
+.help-legend-item.command span {
+    background-color: cyan;
+}
+
+.help-legend-item.required span {
+    background-color: rgba(0, 128, 0, 0.6);
+}
+
+.help-legend-item.optional span {
+    background-color: rgba(128, 128, 128, 0.4);
+}
+
+.help-legend-item.special span {
+    background-color: rgba(200, 200, 200, 0.6);
+}
+
+/* ensure the code labels in special commands look nice */
+.help-legend-item.special code {
+    margin-left: 4px;
+    font-family: monospace;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 2px 4px;
+    border-radius: 4px;
+}
+
+/* ─── HELP LEGEND FOR PATH COLORS ───────────────────────────────── */
+.help-legend-item.current-path span {
+    background-color: rgba(255, 165, 0, 0.8); /* orange */
+}
+
+.help-legend-item.history-path span {
+    background-color: rgba(124, 252, 0, 0.8); /* light green */
+}
+
+
+/* Label next to each example */
+.help-label {
+    margin-left: 8px;
+    font-style: italic;
+    font-size: 9pt;
+    color: #ddd;
+}
+
+.terminal-input-container {
+    position: relative; /* make sure pseudo/children absolutely positioned inside */
+}
+
+/* the empty track */
+.history-indicator {
+    position: absolute;
+    right: 28px;
+    top: 6px;
+    bottom: 6px;
+    width: 4px;
+    background: black;
+    border-radius: 2px;
+    overflow: hidden;
+    pointer-events: none;
+    display: none; /* JS toggles */
+    z-index: 0;
+}
+
+.history-indicator-fill {
+    position: absolute;
+    bottom: 0;
+    width: 100%;
+    height: 0%;
+    background: yellowgreen;
+    transition: height 0.1s ease;
+}
+
+
+.toolbar-icon {
+    width: 16px;
+    height: 16px;
+    pointer-events: none; /* delegate clicks to the button */
+}
+
+
+
+
+
+
+

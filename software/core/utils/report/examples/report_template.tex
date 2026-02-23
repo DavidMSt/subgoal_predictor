@@ -1,0 +1,221 @@
+\documentclass[11pt,a4paper]{article}
+
+% === PACKAGES ===
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{caption}
+
+% === PAGE SETUP ===
+\geometry{margin=2.5cm}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.5em}
+
+% === COLORS ===
+\definecolor{headerblue}{RGB}{44, 62, 80}
+\definecolor{successgreen}{RGB}{39, 174, 96}
+\definecolor{warningorange}{RGB}{243, 156, 18}
+\definecolor{failurered}{RGB}{231, 76, 60}
+\definecolor{lightgray}{RGB}{245, 245, 245}
+
+% === HEADER/FOOTER ===
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\textcolor{headerblue}{\VAR{title|e}}}
+\fancyhead[R]{\textcolor{gray}{\VAR{generated_at|format_date}}}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+% === CUSTOM COMMANDS ===
+\newcommand{\statusbox}[2]{%
+    \par\vspace{0.5em}%
+    \colorbox{#1}{\parbox{0.97\textwidth}{\color{white}\textbf{#2}}}%
+    \par\vspace{0.5em}%
+}
+
+\newcommand{\summarybox}[1]{%
+    \par\vspace{0.5em}%
+    \colorbox{lightgray}{\parbox{0.97\textwidth}{#1}}%
+    \par\vspace{0.5em}%
+}
+
+\begin{document}
+
+% === TITLE ===
+\begin{center}
+    {\Huge\bfseries\color{headerblue} \VAR{title|e}}
+
+    \vspace{0.5em}
+
+    \BLOCK{if author}
+    {\large \VAR{author|e}}
+    \BLOCK{endif}
+
+    \BLOCK{if experiment_id}
+    \vspace{0.3em}
+    {\small\textcolor{gray}{Experiment ID: \VAR{experiment_id|e}}}
+    \BLOCK{endif}
+
+    \vspace{0.3em}
+    {\small\textcolor{gray}{Generated: \VAR{generated_at|format_date('%Y-%m-%d %H:%M')}}}
+\end{center}
+
+\vspace{1em}
+
+% === STATUS ===
+\BLOCK{if status == 'success'}
+\statusbox{successgreen}{Status: Success \BLOCK{if status_message}--- \VAR{status_message|e}\BLOCK{endif}}
+\BLOCK{elif status == 'warning'}
+\statusbox{warningorange}{Status: Warning \BLOCK{if status_message}--- \VAR{status_message|e}\BLOCK{endif}}
+\BLOCK{elif status == 'failure'}
+\statusbox{failurered}{Status: Failure \BLOCK{if status_message}--- \VAR{status_message|e}\BLOCK{endif}}
+\BLOCK{endif}
+
+% === INTRODUCTION ===
+\BLOCK{if introduction}
+\section*{Introduction}
+\VAR{introduction|e}
+\BLOCK{endif}
+
+% === SUMMARY ===
+\BLOCK{if summary}
+\summarybox{\textbf{Summary:} \VAR{summary|e}}
+\BLOCK{endif}
+
+% === MAIN PLOT ===
+\BLOCK{if main_plot}
+\section*{Results}
+\begin{figure}[H]
+    \centering
+    \VAR{main_plot}
+    \BLOCK{if main_plot_caption}
+    \caption{\VAR{main_plot_caption|e}}
+    \BLOCK{endif}
+\end{figure}
+\BLOCK{endif}
+
+% === COMPARISON PLOTS ===
+\BLOCK{if plot_left or plot_right}
+\BLOCK{if comparison_title}
+\section*{\VAR{comparison_title|e}}
+\BLOCK{endif}
+
+\begin{figure}[H]
+    \centering
+    \BLOCK{if plot_left}
+    \begin{minipage}{0.48\textwidth}
+        \centering
+        \VAR{plot_left}
+        \BLOCK{if plot_left_caption}
+        \captionof{figure}{\VAR{plot_left_caption|e}}
+        \BLOCK{endif}
+    \end{minipage}
+    \BLOCK{endif}
+    \hfill
+    \BLOCK{if plot_right}
+    \begin{minipage}{0.48\textwidth}
+        \centering
+        \VAR{plot_right}
+        \BLOCK{if plot_right_caption}
+        \captionof{figure}{\VAR{plot_right_caption|e}}
+        \BLOCK{endif}
+    \end{minipage}
+    \BLOCK{endif}
+\end{figure}
+\BLOCK{endif}
+
+% === ADDITIONAL PLOTS ===
+\BLOCK{if additional_plots}
+\BLOCK{if additional_plots_title}
+\section*{\VAR{additional_plots_title|e}}
+\BLOCK{endif}
+
+\begin{figure}[H]
+    \centering
+    \BLOCK{for item in additional_plots}
+    \begin{minipage}{0.48\textwidth}
+        \centering
+        \VAR{item.plot}
+        \BLOCK{if item.caption}
+        \captionof{figure}{\VAR{item.caption|e}}
+        \BLOCK{endif}
+    \end{minipage}
+    \BLOCK{if not loop.last and loop.index is odd}
+    \hfill
+    \BLOCK{elif not loop.last}
+
+    \vspace{1em}
+    \BLOCK{endif}
+    \BLOCK{endfor}
+\end{figure}
+\BLOCK{endif}
+
+% === METRICS ===
+\BLOCK{if metrics}
+\section*{Key Metrics}
+\begin{table}[H]
+    \centering
+    \begin{tabular}{ll}
+        \toprule
+        \textbf{Metric} & \textbf{Value} \\
+        \midrule
+        \BLOCK{for name, value in metrics.items()}
+        \VAR{name|e} & \BLOCK{if value is number}\VAR{value|format_number(4)}\BLOCK{else}\VAR{value|e}\BLOCK{endif} \\
+        \BLOCK{endfor}
+        \bottomrule
+    \end{tabular}
+\end{table}
+\BLOCK{endif}
+
+% === DATA TABLE ===
+\BLOCK{if table_data}
+\BLOCK{if table_title}
+\section*{\VAR{table_title|e}}
+\BLOCK{endif}
+\begin{table}[H]
+    \centering
+    \begin{tabular}{\BLOCK{for h in table_headers}l\BLOCK{endfor}}
+        \toprule
+        \BLOCK{for h in table_headers}\textbf{\VAR{h|e}}\BLOCK{if not loop.last} & \BLOCK{endif}\BLOCK{endfor} \\
+        \midrule
+        \BLOCK{for row in table_data}
+        \BLOCK{for cell in row}\BLOCK{if cell is number}\VAR{cell|format_number(3)}\BLOCK{else}\VAR{cell|e}\BLOCK{endif}\BLOCK{if not loop.last} & \BLOCK{endif}\BLOCK{endfor} \\
+        \BLOCK{endfor}
+        \bottomrule
+    \end{tabular}
+\end{table}
+\BLOCK{endif}
+
+% === WARNINGS ===
+\BLOCK{if warnings}
+\section*{Warnings}
+\begin{itemize}
+    \BLOCK{for warning in warnings}
+    \item \textcolor{warningorange}{\VAR{warning|e}}
+    \BLOCK{endfor}
+\end{itemize}
+\BLOCK{endif}
+
+% === OBSERVATIONS ===
+\BLOCK{if observations}
+\section*{Observations}
+\begin{itemize}
+    \BLOCK{for obs in observations}
+    \item \VAR{obs|e}
+    \BLOCK{endfor}
+\end{itemize}
+\BLOCK{endif}
+
+% === CONCLUSION ===
+\BLOCK{if conclusion}
+\section*{Conclusion}
+\VAR{conclusion|e}
+\BLOCK{endif}
+
+\end{document}

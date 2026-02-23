@@ -1,0 +1,39 @@
+server:
+  host: 0.0.0.0
+  port: 8500
+mdns:
+  enabled: true
+  hostname: network
+  use_port_80: false
+intervals:
+  network_scan: 15.0
+  ping: 2.0
+  internet_check: 5.0
+  system_metrics: 2.0
+  openwrt_poll: 10.0
+ping_monitor:
+  failure_threshold: 5
+monitored_hosts:
+- name: dale.lan
+  ip: 192.168.1.238
+  username: lehmann
+  description: HOST
+- name: bilbo2.local
+  username: admin
+  description: BILBO 2
+- name: palantir.lan
+  ip: 192.168.1.133
+  description: OPTIRACK
+- name: bilbo1.local
+  username: admin
+- name: display.lan
+  username: admin
+  description: DISPLAY
+openwrt:
+  enabled: true
+  ip: 192.168.1.1
+  username: root
+  password: ''
+dev:
+  vite_port: 9201
+  cors_enabled: true

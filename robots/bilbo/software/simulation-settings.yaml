@@ -1,0 +1,12 @@
+# Simulation Settings
+
+# Robot ID used when no --robot argument is given to main_simulation.py
+robot_id: bilbo-sim-1
+
+# Parent directory for all simulated robot data folders.
+# Each robot gets a subfolder: <robots_path>/<robot_id>/
+robots_path: ~/bilbo-sim
+
+# Robot config template used by simulation-setup.py
+# Must match a folder in configs/control/ and a file in configs/hardware/
+default_robot_config: bilbo2

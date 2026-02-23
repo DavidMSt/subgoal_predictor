@@ -72,6 +72,11 @@ static RobotControl_Extender *s_self = nullptr;
 // Track what was last sent (to send only diffs)
 static external_led_colors_struct_t s_last_sent = { 0 };
 
+// Track what we're attempting to send (for rollback-free confirmation)
+static external_led_colors_struct_t s_pending_colors = { 0 };
+static uint8_t s_pending_indices[16] = { 0 };  // LED indices that have pending updates
+static uint8_t s_pending_count = 0;
+
 // Forward declarations (file-local)
 static void flush_build_diff(); // builds s_ops[] from s_self->current_external_colors vs s_last_sent
 static void flush_kick_next();    // starts next I2C op or finishes frame
@@ -293,7 +298,9 @@ static inline uint16_t base_red_reg(uint8_t i) {
 
 static void flush_build_diff() {
 	// Build ops for differences between current and last-sent; coalesce RGB per LED
+	// IMPORTANT: Do NOT update s_last_sent here - wait until transfer succeeds
 	uint8_t n = 0;
+	s_pending_count = 0;
 
 #ifndef EXT_NO_AUTOINC
 	for (uint8_t i = 0; i < 16 && n < 16; ++i) {
@@ -308,28 +315,37 @@ static void flush_build_diff() {
 		s_ops[n].buf[1] = cur.green;
 		s_ops[n].buf[2] = cur.blue;
 		s_ops[n].len = 3;
-		s_last_sent.colors[i] = cur;
+		// Track pending update for confirmation after I2C success
+		s_pending_colors.colors[i] = cur;
+		s_pending_indices[s_pending_count++] = i;
 		++n;
 	}
 #else
 	for (uint8_t i = 0; i < 16 && n < OPS_CAP; ++i) {
 		const rgb_color_struct_t cur = s_self->current_external_colors.colors[i];
-		rgb_color_struct_t &old = s_last_sent.colors[i];
+		const rgb_color_struct_t old = s_last_sent.colors[i];
 
+		// Check if this LED needs any update
+		uint8_t needs_update = 0;
 		if (cur.red != old.red && n < OPS_CAP) {
 			s_ops[n++] = { (uint16_t) (ext_led_base_reg(i) + 1),
 					{ cur.red, 0, 0 }, 1 };
-			old.red = cur.red;
+			needs_update = 1;
 		}
 		if (cur.green != old.green && n < OPS_CAP) {
 			s_ops[n++] = { (uint16_t) (ext_led_base_reg(i) + 2), { cur.green, 0,
 					0 }, 1 };
-			old.green = cur.green;
+			needs_update = 1;
 		}
 		if (cur.blue != old.blue && n < OPS_CAP) {
 			s_ops[n++] = { (uint16_t) (ext_led_base_reg(i) + 3), { cur.blue, 0,
 					0 }, 1 };
-			old.blue = cur.blue;
+			needs_update = 1;
+		}
+		// Track pending update for this LED
+		if (needs_update && s_pending_count < 16) {
+			s_pending_colors.colors[i] = cur;
+			s_pending_indices[s_pending_count++] = i;
 		}
 	}
 #endif
@@ -342,7 +358,13 @@ static void flush_kick_next() {
 		return;
 
 	if (s_op_index >= s_op_count) {
-		// Frame done
+		// Frame done successfully - commit pending colors to s_last_sent
+		for (uint8_t i = 0; i < s_pending_count; ++i) {
+			uint8_t idx = s_pending_indices[i];
+			s_last_sent.colors[idx] = s_pending_colors.colors[idx];
+		}
+		s_pending_count = 0;
+
 		s_in_progress = 0;
 		if (s_pending) {
 			s_pending = 0;
@@ -407,8 +429,17 @@ extern "C" void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *hi2c) {
 	if (!s_self)
 		return;
 	if (hi2c == s_self->config.hi2c) {
-		// Skip failed op and proceed. Optional: inspect hi2c->ErrorCode for smarter behavior.
-		++s_op_index;
-		flush_kick_next();
+		// On error: abort the entire frame without confirming any colors.
+		// This ensures colors will be retried on the next update cycle.
+		s_pending_count = 0;  // Don't confirm any pending colors
+		s_op_count = 0;       // Cancel remaining ops
+		s_op_index = 0;
+		s_in_progress = 0;
+
+		// If there was a pending update request, allow it to start fresh
+		if (s_pending) {
+			s_pending = 0;
+			flush_start();
+		}
 	}
 }

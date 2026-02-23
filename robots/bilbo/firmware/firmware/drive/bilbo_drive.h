@@ -13,6 +13,10 @@
 #include "stm32h7xx_hal.h"
 #include "core.h"
 #include "robot-control_std.h"
+#include "firmware_addresses.h"
+#include "bilbo_message.h"
+
+void sendMessage(BILBO_Message_t &message);
 
 typedef enum bilbo_drive_type_t {
 	BILBO_DRIVE_SM_RS485 = 1,
@@ -43,6 +47,25 @@ typedef enum bilbo_drive_status_t {
 	BILBO_DRIVE_STATUS_ERROR = 2,
 } bilbo_drive_status_t;
 
+typedef struct bilbo_logging_drive_t {
+	uint8_t status;
+	uint8_t motor_mode_left;
+	uint8_t motor_mode_right;
+} bilbo_logging_drive_t;
+
+typedef struct drive_event_message_data_t {
+	uint8_t status;
+	uint32_t tick;
+} drive_event_message_data_t;
+
+typedef BILBO_Message<drive_event_message_data_t, MSG_EVENT,
+	BILBO_MESSAGE_DRIVE_EVENT> BILBO_Message_Drive_Event;
+
+// Number of immediate retries per failed operation (with bus reset between)
+#define BILBO_DRIVE_MAX_RETRIES 1
+// Consecutive failed task cycles before entering fatal error state
+#define BILBO_DRIVE_MAX_CONSECUTIVE_ERRORS 3
+
 class BILBO_Drive {
 public:
 
@@ -54,10 +77,13 @@ public:
 
 	HAL_StatusTypeDef start();
 	HAL_StatusTypeDef stop();
+	HAL_StatusTypeDef emergencyStop();
+	bool resetDrive();
 
 	bilbo_drive_speed_t getSpeed();
 	void setTorque(bilbo_drive_input_t input);
 	float getVoltage();
+	bilbo_logging_drive_t getSample();
 
 	void task();
 
@@ -72,6 +98,10 @@ private:
 	float _voltage = 0;
 	bilbo_drive_speed_t _speed = {0};
 	bilbo_drive_input_t _input = {0};
+	volatile bool _reset_requested = false;
+
+	simplexmotion_mode_t _motor_mode_left = SM_MODE_UNKNOWN;
+	simplexmotion_mode_t _motor_mode_right = SM_MODE_UNKNOWN;
 };
 
 

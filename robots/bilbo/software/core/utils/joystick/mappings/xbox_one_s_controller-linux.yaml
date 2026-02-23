@@ -1,0 +1,31 @@
+buttons:
+  1: A
+  0: B
+  3: X
+  2: Y
+  7: START
+  6: SELECT
+  8: L3
+  9: R3
+  4: L1
+  5: R1
+  10: SPECIAL
+axes:
+  0:
+    name: LEFT_HORIZONTAL
+    scale: 1
+  1:
+    name: LEFT_VERTICAL
+    scale: -1
+  2:
+    name: TRIGGER_LEFT
+    scale: 1
+  3:
+    name: RIGHT_HORIZONTAL
+    scale: 1
+  4:
+    name: RIGHT_VERTICAL
+    scale: -1
+  5:
+    name: TRIGGER_RIGHT
+    scale: 1

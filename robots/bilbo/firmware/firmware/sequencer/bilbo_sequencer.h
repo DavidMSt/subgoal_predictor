@@ -10,80 +10,80 @@
 
 
 #include <bilbo_messages.h>
-#include "twipr_control.h"
+#include "bilbo_control.h"
 #include "firmware_core.h"
 
-class TWIPR_CommunicationManager;
+class BILBO_CommunicationManager;
 
 /**
- * @brief Configuration for the TWIPR_Sequencer.
+ * @brief Configuration for the BILBO_Sequencer.
  */
-typedef struct twipr_sequencer_config_t {
-	TWIPR_ControlManager *control;
-	TWIPR_CommunicationManager *comm;
-} twipr_sequencer_config_t;
+typedef struct bilbo_sequencer_config_t {
+	BILBO_Control *control;
+	BILBO_CommunicationManager *comm;
+} bilbo_sequencer_config_t;
 
 /**
  * @brief High-level state of the sequencer.
  */
-typedef enum twipr_sequencer_mode_t {
-	TWIPR_SEQUENCER_MODE_IDLE = 0,
-	TWIPR_SEQUENCER_MODE_RUNNING = 1,
-	TWIPR_SEQUENCER_MODE_ERROR = 2
-} twipr_sequencer_mode_t;
+typedef enum bilbo_sequencer_mode_t {
+	BILBO_SEQUENCER_MODE_IDLE = 0,
+	BILBO_SEQUENCER_MODE_RUNNING = 1,
+	BILBO_SEQUENCER_MODE_ERROR = 2
+} bilbo_sequencer_mode_t;
 
 /**
  * @brief Metadata for a trajectory / sequence.
  */
-typedef struct twipr_sequencer_sequence_data_t {
+typedef struct bilbo_sequencer_sequence_data_t {
 	uint16_t sequence_id;          ///< ID of the sequence
 	uint16_t length;               ///< Number of samples
 	bool require_control_mode; ///< true: Control mode must be set in advance. false: Sequencer sets control mode
 	uint16_t wait_time_beginning; ///< Wait time in ticks before starting sequence (currently unused)
 	uint16_t wait_time_end; ///< Time in ticks after sequence (currently unused)
-	twipr_control_mode_t control_mode; ///< Control mode in which the sequence is run
-	twipr_control_mode_t control_mode_end; ///< Control mode to switch to after the sequence
+	bilbo_control_mode_t control_mode; ///< Control mode in which the sequence is run
+	bilbo_control_mode_t control_mode_end; ///< Control mode to switch to after the sequence
 	bool loaded;               ///< True if sequence data is present in buffer
-} twipr_sequencer_sequence_data_t;
+} bilbo_sequencer_sequence_data_t;
 
 /**
  * @brief Callback identifiers for application-level hooks.
  */
-typedef enum twipr_sequencer_callback_id_t {
-	TWIPR_SEQUENCER_CALLBACK_SEQUENCE_STARTED = 1,
-	TWIPR_SEQUENCER_CALLBACK_SEQUENCE_FINISHED = 2,
-	TWIPR_SEQUENCER_CALLBACK_SEQUENCE_ABORTED = 3,
-} twipr_sequencer_callback_id_t;
+typedef enum bilbo_sequencer_callback_id_t {
+	BILBO_SEQUENCER_CALLBACK_SEQUENCE_STARTED = 1,
+	BILBO_SEQUENCER_CALLBACK_SEQUENCE_FINISHED = 2,
+	BILBO_SEQUENCER_CALLBACK_SEQUENCE_ABORTED = 3,
+} bilbo_sequencer_callback_id_t;
 
 /**
  * @brief One sample of a sequence (trajectory input).
  */
-typedef struct twipr_sequence_input_t {
+typedef struct bilbo_sequence_input_t {
 	uint32_t step;
 	float u_1;
 	float u_2;
-} twipr_sequence_input_t;
+} bilbo_sequence_input_t;
 
 /**
  * @brief Sample snapshot of sequencer state (for logging / telemetry).
  */
-typedef struct twipr_sequencer_sample_t {
-	twipr_sequencer_mode_t mode;
+typedef struct bilbo_sequencer_sample_t {
+	bilbo_sequencer_mode_t mode;
 	uint16_t sequence_id;
 	uint32_t sequence_tick;
-} twipr_sequencer_sample_t;
+} bilbo_sequencer_sample_t;
 
 /**
  * @brief Callback set for sequence lifecycle events.
  */
-typedef struct twipr_sequencer_callbacks_t {
+typedef struct bilbo_sequencer_callbacks_t {
 	core_utils_Callback<void, uint16_t> started;
 	core_utils_Callback<void, uint16_t> finished;
 	core_utils_Callback<void, uint16_t> aborted;
-} twipr_sequencer_callbacks_t;
+} bilbo_sequencer_callbacks_t;
 
-extern twipr_sequence_input_t rx_sequence_buffer[TWIPR_SEQUENCE_BUFFER_SIZE ];
-extern twipr_sequence_input_t sequence_buffer[TWIPR_SEQUENCE_BUFFER_SIZE ];
+extern bilbo_sequence_input_t rx_sequence_buffer[BILBO_SEQUENCE_BUFFER_SIZE ];
+extern bilbo_sequence_input_t sequence_buffer[BILBO_SEQUENCE_BUFFER_SIZE ];
 
 /**
  * @brief Sequencer / trajectory player.
@@ -104,7 +104,7 @@ public:
 	/**
 	 * @brief Initialize the sequencer with the required managers.
 	 */
-	void init(twipr_sequencer_config_t config);
+	void init(bilbo_sequencer_config_t config);
 
 	/**
 	 * @brief Start the sequencer subsystem (if needed).
@@ -156,12 +156,12 @@ public:
 	 * @param sequence_data Meta information about the sequence.
 	 * @return true if sequence data was accepted and sequencer is ready to receive samples.
 	 */
-	bool loadSequence(twipr_sequencer_sequence_data_t sequence_data);
+	bool loadSequence(bilbo_sequencer_sequence_data_t sequence_data);
 
 	/**
 	 * @brief Get the currently loaded sequence metadata.
 	 */
-	twipr_sequencer_sequence_data_t readSequence();
+	bilbo_sequencer_sequence_data_t readSequence();
 
 	/**
 	 * @brief Clear sequence meta information and reset counters.
@@ -173,7 +173,7 @@ public:
 	/**
 	 * @brief Get a snapshot of the sequencer state for logging / telemetry.
 	 */
-	twipr_sequencer_sample_t getSample();
+	bilbo_sequencer_sample_t getSample();
 
 	/**
 	 * @brief Callback from communication layer when raw trajectory data has been received.
@@ -187,7 +187,7 @@ public:
 	 *
 	 * If a sequence is running, it will be aborted.
 	 */
-	void modeChange_callback(twipr_control_mode_t mode);
+	void modeChange_callback(bilbo_control_mode_t mode);
 
 	/**
 	 * @brief Called once the DMA transfer of the complete sequence has finished.
@@ -195,13 +195,13 @@ public:
 	void sequenceReceivedAndTransferred_callback();
 
 	// Public state (as in original code)
-	twipr_sequencer_mode_t mode;
+	bilbo_sequencer_mode_t mode;
 	uint32_t sequence_tick;
-	twipr_sequencer_config_t config;
-	twipr_sequencer_sequence_data_t loaded_sequence;
+	bilbo_sequencer_config_t config;
+	bilbo_sequencer_sequence_data_t loaded_sequence;
 
-	twipr_sequence_input_t *rx_buffer = rx_sequence_buffer;
-	twipr_sequence_input_t *buffer = sequence_buffer;
+	bilbo_sequence_input_t *rx_buffer = rx_sequence_buffer;
+	bilbo_sequence_input_t *buffer = sequence_buffer;
 
 private:
 	/**
@@ -216,6 +216,11 @@ private:
 
 	bool _startSequenceInternal();
 
+	/**
+	 * @brief Send a TRAJECTORY_ABORTED event when the queued start fails validation.
+	 */
+	void _sendStartFailedAbort();
+
 	/// Queued start request flag.
 	bool _start_requested = false;
 	/// Sequence id that was requested to start.
@@ -223,7 +228,7 @@ private:
 	/// Tick at which the start was requested (for debugging).
 	uint32_t _start_request_tick = 0;
 
-	twipr_sequencer_callbacks_t _callbacks;
+	bilbo_sequencer_callbacks_t _callbacks;
 };
 
 void trajectory_dma_transfer_cmplt_callback(DMA_HandleTypeDef *hdma);

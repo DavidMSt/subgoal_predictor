@@ -1,0 +1,6 @@
+name: 'bilbo2 lab control'
+description: 'For the blue carpet tiles in the lab'
+velocity_control:
+  v:
+    feedforward:
+      Ka: -0.0                          # [rad/(m/s^2)] Inertia compensation

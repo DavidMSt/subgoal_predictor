@@ -1,0 +1,60 @@
+.context-menu {
+    position: absolute;
+    z-index: 2000;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    /*padding: 4px 4px;*/
+    min-width: 140px;
+    /*box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);*/
+    font-family: sans-serif;
+}
+
+.context-menu--submenu {
+    z-index: 2001;
+    /* display is toggled by JS */
+}
+
+/* ─── MENU ITEMS ───────────────────────────────────────────────────────── */
+.context-menu__item {
+    display: flex;
+    align-items: center;
+    padding: 6px 6px;
+    font-size: 10pt;
+    cursor: pointer;
+    border-radius: 6px;
+    min-height: 35px;
+}
+
+/* icon slots */
+.context-menu__item-icon.left {
+    margin-right: 8px;
+}
+
+.context-menu__item-icon.right {
+    margin-left: 8px;
+}
+
+/* submenu‐trigger items */
+.context-menu__item--submenu-trigger {
+    justify-content: space-between;
+}
+
+/* ─── INLINE GROUPS ─────────────────────────────────────────────────────── */
+.context-menu__inline-group {
+    margin: 6px 0;
+    padding: 4px 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.2);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+/* ─── GROUP TITLES ──────────────────────────────────────────────────────── */
+.context-menu__group-title {
+    font-size: 9pt;
+    font-weight: bold;
+    color: rgba(255, 255, 255, 0.7);
+    padding: 4px 12px;
+}
+
+.cmh {
+    background-color: var(--highlight-color, rgba(255, 255, 255, 0.2)) !important;
+}

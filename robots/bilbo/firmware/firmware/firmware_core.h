@@ -13,7 +13,7 @@
 #include "firmware_addresses.h"
 #include "firmware_defs.h"
 #include "firmware_settings.h"
-#include "twipr_errors.h"
+#include "bilbo_errors.h"
 
 extern uint32_t tick_global;
 
