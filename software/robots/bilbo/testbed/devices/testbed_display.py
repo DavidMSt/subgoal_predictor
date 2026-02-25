@@ -57,8 +57,8 @@ DEFAULT_TITLE_COLOR = (200, 200, 200)  # light gray
 DEFAULT_CLOCK_COLOR = DEFAULT_TITLE_COLOR
 
 # Per your request: bigger defaults on the sender side
-DEFAULT_TEXT_SIZE = 235
-DEFAULT_TITLE_SIZE = 140
+DEFAULT_TEXT_SIZE = 176
+DEFAULT_TITLE_SIZE = 175
 DEFAULT_ICON_SIZE = 200
 
 
@@ -733,26 +733,29 @@ class TestbedDisplayClient:
 
 # Optional: quick manual test when run as script
 if __name__ == "__main__":
-    client = TestbedDisplayClient()
+    try:
+        client = TestbedDisplayClient()
 
-    # Best-effort: sets client.connected; safe even if display isn't reachable
-    client.start()
+        # Best-effort: sets client.connected; safe even if display isn't reachable
+        client.start()
 
-    client.clear()
-    client.set_background_color((0, 0, 0))
-    client.set_title("Experiment 1: Stand Up", color=(255, 255, 255), alignment="left", size=DEFAULT_TITLE_SIZE)
-    client.set_text(
-        "Hello from TestbedDisplayClient",
-        size=DEFAULT_TEXT_SIZE,
-        color=(255, 255, 255),
-        alignment="center",
-    )
-    # client.set_icon("🚀", size=DEFAULT_ICON_SIZE)
-    client.start_clock(mode="replace_text", color=(0, 255, 255))
+        client.clear()
+        client.set_background_color((0, 0, 0))
+        client.set_title("Experiment 1: Stand Up", color=(255, 255, 255), alignment="left", size=DEFAULT_TITLE_SIZE)
+        client.set_text(
+            "Hello from TestbedDisplayClient",
+            size=DEFAULT_TEXT_SIZE,
+            color=(255, 255, 255),
+            alignment="center",
+        )
+        # client.set_icon("🚀", size=DEFAULT_ICON_SIZE)
+        client.start_clock(mode="replace_text", color=(0, 255, 255))
 
-    # Example: read and print local state snapshot
-    print(json.dumps(client.get_state_dict(json_ready=True), indent=2))
+        # Example: read and print local state snapshot
+        print(json.dumps(client.get_state_dict(json_ready=True), indent=2))
 
-    time.sleep(5.05)
-    client.set_clock_color((255, 0, 0))
-    print(json.dumps(client.get_state_dict(json_ready=True), indent=2))
+        time.sleep(5.05)
+        client.set_clock_color((255, 0, 0))
+        print(json.dumps(client.get_state_dict(json_ready=True), indent=2))
+    finally:
+        client.clear()

@@ -608,6 +608,10 @@ class bilbo_position_control_config:
     kp_angular: float = 10.0                # [rad/s per rad] Proportional gain
     ki_angular: float = 0.3                 # [rad/s per rad*s] Integral gain
 
+    # Heading-only angular gains (turn_to_heading override)
+    kp_angular_heading: float = 0.0         # [rad/s per rad] Heading-only kp (0 = use kp_angular)
+    ki_angular_heading: float = 0.0         # [rad/s per rad*s] Heading-only ki (0 = use ki_angular)
+
     # Linear control gains (speed toward carrot)
     kp_linear: float = 2.0                  # [1/s] speed = kp_linear * carrot_distance
     ki_linear: float = 0.0                  # [1/s^2] Integral gain (usually 0)
@@ -638,6 +642,8 @@ class bilbo_position_control_config_t(ctypes.Structure):
         ("Ts", ctypes.c_float),
         ("kp_angular", ctypes.c_float),
         ("ki_angular", ctypes.c_float),
+        ("kp_angular_heading", ctypes.c_float),
+        ("ki_angular_heading", ctypes.c_float),
         ("kp_linear", ctypes.c_float),
         ("ki_linear", ctypes.c_float),
         ("kd_linear", ctypes.c_float),

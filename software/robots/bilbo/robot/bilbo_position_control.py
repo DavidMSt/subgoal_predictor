@@ -16,6 +16,7 @@ from core.utils.callbacks import CallbackContainer, callback_definition
 from core.utils.dataclass_utils import from_dict_auto
 from core.utils.events import event_definition, Event, EventFlag, pred_flag_equals, wait_for_events, OR
 from robots.bilbo.robot.bilbo_core import BILBO_Core
+from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
 
 
 # =============================================================================
@@ -431,7 +432,8 @@ class BILBO_PositionControl:
                         timeout: float = 0.0,
                         allow_reverse: bool = False,
                         seed: int | None = None,
-                        blocking: bool = False) -> bool:
+                        blocking: bool = False,
+                        target_heading: float | None = None) -> bool:
         """
         Plan a collision-free path from the robot's current position to target,
         load it, and start following it. The motion planner runs on the robot.
@@ -453,6 +455,7 @@ class BILBO_PositionControl:
             allow_reverse: Allow reverse driving
             seed: RNG seed for motion planner reproducibility
             blocking: If True, block until path finished or timeout
+            target_heading: Desired heading [rad] at the target (None = unconstrained)
 
         Returns:
             True if path was planned, loaded, and started successfully
@@ -488,6 +491,7 @@ class BILBO_PositionControl:
             'timeout': timeout,
             'allow_reverse': allow_reverse,
             'seed': seed,
+            'target_heading': target_heading,
         }
 
         self.logger.info(
@@ -527,7 +531,8 @@ class BILBO_PositionControl:
                   waypoints: list[dict | tuple] | None = None,
                   obstacles: list[dict] | None = None,
                   bounds: dict | tuple | None = None,
-                  seed: int | None = None) -> bool:
+                  seed: int | None = None,
+                  target_heading: float | None = None) -> bool:
         """
         Plan a path from the robot's current position to target (preview only).
         Does NOT load or start the path. The robot emits a path_planned WiFi event
@@ -539,6 +544,7 @@ class BILBO_PositionControl:
             obstacles: Extra obstacle dicts (merged with stored obstacles on robot).
             bounds: Workspace limits as dict or (x_min, x_max, y_min, y_max) tuple.
             seed: RNG seed for motion planner reproducibility
+            target_heading: Desired heading [rad] at the target (None = unconstrained)
 
         Returns:
             True if path was planned successfully
@@ -576,6 +582,7 @@ class BILBO_PositionControl:
                     'obstacles': obstacles,
                     'bounds': bounds_arg,
                     'seed': seed,
+                    'target_heading': target_heading,
                 },
                 return_type=bool,
                 request_response=True,
@@ -584,7 +591,6 @@ class BILBO_PositionControl:
             if not result:
                 self.logger.error("plan_path failed on robot")
 
-        import threading
         threading.Thread(target=_execute, daemon=True).start()
 
         return True
@@ -606,7 +612,6 @@ class BILBO_PositionControl:
             else:
                 self.logger.error("PRM roadmap build failed")
 
-        import threading
         threading.Thread(target=_execute, daemon=True).start()
 
         return True
@@ -942,8 +947,6 @@ class BILBO_PositionControl:
 
     def _on_control_mode_change(self, mode, *args, **kwargs):
         """Handle top-level control mode changes to sync state"""
-        from robots.bilbo.robot.bilbo_definitions import BILBO_Control_Mode
-
         # Track top-level control mode
         self._top_level_control_mode = mode
 

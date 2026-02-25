@@ -99,6 +99,16 @@ export class BabylonCylinder extends BabylonObject {
         this.setOrientation(orientation);
     }
 
+    setColor(color) {
+        const c = getBabylonColor3(color);
+        if (this.config.glow) {
+            this.material.emissiveColor = c.scale(this.config.glow_intensity);
+        } else {
+            this.material.diffuseColor = c;
+        }
+        this.config.color = color;
+    }
+
     highlight(state) {}
     onMessage(message) {}
     dim(state) {}

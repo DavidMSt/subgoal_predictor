@@ -182,6 +182,7 @@ class PRMRoadmap:
         smoothing: float = 1.0,
         padding: float = 0.0,
         state_constraints: StateConstraints | None = None,
+        target_heading: float | None = None,
     ) -> list[tuple[float, float]]:
         """Find a path through the roadmap from start to end.
 
@@ -208,6 +209,10 @@ class PRMRoadmap:
             Robot half-width [m], inflates obstacles during post-processing.
         state_constraints : StateConstraints, optional
             Per-axis position constraints.
+        target_heading : float or None
+            If given, the spline is shaped so that the path arrives at the
+            endpoint with approximately this heading angle [rad].  The end
+            tangent of the cubic spline is clamped to (cos(h), sin(h)).
 
         Returns
         -------
@@ -319,7 +324,8 @@ class PRMRoadmap:
             polyline = _subdivide_polyline(polyline, ds_knot)
 
         cs_x, cs_y, L, _ = _ensure_spline_safety(
-            polyline, all_obstacles, margin=margin)
+            polyline, all_obstacles, margin=margin,
+            target_heading=target_heading)
 
         if cs_x is None:
             return pruned
@@ -711,6 +717,7 @@ def plan_path_prm(
     waypoints: list[Waypoint] | None = None,
     smoothing: float = 1.0,
     padding: float = 0.0,
+    target_heading: float | None = None,
 ) -> list[tuple[float, float]]:
     """One-shot query wrapper around PRMRoadmap.query().
 
@@ -726,6 +733,8 @@ def plan_path_prm(
         Spline smoothing [0, 1].
     padding : float
         Robot half-width [m].
+    target_heading : float or None
+        Desired arrival heading [rad] at the endpoint.
 
     Returns
     -------
@@ -733,7 +742,8 @@ def plan_path_prm(
         Post-processed path.
     """
     return roadmap.query(start, end, waypoints=waypoints,
-                         smoothing=smoothing, padding=padding)
+                         smoothing=smoothing, padding=padding,
+                         target_heading=target_heading)
 
 
 def plot_roadmap(

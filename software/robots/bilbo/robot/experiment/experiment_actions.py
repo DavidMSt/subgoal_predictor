@@ -594,6 +594,14 @@ def _register_builtin_actions():
     ))
 
     register_action(ActionEntry(
+        type_name="set_tracker_updates",
+        parameters=[
+            ActionParameter("enabled", bool, default=True),
+        ],
+        description="Enable/disable sending OptiTrack tracker updates to lowlevel firmware"
+    ))
+
+    register_action(ActionEntry(
         type_name="speak",
         parameters=[
             ActionParameter("text", str, default=""),
@@ -780,6 +788,8 @@ def _register_builtin_actions():
             ActionParameter("timeout", float, default=0.0),
             ActionParameter("allow_reverse", bool, default=False),
             ActionParameter("seed", int, default=None),
+            ActionParameter("target_heading", float, default=None),
+            ActionParameter("target_heading_deg", float, default=None),
             ActionParameter("wait", bool, default=True),
         ],
         description="Plan and follow a path to a target point"

@@ -225,6 +225,7 @@ class PRMRoadmap:
         smoothing: float = 1.0,
         padding: float = 0.0,
         state_constraints: StateConstraints | None = None,
+        target_heading: float | None = None,
     ) -> list[tuple[float, float]]:
         """Find a path through the roadmap from start to end.
 
@@ -251,6 +252,9 @@ class PRMRoadmap:
             Robot half-width [m], inflates obstacles during post-processing.
         state_constraints : StateConstraints, optional
             Per-axis position constraints.
+        target_heading : float or None
+            If given, the spline is shaped so that the path arrives at the
+            endpoint with approximately this heading angle [rad].
 
         Returns
         -------
@@ -362,7 +366,8 @@ class PRMRoadmap:
             polyline = _subdivide_polyline(polyline, ds_knot)
 
         cs_x, cs_y, L, _ = _ensure_spline_safety(
-            polyline, all_obstacles, margin=margin)
+            polyline, all_obstacles, margin=margin,
+            target_heading=target_heading)
 
         if cs_x is None:
             return pruned

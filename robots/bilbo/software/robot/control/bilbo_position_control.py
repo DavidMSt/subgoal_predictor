@@ -90,6 +90,8 @@ def position_control_config_to_ctypes(config: PositionControl_Config) -> bilbo_p
         Ts=LOOP_TIME_CONTROL,
         kp_angular=config.kp_angular,
         ki_angular=config.ki_angular,
+        kp_angular_heading=config.kp_angular_heading,
+        ki_angular_heading=config.ki_angular_heading,
         kp_linear=config.kp_linear,
         ki_linear=config.ki_linear,
         kd_linear=config.kd_linear,
@@ -854,13 +856,17 @@ class BILBO_PositionControl:
     # MOTION PLANNING + PATH FOLLOWING
     # =========================================================================
 
-    def _run_planner(self, start, target, waypoints, obstacles, bounds, seed):
+    def _run_planner(self, start, target, waypoints, obstacles, bounds, seed,
+                     target_heading=None):
         """Dispatch to RRT or PRM based on config.method."""
         if self._planning_config.method == 'prm':
-            return self._plan_prm(start, target, waypoints, bounds)
-        return self._plan_rrt(start, target, waypoints, obstacles, bounds, seed)
+            return self._plan_prm(start, target, waypoints, bounds,
+                                  target_heading=target_heading)
+        return self._plan_rrt(start, target, waypoints, obstacles, bounds, seed,
+                              target_heading=target_heading)
 
-    def _plan_rrt(self, start, target, waypoints, obstacles, bounds, seed):
+    def _plan_rrt(self, start, target, waypoints, obstacles, bounds, seed,
+                  target_heading=None):
         """Plan using RRT/RRT* (existing behavior, extracted)."""
         cfg = self._planning_config
         return _plan_path_mp(
@@ -879,9 +885,10 @@ class BILBO_PositionControl:
             step_size=cfg.rrt.step_size,
             goal_bias=cfg.rrt.goal_bias,
             rewire_radius=cfg.rrt.rewire_radius,
+            target_heading=target_heading,
         )
 
-    def _plan_prm(self, start, target, waypoints, bounds):
+    def _plan_prm(self, start, target, waypoints, bounds, target_heading=None):
         """Plan using PRM. Roadmap must be built beforehand via build_prm_map()."""
         if self._prm_roadmap is None or not self._prm_roadmap.is_built():
             self.logger.error("PRM roadmap not built. Call build_prm_map() first.")
@@ -892,6 +899,7 @@ class BILBO_PositionControl:
             end=target,
             waypoints=waypoints or None,
             smoothing=cfg.smoothing,
+            target_heading=target_heading,
         )
 
     def plan_and_follow(self,
@@ -906,7 +914,8 @@ class BILBO_PositionControl:
                         allow_reverse: bool = False,
                         seed: int | None = None,
                         start: tuple[float, float] | None = None,
-                        blocking: bool = False) -> bool:
+                        blocking: bool = False,
+                        target_heading: float | None = None) -> bool:
         """
         Plan a collision-free path from the current position to target,
         load it onto the STM32, and start following it.
@@ -929,6 +938,7 @@ class BILBO_PositionControl:
             timeout: Path timeout [s] (0 = no timeout)
             allow_reverse: Allow reverse driving
             seed: RNG seed for motion planner reproducibility
+            target_heading: Desired heading [rad] at the target (None = unconstrained)
             start: Override start position (default: current estimation state)
             blocking: If True, block until path finished or timeout
 
@@ -977,7 +987,8 @@ class BILBO_PositionControl:
             )
             self._log_planner_inputs(start, target, planner_waypoints, planner_obstacles, planner_bounds)
             dense_points = self._run_planner(
-                start, target, planner_waypoints, planner_obstacles, planner_bounds, seed)
+                start, target, planner_waypoints, planner_obstacles, planner_bounds, seed,
+                target_heading=target_heading)
         except (ValueError, RuntimeError, TimeoutError) as e:
             self.logger.error(f"Motion planning failed: {e}")
             return False
@@ -1046,7 +1057,8 @@ class BILBO_PositionControl:
                   obstacles: list[dict] | None = None,
                   bounds: dict | tuple | None = None,
                   seed: int | None = None,
-                  start: tuple[float, float] | None = None) -> list[tuple[float, float]] | None:
+                  start: tuple[float, float] | None = None,
+                  target_heading: float | None = None) -> list[tuple[float, float]] | None:
         """
         Plan a path without loading or starting it. Useful for preview/visualization.
         Uses stored obstacles merged with any extra obstacles passed here.
@@ -1076,7 +1088,8 @@ class BILBO_PositionControl:
 
         try:
             return self._run_planner(
-                start, target, planner_waypoints, planner_obstacles, planner_bounds, seed)
+                start, target, planner_waypoints, planner_obstacles, planner_bounds, seed,
+                target_heading=target_heading)
         except (ValueError, RuntimeError, TimeoutError) as e:
             self.logger.error(f"Motion planning failed: {e}")
             return None
@@ -1844,6 +1857,7 @@ class BILBO_PositionControl:
                 CommandArgument(name='timeout', type=float, optional=True, default=0.0),
                 CommandArgument(name='allow_reverse', type=bool, optional=True, default=False),
                 CommandArgument(name='seed', type=int, optional=True, default=None),
+                CommandArgument(name='target_heading', type=float, optional=True, default=None),
             ],
             description='Plan path from current position to target and follow it',
             execute_in_thread=True
@@ -1858,6 +1872,7 @@ class BILBO_PositionControl:
                 CommandArgument(name='obstacles', type=list, optional=True, default=None),
                 CommandArgument(name='bounds', type=dict, optional=True, default=None),
                 CommandArgument(name='seed', type=int, optional=True, default=None),
+                CommandArgument(name='target_heading', type=float, optional=True, default=None),
             ],
             description='Plan path from current position to target (preview only, no load/start)',
             execute_in_thread=True
@@ -1934,7 +1949,8 @@ class BILBO_PositionControl:
 
     def _wifi_plan_and_follow(self, target, waypoints=None, obstacles=None, bounds=None,
                                stop_indices=None, max_speed=0.0, max_spacing=0.0,
-                               timeout=0.0, allow_reverse=False, seed=None) -> bool:
+                               timeout=0.0, allow_reverse=False, seed=None,
+                               target_heading=None) -> bool:
         """Plan and follow path from WiFi command"""
         # Parse target from dict or list
         if isinstance(target, dict):
@@ -1952,9 +1968,11 @@ class BILBO_PositionControl:
             timeout=float(timeout),
             allow_reverse=bool(allow_reverse),
             seed=int(seed) if seed is not None else None,
+            target_heading=float(target_heading) if target_heading is not None else None,
         )
 
-    def _wifi_plan_path(self, target, waypoints=None, obstacles=None, bounds=None, seed=None) -> bool:
+    def _wifi_plan_path(self, target, waypoints=None, obstacles=None, bounds=None, seed=None,
+                         target_heading=None) -> bool:
         """Plan path from WiFi command. Plans, emits preview event, and loads onto STM32 (without starting)."""
         if self._top_level_control_mode != BILBO_Control_Mode.POSITION:
             self.logger.warning(
@@ -1974,6 +1992,7 @@ class BILBO_PositionControl:
             obstacles=obstacles,
             bounds=bounds,
             seed=int(seed) if seed is not None else None,
+            target_heading=float(target_heading) if target_heading is not None else None,
         )
 
         if dense_points is None or len(dense_points) < 2:

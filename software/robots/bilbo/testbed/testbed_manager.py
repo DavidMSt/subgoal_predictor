@@ -11,7 +11,7 @@ from core.utils.sound.sound import speak
 from extensions.cli.cli import CommandSet, Command, CommandArgument
 from core.utils.timecode.timecode_server import TimecodeServer
 from core.utils.yaml_utils import load_yaml
-from robots.bilbo.definitions import BoxObstacle_Config, BoxObstacle_State
+from robots.bilbo.definitions import BoxObstacle_Config, BoxObstacle_State, Line_Config, Point_Config, Pose_Config
 from robots.bilbo.manager.bilbo_manager import BILBO_Manager
 from robots.bilbo.robot.bilbo import BILBO
 from robots.bilbo.robot.bilbo_definitions import BILBO_Config
@@ -45,6 +45,10 @@ def _resolve_config_from_file(name: str, directory: str, data_class):
 class TestbedSettings:
     id: str | None = None  # ID of the testbed. Is used by the robots to set specific control configs
     size: dict[str, list[float]] | None = None
+    obstacles: list[BoxObstacle_Config] | None = None
+    lines: list[Line_Config] | None = None
+    points: list[Point_Config] | None = None
+    poses: list[Pose_Config] | None = None
 
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -186,6 +190,8 @@ class TestbedManager:
         self.cli = self._build_cli()
 
         self._running = False
+        self._experiment_listeners: dict[str, list] = {}
+        self._display_clear_timer: threading.Timer | None = None
         self._obstacle_sync_thread: threading.Thread | None = None
         register_exit_callback(self.close)
 
@@ -194,6 +200,7 @@ class TestbedManager:
         self._register_events()
         self.robot_manager.init()
         self.virtual_testbed.init()
+        self._load_obstacles_from_settings()
 
         if self.tracker is not None:
             self.tracker.init()
@@ -260,6 +267,15 @@ class TestbedManager:
         self.testbed.add_bilbo(testbed_bilbo)
         self.events.new_bilbo.set(testbed_bilbo)
 
+        # Listen for experiment events to show status on testbed display
+        listeners = [
+            robot.experiment_handler.events.experiment_started.on(self._on_experiment_started, discard_match_data=False),
+            robot.experiment_handler.events.experiment_finished.on(self._on_experiment_finished),
+            robot.experiment_handler.events.experiment_error.on(self._on_experiment_finished),
+            robot.experiment_handler.events.experiment_timeout.on(self._on_experiment_finished),
+        ]
+        self._experiment_listeners[robot.id] = listeners
+
     # ------------------------------------------------------------------------------------------------------------------
     def _on_robot_disconnected(self, robot: BILBO):
         self.logger.info(f"Robot disconnected: {robot.id}")
@@ -268,6 +284,10 @@ class TestbedManager:
         if robot.id not in self.testbed.bilbos:
             self.logger.warning(f"Robot {robot.id} does not exist in testbed")
             return
+
+        if robot.id in self._experiment_listeners:
+            for listener in self._experiment_listeners.pop(robot.id):
+                listener.stop()
 
         self.testbed.remove_bilbo(robot.id)
 
@@ -279,6 +299,25 @@ class TestbedManager:
 
         self.events.bilbo_removed.set(robot.id)
         self.events.robot_disconnected.set(robot, flags={'type': 'robot', 'id': robot.id})
+
+    # === EVENT HANDLERS: EXPERIMENTS ==================================================================================
+    def _on_experiment_started(self, data, match):
+        if self.extensions is not None and self.extensions.display is not None:
+            if self._display_clear_timer is not None:
+                self._display_clear_timer.cancel()
+                self._display_clear_timer = None
+            experiment_label = match.flags.get('experiment_label') or match.flags.get('experiment_id', '')
+            self.extensions.display.set_title(experiment_label)
+            self.extensions.display.start_clock(mode='replace_text')
+
+    def _on_experiment_finished(self, data, *args, **kwargs):
+        if self.extensions is not None and self.extensions.display is not None:
+            self.extensions.display.stop_clock()
+            if self._display_clear_timer is not None:
+                self._display_clear_timer.cancel()
+            self._display_clear_timer = threading.Timer(5.0, self.extensions.display.clear)
+            self._display_clear_timer.daemon = True
+            self._display_clear_timer.start()
 
     # === EVENT HANDLERS: TRACKER ======================================================================================
     def _on_tracker_initialized(self, *args, **kwargs):
@@ -433,9 +472,18 @@ class TestbedManager:
             ]
         )
 
+        run_final_command = Command(
+            name='runFinal',
+            function=self._cli_run_final,
+            description='Run the Boppard final experiments on all three robots (staggered start)',
+            arguments=[],
+            execute_in_thread=True,
+        )
+
         return CommandSet(
             name='testbed',
-            commands=[add_box_command, remove_command, clear_command, list_command, set_state_command]
+            commands=[add_box_command, remove_command, clear_command, list_command, set_state_command,
+                      run_final_command]
         )
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -489,16 +537,37 @@ class TestbedManager:
         sim_obstacle.set_state(x=x, y=y, psi=psi if psi is not None else sim_obstacle.state.psi)
         self.logger.info(f"Updated obstacle '{id}' to ({x:.2f}, {y:.2f})")
 
+    def _cli_run_final(self):
+        from research.Boppard_2026.experiments.final.run_final import run_final
+        self.logger.info("Starting Boppard final experiments...")
+        run_final(self)
+
     # === OBSTACLE SYNCING =============================================================================================
     def _sync_obstacles_to_robot(self, robot: BILBO):
-        """Send the current obstacle list to a single robot via its TestbedManager."""
+        """Send the current obstacle, line, point, and pose lists to a single robot."""
         device = robot.device
+
         device.executeFunction('clear_obstacles', arguments={})
         for obs in self.testbed.obstacles.values():
             d = obs.to_dict()
             obs_type = d.pop('type', 'box')
             device.executeFunction('add_obstacle',
                                    arguments={'type': obs_type, 'config': d})
+
+        device.executeFunction('clear_lines', arguments={})
+        for line in self.testbed.lines.values():
+            device.executeFunction('add_line',
+                                   arguments={'config': dataclasses.asdict(line)})
+
+        device.executeFunction('clear_points', arguments={})
+        for point in self.testbed.points.values():
+            device.executeFunction('add_point',
+                                   arguments={'config': dataclasses.asdict(point)})
+
+        device.executeFunction('clear_poses', arguments={})
+        for pose in self.testbed.poses.values():
+            device.executeFunction('add_pose',
+                                   arguments={'config': dataclasses.asdict(pose)})
 
     # ------------------------------------------------------------------------------------------------------------------
     def _sync_obstacles_to_robots(self):
@@ -533,6 +602,40 @@ class TestbedManager:
             time.sleep(interval)
 
     # === PRIVATE METHODS ==============================================================================================
+    def _load_obstacles_from_settings(self):
+        """Load obstacles, lines, and points from testbed settings into the testbed."""
+        ts = self.settings.testbed
+
+        # Load obstacles into virtual testbed (which bridges them to testbed via events)
+        if ts.obstacles:
+            for obstacle_config in ts.obstacles:
+                state = None
+                if hasattr(obstacle_config, 'state') and obstacle_config.state is not None:
+                    s = obstacle_config.state
+                    if isinstance(s, (list, tuple)) and len(s) >= 2:
+                        state = BoxObstacle_State(
+                            x=float(s[0]),
+                            y=float(s[1]),
+                            psi=float(s[2]) if len(s) > 2 else 0
+                        )
+                self.virtual_testbed.add_box_obstacle(obstacle_config, state=state)
+
+        # Load lines directly into testbed
+        if ts.lines:
+            for line_config in ts.lines:
+                self.testbed.add_line(line_config)
+
+        # Load points directly into testbed
+        if ts.points:
+            for point_config in ts.points:
+                self.testbed.add_point(point_config)
+
+        # Load poses directly into testbed
+        if ts.poses:
+            for pose_config in ts.poses:
+                self.testbed.add_pose(pose_config)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _build_testbed_config(self) -> TestbedConfig | None:
         """Convert testbed settings (from application YAML) into a TestbedConfig."""
         ts = self.settings.testbed
@@ -560,15 +663,16 @@ class TestbedManager:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _get_obstacle_config_by_id(self, obstacle_id: str) -> BoxObstacle_Config | None:
-        """Look up obstacle dimensions from testbed config by ID."""
-        if self.testbed_config is None:
+        """Look up obstacle dimensions from testbed settings by ID."""
+        obstacles = self.settings.testbed.obstacles
+        if not obstacles:
             return None
-        for obs_def in self.testbed_config.obstacles:
-            obs_id = obs_def.get('id') if isinstance(obs_def, dict) else getattr(obs_def, 'id', None)
+        for obs_config in obstacles:
+            obs_id = obs_config.get('id') if isinstance(obs_config, dict) else getattr(obs_config, 'id', None)
             if obs_id == obstacle_id:
-                if isinstance(obs_def, dict):
-                    return from_dict_auto(BoxObstacle_Config, obs_def)
-                return obs_def
+                if isinstance(obs_config, dict):
+                    return from_dict_auto(BoxObstacle_Config, obs_config)
+                return obs_config
         return None
 
     # ------------------------------------------------------------------------------------------------------------------

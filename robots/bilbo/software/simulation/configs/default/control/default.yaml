@@ -97,6 +97,8 @@ velocity_control:
 position_control: # Dense path following (pure pursuit)
   kp_angular: 8.0
   ki_angular: 0.25
+  kp_angular_heading: 0.0
+  ki_angular_heading: 0.0
   kp_linear: 0.0
   ki_linear: 0.012
   kd_linear: 0.5

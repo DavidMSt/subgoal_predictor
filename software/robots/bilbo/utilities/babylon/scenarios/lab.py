@@ -38,7 +38,7 @@ class LabScenario(BabylonScenario):
                  walls: bool = True,
                  border_type: str | None = 'line',
                  wall_texture: str = 'wood4.png',
-                 wall_height: float = 0.3,
+                 wall_height: float = 0.25,
                  wall_alpha: float = 0.6,
                  include_end_caps: bool = True,
                  background_color: list | None = None,

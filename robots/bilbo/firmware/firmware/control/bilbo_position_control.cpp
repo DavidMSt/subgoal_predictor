@@ -1090,8 +1090,12 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_turn_to_heading(
 	float max_rate = (_active_turn_command.max_angular_speed > 0.0f) ?
 		_active_turn_command.max_angular_speed : config.max_turn_rate;
 
+	// Resolve effective angular gains (heading-specific overrides, 0 = use base)
+	float eff_kp = (config.kp_angular_heading > 0.0f) ? config.kp_angular_heading : config.kp_angular;
+	float eff_ki = (config.ki_angular_heading > 0.0f) ? config.ki_angular_heading : config.ki_angular;
+
 	// PI control
-	float w_p = config.kp_angular * heading_error;
+	float w_p = eff_kp * heading_error;
 	float w_i = _angular_integral;
 	float w_unsat = w_p + w_i;
 	float w_sat = _clamp(w_unsat, -max_rate, max_rate);
@@ -1103,8 +1107,8 @@ bilbo_position_control_output_t BILBO_PositionControl::_update_turn_to_heading(
 		(w_unsat < w_sat && heading_error < 0.0f));
 
 	if (!would_push_further) {
-		_angular_integral += config.ki_angular * heading_error * config.Ts;
-		float max_integral = max_rate / fmaxf(config.ki_angular, 0.01f);
+		_angular_integral += eff_ki * heading_error * config.Ts;
+		float max_integral = max_rate / fmaxf(eff_ki, 0.01f);
 		_angular_integral = _clamp(_angular_integral, -max_integral, max_integral);
 	}
 

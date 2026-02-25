@@ -260,7 +260,7 @@ ActionType = Literal[
 ]
 
 ALLOWED_ACTIONS: list[str] = [
-    "beep", "set_mode", "set_tic", "set_psi_control", "speak", "set_marker", "run_trajectory",
+    "beep", "set_mode", "set_tic", "set_psi_control", "set_tracker_updates", "speak", "set_marker", "run_trajectory",
     "wait_time", "wait_ticks", "wait_until_tick", "wait_event", "set_input",
     "set_velocity", "enable_external_input", "reset", "parallel", "group",
     "loop", "func", "set_feedback_gain", "reset_control",
@@ -470,6 +470,8 @@ class FollowPathActionParams:
     timeout: float = 0.0  # 0 = no timeout
     allow_reverse: bool = False
     seed: int | None = None
+    target_heading: float | None = None  # Desired heading at target [rad] (None = unconstrained)
+    target_heading_deg: float | None = None  # Alternative: specify in degrees (overrides target_heading)
     wait: bool = True
 
 
@@ -772,9 +774,11 @@ class ExperimentDefinition:
     - description: Human-readable description
     - actions: List of actions to execute
     - timeout: Optional experiment timeout in seconds
+    - label: Optional human-readable label (displayed on testbed display; falls back to id)
 
     Example YAML:
         id: balance_test
+        label: Balance Test
         description: Test balancing control
         timeout: 30.0
         actions:
@@ -793,6 +797,7 @@ class ExperimentDefinition:
     description: str
     actions: list[ExperimentActionDefinition]
     timeout: float | None = None
+    label: str | None = None  # Optional human-readable label (displayed on testbed display; falls back to id)
     source_dict: dict | None = None  # Original definition dict before parsing/expansion (preserved for report YAML)
 
     @classmethod
@@ -828,6 +833,7 @@ class ExperimentDefinition:
             description=data["description"],
             actions=actions,
             timeout=data.get("timeout"),
+            label=data.get("label"),
             source_dict=copy.deepcopy(data),
         )
 
@@ -859,12 +865,15 @@ class ExperimentDefinition:
         """
         if self.source_dict is not None:
             return {k: v for k, v in self.source_dict.items() if k != 'source_dict'}
-        return {
+        d = {
             "id": self.id,
             "description": self.description,
             "timeout": self.timeout,
             "actions": [a.to_dict() for a in self.actions],
         }
+        if self.label is not None:
+            d["label"] = self.label
+        return d
 
     def to_yaml(self) -> str:
         """Convert to YAML string."""
@@ -937,7 +946,7 @@ class TestbedData:
 class ExperimentMetaData:
     """Metadata about an experiment execution."""
     description: str
-    camera_timestamp: float | None
+    start_timecode: str | None
     date: str
     control_config: BILBO_ControlConfig
     bilbo_config: BILBO_Config
@@ -1047,8 +1056,24 @@ def read_input_file(file) -> InputTrajectoryFileData | None:
 
     try:
         data_dict = readJSON(file)
-        data = from_dict_auto(InputTrajectoryFileData, data_dict)
-        return data
+        # Fast path: construct trajectory steps directly instead of going
+        # through from_dict_auto, which does expensive per-element reflection
+        # for the inputs list (can take 10+ seconds for ~300 steps).
+        traj_dict = data_dict.get('trajectory', {})
+        raw_inputs = traj_dict.get('inputs', [])
+        steps = [InputTrajectoryStep(step=d['step'], left=d['left'], right=d['right'])
+                 for d in raw_inputs]
+        trajectory = InputTrajectory(
+            name=traj_dict.get('name', ''),
+            id=traj_dict.get('id', 0),
+            inputs=steps,
+            dt=traj_dict.get('dt', BILBO_CONTROL_DT),
+        )
+        return InputTrajectoryFileData(
+            id=data_dict.get('id', ''),
+            description=data_dict.get('description', ''),
+            trajectory=trajectory,
+        )
     except Exception as e:
         print(f"Error reading input file: {e}")
         return None
@@ -1529,8 +1554,9 @@ def turn_to(heading: float = 0.0, heading_deg: float | None = None,
 
 def follow_path(target: dict | list | tuple, waypoints: list[dict | list | tuple] | None = None,
                 max_speed: float = 0.0, timeout: float = 0.0, allow_reverse: bool = False,
-                seed: int | None = None, wait: bool = True,
-                **scheduling) -> ExperimentActionDefinition:
+                seed: int | None = None, target_heading: float | None = None,
+                target_heading_deg: float | None = None,
+                wait: bool = True, **scheduling) -> ExperimentActionDefinition:
     """Create a follow_path action to plan and follow a path to a target point.
 
     Uses the motion planner (RRT) to compute a collision-free path from the current
@@ -1548,6 +1574,8 @@ def follow_path(target: dict | list | tuple, waypoints: list[dict | list | tuple
         timeout: Path execution timeout [s] (0 = no timeout)
         allow_reverse: If True, robot may drive backwards
         seed: Random seed for planner reproducibility
+        target_heading: Desired heading [rad] at the target (None = unconstrained)
+        target_heading_deg: Alternative: specify target heading in degrees (overrides target_heading)
         wait: If True, wait for path completion before continuing
     """
     # Normalize target to dict
@@ -1564,6 +1592,10 @@ def follow_path(target: dict | list | tuple, waypoints: list[dict | list | tuple
         params["waypoints"] = waypoints
     if seed is not None:
         params["seed"] = seed
+    if target_heading_deg is not None:
+        params["target_heading_deg"] = target_heading_deg
+    elif target_heading is not None:
+        params["target_heading"] = target_heading
     return ExperimentActionDefinition(
         id=scheduling.get("id", "follow_path"),
         type="follow_path",
@@ -1634,10 +1666,11 @@ class ExperimentBuilder:
                .build())
     """
 
-    def __init__(self, id: str, description: str, timeout: float | None = None):
+    def __init__(self, id: str, description: str, timeout: float | None = None, label: str | None = None):
         self.id = id
         self.description = description
         self.timeout = timeout
+        self.label = label
         self._actions: list[ExperimentActionDefinition] = []
         self._action_counter = 0
 
@@ -1744,9 +1777,12 @@ class ExperimentBuilder:
                     waypoints: list[dict | list | tuple] | None = None,
                     max_speed: float = 0.0, timeout: float = 0.0,
                     allow_reverse: bool = False, seed: int | None = None,
+                    target_heading: float | None = None,
+                    target_heading_deg: float | None = None,
                     wait: bool = True) -> "ExperimentBuilder":
         return self.add(follow_path(target, waypoints, max_speed, timeout, allow_reverse,
-                                    seed, wait, id=self._next_id("follow_path")))
+                                    seed, target_heading, target_heading_deg, wait,
+                                    id=self._next_id("follow_path")))
 
     def stop_path(self) -> "ExperimentBuilder":
         return self.add(stop_path(id=self._next_id("stop_path")))
@@ -1760,5 +1796,6 @@ class ExperimentBuilder:
             id=self.id,
             description=self.description,
             actions=self._actions,
-            timeout=self.timeout
+            timeout=self.timeout,
+            label=self.label,
         )

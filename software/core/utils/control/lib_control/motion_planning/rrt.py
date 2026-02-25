@@ -299,6 +299,7 @@ def plan_path(
     step_size: float | None = None,
     goal_bias: float | None = None,
     rewire_radius: float | None = None,
+    target_heading: float | None = None,
 ) -> 'list[tuple[float, float]] | PlanResult':
     """
     Plan a collision-free path from start to end through weighted waypoints.
@@ -338,6 +339,9 @@ def plan_path(
         Override RRT goal bias.
     rewire_radius : float, optional
         Override RRT* rewire radius.
+    target_heading : float or None
+        Desired arrival heading [rad] at the endpoint.  The spline's end
+        tangent is clamped to this direction.
 
     Returns
     -------
@@ -538,7 +542,8 @@ def plan_path(
     #  Phase 5: Spline smoothing with collision safety
     # ══════════════════════════════════════════════════════════════════════
     cs_x, cs_y, L, final_pts = _ensure_spline_safety(deduped, all_obstacles,
-                                                      margin=margin)
+                                                      margin=margin,
+                                                      target_heading=target_heading)
     if cs_x is None:
         if debug:
             return PlanResult(

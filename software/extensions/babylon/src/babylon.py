@@ -457,7 +457,7 @@ class BabylonConfig:
     background_color: list[float] = dataclasses.field(default_factory=lambda: [31 / 255, 32 / 255, 35 / 255])
     ambient_color: list[float] = dataclasses.field(default_factory=lambda: [0.5, 0.5, 0.5])
     show_coordinate_system: bool = True
-    coordinate_system_length: float = 0.5
+    coordinate_system_length: float = 0.1
 
     def to_dict(self) -> dict:
         return {
@@ -567,6 +567,7 @@ class BabylonVisualization:
         self._recording_save_path: str | None = None
         self._recording_chunks: list[bytes] = []
         self._recording_total_chunks: int = 0
+        self._recording_complete_received: bool = False
 
     # ------------------------------------------------------------------------------------------------------------------
     def init(self):
@@ -639,6 +640,7 @@ class BabylonVisualization:
             self._recording_save_path = os.path.expanduser(save_path)
             self._recording_chunks = []
             self._recording_total_chunks = 0
+            self._recording_complete_received = False
 
         message = {
             'type': 'command',
@@ -846,6 +848,52 @@ class BabylonVisualization:
         self.send({'type': 'add_camera', 'camera': cam_dict})
 
     # ------------------------------------------------------------------------------------------------------------------
+    def set_camera(self, camera: BabylonCamera):
+        """Set the camera parameters immediately (no UI button)."""
+        self.send({
+            'type': 'set_camera',
+            'target': list(camera.target),
+            'alpha': camera.alpha,
+            'beta': camera.beta,
+            'radius': camera.radius,
+            'fov': camera.fov,
+        })
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def animate_camera(self, end: BabylonCamera, duration: float = 2.0,
+                       start: BabylonCamera | None = None,
+                       easing: str = 'smoothstep'):
+        """Animate the camera from start to end over duration seconds.
+
+        Args:
+            end: Target camera state.
+            duration: Animation duration in seconds.
+            start: Starting camera state. If None, animates from the current camera position.
+            easing: Easing function ('linear', 'smoothstep', 'ease_in', 'ease_out').
+        """
+        msg = {
+            'type': 'animate_camera',
+            'end': {
+                'target': list(end.target),
+                'alpha': end.alpha,
+                'beta': end.beta,
+                'radius': end.radius,
+                'fov': end.fov,
+            },
+            'duration': duration,
+            'easing': easing,
+        }
+        if start is not None:
+            msg['start'] = {
+                'target': list(start.target),
+                'alpha': start.alpha,
+                'beta': start.beta,
+                'radius': start.radius,
+                'fov': start.fov,
+            }
+        self.send(msg)
+
+    # ------------------------------------------------------------------------------------------------------------------
     def center_camera_on(self, obj):
         """Start following a BabylonObject with the camera.
 
@@ -1043,6 +1091,10 @@ class BabylonVisualization:
         total_chunks = message.get('totalChunks', 0)
         data_b64 = message.get('data', '')
 
+        if not self._recording_save_path:
+            self.logger.warning("Received recording data but no save_path was set.")
+            return
+
         if chunk_index == 0:
             self._recording_chunks = []
             self._recording_total_chunks = total_chunks
@@ -1052,12 +1104,24 @@ class BabylonVisualization:
         self.logger.debug(f"Received recording chunk {chunk_index + 1}/{total_chunks} "
                           f"({len(chunk_bytes)} bytes)")
 
+        # Write when all chunks arrived (handles race where recordingComplete arrives first)
+        if len(self._recording_chunks) >= total_chunks:
+            self._finalize_recording()
+
     # ------------------------------------------------------------------------------------------------------------------
     def _handle_recording_complete(self, message):
-        file_name = message.get('fileName', 'recording.webm')
+        self._recording_complete_received = True
 
+        # If all chunks already arrived, finalize now
+        if self._recording_chunks and len(self._recording_chunks) >= self._recording_total_chunks > 0:
+            self._finalize_recording()
+        else:
+            self.logger.debug("recordingComplete received, waiting for data chunks...")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _finalize_recording(self):
         if not self._recording_save_path:
-            self.logger.warning("Received recording data but no save_path was set.")
+            self.logger.warning("Cannot finalize recording: no save_path set.")
             self._recording_chunks = []
             return
 
@@ -1080,5 +1144,6 @@ class BabylonVisualization:
         self._recording_chunks = []
         self._recording_total_chunks = 0
         self._recording_save_path = None
+        self._recording_complete_received = False
 
         self.callbacks.recording_saved.call(save_path)

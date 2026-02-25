@@ -1,8 +1,8 @@
-
+import simulation.core.environment
 from simulation import core as core
 
 
-class BaseEnvironment(core.environment.Environment):
+class BaseEnvironment(simulation.core.environment.Environment):
     """
     A simple dynamic simulation world.
     It schedules various phases during each simulation cycle:

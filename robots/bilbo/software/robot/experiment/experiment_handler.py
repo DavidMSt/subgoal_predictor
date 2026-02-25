@@ -287,16 +287,25 @@ class BILBO_ExperimentHandler:
                 f"Experiment \"{self.active_experiment.definition.id}\" already running. Cannot start experiment \"{experiment.definition.id}\".")
             return False
 
-        self.active_experiment = experiment
-        self.active_experiment.initialize(self)
+        experiment.initialize(self)
 
         # Attach event listeners
-        self.active_experiment.events.finished.on(callback=Callback(self._on_experiment_finished), once=True)
-        self.active_experiment.events.error.on(callback=Callback(self._on_experiment_error), once=True)
-        self.active_experiment.events.timeout.on(callback=Callback(self._on_experiment_timeout), once=True)
+        experiment.events.finished.on(callback=Callback(self._on_experiment_finished), once=True)
+        experiment.events.error.on(callback=Callback(self._on_experiment_error), once=True)
+        experiment.events.timeout.on(callback=Callback(self._on_experiment_timeout), once=True)
         self.status = BILBO_ExperimentHandler_Status.EXPERIMENT
 
-        self.wifi_events.started.send(data={'experiment_id': experiment.definition.id})
+        # Send WiFi event first so the host can update the display before the experiment starts stepping
+        self.wifi_events.started.send(data={
+            'experiment_id': experiment.definition.id,
+            'experiment_label': experiment.definition.label,
+        })
+
+        # Small delay to allow the testbed display to update before the first experiment step
+        time.sleep(0.1)
+
+        # Now activate the experiment — step() will begin executing it
+        self.active_experiment = experiment
 
         return True
 

@@ -12,7 +12,8 @@ from robot.bilbo_common import BILBO_Common
 from robot.communication.bilbo_communication import BILBO_Communication
 from robot.control.bilbo_control import BILBO_Control
 from robot.paths import CONTROL_PATH
-from robot.testbed.obstacles import Obstacle, CircleObstacle, BoxObstacle, LimboBar, LimboBarGeometry
+from robot.testbed.obstacles import Obstacle, CircleObstacle, BoxObstacle, LimboBar, LimboBarGeometry, \
+    Line, Point, Pose
 
 
 @dataclasses.dataclass
@@ -56,6 +57,9 @@ class BILBO_TestbedManager:
     testbed_config: TestbedConfig | None = None
 
     obstacles: list[Obstacle]
+    lines: list[Line]
+    points: list[Point]
+    poses: list[Pose]
     limbo_bars: list[LimboBar]
 
     # === INIT =========================================================================================================
@@ -68,6 +72,9 @@ class BILBO_TestbedManager:
         self.events = TestbedEvents()
         self.wifi_events = TestbedWifiEvents(wifi=communication.wifi.wifi, id='testbed')
         self.obstacles = []
+        self.lines = []
+        self.points = []
+        self.poses = []
         self.limbo_bars = []
         self._register_wifi_commands()
 
@@ -147,6 +154,69 @@ class BILBO_TestbedManager:
             if obs is not None:
                 obs.set_state(x=float(state['x']), y=float(state['y']),
                               psi=float(state['psi']) if 'psi' in state else None)
+
+    # --- LINES --------------------------------------------------------------------------------------------------------
+    def add_line(self, config: dict):
+        line_id = config.get('id') or generate_uuid(prefix='line_')
+        if line_id in [l.id for l in self.lines]:
+            self.logger.error(f"Line with ID '{line_id}' already exists")
+            return
+        self.lines.append(Line(
+            id=line_id,
+            start=config.get('start', [0, 0]),
+            end=config.get('end', [0, 0]),
+        ))
+
+    def remove_line(self, line_id: str):
+        for line in self.lines:
+            if line.id == line_id:
+                self.lines.remove(line)
+                return
+
+    def clear_lines(self):
+        self.lines.clear()
+
+    # --- POINTS -------------------------------------------------------------------------------------------------------
+    def add_point(self, config: dict):
+        point_id = config.get('id') or generate_uuid(prefix='point_')
+        if point_id in [p.id for p in self.points]:
+            self.logger.error(f"Point with ID '{point_id}' already exists")
+            return
+        self.points.append(Point(
+            id=point_id,
+            position=config.get('position', [0, 0]),
+        ))
+
+    def remove_point(self, point_id: str):
+        for point in self.points:
+            if point.id == point_id:
+                self.points.remove(point)
+                return
+
+    def clear_points(self):
+        self.points.clear()
+
+    # --- POSES --------------------------------------------------------------------------------------------------------
+    def add_pose(self, config: dict):
+        pose_id = config.get('id') or generate_uuid(prefix='pose_')
+        if pose_id in [p.id for p in self.poses]:
+            self.logger.error(f"Pose with ID '{pose_id}' already exists")
+            return
+        self.poses.append(Pose(
+            id=pose_id,
+            x=float(config.get('x', 0)),
+            y=float(config.get('y', 0)),
+            psi=float(config.get('psi', 0)),
+        ))
+
+    def remove_pose(self, pose_id: str):
+        for pose in self.poses:
+            if pose.id == pose_id:
+                self.poses.remove(pose)
+                return
+
+    def clear_poses(self):
+        self.poses.clear()
 
     # --- LIMBO BARS ---------------------------------------------------------------------------------------------------
     def add_limbo_bar(self, config: dict) -> str:
@@ -268,6 +338,54 @@ class BILBO_TestbedManager:
                                            function=self.update_obstacle_states,
                                            arguments=['states'],
                                            description='Batch-update obstacle states: {id: {x, y, psi}, ...}')
+
+        # Line commands
+        self.communication.wifi.newCommand(identifier='add_line',
+                                           function=self.add_line,
+                                           arguments=['config'],
+                                           description='Adds a line: {id, start: [x,y], end: [x,y]}')
+
+        self.communication.wifi.newCommand(identifier='remove_line',
+                                           function=self.remove_line,
+                                           arguments=['line_id'],
+                                           description='Removes a line by ID')
+
+        self.communication.wifi.newCommand(identifier='clear_lines',
+                                           function=self.clear_lines,
+                                           arguments=[],
+                                           description='Removes all lines')
+
+        # Point commands
+        self.communication.wifi.newCommand(identifier='add_point',
+                                           function=self.add_point,
+                                           arguments=['config'],
+                                           description='Adds a point: {id, position: [x,y]}')
+
+        self.communication.wifi.newCommand(identifier='remove_point',
+                                           function=self.remove_point,
+                                           arguments=['point_id'],
+                                           description='Removes a point by ID')
+
+        self.communication.wifi.newCommand(identifier='clear_points',
+                                           function=self.clear_points,
+                                           arguments=[],
+                                           description='Removes all points')
+
+        # Pose commands
+        self.communication.wifi.newCommand(identifier='add_pose',
+                                           function=self.add_pose,
+                                           arguments=['config'],
+                                           description='Adds a pose: {id, x, y, psi}')
+
+        self.communication.wifi.newCommand(identifier='remove_pose',
+                                           function=self.remove_pose,
+                                           arguments=['pose_id'],
+                                           description='Removes a pose by ID')
+
+        self.communication.wifi.newCommand(identifier='clear_poses',
+                                           function=self.clear_poses,
+                                           arguments=[],
+                                           description='Removes all poses')
 
         # Limbo bar commands
         self.communication.wifi.newCommand(identifier='add_limbo_bar',

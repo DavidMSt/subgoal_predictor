@@ -14,6 +14,7 @@ import json
 import os
 import tempfile
 import time
+import webbrowser
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 
@@ -149,7 +150,7 @@ class BILBO_ExperimentHandler_Events:
     waiting_for_user: Event = Event()
 
     # Experiment lifecycle events (public)
-    experiment_started: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
+    experiment_started: Event = Event(flags=[EventFlag('experiment_id', str), EventFlag('experiment_label', str)], copy_data_on_set=False)
     experiment_finished: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
     experiment_error: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
     experiment_timeout: Event = Event(flags=EventFlag('experiment_id', str), copy_data_on_set=False)
@@ -390,7 +391,10 @@ class BILBO_ExperimentHandler:
         self.status = BILBO_ExperimentHandler_Status.EXPERIMENT_RUNNING
         self.current_experiment_definition = experiment_definition
         self._experiment_start_time = time.monotonic()
-        self.events.experiment_started.set(flags={'experiment_id': experiment_definition.id})
+        self.events.experiment_started.set(flags={
+            'experiment_id': experiment_definition.id,
+            'experiment_label': experiment_definition.label or experiment_definition.id,
+        })
 
         if blocking:
             return self._wait_for_experiment_completion(
@@ -783,9 +787,6 @@ class BILBO_ExperimentHandler:
                            in the same directory with the same base name but .html extension.
             open_report: If True, opens the saved report in the default browser.
         """
-        import os
-        import webbrowser
-
         try:
             exp_id = experiment_data.get('id', 'unknown')
             self.logger.info(f"Generating report for experiment \"{exp_id}\"...")

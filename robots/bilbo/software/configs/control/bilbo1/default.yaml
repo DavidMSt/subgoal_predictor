@@ -104,6 +104,8 @@ velocity_control:
 position_control: # Dense path following (pure pursuit)
   kp_angular: 4.0                     # [(rad/s)/rad] Heading error proportional gain
   ki_angular: 0.25                    # [(rad/s)/(rad*s)] Heading error integral gain
+  kp_angular_heading: 0.0            # [(rad/s)/rad] Heading-only kp for turn_to_heading (0 = use kp_angular)
+  ki_angular_heading: 0.0            # [(rad/s)/(rad*s)] Heading-only ki for turn_to_heading (0 = use ki_angular)
   kp_linear: 0.0                      # [1/s] Speed proportional gain (unused when decel_limit > 0)
   ki_linear: 0.012                    # [1/s^2] Speed integral gain
   kd_linear: 0.5                      # [-] Velocity damping factor
