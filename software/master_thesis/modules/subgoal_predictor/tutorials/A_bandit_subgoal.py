@@ -58,7 +58,7 @@ class Limits:
 class SubgoalBanditEnv(gym.Env):
     def __init__(self) -> None:
 
-        pos _limits = Range2D((-1.0, -1.0), (1.0, 1.0)) # type: ignore[arg-type]
+        pos_limits = Range2D((-1.0, -1.0), (1.0, 1.0)) # type: ignore[arg-type]
         goal_limits = Range2D((-1.0, -1.0), (1.0, 1.0)) # type: ignore[arg-type]
         action_limits = Range2D((-1.0, -1.0), (1.0, 1.0)) # type: ignore[arg-type]
 
@@ -148,14 +148,14 @@ if __name__ == "__main__":
     print("Initial obs:", obs.shape, obs)
     print("Env having complications: ", "gym: ",check_env(env), ", stable-baselines: ", check_env_sb3(env))
 
-    # PPO is meant to run primarily on the cpu
+    # PPO is meant to run primarily on the cpu 
     model = PPO("MlpPolicy", env=env, device="cpu", verbose = 1)
     # one update is standard as 2048 steps, we want to perform ten episodes 
     model.learn(total_timesteps=2048*10)
-    model.save('bandit_subgoal')
+    model.save('master_thesis/modules/subgoal_predictor/tutorials/bandit_subgoal')
     del(model)
 
-    model = PPO.load('bandit_subgoal', env = env)
+    model = PPO.load('master_thesis/modules/subgoal_predictor/tutorials/bandit_subgoal', env = env)
     
 
     # action = env.action_space.sample()
