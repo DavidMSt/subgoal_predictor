@@ -7,7 +7,7 @@ from master_thesis.modules.execution.motion_executor_base import MotionExecutorB
 from master_thesis.modules.motion_planning.path_planner_base import PlanResult
 from master_thesis.modules.local_control.local_control_module import LocalControlModule
 from master_thesis.modules.local_control.local_controller import LocalController
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 
 

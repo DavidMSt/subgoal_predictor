@@ -7,7 +7,7 @@ from core.utils.logging_utils import Logger
 from master_thesis.general.general_task import GeneralTask
 from master_thesis.general.general_agent import FRODOGeneralAgent
 
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_agent import AgentTAContainer, AgentTAConfig, AgentTAState

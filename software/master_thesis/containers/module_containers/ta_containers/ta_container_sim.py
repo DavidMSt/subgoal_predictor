@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from master_thesis.containers.base_container import BaseContainer
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 import numpy as np
 

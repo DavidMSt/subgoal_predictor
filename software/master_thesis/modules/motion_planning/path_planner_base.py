@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 import numpy as np
 
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 

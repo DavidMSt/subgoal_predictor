@@ -8,7 +8,7 @@ from core.utils.logging_utils import Logger
 # master thesis
 from master_thesis.modules.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOBase
 
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer, MPPhaseConfig
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerConfig, AgentMPPlannerContainer

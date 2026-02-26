@@ -11,7 +11,7 @@ from core.utils.logging_utils import Logger
 
 from master_thesis.modules.motion_planning.path_planner_base import PathPlannerBase, PlanResult
 from master_thesis.modules.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOBase
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer, MPPhaseConfig

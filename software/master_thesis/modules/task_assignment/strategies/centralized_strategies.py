@@ -8,7 +8,7 @@ from master_thesis.modules.task_assignment.strategies.base_strategy import BaseS
 from master_thesis.modules.task_assignment.gnn.dgnn_ga import DGNN_GA
 from master_thesis.modules.task_assignment.gnn.helpers.cost_computation import squared_cost_matrix_from_tensors
 
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_sim import (
     SimTAResultContainer,

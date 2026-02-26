@@ -3,7 +3,7 @@ from __future__ import annotations
 from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
 from master_thesis.universal.universal_agent import FRODOUniversalAgent
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 
 from typing import Optional, Type
 import gymnasium as gym

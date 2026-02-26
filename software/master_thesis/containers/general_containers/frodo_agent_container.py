@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from robots.frodo.simulation.frodo import FRODO_State
 from master_thesis.containers.base_container import BaseContainer
-from robots.frodo.simulation.frodo import FRODO_State
 
 @dataclass
 class FRODO_AgentState(FRODO_State):

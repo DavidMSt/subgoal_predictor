@@ -1,6 +1,6 @@
 import numpy as np
 import fcl
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.general_containers.obstacle_container import ObstacleContainer

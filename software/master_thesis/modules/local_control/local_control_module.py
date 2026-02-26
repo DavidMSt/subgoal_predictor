@@ -7,7 +7,7 @@ from core.utils.logging_utils import Logger
 
 # master thesis
 from master_thesis.modules.local_control.local_controller import LocalController
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 
 

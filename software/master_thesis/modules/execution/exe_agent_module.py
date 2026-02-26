@@ -8,7 +8,7 @@ import math
 from core.utils.logging_utils import Logger
 
 # master thesis
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.module_containers.exe_containers.exe_container import AgentExeContainer
 from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer, MPPhaseConfig, MPPhaseState
 

@@ -30,7 +30,7 @@ import argparse
 from master_thesis.modules.motion_planning.helper.nearest_neighbor import NearestNeighbor # TODO: Use scikit-learn kd tree here
 from master_thesis.modules.motion_planning.helper.collisions_fcl import AgentCollisionChecker
 
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
 from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer, MPPhaseConfig

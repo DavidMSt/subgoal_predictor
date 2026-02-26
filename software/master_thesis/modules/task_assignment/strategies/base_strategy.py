@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
 from master_thesis.containers.module_containers.ta_containers.ta_container_sim import SimTAResultContainer
 from core.utils.logging_utils import Logger

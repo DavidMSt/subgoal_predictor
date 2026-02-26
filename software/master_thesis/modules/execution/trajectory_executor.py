@@ -6,7 +6,7 @@ from core.utils.logging_utils import Logger
 from master_thesis.modules.execution.motion_executor_base import MotionExecutorBase
 from master_thesis.modules.execution.exe_agent_module import EXEAgentModule
 from master_thesis.modules.motion_planning.path_planner_base import PlanResult
-from master_thesis.containers.general_containers.agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.module_containers.exe_containers.exe_container import AgentExeContainer
 
 
