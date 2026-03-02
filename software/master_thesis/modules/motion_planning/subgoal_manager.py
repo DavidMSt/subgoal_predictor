@@ -1,6 +1,7 @@
 """Coordinates planner and executor: assign task → plan → execute → replan."""
 
 import numpy as np
+from types import SimpleNamespace
 from core.utils.logging_utils import Logger
 
 from master_thesis.modules.motion_planning.path_planner_base import PathPlannerBase, PlanResult
@@ -21,6 +22,10 @@ class SubgoalManager:
         2. sim.start_mp()  → sets sgm.start_planning_flag  → _action_planning picks it up
         3. sim.start_exe() → sets sgm._execution_enabled    → executor starts producing controls
         4. tick() each step → handles automatic re-planning for reactive modes
+
+    RL subgoal mode (optional):
+        Call set_subgoals() with a list of (x, y, psi) arrays before starting execution.
+        The manager will plan to each subgoal in sequence, then to the final task.
     """
 
     def __init__(self, planner: PathPlannerBase, executor: MotionExecutorBase,
@@ -37,6 +42,10 @@ class SubgoalManager:
         # Flag set by sim-level trigger (sim.start_mp → sets this to a phase key string)
         self.start_planning_flag: str | None = None
 
+        # RL subgoal queue — set via set_subgoals() before execution
+        self._subgoal_queue: list[np.ndarray] = []
+        self._subgoal_idx: int = 0
+
     @property
     def current_task(self) -> TaskContainer | None:
         """Read assigned task from the TA container (single source of truth)."""
@@ -46,6 +55,29 @@ class SubgoalManager:
     def last_plan_result(self) -> PlanResult | None:
         """Last successful plan result (for visualization)."""
         return self._last_result
+
+    # ── RL subgoal interface ─────────────────────────────────────────
+
+    def set_subgoals(self, subgoals: list[np.ndarray]):
+        """Load RL-predicted subgoal sequence.
+
+        Each entry is a (3,) array [x, y, psi].  The manager will plan to
+        each subgoal in order, then fall back to the final assigned task.
+        """
+        self._subgoal_queue = list(subgoals)
+        self._subgoal_idx = 0
+        self.logger.debug(f"SubgoalManager: {len(subgoals)} subgoals loaded")
+
+    @property
+    def _has_pending_subgoal(self) -> bool:
+        return self._subgoal_idx < len(self._subgoal_queue)
+
+    def _current_target(self):
+        """Return the current planning target — next subgoal or the final task."""
+        if self._has_pending_subgoal:
+            sg = self._subgoal_queue[self._subgoal_idx]
+            return SimpleNamespace(x=float(sg[0]), y=float(sg[1]), psi=float(sg[2]))
+        return self.current_task
 
     # ── External triggers ───────────────────────────────────────────
 
@@ -67,7 +99,7 @@ class SubgoalManager:
     # ── Per-tick call ───────────────────────────────────────────────
 
     def tick(self):
-        """Called every LOGIC step.  Handles automatic re-planning for reactive modes."""
+        """Called every LOGIC step.  Handles automatic re-planning."""
         if not self._execution_enabled:
             return
         if not self._plan_active:
@@ -75,19 +107,29 @@ class SubgoalManager:
         if self.current_task is None:
             return
 
-        # Re-plan when the executor reports goal reached AND the planner wants to replan
-        if self.executor.is_goal_reached() and self.planner.needs_replan():
-            self.logger.debug("SubgoalManager: replanning (executor reached subgoal)")
-            self._do_plan()
+        if self.executor.is_goal_reached():
+            if self._has_pending_subgoal:
+                # Advance to next subgoal and replan (offline and reactive)
+                self._subgoal_idx += 1
+                self.logger.debug(
+                    f"SubgoalManager: subgoal reached, advancing to "
+                    f"{self._subgoal_idx}/{len(self._subgoal_queue)}"
+                )
+                self._do_plan()
+            elif self.planner.needs_replan():
+                # Reactive replan toward final task (no subgoals remaining)
+                self.logger.debug("SubgoalManager: replanning (executor reached subgoal)")
+                self._do_plan()
 
     # ── Internal ────────────────────────────────────────────────────
 
     def _do_plan(self, phase_key: str = 'default'):
-        if self.current_task is None:
+        target = self._current_target()
+        if target is None:
             self.logger.warning("SubgoalManager: _do_plan called but no task assigned")
             return
 
-        result = self.planner.plan(self.current_task, phase_key)
+        result = self.planner.plan(target, phase_key)
         if result.success:
             self._last_result = result
             self.executor.set_plan(result, phase_key=phase_key)
@@ -108,4 +150,6 @@ class SubgoalManager:
         self._execution_enabled = False
         self._last_result = None
         self.start_planning_flag = None
+        self._subgoal_queue = []
+        self._subgoal_idx = 0
         self.executor.clear()

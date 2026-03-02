@@ -260,6 +260,24 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
         """Advance simulation by one timestep (for non-real-time RL training)."""
         self.environment.scheduling.actions['step'].run()
 
+    def all_agents_reached_tasks(self) -> bool:
+        """Return True when every agent is within its task's goal_tolerance_xy.
+
+        Assumes a 1-to-1 assignment: agent i -> task i (insertion order).
+        Tolerance is read from each task's own config (Task_Config.goal_tolerance_xy).
+        """
+        env_cont = self.environment.environment_container
+        agents   = list(env_cont.agent_conts.values())
+        tasks    = list(env_cont.task_conts.values())
+
+        for agent_cont, task_cont in zip(agents, tasks):
+            dx  = agent_cont.x - task_cont.x
+            dy  = agent_cont.y - task_cont.y
+            tol = task_cont.goal_tolerance_xy
+            if dx*dx + dy*dy >= tol*tol:
+                return False
+        return True
+
 
 # =======================================================================================
 # ======================================== Examples =====================================
