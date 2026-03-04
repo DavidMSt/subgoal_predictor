@@ -27,13 +27,13 @@ from master_thesis.containers.general_containers.local_world_container import (
 class FrodoGeneralEnvironment(FrodoEnvironment):
     environment_container : EnvironmentContainer
 
-    def __init__(self, Ts, run_mode, limits: tuple[tuple[int, int], ...] = ((-5, 5), (-5, 5)), *args, **kwargs):
+    def __init__(self, Ts, run_mode, limits: tuple[tuple[int, int], ...] = ((-5, 5), (-5, 5)), grid_resolution: float = 0.1, *args, **kwargs):
         super().__init__(Ts=Ts, run_mode=run_mode, *args, **kwargs)
         self.space = core.spaces.Space2D()
         self._obstacles = []  # TODO: still needed? 
 
         self.set_limits(limits)
-        environment_config = EnvironmentConfig(limits=limits, Ts = Ts)
+        environment_config = EnvironmentConfig(limits=limits, Ts=Ts, grid_resolution=grid_resolution)
         self.environment_container = EnvironmentContainer(environment_config) 
         
         # Initialize collision checker after parent init (when self.objects exists)
@@ -169,6 +169,7 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
 
         elif isinstance(objects, GeneralObstacle):
             self.environment_container.add_obstacles(objects.container)
+            self.collision_checker.add_obstacle(objects.container, objects.obstacle_id)
 
         elif isinstance(objects, GeneralTask):
             self.environment_container.add_tasks(objects.container)
@@ -235,7 +236,7 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
 
         for aid, hits in collisions.items():
             if hits:
-                print(f"[COLLISION] Agent {aid} collided with {hits}")
+                self.logger.debug(f"[COLLISION] Agent {aid} collided with {hits}")
 
     @property
     def limits(self) ->list[list[float]]:
@@ -344,6 +345,41 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
                     container.occupancy_grid_full[gy, gx] = True
                 if mark_static:
                     container.occupancy_grid_static[gy, gx] = True
+
+    def footprint_cells(
+        self, x: float, y: float, psi: float, length: float, width: float
+    ) -> list[tuple[int, int]]:
+        """Return the grid cell indices (row, col) covered by a rectangular footprint.
+
+        Uses the same axis-aligned bounding box approximation as
+        :meth:`mark_object_in_grid`.  The result can be used to mark or query
+        the occupancy grid without modifying it.
+        """
+        container = self.environment_container
+        grid_shape = container.occupancy_grid_full.shape
+
+        half_l, half_w = length / 2, width / 2
+        corners_local = np.array([
+            [ half_l,  half_w],
+            [ half_l, -half_w],
+            [-half_l, -half_w],
+            [-half_l,  half_w],
+        ])
+        cos_psi, sin_psi = np.cos(psi), np.sin(psi)
+        R = np.array([[cos_psi, -sin_psi], [sin_psi, cos_psi]])
+        corners_world = (R @ corners_local.T).T + np.array([x, y])
+
+        x_min, y_min = corners_world.min(axis=0)
+        x_max, y_max = corners_world.max(axis=0)
+
+        gy_min, gx_min = self.world_to_grid(x_min, y_min)
+        gy_max, gx_max = self.world_to_grid(x_max, y_max)
+
+        cells = []
+        for gy in range(max(0, gy_min), min(grid_shape[0], gy_max + 1)):
+            for gx in range(max(0, gx_min), min(grid_shape[1], gx_max + 1)):
+                cells.append((gy, gx))
+        return cells
 
     def is_position_free(self, x: float, y: float, psi: float, length: float, width: float,
                         check_grid: str = 'full') -> bool:

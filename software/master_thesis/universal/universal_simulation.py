@@ -1,5 +1,8 @@
+import numpy as np
+
 from extensions.cli.cli import CommandSet, Command, CommandArgument
 from typing import Sequence, cast
+import simulation.core as core
 
 from core.utils.logging_utils import Logger
 
@@ -109,8 +112,8 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
     agents: dict[str, FRODOUniversalAgent] # type: ignore[assignment]
     cli: FRODO_General_CommandSet | None = None
 
-    def __init__(self, Ts=0.1, limits=((-5,5),(-5,5)), env=FrodoGeneralEnvironment, run_mode='rt'):
-        super().__init__(Ts=Ts, limits=limits, env=env, run_mode=run_mode)
+    def __init__(self, Ts=0.1, limits=((-5,5),(-5,5)), env=FrodoGeneralEnvironment, run_mode='rt', grid_resolution: float = 0.1):
+        super().__init__(Ts=Ts, limits=limits, env=env, run_mode=run_mode, grid_resolution=grid_resolution)
 
         self.mp_containers: dict[str, AgentMPPlannerContainer] = {}
         self.ta_containers: dict[str, AgentTAContainer] = {}
@@ -124,6 +127,96 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
         self.exm = ExeSimulationModule(agent_exe_conts=self.exe_containers, logger = self.logger)
 
         self.cli = FRODO_General_CommandSet(self)
+
+        # Pre-move collision prevention — runs AFTER INPUT (10) sets input.v, AFTER LOGIC (40)
+        # picks up any existing replan flags, but BEFORE DYNAMICS (50) integrates kinematics.
+        # Priority 48 places it between LOGIC and DYNAMICS.
+        core.scheduling.Action(
+            action_id='collision_prevention',
+            object=self.environment,
+            function=self._collision_prevention,
+            priority=48,
+            parent=self.environment.scheduling.actions['objects'],
+        )
+
+    def _collision_prevention(self):
+        """Zero velocity and trigger OMPL replan when prospective position collides.
+
+        Called at scheduling priority 48 (after INPUT sets v, before DYNAMICS integrates).
+
+        Two independent checks, each purely local (decentralised):
+
+        1. FCL (agent-vs-wall): reliable because walls span many grid cells.
+        2. Occupancy grid (agent-vs-agent): each agent builds a cell map of all
+           OTHER agents' current footprints and checks whether its own prospective
+           footprint overlaps any of those cells.  Two agents approaching each
+           other both trigger independently — symmetric stop as an emergent
+           consequence of two decentralised checks, not explicit coordination.
+
+        FCL bounding boxes (FRODO: 0.157 × 0.115 m, Ts=0.01 s) are too small
+        for reliable one-tick lookahead in the agent-agent case, hence the grid.
+        """
+        if self.environment.collision_checker is None:
+            return
+
+        env = self.environment
+        Ts  = env.Ts
+
+        # ── Prospective positions ────────────────────────────────────────────
+        prospective: dict[str, tuple[float, float, float]] = {}
+        for aid, agent in self.agents.items():
+            x, y, psi = agent.state.x, agent.state.y, agent.state.psi
+            v = agent.input.v
+            prospective[aid] = (
+                x + Ts * v * np.cos(psi),
+                y + Ts * v * np.sin(psi),
+                psi,
+            )
+
+        # ── 1. FCL: agent-vs-wall ────────────────────────────────────────────
+        # Returns {agent_id: [list of colliding ids]} for walls and agents.
+        # Use sets throughout to avoid duplicate blocker entries.
+        fcl_hits = env.collision_checker.check_prospective(prospective)
+        collisions: dict[str, set[str]] = {
+            aid: set(hits) for aid, hits in fcl_hits.items()
+        }
+
+        # ── 2. Grid: agent-vs-agent ──────────────────────────────────────────
+        # Build a map: grid cell → agent_id that currently occupies it.
+        agent_conts = env.environment_container.state.agent_conts
+        cell_to_agent: dict[tuple[int, int], str] = {}
+        for aid, ag_cont in agent_conts.items():
+            for cell in env.footprint_cells(
+                ag_cont.x, ag_cont.y, ag_cont.psi,
+                ag_cont.length, ag_cont.width,
+            ):
+                cell_to_agent[cell] = aid
+
+        # Each agent independently checks its own prospective footprint.
+        for aid, (px, py, ppsi) in prospective.items():
+            ag_cont = agent_conts[aid]
+            for cell in env.footprint_cells(px, py, ppsi, ag_cont.length, ag_cont.width):
+                blocker = cell_to_agent.get(cell)
+                if blocker is not None and blocker != aid:
+                    collisions[aid].add(blocker)
+
+        # ── Response ─────────────────────────────────────────────────────────
+        for aid, hits in collisions.items():
+            if not hits:
+                continue
+            agent = self.agents[aid]
+            agent.input.v      = 0.0
+            agent.input.psi_dot = 0.0
+            if agent.sgm.start_planning_flag is None and agent.sgm.current_task is not None:
+                agent.sgm.start_planning_flag = 'default'
+                if isinstance(agent.planner, OMPLTrajectoryPlanner):
+                    # Freeze only the specific agents blocking this one.
+                    # Static obstacles are already permanent in the FCL env.
+                    agent.planner._freeze_agents = [
+                        agent_conts[hit_id]
+                        for hit_id in hits
+                        if hit_id in self.agents
+                    ]
 
     def new_agent(self, # type: ignore[override]
                   agent_id: str,
@@ -420,10 +513,74 @@ def dgnn_ga_centralized_example():
 
 
 
+def test_collision_prevention_agents():
+    """
+    Two agents assigned to each other's starting positions so they head
+    directly at each other.  Expected behaviour:
+      - Collision prevention fires as they approach → both stop one tick early
+      - Each replans treating the other as a static obstacle (freeze-and-plan)
+      - Both find paths that go around each other and reach their goals
+    Watch the console: 'planning failed' / replan logs indicate the mechanism fired.
+    """
+    sim = FRODO_Universal_Simulation(
+        Ts=0.1,
+        limits=((-4, 4), (-4, 4)),
+        run_mode='rt',
+    )
+    sim.init()
+
+    # Face each other head-on along the x-axis
+    sim.new_agent('vfrodo0', start_config=(-2.0,  0.0,  0.0))   # faces right
+    sim.new_agent('vfrodo1', start_config=( 2.0,  0.0, np.pi))  # faces left
+
+    sim.new_task('task_right',  2.0,  0.0, 0.0)
+    sim.new_task('task_left',  -2.0,  0.0, np.pi)
+
+    sim.start()
+    sim.start_ta(strategy=HungarianStrategyCent)
+    sim.start_mp()
+    sim.start_exe()
+
+
+def test_collision_prevention_wall():
+    """
+    Single agent with a subgoal placed INSIDE a wall.
+    Expected behaviour:
+      - First OMPL attempt fails (invalid goal) → _failed_plans += 1
+      - SubgoalManager skips that subgoal, tries the final task
+      - Agent routes around the wall to the real task
+    Check console for 'planning failed, skipping subgoal' log.
+    """
+    sim = FRODO_Universal_Simulation(
+        Ts=0.1,
+        limits=((-4, 4), (-4, 4)),
+        run_mode='rt',
+    )
+    sim.init()
+
+    # Wall across the middle — blocks the direct path from agent to task
+    sim.new_wall('wall', x=0.0, y=0.0, psi=np.pi / 2, length=4.0, width=0.2)
+
+    sim.new_agent('vfrodo0', start_config=(0.0, -2.0, np.pi / 2))
+    sim.new_task('task0', 0.0, 2.0, 0.0)
+
+    sim.start()
+    sim.start_ta(strategy=HungarianStrategyCent)
+
+    # Inject a subgoal that sits inside the wall — the skip logic should handle it
+    bad_subgoal = np.array([0.0, 0.0, 0.0])   # (x=0, y=0) is inside the wall
+    sim.agents['vfrodo0'].sgm.set_subgoals([bad_subgoal])
+
+    sim.start_mp()
+    sim.start_exe()
+
+
 if __name__ == "__main__":
 
 #    general_example()
     # central_ta_example()
     # local_ta_example()
     # dgnn_ga_example()
-    dgnn_ga_centralized_example()
+    # dgnn_ga_centralized_example()
+    # test_collision_prevention_agents()
+    test_collision_prevention_wall()

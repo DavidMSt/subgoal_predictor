@@ -46,6 +46,9 @@ class SubgoalManager:
         self._subgoal_queue: list[np.ndarray] = []
         self._subgoal_idx: int = 0
 
+        # Count of OMPL planning failures in the current episode (used for RL reward shaping)
+        self._failed_plans: int = 0
+
     @property
     def current_task(self) -> TaskContainer | None:
         """Read assigned task from the TA container (single source of truth)."""
@@ -142,7 +145,20 @@ class SubgoalManager:
             if self._execution_enabled and hasattr(self.executor, 'start_execution'):
                 self.executor.start_execution()
         else:
-            self.logger.warning("SubgoalManager: planner returned success=False")
+            self._failed_plans += 1
+            if self._has_pending_subgoal:
+                # Skip the unreachable RL-predicted subgoal and try the next one.
+                # Bounded by the remaining subgoal count — recursion terminates when
+                # the queue is exhausted or a reachable target is found.
+                self.logger.warning(
+                    f"SubgoalManager: planning failed, skipping subgoal "
+                    f"{self._subgoal_idx} → trying {self._subgoal_idx + 1}"
+                )
+                self._subgoal_idx += 1
+                self._do_plan(phase_key)
+            else:
+                # Final task is unreachable — agent stays put.
+                self.logger.warning("SubgoalManager: planner returned success=False (final task unreachable)")
 
     def reset(self):
         """Full reset (used between episodes in RL training)."""
@@ -152,4 +168,5 @@ class SubgoalManager:
         self.start_planning_flag = None
         self._subgoal_queue = []
         self._subgoal_idx = 0
+        self._failed_plans = 0
         self.executor.clear()

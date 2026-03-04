@@ -39,11 +39,11 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
     events: FRODO_Simulation_Events
 
-    def __init__(self, Ts=0.1, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), env = FrodoGeneralEnvironment, run_mode='rt'):
+    def __init__(self, Ts=0.1, limits: tuple[tuple[int, int], ...] = ((-3, 3), (-3, 3)), env = FrodoGeneralEnvironment, run_mode='rt', grid_resolution: float = 0.1):
 
         super().__init__(Ts)
         # override standard bilbo environment with my custom version
-        self.environment = env(Ts=Ts, run_mode=run_mode, limits = limits)
+        self.environment = env(Ts=Ts, run_mode=run_mode, limits=limits, grid_resolution=grid_resolution)
         # self.environment.setup_collision_checker()
         self.agents = {} # TODO: Remove these global variables from BILBOLAB?
         self.obstacles = {}

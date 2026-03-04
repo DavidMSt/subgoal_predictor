@@ -26,8 +26,8 @@ class AgentMPPlannerConfig:
     goal_bias: float = 0.1
     # size of the goal region
     goal_eps: float = 0.1
-    # weight of so2 relative to r2 in distance metric
-    so_r2_weight: float = 0.1
+    # weight of so2 relative to r2 in distance metric (0.0 = xy-only goal, psi ignored)
+    so_r2_weight: float = 0.0
     # select which planner to use
     planner: str = 'rrt'
     # Select how to sample

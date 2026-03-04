@@ -90,12 +90,33 @@ class AgentCollisionChecker():
 
     #     return objs
 
-    def create_environment_objects(self):
+    def create_environment_objects(self, frozen_agents: list | None = None):
         obstacle_list = []
         for obstacle in self.lwr_config.state.obstacles.values():
             _obs = self.create_env_collision_object(obstacle)
             obstacle_list.append(_obs)
+        # Include all visible neighbors as static obstacles so OMPL plans
+        # paths that avoid other agents at their current positions.
+        for neighbor in self.lwr_config.state.neighbors.values():
+            obstacle_list.append(self.create_collision_box(container=neighbor))
+        if frozen_agents:
+            # Additionally freeze specific agents that caused a collision event.
+            # Their positions are added again (duplicate FCL objects are harmless)
+            # to ensure they are registered even if outside the local world range.
+            for agent_cont in frozen_agents:
+                obstacle_list.append(self.create_collision_box(container=agent_cont))
         return obstacle_list
+
+    def refresh_env_manager(self, frozen_agents: list | None = None):
+        """Rebuild the environment collision manager.
+
+        Args:
+            frozen_agents: Agent containers to treat as static obstacles.
+                Pass only the agent(s) that triggered a collision event.
+                None (default) rebuilds with static obstacles only.
+        """
+        obstacle_objects_list = self.create_environment_objects(frozen_agents=frozen_agents)
+        self.env_manager = self.create_collision_manager(obstacle_objects_list)
     
     def create_agent_objects(self, agent_container: FRODOAgentContainer):
         """
@@ -185,8 +206,10 @@ class WorldCollisionChecker:
     def _make_box(self, config, state):
         geom = fcl.Box(config.length, config.width, config.height)
 
-        q = [np.cos(state.psi / 2), 0, 0, np.sin(state.psi / 2)]
-        pos = [state.x, state.y, 0.0]
+        # Obstacles keep pose in config (state=None); agents keep pose in state.
+        pose = state if state is not None else config
+        q = [np.cos(pose.psi / 2), 0, 0, np.sin(pose.psi / 2)]
+        pos = [pose.x, pose.y, 0.0]
 
         tf = fcl.Transform(q, pos)
         return fcl.CollisionObject(geom, tf)
@@ -203,7 +226,12 @@ class WorldCollisionChecker:
 
         self.manager.update()
 
-    def check_all(self):
+    def _run_check(self) -> dict:
+        """Run collision detection on the current manager state and return results.
+
+        The result dict has one entry per agent.  Values are lists of colliding
+        object IDs (other agents *or* obstacles).  Obstacles never appear as keys.
+        """
         collisions = {aid: [] for aid in self.agent_objs.keys()}
 
         req = fcl.CollisionRequest(num_max_contacts=1, enable_contact=False)
@@ -213,9 +241,43 @@ class WorldCollisionChecker:
             a = self.obj_to_id.get(o1)
             b = self.obj_to_id.get(o2)
             if a and b and a != b:
-                collisions[a].append(b)
-                collisions[b].append(a)
+                # Only update the entries that exist (agents); obstacles have no key.
+                if a in collisions:
+                    collisions[a].append(b)
+                if b in collisions:
+                    collisions[b].append(a)
             return False
 
         self.manager.collide(self.manager, data, cb)
         return collisions
+
+    def check_all(self):
+        return self._run_check()
+
+    def check_prospective(self, prospective: dict[str, tuple[float, float, float]]) -> dict:
+        """Check prospective next-tick positions without committing to container state.
+
+        Sets agent transforms to the prospective positions, runs collision detection,
+        then restores the transforms to the current container state.
+
+        Args:
+            prospective: {agent_id: (x, y, psi)} map of where each agent would move.
+
+        Returns:
+            Same collision dict as check_all(): {agent_id: [list of colliding ids]}.
+        """
+        for aid, (x, y, psi) in prospective.items():
+            q = [np.cos(psi / 2), 0, 0, np.sin(psi / 2)]
+            self.agent_objs[aid].setTransform(fcl.Transform(q, [x, y, 0.0]))
+        self.manager.update()
+
+        result = self._run_check()
+
+        # Restore transforms from container state
+        for aid, obj in self.agent_objs.items():
+            st = self.env_cont.state.agent_conts[aid].state
+            q = [np.cos(st.psi / 2), 0, 0, np.sin(st.psi / 2)]
+            obj.setTransform(fcl.Transform(q, [st.x, st.y, 0.0]))
+        self.manager.update()
+
+        return result
