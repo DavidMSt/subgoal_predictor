@@ -1365,7 +1365,7 @@ export class Babylon extends Scene {
         this.hemisphericLight = new HemisphericLight("light", coordinatesToBabylon(lc.hemispheric_direction), this.scene);
         this.hemisphericLight.intensity = lc.hemispheric_intensity;
         this.hemisphericLight.groundColor = getBabylonColor3(lc.hemispheric_ground_color);
-        new GlowLayer("glow", this.scene).intensity = 0.1;
+        new GlowLayer("glow", this.scene).intensity = 0.5;
 
         // - SHADOW -
         this.dirLight = new DirectionalLight(

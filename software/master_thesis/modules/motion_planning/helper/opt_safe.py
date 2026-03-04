@@ -502,7 +502,7 @@ class FlatOutputOpt(OptSafeBase, ABC):
     @abstractmethod
     def create_plan_content(self) -> dict:
         ...
-
+            
 # ---------------------------------------------------------------------------
 # FRODOFlatOpt — unicycle flat-output inversion (zero-wheelbase limiting case)
 # ---------------------------------------------------------------------------

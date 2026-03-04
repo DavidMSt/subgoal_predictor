@@ -204,7 +204,47 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
         for aid, hits in collisions.items():
             if not hits:
                 continue
+
             agent = self.agents[aid]
+            ax, ay = agent.state.x, agent.state.y
+            px, py, _ = prospective[aid]
+            v = agent.input.v
+
+            # Filter hits using two directional guards so that an agent that is
+            # already departing (or only rotating) is not unnecessarily stopped.
+            #
+            # Guard 1 — translation: skip agent-agent hits where the prospective
+            #   centre moves *away* from the blocker (d_next > d_now).  Wall hits
+            #   from FCL are always kept regardless of direction.
+            #
+            # Guard 2 — rotation: skip agent-agent hits when the agent is in
+            #   pure in-place rotation (|v| < ε).  The centre does not translate
+            #   so the grid overlap is a bounding-box artefact, not a real
+            #   approach.  Agent-vs-wall is still enforced by FCL above.
+            real_hits: set[str] = set()
+            for hit_id in hits:
+                if hit_id not in self.agents:
+                    # Wall or static obstacle from FCL — always block.
+                    real_hits.add(hit_id)
+                    continue
+
+                # Agent-agent: apply directional guards.
+                if abs(v) < 1e-3:
+                    # Guard 2: pure rotation — skip.
+                    continue
+
+                bx, by = agent_conts[hit_id].x, agent_conts[hit_id].y
+                d_now  = (ax - bx) ** 2 + (ay - by) ** 2
+                d_next = (px - bx) ** 2 + (py - by) ** 2
+                if d_next > d_now:
+                    # Guard 1: moving away — skip.
+                    continue
+
+                real_hits.add(hit_id)
+
+            if not real_hits:
+                continue
+
             agent.input.v      = 0.0
             agent.input.psi_dot = 0.0
             if agent.sgm.start_planning_flag is None and agent.sgm.current_task is not None:
@@ -214,7 +254,7 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
                     # Static obstacles are already permanent in the FCL env.
                     agent.planner._freeze_agents = [
                         agent_conts[hit_id]
-                        for hit_id in hits
+                        for hit_id in real_hits
                         if hit_id in self.agents
                     ]
 

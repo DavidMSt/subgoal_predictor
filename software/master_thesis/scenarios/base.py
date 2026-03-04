@@ -9,6 +9,19 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import ClassVar
 
+# ---------------------------------------------------------------------------
+# Shared task color palette
+# ---------------------------------------------------------------------------
+
+TASK_COLORS: list[list[float]] = [
+    [0.000, 0.545, 0.604],  # #008B9A  teal
+    [0.000, 0.714, 0.584],  # #00B695  emerald
+    [0.902, 0.224, 0.275],  # #E63946  red
+    [0.271, 0.482, 0.616],  # #457B9D  steel blue
+    [0.659, 0.855, 0.863],  # #A8DADC  light blue
+    [0.114, 0.208, 0.341],  # #1D3557  navy
+]
+
 
 @dataclass
 class AgentSpec:

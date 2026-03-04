@@ -63,7 +63,7 @@ def door_scenario_config(
             ),
         ],
         tasks=[
-            TaskSpec("task_0", x=-2.0, y=2.0, color=[0.2, 0.8, 0.2]),
-            TaskSpec("task_1", x=2.0, y=-2.0, color=[0.8, 0.8, 0.2]),
+            TaskSpec("task_0", x=-2.0, y=2.0),
+            TaskSpec("task_1", x=2.0, y=-2.0),
         ],
     )

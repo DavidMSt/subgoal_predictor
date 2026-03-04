@@ -49,6 +49,9 @@ class SubgoalManager:
         # Count of OMPL planning failures in the current episode (used for RL reward shaping)
         self._failed_plans: int = 0
 
+        # Distance threshold for declaring a task reached (metres)
+        self.goal_radius: float = 0.25
+
     @property
     def current_task(self) -> TaskContainer | None:
         """Read assigned task from the TA container (single source of truth)."""
@@ -103,6 +106,17 @@ class SubgoalManager:
 
     def tick(self):
         """Called every LOGIC step.  Handles automatic re-planning."""
+        # Proximity-based task completion — runs regardless of execution state
+        # so it catches manual (joystick) driving as well as planned execution.
+        if self.current_task is not None:
+            task = self.current_task
+            agent_cont = self.planner.agent_cont
+            dx = task.x - agent_cont.x
+            dy = task.y - agent_cont.y
+            if (dx * dx + dy * dy) <= self.goal_radius ** 2:
+                self._complete_task()
+                return
+
         if not self._execution_enabled:
             return
         if not self._plan_active:
@@ -123,8 +137,19 @@ class SubgoalManager:
                 # Reactive replan toward final task (no subgoals remaining)
                 self.logger.debug("SubgoalManager: replanning (executor reached subgoal)")
                 self._do_plan()
+            else:
+                # Final task reached via planned trajectory.
+                self._complete_task()
 
     # ── Internal ────────────────────────────────────────────────────
+
+    def _complete_task(self):
+        """Mark current task as completed: clear assignment, stop executor, log."""
+        task_id = self.current_task.object_id if self.current_task is not None else '?'
+        self.logger.info(f"Task '{task_id}' completed")
+        self._ta_cont.assigned_task = None
+        self._plan_active = False
+        self.executor.clear()
 
     def _do_plan(self, phase_key: str = 'default'):
         target = self._current_target()

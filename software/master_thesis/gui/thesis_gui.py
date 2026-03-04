@@ -25,6 +25,7 @@ from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.objects.python.buttons import Button
 from simulation.core.environment import BASE_ENVIRONMENT_ACTIONS
+from simulation.core.scheduling import Action
 # from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Control_Mode, DEFAULT_BILBO_MODEL, \
 #     BILBO_EIGENSTRUCTURE_ASSIGNMENT_DEFAULT_POLES, BILBO_EIGENSTRUCTURE_ASSIGNMENT_EIGEN_VECTORS
 from extensions.joystick.joystick_manager import JoystickManager, Joystick
@@ -56,7 +57,7 @@ class BabylonTask(Box):
         z = 0.0
 
         # Call parent Box constructor with all kwargs (including color, x, y)
-        super().__init__(object_id, size= size, x = x, y = y, z = z, color = color)
+        super().__init__(object_id, size=size, x=x, y=y, z=z, color=color, emissive_intensity=0.35)
 
     def setColor(self, color: list):
         """
@@ -76,15 +77,8 @@ AGENT_TYPE_COLORS: dict[type, list[float]] = {
     FRODORLAgent:       [0.7, 0.3, 1.0],   # purple
 }
 
-# Task color palette — master thesis colors (omit grey / black / white tones)
-TASK_COLORS = [
-    [0.000, 0.545, 0.604],  # #008B9A  teal
-    [0.000, 0.714, 0.584],  # #00B695  emerald
-    [0.902, 0.224, 0.275],  # #E63946  red
-    [0.271, 0.482, 0.616],  # #457B9D  steel blue
-    [0.659, 0.855, 0.863],  # #A8DADC  light blue
-    [0.114, 0.208, 0.341],  # #1D3557  navy
-]
+# Task color palette — single source of truth lives in scenarios/base.py
+from master_thesis.scenarios.base import TASK_COLORS
 
 
 @dataclasses.dataclass
@@ -96,6 +90,9 @@ class RobotGUIContainer:
     subgoal_markers: list = dataclasses.field(default_factory=list)
     _last_plan_result: object = None
     _last_trajectory_update: float = 0.0
+    joystick: Joystick | None = None
+    _joystick_action: Action | None = None
+    _last_assigned_task_id: str | None = None
 
 @dataclasses.dataclass
 class ObstacleGUIContainer:
@@ -130,7 +127,11 @@ class ThesisGUI:
 
         self.robots = {}
         self.obstacles = {}
-        self.tasks = {} 
+        self.tasks = {}
+
+        self.joystick_manager = JoystickManager()
+        self.joystick_manager.callbacks.new_joystick.register(self._newJoystick_callback)
+        self.joystick_manager.callbacks.joystick_disconnected.register(self._joystickDisconnected_callback)
 
         self.command_set = BILBO_Interactive_CommandSet(self)
 
@@ -155,6 +156,7 @@ class ThesisGUI:
 
     # === METHODS ======================================================================================================
     def init(self):
+        self.joystick_manager.init()
         self._buildGUI()
         self._buildBabylonFloor()
         self.babylon_visualization.init()
@@ -167,6 +169,7 @@ class ThesisGUI:
 
         self.free_port(8098)
         self.free_port(8400)
+        self.joystick_manager.start()
         self.gui.start()
         self.babylon_visualization.start()
         self.sim.environment.start()
@@ -175,7 +178,6 @@ class ThesisGUI:
 
     # ------------------------------------------------------------------------------------------------------------------
     def close(self, *args, **kwargs):
-        self.joystick_manager.exit()
         self.logger.info("HHI demo stopped")
         time.sleep(2)
 
@@ -394,8 +396,9 @@ class ThesisGUI:
                 **a.kwargs,
             )
 
-        for t in config.tasks:
-            self.newTask(t.task_id, x=t.x, y=t.y, psi=t.psi, color=t.color)
+        for i, t in enumerate(config.tasks):
+            color = t.color if t.color is not None else TASK_COLORS[i % len(TASK_COLORS)]
+            self.newTask(t.task_id, x=t.x, y=t.y, psi=t.psi, color=color)
 
         config.apply_assignments(self.sim)
 
@@ -426,6 +429,83 @@ class ThesisGUI:
             return self.robots[robot_id]
         else:
             return None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def assignJoystick(self, robot_id: str, joystick_id: int = 0):
+        robot = self.getRobotByID(robot_id)
+        if robot is None:
+            self.logger.warning(f'Robot {robot_id} not found')
+            return
+        joy = self.joystick_manager.getJoystickById(joystick_id)
+        if joy is None:
+            self.logger.warning(f'Joystick {joystick_id} not found')
+            return
+
+        if robot.joystick is not None:
+            self.unassignJoystick(robot_id)
+
+        robot.joystick = joy
+        agent = robot.sim_agent
+
+        def _joystick_input_override():
+            if robot.joystick is None:
+                return
+            if agent.sgm.start_planning_flag is not None:
+                return  # Freeze joystick input while a replan is in progress
+            v_axis = robot.joystick.getAxis('LEFT_VERTICAL')
+            w_axis = robot.joystick.getAxis('RIGHT_HORIZONTAL')
+            if abs(v_axis) < 0.05:
+                v_axis = 0.0
+            if abs(w_axis) < 0.05:
+                w_axis = 0.0
+            agent.input.v = -v_axis * 0.5
+            agent.input.psi_dot = -w_axis * 2.0
+
+        # Register directly on the environment's 'objects' action at priority 10
+        # (same tree as collision_prevention at 48), so collision_prevention can
+        # zero the joystick-set velocity before DYNAMICS integrates it.
+        joystick_action = Action(function=_joystick_input_override, priority=10)
+        robot._joystick_action = joystick_action
+        self.sim.environment.scheduling.actions['objects'].addAction(joystick_action)
+        self.logger.info(f'Joystick {joystick_id} assigned to {robot_id}')
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def unassignJoystick(self, robot_id: str):
+        robot = self.getRobotByID(robot_id)
+        if robot is None or robot.joystick is None:
+            return
+        if robot._joystick_action is not None:
+            self.sim.environment.scheduling.actions['objects'].removeAction(robot._joystick_action)
+            robot._joystick_action = None
+        robot.joystick = None
+        self.logger.info(f'Joystick unassigned from {robot_id}')
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def assignJoystickToFirst(self):
+        if not self.robots:
+            self.logger.warning('No robots spawned yet')
+            return
+        if not self.joystick_manager.joysticks:
+            self.logger.warning('No joystick connected')
+            return
+        robot_id = next(iter(self.robots))
+        joystick_id = next(iter(self.joystick_manager.joysticks))
+        self.assignJoystick(robot_id, joystick_id)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _newJoystick_callback(self, joystick: Joystick):
+        self.logger.info(f'Joystick connected: id={joystick.id}')
+        # Auto-assign if a robot exists and none has a joystick yet
+        if self.robots and not any(r.joystick is not None for r in self.robots.values()):
+            self.assignJoystickToFirst()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _joystickDisconnected_callback(self, joystick: Joystick):
+        self.logger.warning(f'Joystick disconnected: id={joystick.id}')
+        for robot in self.robots.values():
+            if robot.joystick is joystick:
+                robot.joystick = None
+                robot._joystick_action = None
 
     # ------------------------------------------------------------------------------------------------------------------
     def runPipeline(self):
@@ -725,6 +805,10 @@ class ThesisGUI:
             discard_inputs=True,
         )), height=2, width=4)
 
+        # ── Joystick ───────────────────────────────────────────────────
+
+        page1.addWidget(Button(text="Assign Joystick", callback=self.assignJoystickToFirst), height=2, width=4)
+
         # ── Visualization controls ─────────────────────────────────────
 
         page1.addWidget(Button(text="Show Trajectories", callback=Callback(
@@ -758,8 +842,27 @@ class ThesisGUI:
                 psi=state.psi,
             )
 
-            # Detect new task assignment → create colored circle around agent
+            # Detect task completion → remove assignment circle and task marker
             assigned = robot.sim_agent.assigned_task
+            if assigned is None and robot._last_assigned_task_id is not None:
+                completed_id = robot._last_assigned_task_id
+                robot._last_assigned_task_id = None
+                # Remove assignment circle
+                if robot.assignment_circle is not None:
+                    try:
+                        self.babylon_visualization.removeObject(robot.assignment_circle)
+                    except Exception:
+                        pass
+                    robot.assignment_circle = None
+                # Remove task from Babylon and tracking dict
+                task_gui = self.tasks.pop(completed_id, None)
+                if task_gui and task_gui.babylon is not None:
+                    try:
+                        self.babylon_visualization.removeObject(task_gui.babylon)
+                    except Exception:
+                        pass
+
+            # Detect new task assignment → create colored circle around agent
             if assigned is not None and robot.assignment_circle is None:
                 task_gui = self.tasks.get(assigned.object_id)
                 if task_gui and task_gui.babylon is not None:
@@ -781,6 +884,7 @@ class ThesisGUI:
                             pass
                         self.babylon_visualization.addObject(circle)
                     robot.assignment_circle = circle
+                    robot._last_assigned_task_id = assigned.object_id
 
             # Update circle position to follow agent
             if robot.assignment_circle is not None:
@@ -835,6 +939,26 @@ class BILBO_Interactive_CommandSet(CommandSet):
 
         self.addCommand(add_robot_command)
         self.addCommand(add_obstacle_command)
+
+        assign_joystick_cmd = Command(
+            function=self.example.assignJoystick,
+            name='assign_joystick',
+            description='Assign Xbox controller to a robot',
+            allow_positionals=True,
+            arguments=[
+                CommandArgument(name='robot_id', type=str),
+                CommandArgument(name='joystick_id', type=int, default=0),
+            ]
+        )
+        unassign_joystick_cmd = Command(
+            function=self.example.unassignJoystick,
+            name='unassign_joystick',
+            description='Remove joystick from a robot',
+            allow_positionals=True,
+            arguments=[CommandArgument(name='robot_id', type=str)]
+        )
+        self.addCommand(assign_joystick_cmd)
+        self.addCommand(unassign_joystick_cmd)
 
 
 def main():

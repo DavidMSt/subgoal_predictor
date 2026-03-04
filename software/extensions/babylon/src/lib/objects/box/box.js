@@ -62,7 +62,9 @@ export class BabylonBox extends BabylonObject {
             this.material.diffuseTexture.vScale = this.config.texture_vscale;
             this.material.specularColor = getBabylonColor3([0, 0, 0]);
         } else {
-            this.material.diffuseColor = getBabylonColor3(this.config.color);
+            const col = getBabylonColor3(this.config.color);
+            this.material.diffuseColor = col;
+            this.material.emissiveColor = col.scale(this.config.emissive_intensity ?? 0);
         }
 
         this.mesh.material = this.material;

@@ -78,7 +78,7 @@ def maze_2x2_config(
             AgentSpec("frodo1", agent_class, start_config=(-0.75, -0.75, 0.0)),
         ],
         tasks=[
-            TaskSpec("goal1", x=0.75, y=0.75, color=[0, 1, 0]),
+            TaskSpec("goal1", x=0.75, y=0.75),
         ],
     )
 
@@ -136,8 +136,8 @@ def maze_4x4_config(
             AgentSpec("frodo3", agent_class, start_config=(1.75, 1.75, 0.0)),
         ],
         tasks=[
-            TaskSpec("goal1", x=-1.75, y=-1.75, color=[0, 1, 0]),
-            TaskSpec("goal2", x=0.0,   y=-1.75, color=[1, 1, 0]),
-            TaskSpec("goal3", x=1.75,  y=-1.75, color=[0, 0, 1]),
+            TaskSpec("goal1", x=-1.75, y=-1.75),
+            TaskSpec("goal2", x=0.0,   y=-1.75),
+            TaskSpec("goal3", x=1.75,  y=-1.75),
         ],
     )

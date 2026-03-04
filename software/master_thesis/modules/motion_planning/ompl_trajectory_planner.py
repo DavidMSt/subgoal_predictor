@@ -48,6 +48,8 @@ class OMPLTrajectoryPlanner(PathPlannerBase):
 
     # ── PathPlannerBase interface ───────────────────────────────────
 
+    _MAX_BEZIER_RETRIES: int = 5
+
     def plan(self, goal_task: TaskContainer, phase_key: str = 'default') -> PlanResult:
         if self._motion_planner is None:
             self._motion_planner = self._setup_motion_planner()
@@ -65,25 +67,41 @@ class OMPLTrajectoryPlanner(PathPlannerBase):
         self._planner_cont.start = start_config
         self._planner_cont.goal = goal_config
 
-        try:
-            solved, path_length = self._motion_planner.solve_problem()
-        except ValueError as e:
-            # Goal or start state is in collision (e.g. neighbor frozen at goal position).
-            # Degrade gracefully so SubgoalManager can skip to next target.
-            self.logger.warning(f"OMPL problem invalid: {e}")
-            return PlanResult(success=False)
+        for attempt in range(self._MAX_BEZIER_RETRIES):
+            try:
+                solved, path_length = self._motion_planner.solve_problem()
+            except ValueError as e:
+                # Goal or start state is in collision (e.g. neighbor frozen at goal).
+                self.logger.warning(f"OMPL problem invalid: {e}")
+                return PlanResult(success=False)
 
-        if solved:
-            solution_cont = self._motion_planner._create_solution_cont()
-            self._planner_cont.phases[phase_key] = solution_cont
+            if solved:
+                solution_cont = self._motion_planner._create_solution_cont()
+                self._planner_cont.phases[phase_key] = solution_cont
+                self.logger.info(
+                    f"Found solution with {len(solution_cont.states)} states, "
+                    f"total length {path_length}, end config: {solution_cont.states[-1]}"
+                )
+                return PlanResult(success=True, phase_container=solution_cont)
 
-            self.logger.info(
-                f"Found solution with {len(solution_cont.states)} states, "
-                f"total length {path_length}, end config: {solution_cont.states[-1]}"
-            )
-            return PlanResult(success=True, phase_container=solution_cont)
+            # Distinguish failure cause for logging and retry decisions.
+            opt = getattr(self._motion_planner, '_opt', None)
+            if opt is not None and not opt.feasible:
+                # OMPL found a path but the Bézier cvxpy optimisation was
+                # infeasible for those specific waypoints.  Re-running OMPL
+                # produces a different random path that is often Bézier-feasible.
+                self.logger.warning(
+                    f"Bézier optimisation infeasible for OMPL path "
+                    f"(attempt {attempt + 1}/{self._MAX_BEZIER_RETRIES}) — retrying with new path"
+                )
+            else:
+                # OMPL itself timed out — retrying immediately won't help.
+                self.logger.warning("OMPL timeout: no geometric path found within time limit")
+                return PlanResult(success=False)
 
-        self.logger.warning("No solution found! timeout reached")
+        self.logger.warning(
+            f"Bézier optimisation infeasible after {self._MAX_BEZIER_RETRIES} attempts — giving up"
+        )
         return PlanResult(success=False)
 
     def needs_replan(self) -> bool:

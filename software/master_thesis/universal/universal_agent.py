@@ -142,7 +142,11 @@ class FRODOUniversalAgent(FRODOGeneralAgent, ABC):
         self.sgm.tick()
 
     def _action_executor_step(self):
-        """Get control from executor."""
+        """Get control from executor. Outputs zero while a replan is pending."""
+        if self.sgm.start_planning_flag is not None:
+            self.input.v = 0.0
+            self.input.psi_dot = 0.0
+            return
         u = self.executor.step()
         self.input.v = float(u[0])
         self.input.psi_dot = float(u[1])
