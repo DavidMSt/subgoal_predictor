@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import importlib
+import inspect
+import pathlib
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import ClassVar
 
 
 @dataclass
@@ -45,15 +50,26 @@ class ScenarioConfig:
     Stores agent class names as *strings* so the config stays picklable
     (required by SB3 ``SubprocVecEnv``).  Classes are resolved lazily in
     :meth:`build`.
+
+    Optional ``assignments`` dict maps agent_id → task_id for scenarios that
+    need deterministic task assignment instead of running the TA algorithm.
+    Applied automatically at the end of :meth:`build` and via
+    :meth:`apply_assignments` for the GUI path.
     """
     name: str
     limits: tuple[tuple[float, float], tuple[float, float]]
     agents: list[AgentSpec] = field(default_factory=list)
     tasks: list[TaskSpec] = field(default_factory=list)
     obstacles: list[ObstacleSpec] = field(default_factory=list)
+    assignments: dict[str, str] = field(default_factory=dict)  # agent_id → task_id
 
-    def build(self, sim) -> None:
-        """Apply this scenario to *sim* (creates obstacles, agents, tasks)."""
+    def build(self, sim, log_level: str = 'INFO') -> None:
+        """Apply this scenario to *sim* (creates obstacles, agents, tasks).
+
+        Args:
+            log_level: Logger level for spawned agents. Use 'WARNING' to
+                suppress verbose per-step output during RL training.
+        """
         sim.environment.set_limits(limits=self.limits)
 
         for obs in self.obstacles:
@@ -70,6 +86,7 @@ class ScenarioConfig:
                 agent_class=agent_cls,
                 start_config=agent_spec.start_config,
                 color=agent_spec.color or (1.0, 1.0, 1.0),
+                log_level=log_level,
                 **agent_spec.kwargs,
             )
 
@@ -78,6 +95,110 @@ class ScenarioConfig:
                 task_id=task_spec.task_id,
                 x=task_spec.x, y=task_spec.y, psi=task_spec.psi,
             )
+
+        self.apply_assignments(sim)
+
+    def apply_assignments(self, sim) -> None:
+        """Directly assign tasks to agents, bypassing the TA algorithm.
+
+        Looks up each agent and task by ID in *sim* and sets the assignment
+        on the agent's TA container.  Silently skips unknown IDs.
+        Only applies to agents that have a TA module (universal agents).
+        """
+        if not self.assignments:
+            return
+
+        env_cont = sim.environment.environment_container
+        for agent_id, task_id in self.assignments.items():
+            agent = sim.agents.get(agent_id)
+            task_cont = env_cont.state.task_conts.get(task_id)
+            if agent is None or task_cont is None:
+                continue
+            if not hasattr(agent, 'tam'):
+                continue
+            agent.tam.ta_container.assigned_task = task_cont
+
+
+# ---------------------------------------------------------------------------
+# Scenario factory ABC
+# ---------------------------------------------------------------------------
+
+class ScenarioFactory(ABC):
+    """Abstract base class for GUI-discoverable scenario factories.
+
+    Subclass this in any ``master_thesis/scenarios/*.py`` file to have the
+    scenario appear automatically as a button in the GUI.
+
+    Required:
+        name (ClassVar[str]): Label shown on the GUI button.
+
+    Must implement:
+        create() -> ScenarioConfig
+    """
+
+    name: ClassVar[str]
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        super().__init_subclass__(**kwargs)
+        # Only enforce on concrete (fully implemented) subclasses.
+        if not inspect.isabstract(cls) and not hasattr(cls, "name"):
+            raise TypeError(
+                f"Concrete ScenarioFactory subclass '{cls.__name__}' "
+                "must define a 'name' class variable."
+            )
+
+    @classmethod
+    @abstractmethod
+    def create(cls) -> ScenarioConfig:
+        """Return the ScenarioConfig for this scenario."""
+        ...
+
+
+# ---------------------------------------------------------------------------
+# Scenario discovery
+# ---------------------------------------------------------------------------
+
+_SCENARIOS_DIR = pathlib.Path(__file__).parent
+_SKIP_FILES = {"base.py", "__init__.py"}
+
+
+def _all_subclasses(cls: type) -> list[type]:
+    result = []
+    for sub in cls.__subclasses__():
+        result.append(sub)
+        result.extend(_all_subclasses(sub))
+    return result
+
+
+def discover_scenarios() -> list[ScenarioConfig]:
+    """Import all scenario modules and return one ScenarioConfig per factory.
+
+    Each concrete :class:`ScenarioFactory` subclass found in the scenarios
+    package contributes exactly one config via its ``create()`` classmethod.
+    Results are sorted alphabetically by ``ScenarioConfig.name``.
+    """
+    for path in sorted(_SCENARIOS_DIR.glob("*.py")):
+        if path.name in _SKIP_FILES:
+            continue
+        try:
+            importlib.import_module(f"master_thesis.scenarios.{path.stem}")
+        except Exception:
+            pass
+
+    factories = [
+        cls for cls in _all_subclasses(ScenarioFactory)
+        if not inspect.isabstract(cls)
+    ]
+
+    configs = []
+    for factory in factories:
+        try:
+            configs.append(factory.create())
+        except Exception:
+            pass
+
+    configs.sort(key=lambda c: c.name)
+    return configs
 
 
 # ---------------------------------------------------------------------------

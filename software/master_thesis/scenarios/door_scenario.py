@@ -8,8 +8,19 @@ from master_thesis.scenarios.base import (
     AgentSpec,
     ObstacleSpec,
     ScenarioConfig,
+    ScenarioFactory,
     TaskSpec,
 )
+
+
+class DoorScenario(ScenarioFactory):
+    """Two reactive agents crossing a narrow door passage."""
+
+    name = "door_reactive"
+
+    @classmethod
+    def create(cls) -> ScenarioConfig:
+        return door_scenario_config()
 
 
 def door_scenario_config(

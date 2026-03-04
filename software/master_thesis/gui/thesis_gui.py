@@ -37,9 +37,7 @@ from master_thesis.universal.reactive_agent import FRODOReactiveAgent
 from master_thesis.universal.rl_agent import FRODORLAgent
 from master_thesis.general.general_obstacle import GeneralObstacle
 from master_thesis.general.general_task import GeneralTask
-from master_thesis.scenarios.base import ScenarioConfig, _resolve_agent_class
-from master_thesis.scenarios.door_scenario import door_scenario_config
-from master_thesis.scenarios.maze_scenarios import maze_2x2_config, maze_4x4_config, maze_4x4_reactive_config
+from master_thesis.scenarios.base import ScenarioConfig, _resolve_agent_class, discover_scenarios
 
 from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyType
 
@@ -78,13 +76,14 @@ AGENT_TYPE_COLORS: dict[type, list[float]] = {
     FRODORLAgent:       [0.7, 0.3, 1.0],   # purple
 }
 
-# Task color palette (cycled through when spawning tasks)
+# Task color palette — master thesis colors (omit grey / black / white tones)
 TASK_COLORS = [
-    [0.2, 0.8, 0.2],   # green
-    [0.2, 0.8, 0.8],   # cyan
-    [0.8, 0.2, 0.8],   # magenta
-    [0.8, 0.8, 0.2],   # yellow
-    [0.2, 0.4, 0.9],   # blue
+    [0.000, 0.545, 0.604],  # #008B9A  teal
+    [0.000, 0.714, 0.584],  # #00B695  emerald
+    [0.902, 0.224, 0.275],  # #E63946  red
+    [0.271, 0.482, 0.616],  # #457B9D  steel blue
+    [0.659, 0.855, 0.863],  # #A8DADC  light blue
+    [0.114, 0.208, 0.341],  # #1D3557  navy
 ]
 
 
@@ -94,6 +93,7 @@ class RobotGUIContainer:
     sim_agent: FRODOUniversalAgent
     assignment_circle: CircleDrawing | None = None
     trajectory_lines: list = dataclasses.field(default_factory=list)
+    subgoal_markers: list = dataclasses.field(default_factory=list)
     _last_plan_result: object = None
     _last_trajectory_update: float = 0.0
 
@@ -397,10 +397,13 @@ class ThesisGUI:
         for t in config.tasks:
             self.newTask(t.task_id, x=t.x, y=t.y, psi=t.psi, color=t.color)
 
+        config.apply_assignments(self.sim)
+
         self.logger.info(
             f"Scenario '{config.name}' loaded: "
             f"{len(config.agents)} agents, {len(config.tasks)} tasks, "
             f"{len(config.obstacles)} obstacles"
+            + (f", {len(config.assignments)} pre-assigned" if config.assignments else "")
         )
 
     # ------------------------------------------------------------------------------------------------------------------
@@ -468,11 +471,18 @@ class ThesisGUI:
         segments: list[tuple[list, list]] = []
 
         if plan_result.phase_container is not None:
-            # OMPL trajectory: connected waypoints
+            # OMPL trajectory: subsample to at most MAX_TRAJ_SEGMENTS line segments.
+            # The smooth planner produces one state per Ts tick (potentially 200+),
+            # which would create hundreds of Babylon objects and stall rendering.
+            MAX_TRAJ_SEGMENTS = 30
             states = plan_result.phase_container.states
             if states is not None and len(states) >= 2:
-                for j in range(len(states) - 1):
-                    s0, s1 = states[j], states[j + 1]
+                step = max(1, (len(states) - 1) // MAX_TRAJ_SEGMENTS)
+                indices = list(range(0, len(states), step))
+                if indices[-1] != len(states) - 1:
+                    indices.append(len(states) - 1)
+                for j in range(len(indices) - 1):
+                    s0, s1 = states[indices[j]], states[indices[j + 1]]
                     segments.append(([float(s0[0]), float(s0[1])],
                                      [float(s1[0]), float(s1[1])]))
             style = 'solid'
@@ -526,6 +536,43 @@ class ThesisGUI:
                 self.babylon_visualization.addObject(line)
             existing.append(line)
 
+        # Draw subgoal markers (remaining RL-predicted subgoals not yet visited)
+        sgm = agent.sgm
+        pending_subgoals = sgm._subgoal_queue[sgm._subgoal_idx:]
+        existing_markers = robot.subgoal_markers
+        needed_markers = len(pending_subgoals)
+
+        # Remove excess markers
+        while len(existing_markers) > needed_markers:
+            try:
+                self.babylon_visualization.removeObject(existing_markers.pop())
+            except Exception:
+                pass
+
+        # Update existing markers or add new ones
+        for i, sg in enumerate(pending_subgoals):
+            x, y = float(sg[0]), float(sg[1])
+            if i < len(existing_markers):
+                existing_markers[i].setPosition(x, y)
+            else:
+                marker = CircleDrawing(
+                    f"sg_{agent_id}_{i}",
+                    x=x, y=y,
+                    radius=0.06,
+                    fill_color=[*task_color[:3], 0.8],
+                    border_color=[*task_color[:3], 1.0],
+                    border_width=0.01,
+                )
+                try:
+                    self.babylon_visualization.addObject(marker)
+                except ValueError:
+                    try:
+                        self.babylon_visualization.removeObject(marker)
+                    except Exception:
+                        pass
+                    self.babylon_visualization.addObject(marker)
+                existing_markers.append(marker)
+
     # ------------------------------------------------------------------------------------------------------------------
     def _clearVisualizationOverlays(self):
         """Remove all assignment circles and trajectory lines from Babylon."""
@@ -542,6 +589,12 @@ class ThesisGUI:
                 except Exception:
                     pass
             robot.trajectory_lines.clear()
+            for marker in robot.subgoal_markers:
+                try:
+                    self.babylon_visualization.removeObject(marker)
+                except Exception:
+                    pass
+            robot.subgoal_markers.clear()
             robot._last_plan_result = None
 
     # === PRIVATE METHODS ==============================================================================================
@@ -608,30 +661,13 @@ class ThesisGUI:
         reset_button = Button(text="Reset", callback=self.reset)
         page1.addWidget(reset_button, height=2, width=4)
 
-        # Scenario buttons — all use loadScenario(config)
-        page1.addWidget(Button(text="2x2_maze", callback=Callback(
-            function=self.loadScenario,
-            inputs={'config': maze_2x2_config()},
-            discard_inputs=True,
-        )), height=2, width=4)
-
-        page1.addWidget(Button(text="4x4_maze", callback=Callback(
-            function=self.loadScenario,
-            inputs={'config': maze_4x4_config()},
-            discard_inputs=True,
-        )), height=2, width=4)
-
-        page1.addWidget(Button(text="4x4 Reactive", callback=Callback(
-            function=self.loadScenario,
-            inputs={'config': maze_4x4_reactive_config()},
-            discard_inputs=True,
-        )), height=2, width=4)
-
-        page1.addWidget(Button(text="Door", callback=Callback(
-            function=self.loadScenario,
-            inputs={'config': door_scenario_config()},
-            discard_inputs=True,
-        )), height=2, width=4)
+        # Scenario buttons — discovered automatically from master_thesis/scenarios/
+        for _config in discover_scenarios():
+            page1.addWidget(Button(text=_config.name, callback=Callback(
+                function=self.loadScenario,
+                inputs={'config': _config},
+                discard_inputs=True,
+            )), height=2, width=4)
 
         # ── Spawn buttons (type-specific) ──────────────────────────────
 
