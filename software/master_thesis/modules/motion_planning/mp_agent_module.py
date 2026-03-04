@@ -6,7 +6,7 @@ from typing import Type
 from core.utils.logging_utils import Logger
 
 # master thesis
-from master_thesis.modules.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOBase
+from master_thesis.modules.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOBase, OMPLSmoothPathPlanner
 
 from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
@@ -21,7 +21,8 @@ class MPAgentModule():
     lwr_cont: LocalWorldContainer | None
     agent_cont: FRODOAgentContainer
 
-    def __init__(self,agent_cont: FRODOAgentContainer, lwr_cont: LocalWorldContainer | None, logger: Logger, mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino) -> None:
+    # def __init__(self,agent_cont: FRODOAgentContainer, lwr_cont: LocalWorldContainer | None, logger: Logger, mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino) -> None:
+    def __init__(self,agent_cont: FRODOAgentContainer, lwr_cont: LocalWorldContainer | None, logger: Logger, mp_type: Type[OMPLPlannerFRODOBase] = OMPLSmoothPathPlanner) -> None:
         self.agent_cont = agent_cont
         self.lwr_cont = lwr_cont
         self.logger = logger

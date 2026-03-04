@@ -24,11 +24,13 @@ from abc import ABC, abstractmethod
 from ompl.base import PathLengthOptimizationObjective
 from typing import List
 
+import math
 import numpy as np
 import argparse
 
 from master_thesis.modules.motion_planning.helper.nearest_neighbor import NearestNeighbor # TODO: Use scikit-learn kd tree here
 from master_thesis.modules.motion_planning.helper.collisions_fcl import AgentCollisionChecker
+from master_thesis.modules.motion_planning.helper.opt_safe import FRODOFlatOpt, OptimizationData
 
 from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
@@ -271,10 +273,12 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
     def _create_space_info(self) -> ob.SpaceInformation: # type: ignore[attr-defined]
         self._control_space = oc.RealVectorControlSpace(self._space, 2) # type: ignore[attr-defined]
         control_bounds = ob.RealVectorBounds(2) # type: ignore[attr-defined]
-        control_bounds.setLow(0, -1)
-        control_bounds.setHigh(0, +1) 
-        control_bounds.setLow(1, -np.pi / 3) # TODO: how fast should i allow here? 
-        control_bounds.setHigh(1, +np.pi / 3)
+        v_lo, v_hi = self.mp_container.v_bounds
+        w_lo, w_hi = self.mp_container.theta_dot_bounds
+        control_bounds.setLow(0, v_lo)
+        control_bounds.setHigh(0, v_hi)
+        control_bounds.setLow(1, w_lo)
+        control_bounds.setHigh(1, w_hi)
         self._control_space.setBounds(control_bounds)
 
         # Space information for (collision checking, interpolation, etc.)
@@ -361,104 +365,179 @@ class OMPLPlannerFRODOKino(OMPLPlannerFRODOBase):
         
         return False, 0
 
-class OMPLPlannerFRODOGeo(OMPLPlannerFRODOBase):
+class OMPLSmoothPathPlanner(OMPLPlannerFRODOBase):
+    """Geometric OMPL planner + Bézier flat-output post-processor for FRODO.
+
+    Pipeline
+    --------
+    1. OMPL og.RRT (geometric) → list of (x, y) waypoints
+    2. FRODOFlatOpt:
+       a. find_hyperplanes()          — SVM safe-region per path segment
+       b. create_bezier()             — cvxpy min-length optimisation s.t. SVM + C²
+       c. bezier_to_configurations()  — flat-output inversion + temporal scaling
+    3. _create_solution_cont()        — pack into MPPhaseContainer
+
+    Control bounds are read from AgentMPPlannerConfig (single source of truth).
+    """
 
     def __init__(self, mp_container: AgentMPPlannerContainer,
                  agent_container: FRODOAgentContainer,
                  lwr_container: LocalWorldContainer,
                  sampler: SamplerType = SamplerType.UNIFORM):
 
-        super().__init__(mp_container=mp_container, agent_container=agent_container, lwr_container=lwr_container, sampler=sampler)
+        super().__init__(mp_container=mp_container, agent_container=agent_container,
+                         lwr_container=lwr_container, sampler=sampler)
+        self._opt: FRODOFlatOpt | None = None
 
     def select_planner_type(self, si) -> Any:
-        L, W, H = self.agent_container.length, self.agent_container.width, self.agent_container.height
-        if L is None or W is None or H is None or L <= 0 or W <= 0 or H <= 0:
-            raise ValueError("Dimensions L, W, H must be provided for FRODO collision checking and must be v")
-                             
         try:
-                self.planner_type = self.mp_container.planner
-                if self.planner_type == "rrt": # car and arm
-                    return og.RRT(si) # type: ignore[attr-defined]
-                elif self.planner_type == "rrt*":
-                    return og.RRTStar(si) # type: ignore[attr-defined]
-                elif self.planner_type == "rrt-connect": # car and arm
-                    return og.RRTConnect(si) # type: ignore[attr-defined]
-                elif self.planner_type == "sst": # Only car case
-                    return og.SST(si) # type: ignore[attr-defined]
-                else:
-                    raise ValueError(f"Unsupported planner type the motion problem: {self.planner_type}")
+            self.planner_type = self.mp_container.planner
+            if self.planner_type == "rrt":
+                return og.RRT(si)  # type: ignore[attr-defined]
+            elif self.planner_type == "rrt*":
+                return og.RRTStar(si)  # type: ignore[attr-defined]
+            elif self.planner_type == "rrt-connect":
+                return og.RRTConnect(si)  # type: ignore[attr-defined]
+            else:
+                raise ValueError(f"Unsupported planner type: {self.planner_type}")
+        except (AttributeError, KeyError):
+            return og.RRT(si)  # type: ignore[attr-defined]
 
-        except KeyError:
-            print("No planner type specified, using default RRT")
-            return og.RRT(si) # type: ignore[attr-defined]
-    
-    # def _create_space(self):
-
-    #     space = ob.SE2StateSpace() # type: ignore[attr-defined]
-    #     # only for the car, we need the bounds since SE2 is already bounded 0,2pi
-    #     bounds = ob.RealVectorBounds(2) # type: ignore[attr-defined]
-    #     for i in range(2):
-    #         bounds.setLow(i, 0.0)
-    #         bounds.setHigh(i, 2*np.pi)  # Assuming angles in radians, adjust as necessary
-    #     space.setBounds(bounds)
-    #     # space = ob.CompoundStateSpace() # type: ignore[attr-defined]
-
-    #     # for link in self.mp["L"]:
-    #     #     space.addSubspace(ob.SO2StateSpace(), 1)  # One rotation per link # type: ignore[attr-defined]
-
-    #     return space
-    
-    def _create_space_info(self) -> ob.SpaceInformation: # type: ignore[attr-defined]
-        # Space information for (collision checking, interpolation, etc.)
-        si = ob.SpaceInformation(self._space) # type: ignore[attr-defined]
-        # set state validity checking for this space
-        si.setStateValidityChecker(ob.StateValidityCheckerFn(self._collision_checker.check_state_ompl)) # type: ignore[attr-defined]
-        # set the state sampler for this space
-        sampler = self._get_state_sampler(si)
-        si.setValidStateSamplerAllocator(ob.ValidStateSamplerAllocator(self.sampler)) # type: ignore[attr-defined]
-
+    def _create_space_info(self) -> ob.SpaceInformation:  # type: ignore[attr-defined]
+        si = ob.SpaceInformation(self._space)  # type: ignore[attr-defined]
+        si.setStateValidityChecker(
+            ob.StateValidityCheckerFn(self._collision_checker.check_state_ompl)  # type: ignore[attr-defined]
+        )
+        si.setValidStateSamplerAllocator(
+            ob.ValidStateSamplerAllocator(self.sampler)  # type: ignore[attr-defined]
+        )
         return si
-    
-    # def _extract_ompl_state(self, ompl_state) -> list:
-    #     # Extract joint angles from flat RealVectorStateSpace
-    #     return [float(ompl_state[i]) for i in range(len(self.mp["L"]))]
-    
-    def _create_solution_cont(self)-> MPPhaseContainer:
-        path_states = self._solution_path_states
 
-        config = MPPhaseConfig(states=path_states)
-        cont = MPPhaseContainer(config=config)
+    def _build_opt_data(self, waypoints: list[list[float]]) -> OptimizationData:
+        """Convert simulation state into OptimizationData for FRODOFlatOpt.
 
-        return cont
-    
-    def solve_problem(self, verbose = False) -> tuple[bool, float]:
+        Obstacles are given as axis-aligned bounding boxes (AABBs) computed
+        from the obstacle's actual yaw.
 
+        AABB formula for a 2-D rotated rectangle (standard tight AABB):
+            half_x = |cos(ψ)| · L/2  +  |sin(ψ)| · W/2
+            half_y = |sin(ψ)| · L/2  +  |cos(ψ)| · W/2
+        """
+        lims = self.lwr_container.config.limits
+
+        obstacles = []
+        for obs in self.lwr_container.state.obstacles.values():
+            psi = float(obs.psi)
+            cos_a = abs(np.cos(psi))
+            sin_a = abs(np.sin(psi))
+            hw = obs.length / 2 * cos_a + obs.width / 2 * sin_a
+            hh = obs.length / 2 * sin_a + obs.width / 2 * cos_a
+            obstacles.append([obs.x - hw, obs.x + hw, obs.y - hh, obs.y + hh])
+
+        return OptimizationData(
+            bound_min=[lims[0][0], lims[1][0]],
+            bound_high=[lims[0][1], lims[1][1]],
+            start=[float(self.mp_container.start[0]), float(self.mp_container.start[1])],
+            goal=[float(self.mp_container.goal[0]),  float(self.mp_container.goal[1])],
+            path=waypoints,
+            obstacles=obstacles,
+            start_psi=float(self.mp_container.start[2]),
+        )
+
+    def solve_problem(self, verbose: bool = False) -> tuple[bool, float]:
+        self._pdef = self._create_pdef()
+        self._planner = self.create_planner()
+        self._planner.setProblemDefinition(self._pdef)
         self.check_pdef_validity()
         self._solution_path = None
 
         solved = self._planner.solve(self.mp_container.timelimit)
-        exact = self._pdef.hasExactSolution() # type: ignore[attr-defined]
-        approx = self._pdef.hasApproximateSolution() # type: ignore[attr-defined]
+        if not solved or not self._pdef.hasExactSolution():  # type: ignore[attr-defined]
+            return False, 0
 
-        if verbose:
-            print(f"Solved: {solved}, Exact: {exact}, Approx: {approx}")
+        self._solution_path = self._pdef.getSolutionPath()
 
-        if solved:
-            self._solution_path = self._pdef.getSolutionPath()
+        # Reduce redundant intermediate waypoints.  simplifyMax() uses the same
+        # FCL state-validity checker so it only removes a vertex when the direct
+        # connection is collision-free — safe to use with the tight-AABB approach.
+        simplifier = og.PathSimplifier(self._si)  # type: ignore[attr-defined]
+        simplifier.simplifyMax(self._solution_path)  # type: ignore[attr-defined]
 
-            print('this is the solution path! ', self._solution_path_states)
-            print(len(self._solution_path_states))
-            start_config,  = self._solution_path_states
-            raise NotImplementedError
-            path_length = self._solution_path.length()
-            return True, path_length
-            # Print a concise summary instead of the full path details
-            # num_states = self._solution_path.getStateCount()  # type: ignore[attr-defined]
-            # path_length = self._solution_path.length()       # type: ignore[attr-defined]
-            # print(f"Found solution with {num_states} states, total length {path_length:.3f}") # TODO: Put this into logger
-        
-        return False, 0
-    
+        n = self._solution_path.getStateCount()
+        waypoints = [
+            [self._solution_path.getState(i).getX(),
+             self._solution_path.getState(i).getY()]
+            for i in range(n)
+        ]
+
+        opt_data = self._build_opt_data(waypoints)
+        _, v_hi  = self.mp_container.v_bounds
+        _, w_hi  = self.mp_container.theta_dot_bounds
+
+        self._opt = FRODOFlatOpt(
+            opt_data,
+            dt=self.agent_container.Ts,
+            v_max=v_hi,
+            psi_dot_max=w_hi,
+        )
+        self._opt.find_hyperplanes()
+        self._opt.create_optimization_vars()
+        self._opt.create_bezier()
+
+        if not self._opt.feasible:
+            return False, 0
+
+        self._opt.bezier_to_configurations()
+        return True, self._solution_path.length()
+
+    def _create_solution_cont(self) -> MPPhaseContainer:
+        if self._opt is None:
+            raise RuntimeError("solve_problem() must succeed before _create_solution_cont()")
+
+        dt = self.agent_container.Ts
+        states_np, actions_np = self._opt.get_trajectory(dt)
+
+        # Pre-rotation: align agent heading with the Bézier's initial tangent direction.
+        #
+        # Without the heading constraint in create_bezier(), the Bézier's initial
+        # tangent (psi = atan2(dot_y(0), dot_x(0))) may differ from the agent's
+        # actual heading.  We prepend spin-in-place steps (v=0, constant psi_dot)
+        # to rotate the agent to the Bézier's starting direction before forward
+        # motion begins.  This keeps flat-output inversion exact from step 1.
+        agent_psi   = float(self.agent_container.psi)
+        flat_psi_0  = float(states_np[0, 2])
+        delta_psi   = (flat_psi_0 - agent_psi + math.pi) % (2 * math.pi) - math.pi
+
+        _, psi_dot_max = self.mp_container.theta_dot_bounds
+
+        pre_states:  list[np.ndarray] = []
+        pre_actions: list[np.ndarray] = []
+
+        if abs(delta_psi) > 0.05:   # threshold ~3°
+            n_rot       = math.ceil(abs(delta_psi) / (psi_dot_max * dt))
+            psi_dot_rot = delta_psi / (n_rot * dt)   # exact rate to reach flat_psi_0
+            x0, y0      = states_np[0, 0], states_np[0, 1]
+            for k in range(n_rot):
+                psi_k = agent_psi + k * psi_dot_rot * dt
+                pre_states.append(np.array([x0, y0, psi_k]))
+                pre_actions.append(np.array([0.0, psi_dot_rot]))
+
+        if pre_actions:
+            all_states  = np.vstack([np.array(pre_states), states_np])
+            all_actions = np.vstack([np.array(pre_actions), actions_np])
+        else:
+            all_states  = states_np
+            all_actions = actions_np
+
+        N = len(all_actions)
+        config = MPPhaseConfig(
+            inputs=list(all_actions),    # N × [v, psi_dot]
+            states=list(all_states),     # (N+1) × [x, y, psi]
+            durations=[dt] * N,          # each input applied for exactly one Ts tick
+            delta_t=dt,
+        )
+        return MPPhaseContainer(config=config)
+
 
 if __name__ == "__main__":
     ...

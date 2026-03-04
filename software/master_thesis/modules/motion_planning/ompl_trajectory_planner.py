@@ -10,7 +10,11 @@ from typing import Type
 from core.utils.logging_utils import Logger
 
 from master_thesis.modules.motion_planning.path_planner_base import PathPlannerBase, PlanResult
-from master_thesis.modules.motion_planning.helper.ompl_planner import OMPLPlannerFRODOKino, OMPLPlannerFRODOBase
+from master_thesis.modules.motion_planning.helper.ompl_planner import (
+    OMPLPlannerFRODOKino,
+    OMPLSmoothPathPlanner,
+    OMPLPlannerFRODOBase,
+)
 from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
 from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.general_containers.task_container import TaskContainer
@@ -31,12 +35,16 @@ class OMPLTrajectoryPlanner(PathPlannerBase):
         agent_cont: FRODOAgentContainer,
         lwr_cont: LocalWorldContainer | None,
         logger: Logger,
-        mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino,
+        mp_type: Type[OMPLPlannerFRODOBase] = OMPLSmoothPathPlanner,
+        # mp_type: Type[OMPLPlannerFRODOBase] = OMPLPlannerFRODOKino,
     ):
         super().__init__(agent_cont, lwr_cont, logger)
         self.mp_type = mp_type
         self._motion_planner = None
         self._planner_cont = self._setup_mp_container()
+        # Agent containers to freeze as static obstacles on the next plan().
+        # Set by the collision prevention action; cleared after each plan.
+        self._freeze_agents: list = []
 
     # ── PathPlannerBase interface ───────────────────────────────────
 
@@ -44,13 +52,26 @@ class OMPLTrajectoryPlanner(PathPlannerBase):
         if self._motion_planner is None:
             self._motion_planner = self._setup_motion_planner()
 
+        # Rebuild FCL environment. Freeze only the specific agents that caused
+        # a prospective collision; empty list on initial plans so goal validity
+        # is not poisoned by agents that happen to sit at the goal position.
+        frozen = self._freeze_agents
+        self._freeze_agents = []
+        self._motion_planner._collision_checker.refresh_env_manager(frozen_agents=frozen)
+
         start_config = np.array([self.agent_cont.x, self.agent_cont.y, self.agent_cont.psi])
         goal_config = np.array([goal_task.x, goal_task.y, goal_task.psi])
 
         self._planner_cont.start = start_config
         self._planner_cont.goal = goal_config
 
-        solved, path_length = self._motion_planner.solve_problem()
+        try:
+            solved, path_length = self._motion_planner.solve_problem()
+        except ValueError as e:
+            # Goal or start state is in collision (e.g. neighbor frozen at goal position).
+            # Degrade gracefully so SubgoalManager can skip to next target.
+            self.logger.warning(f"OMPL problem invalid: {e}")
+            return PlanResult(success=False)
 
         if solved:
             solution_cont = self._motion_planner._create_solution_cont()
