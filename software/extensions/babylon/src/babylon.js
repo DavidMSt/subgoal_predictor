@@ -281,6 +281,7 @@ export class Babylon extends Scene {
 
     /* -------------------------------------------------------------------------------------------------------------- */
     setArcRotateCamera(position, target, alpha, beta, radius, fov) {
+        this._cancelCameraAnim();
         if (target) this.camera.setTarget(coordinatesToBabylon(target));
         if (position && alpha == null && beta == null && radius == null) {
             this.camera.setPosition(coordinatesToBabylon(position));
@@ -289,6 +290,58 @@ export class Babylon extends Scene {
         if (beta != null) this.camera.beta = beta;
         if (radius != null) this.camera.radius = radius;
         if (fov != null) this.camera.fov = fov;
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    animateCamera(start, end, duration, easing) {
+        this._cancelCameraAnim();
+
+        if (!start) {
+            const t = this.camera.target;
+            start = {
+                target: [t.x, -t.z, t.y],   // babylon → world coordinates
+                alpha: this.camera.alpha,
+                beta: this.camera.beta,
+                radius: this.camera.radius,
+                fov: this.camera.fov,
+            };
+        }
+
+        const easingFn = {
+            linear:     t => t,
+            smoothstep: t => t * t * (3 - 2 * t),
+            ease_in:    t => t * t,
+            ease_out:   t => 1 - (1 - t) * (1 - t),
+        }[easing] || (t => t * t * (3 - 2 * t));
+
+        let elapsed = 0;
+        this._cameraAnimObserver = this.scene.onBeforeRenderObservable.add(() => {
+            elapsed += this.scene.getEngine().getDeltaTime() / 1000;
+            const t = Math.min(elapsed / duration, 1);
+            const s = easingFn(t);
+
+            const lerp = (a, b) => a + (b - a) * s;
+            const lerpArr = (a, b) => a.map((v, i) => lerp(v, b[i]));
+
+            const target = lerpArr(start.target, end.target);
+            this.camera.setTarget(coordinatesToBabylon(target));
+            this.camera.alpha = lerp(start.alpha, end.alpha);
+            this.camera.beta = lerp(start.beta, end.beta);
+            this.camera.radius = lerp(start.radius, end.radius);
+            this.camera.fov = lerp(start.fov, end.fov);
+
+            if (t >= 1) {
+                this._cancelCameraAnim();
+            }
+        });
+    }
+
+    /* -------------------------------------------------------------------------------------------------------------- */
+    _cancelCameraAnim() {
+        if (this._cameraAnimObserver) {
+            this.scene.onBeforeRenderObservable.remove(this._cameraAnimObserver);
+            this._cameraAnimObserver = null;
+        }
     }
 
     /* -------------------------------------------------------------------------------------------------------------- */
@@ -721,6 +774,24 @@ export class Babylon extends Scene {
                     this.callbacks.get('add_camera').call(msg.camera);
                 }
                 break;
+            case 'set_camera':
+                this.setArcRotateCamera(
+                    msg.position || null,
+                    msg.target || null,
+                    msg.alpha != null ? msg.alpha : null,
+                    msg.beta != null ? msg.beta : null,
+                    msg.radius != null ? msg.radius : null,
+                    msg.fov != null ? msg.fov : null,
+                );
+                break;
+            case 'animate_camera':
+                this.animateCamera(
+                    msg.start || null,
+                    msg.end,
+                    msg.duration || 2.0,
+                    msg.easing || 'smoothstep',
+                );
+                break;
             case 'follow_object':
                 this.followObject(msg.object_id);
                 this.callbacks.get('follow_started').call(msg.object_id);
@@ -898,12 +969,14 @@ export class Babylon extends Scene {
             this.config.cameras = config.cameras;
         }
 
-        // Coordinate system
-        if (config.show_coordinate_system === false) {
-            for (const name of ['axisX', 'axisY', 'axisZ']) {
-                const mesh = this.scene.getMeshByName(name);
-                if (mesh) mesh.dispose();
-            }
+        // Coordinate system — dispose old axes, then redraw with the correct length
+        for (const name of ['axisX', 'axisY', 'axisZ']) {
+            const mesh = this.scene.getMeshByName(name);
+            if (mesh) mesh.dispose();
+        }
+        if (config.show_coordinate_system !== false) {
+            const len = config.coordinate_system_length ?? this.config.coordinate_system_length;
+            drawCoordinateSystem(this.scene, len);
         }
 
         // Rebuild light helpers now that the real light positions/directions are applied

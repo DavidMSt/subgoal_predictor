@@ -20,8 +20,8 @@
 #define BOARD_REV_4
 
 // Robot model (sets wheel diameter and wheel distance in bilbo_model.h)
-#define BILBO_MODEL_NORMAL
-//#define BILBO_MODEL_SMALL
+//#define BILBO_MODEL_NORMAL
+#define BILBO_MODEL_SMALL
 //#define BILBO_MODEL_BIG
 
 /* ================================================================

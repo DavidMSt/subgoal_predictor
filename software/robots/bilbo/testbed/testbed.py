@@ -2,6 +2,7 @@ import dataclasses
 
 from core.utils.events import event_definition, Event
 from core.utils.logging_utils import Logger
+from robots.bilbo.definitions import Line_Config, Point_Config, Pose_Config
 from robots.bilbo.testbed.objects import TestbedBILBO, Obstacle, LimboBar
 
 
@@ -30,6 +31,9 @@ class Testbed_Events:
 class Testbed:
     bilbos: dict[str, TestbedBILBO]
     obstacles: dict[str, Obstacle]
+    lines: dict[str, Line_Config]
+    points: dict[str, Point_Config]
+    poses: dict[str, Pose_Config]
     limbo_bar: LimboBar | None
     config: TestbedConfig | None
 
@@ -39,6 +43,9 @@ class Testbed:
         self.config = config
         self.bilbos = {}
         self.obstacles = {}
+        self.lines = {}
+        self.points = {}
+        self.poses = {}
         self.limbo_bar = None
         self.events = Testbed_Events()
 
@@ -79,6 +86,33 @@ class Testbed:
         self.events.obstacle_removed.set(obstacle)
 
     # ------------------------------------------------------------------------------------------------------------------
+    def add_line(self, line: Line_Config):
+        line_id = line.id or f"line_{len(self.lines) + 1}"
+        if line_id in self.lines:
+            self.logger.warning(f"Line {line_id} already exists in testbed")
+            return
+        self.lines[line_id] = line
+        self.logger.info(f"Added line {line_id} to testbed")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def add_point(self, point: Point_Config):
+        point_id = point.id or f"point_{len(self.points) + 1}"
+        if point_id in self.points:
+            self.logger.warning(f"Point {point_id} already exists in testbed")
+            return
+        self.points[point_id] = point
+        self.logger.info(f"Added point {point_id} to testbed")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def add_pose(self, pose: Pose_Config):
+        pose_id = pose.id or f"pose_{len(self.poses) + 1}"
+        if pose_id in self.poses:
+            self.logger.warning(f"Pose {pose_id} already exists in testbed")
+            return
+        self.poses[pose_id] = pose
+        self.logger.info(f"Added pose {pose_id} to testbed")
+
+    # ------------------------------------------------------------------------------------------------------------------
     def add_limbo_bar(self):
         raise NotImplementedError
 
@@ -101,7 +135,10 @@ class Testbed:
                 'y_min': self.config.size.y_min,
                 'y_max': self.config.size.y_max,
             },
-            'obstacles': [obs.to_dict() for obs in self.obstacles.values()]
+            'obstacles': [obs.to_dict() for obs in self.obstacles.values()],
+            'lines': [dataclasses.asdict(l) for l in self.lines.values()],
+            'points': [dataclasses.asdict(p) for p in self.points.values()],
+            'poses': [dataclasses.asdict(p) for p in self.poses.values()],
         }
         if self.config.id is not None:
             config['id'] = self.config.id
@@ -114,4 +151,7 @@ class Testbed:
             'bilbos': {id: {'x': b.state.x, 'y': b.state.y, 'psi': b.state.psi}
                        for id, b in self.bilbos.items()},
             'obstacles': {id: obs.to_dict() for id, obs in self.obstacles.items()},
+            'lines': {id: dataclasses.asdict(l) for id, l in self.lines.items()},
+            'points': {id: dataclasses.asdict(p) for id, p in self.points.items()},
+            'poses': {id: dataclasses.asdict(p) for id, p in self.poses.items()},
         }

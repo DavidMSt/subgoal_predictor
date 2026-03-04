@@ -45,18 +45,6 @@ class StandaloneBabylon:
         if scenario is not None:
             self.load_scenario(scenario)
 
-        register_exit_callback(self.close)
-
-    # === SCENARIO =====================================================================================================
-    def load_scenario(self, scenario: BabylonScenario):
-        """Load a scenario. Must be called before start()."""
-        self._scenario = scenario
-
-    # === LIFECYCLE =====================================================================================================
-    def start(self):
-        """Start WebSocket server, Vite dev server, and optionally open the browser."""
-        # Build merged config dict: scenario config + user overrides
-        # Use get_config() so subclasses that override it (returning dicts) still work.
         config_dict = {'title': self._title}
         if self._scenario is not None:
             config_dict = update_dict(config_dict, self._scenario.get_config())
@@ -73,6 +61,19 @@ class StandaloneBabylon:
             port=self._ws_port,
             babylon_config=config_dict,
         )
+
+        register_exit_callback(self.close)
+
+    # === SCENARIO =====================================================================================================
+    def load_scenario(self, scenario: BabylonScenario):
+        """Load a scenario. Must be called before start()."""
+        self._scenario = scenario
+
+    # === LIFECYCLE =====================================================================================================
+    def start(self):
+        """Start WebSocket server, Vite dev server, and optionally open the browser."""
+        # Build merged config dict: scenario config + user overrides
+        # Use get_config() so subclasses that override it (returning dicts) still work.
 
         self._babylon.init()
         self._babylon.start()

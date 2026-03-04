@@ -416,6 +416,7 @@ class ExperimentParser:
             description=data["description"],
             actions=actions,
             timeout=data.get("timeout"),
+            label=data.get("label"),
             external_input_enabled=data.get("external_input_enabled", False),
             source_dict=copy.deepcopy(data),
         )
@@ -456,7 +457,8 @@ class ExperimentParser:
 def _register_builtin_actions():
     """Register all built-in action types."""
     from robot.experiment.experiment import (
-        BeepAction, SetModeAction, SetTICAction, SpeakAction, SetMarkerAction,
+        BeepAction, SetModeAction, SetTICAction, SetTrackerUpdatesAction,
+        SpeakAction, SetMarkerAction,
         EnableExternalInputAction, SetVelocityAction, ResetAction, RunTrajectoryAction,
         SetInputAction, WaitTimeAction, WaitTickAction, WaitUntilTickAction,
         WaitEventAction, ParallelAction, GroupAction, FuncAction, SetFeedbackGainAction,
@@ -493,6 +495,15 @@ def _register_builtin_actions():
             ActionParameter("enabled", bool, default=True),
         ],
         description="Enable/disable TIC control"
+    ))
+
+    register_action(ActionEntry(
+        type_name="set_tracker_updates",
+        action_class=SetTrackerUpdatesAction,
+        parameters=[
+            ActionParameter("enabled", bool, default=True),
+        ],
+        description="Enable/disable sending OptiTrack tracker updates to lowlevel firmware"
     ))
 
     register_action(ActionEntry(

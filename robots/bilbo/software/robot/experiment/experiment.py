@@ -668,6 +668,26 @@ class SetTICAction(ExperimentAction):
 
 # ----------------------------------------------------------------------------------------------------------------------
 @dataclasses.dataclass(kw_only=True)
+class SetTrackerUpdatesAction(ExperimentAction):
+    enabled: bool
+
+    def execute(self) -> bool:
+        self._on_started()
+        self.experiment.experiment_handler.estimation.set_tracker_updates_enabled(self.enabled)
+        self._on_finished()
+        return True
+
+    @classmethod
+    def from_definition(cls, definition: ExperimentActionDefinition) -> SetTrackerUpdatesAction:
+        kwargs = cls._common_init_kwargs(definition)
+        return cls(
+            **kwargs,
+            enabled=definition.parameters.get('enabled', True),
+        )
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+@dataclasses.dataclass(kw_only=True)
 class SetPSIAction(ExperimentAction):
     enabled: bool
 
@@ -1522,6 +1542,7 @@ class FollowPathAction(ExperimentAction):
     timeout: float = 0.0
     allow_reverse: bool = False
     seed: int | None = None
+    target_heading: float | None = None
     wait: bool = True
 
     def execute(self) -> bool:
@@ -1571,6 +1592,7 @@ class FollowPathAction(ExperimentAction):
             allow_reverse=self.allow_reverse,
             seed=self.seed,
             blocking=False,
+            target_heading=self.target_heading,
         )
 
         if not result:
@@ -1635,6 +1657,18 @@ class FollowPathAction(ExperimentAction):
                 self._on_error(f"Path to {target_str} ended unexpectedly (unknown event)")
                 return
 
+    @staticmethod
+    def _parse_target_heading(parameters: dict) -> float | None:
+        """Parse target_heading from action parameters, supporting degrees."""
+        import math
+        heading_deg = parameters.get('target_heading_deg')
+        if heading_deg is not None:
+            return math.radians(float(heading_deg))
+        heading = parameters.get('target_heading')
+        if heading is not None:
+            return float(heading)
+        return None
+
     @classmethod
     def from_definition(cls, definition: ExperimentActionDefinition) -> "FollowPathAction":
         kwargs = cls._common_init_kwargs(definition)
@@ -1658,6 +1692,7 @@ class FollowPathAction(ExperimentAction):
             max_speed=definition.parameters.get('max_speed', 0.0),
             allow_reverse=definition.parameters.get('allow_reverse', False),
             seed=definition.parameters.get('seed'),
+            target_heading=cls._parse_target_heading(definition.parameters),
             wait=definition.parameters.get('wait', True),
         )
 
@@ -1729,6 +1764,7 @@ EXPERIMENT_ACTION_TYPE_MAPPING = {
     "set_mode": SetModeAction,
     "set_tic": SetTICAction,
     "set_psi_control": SetPSIAction,
+    "set_tracker_updates": SetTrackerUpdatesAction,
     "speak": SpeakAction,
     "set_marker": SetMarkerAction,
     "run_trajectory": RunTrajectoryAction,
@@ -1764,6 +1800,7 @@ class ExperimentDefinition:
     description: str
     actions: list[ExperimentActionDefinition]
     timeout: float | None = None
+    label: str | None = None  # Optional human-readable label (displayed on testbed display; falls back to id)
     external_input_enabled: bool = False  # Whether external inputs (joystick, etc.) are enabled during experiment
     source_dict: dict | None = None  # Original definition dict before parsing/expansion (preserved for report YAML)
 
@@ -1801,13 +1838,16 @@ class ExperimentDefinition:
         return parser.from_file(file)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "id": self.id,
             "description": self.description,
             "timeout": self.timeout,
             "external_input_enabled": self.external_input_enabled,
             "actions": [a.to_dict() for a in self.actions],
         }
+        if self.label is not None:
+            d["label"] = self.label
+        return d
 
 
 # ======================================================================================================================
@@ -1833,7 +1873,7 @@ class ExperimentActionData:
 @dataclasses.dataclass(frozen=True)
 class ExperimentMetaData:
     description: str
-    camera_timestamp: float
+    start_timecode: str | None
     date: str
     control_config: BILBO_ControlConfig
     bilbo_config: BILBO_Config
@@ -1952,7 +1992,7 @@ class Experiment:
 
     _active_action_ids: list
 
-    _camera_timestamp: float | None = None
+    _start_timecode: str | None = None
 
     # === INIT =========================================================================================================
     def __init__(self, definition: ExperimentDefinition):
@@ -1976,7 +2016,7 @@ class Experiment:
         self.tick = 0
         self._timeout_ticks = None
         self.experiment_handler = None
-        self._camera_timestamp = None
+        self._start_timecode = None
 
         # Status tracking
         self._status: ExperimentStatus = ExperimentStatus.FINISHED  # Default to finished (set on completion)
@@ -2163,6 +2203,12 @@ class Experiment:
             lp = get_logging_provider()
             self.start_tick = lp.get_tick()
 
+            # Capture timecode at experiment start
+            tc = self.experiment_handler.common.get_timecode()
+            if tc is not None:
+                self._start_timecode = tc.to_string()
+                self.logger.info(f"Start timecode: {self._start_timecode}")
+
             # Beep
             self.experiment_handler.utilities.beep(1000, 500, 1)
             speak(f"Experiment {self.definition.id} started")
@@ -2332,10 +2378,6 @@ class Experiment:
         self._active_action_ids.append(action_container.id)
 
     # ------------------------------------------------------------------------------------------------------------------
-    def set_camera_timestamp(self, timestamp: float):
-        self._camera_timestamp = timestamp
-
-    # ------------------------------------------------------------------------------------------------------------------
     def _handle_finished(self):
         """Handle successful experiment completion."""
         self.end_tick = self.experiment_handler.common.tick
@@ -2428,7 +2470,7 @@ class Experiment:
 
         meta = ExperimentMetaData(
             description=self.definition.description,
-            camera_timestamp=self._camera_timestamp,
+            start_timecode=self._start_timecode,
             date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             control_config=self.experiment_handler.control.get_control_config(),
             bilbo_config=self.experiment_handler.common.config,

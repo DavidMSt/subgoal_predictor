@@ -33,6 +33,40 @@ class BoxObstacle_Config:
 
 
 @dataclasses.dataclass
+class Line_Config:
+    id: str | None = None
+    start: list | None = None  # [x, y]
+    end: list | None = None  # [x, y]
+
+
+@dataclasses.dataclass
+class Point_Config:
+    id: str | None = None
+    position: list | None = None  # [x, y]
+
+
+@dataclasses.dataclass
+class Pose_Config:
+    id: str | None = None
+    x: float = 0.0
+    y: float = 0.0
+    psi: float = 0.0
+
+    # YAML shorthand: pose: [x, y, psi]
+    pose: list | None = dataclasses.field(default=None, repr=False)
+
+    def __post_init__(self):
+        if self.pose is not None and len(self.pose) >= 2:
+            if self.x == 0.0:
+                self.x = float(self.pose[0])
+            if self.y == 0.0:
+                self.y = float(self.pose[1])
+            if self.psi == 0.0 and len(self.pose) > 2:
+                self.psi = float(self.pose[2])
+            self.pose = None
+
+
+@dataclasses.dataclass
 class BoxObstacle_State:
     x: float = 0
     y: float = 0

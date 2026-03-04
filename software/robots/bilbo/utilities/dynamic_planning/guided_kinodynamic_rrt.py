@@ -17,6 +17,7 @@ import numpy as np
 from .cspace import ConfigurationSpace
 from .rrt_planner import RRTPlanner, RRTConfig, RRTResult
 from .kinodynamic_rrt import KinodynamicRRTConfig, KinodynamicRRTResult
+from robots.bilbo.simulation.bilbo_model import BILBO_2D_State
 
 
 @dataclasses.dataclass
@@ -150,8 +151,6 @@ class GuidedKinodynamicRRTPlanner:
         best_goal_dist_theta = abs(theta_start - theta_goal)
         guided_samples = 0
         log_interval = max(1, cfg.max_iterations // 20)
-
-        from robots.bilbo.simulation.bilbo_model import BILBO_2D_State
 
         for iteration in range(cfg.max_iterations):
             if iteration % log_interval == 0 and iteration > 0:
@@ -361,7 +360,6 @@ class GuidedKinodynamicRRTPlanner:
         u_ff = np.concatenate(all_inputs)
 
         if cfg.settling_steps > 0:
-            from robots.bilbo.simulation.bilbo_model import BILBO_2D_State
             u_settle = np.zeros(cfg.settling_steps)
             x_last = x_traj[-1]
             x0_state = BILBO_2D_State(s=x_last[0], v=x_last[1],

@@ -2,6 +2,9 @@
 #include "modbus_rtu.h"
 #include "firmware_settings.h"
 #include "robot-control_board.h"
+#ifdef BILBO_DRIVE_SIMPLEXMOTION_RS485
+#include "simplexmotion_rs485.h"
+#endif
 
 static const char* sm_mode_name(simplexmotion_mode_t mode) {
 	switch (mode) {
@@ -108,8 +111,9 @@ bool BILBO_Drive::resetDrive() {
 	// (avoids bus contention — the task owns the CAN/RS485 bus)
 	this->_reset_requested = true;
 
-	// Wait for the task to process the reset (with timeout)
-	uint32_t timeout = 500; // ms
+	// Wait for the task to process the reset (with timeout).
+	// The reset may retry up to 3 times with bus resets between attempts.
+	uint32_t timeout = 3000; // ms
 	uint32_t start = osKernelGetTickCount();
 	while (this->_reset_requested && (osKernelGetTickCount() - start) < timeout) {
 		osDelay(5);
@@ -292,10 +296,35 @@ void BILBO_Drive::task() {
 
 		} else if (this->status == BILBO_DRIVE_STATUS_ERROR) {
 			if (this->_reset_requested) {
-				// Perform reset from within the drive task (owns the bus)
-				HAL_StatusTypeDef s1 = this->motor_left->start();
-				osDelay(10);
-				HAL_StatusTypeDef s2 = this->motor_right->start();
+				SimplexMotion_RS485* ml = static_cast<SimplexMotion_RS485*>(this->motor_left);
+				SimplexMotion_RS485* mr = static_cast<SimplexMotion_RS485*>(this->motor_right);
+
+				HAL_StatusTypeDef s1 = HAL_ERROR;
+				HAL_StatusTypeDef s2 = HAL_ERROR;
+
+				for (int attempt = 0; attempt < 3 && !(s1 == HAL_OK && s2 == HAL_OK); attempt++) {
+					// Reset Modbus handlers — kills the task, recreates it
+					// with fresh UART/DMA. Only once: both motors share
+					// the same bus so resetAllModbusHandlers covers both.
+					ml->resetBus();
+					osDelay(100); // let new Modbus task start + DMA settle
+
+					// Send RESET mode to clear motor fault/quickstop state.
+					// Ignore return: RESET is transient (motor goes to OFF),
+					// so the readback verify fails, but the command is sent.
+					ml->setMode(SIMPLEXMOTION_RS485_MODE_RESET);
+					osDelay(10);
+					mr->setMode(SIMPLEXMOTION_RS485_MODE_RESET);
+					osDelay(100); // let motors complete reset cycle
+
+					s1 = ml->start();
+					osDelay(10);
+					s2 = mr->start();
+
+					if (!(s1 == HAL_OK && s2 == HAL_OK)) {
+						send_error("Drive reset attempt %d failed (L=%d R=%d)", attempt + 1, s1, s2);
+					}
+				}
 
 				if (s1 == HAL_OK && s2 == HAL_OK) {
 					consecutive_errors = 0;
@@ -304,7 +333,7 @@ void BILBO_Drive::task() {
 					osSemaphoreRelease(speed_semaphore);
 					this->status = BILBO_DRIVE_STATUS_OK;
 				} else {
-					send_error("Drive reset failed: motor restart failed in task");
+					send_error("Drive reset failed after 3 attempts");
 				}
 				this->_reset_requested = false;
 			} else {

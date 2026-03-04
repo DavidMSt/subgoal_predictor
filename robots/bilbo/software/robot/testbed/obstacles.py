@@ -36,6 +36,27 @@ class BoxObstacle(Obstacle):
 
 
 @dataclasses.dataclass
+class Line:
+    id: str
+    start: list = dataclasses.field(default_factory=lambda: [0.0, 0.0])  # [x, y]
+    end: list = dataclasses.field(default_factory=lambda: [0.0, 0.0])  # [x, y]
+
+
+@dataclasses.dataclass
+class Point:
+    id: str
+    position: list = dataclasses.field(default_factory=lambda: [0.0, 0.0])  # [x, y]
+
+
+@dataclasses.dataclass
+class Pose:
+    id: str
+    x: float = 0.0
+    y: float = 0.0
+    psi: float = 0.0
+
+
+@dataclasses.dataclass
 class LimboBarGeometry:
     start_x: float | None = None
     end_x: float | None = None

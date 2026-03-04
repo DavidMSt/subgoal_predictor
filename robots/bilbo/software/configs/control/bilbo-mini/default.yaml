@@ -8,9 +8,9 @@ general:
 inputs:
   balancing:
     forward:
-      max: 0.35                       # [Nm] Max normalized forward torque input
+      max: 0.2                       # [Nm] Max normalized forward torque input
     turn:
-      max: 0.2                        # [Nm] Max normalized turn torque input
+      max: 0.1                        # [Nm] Max normalized turn torque input
   velocity:
     forward:
       max: 0.5                        # [m/s] Max forward velocity from normalized input
@@ -22,7 +22,7 @@ balancing_control:
   K: [ 0.19, 0.21, 0.025, 0.015, 0.19, 0.21, 0.025, -0.015 ]  # LQR gains: [v, theta, theta_dot, psi_dot] x [left, right]
   tic:
     enabled: true                     # Enable theta integral controller (pitch drift compensation)
-    ki: 0.1                          # [Nm/(rad*s)] Integral gain
+    ki: 0.2                          # [Nm/(rad*s)] Integral gain
     max_torque: 0.05                  # [Nm] Output saturation
     theta_limit: 0.16                 # [rad] Auto-disable above this pitch (~9 deg)
   vic:
@@ -33,8 +33,8 @@ balancing_control:
     theta_limit: 0.16                 # [rad] Auto-disable above this pitch
   psi:
     enabled: false                    # Enable yaw angle PI controller (heading drift compensation)
-    kp: 0.0                           # [Nm/rad] Proportional gain
-    ki: 0.0                           # [Nm/(rad*s)] Integral gain
+    kp: -0.2                           # [Nm/rad] Proportional gain
+    ki: -0.35                          # [Nm/(rad*s)] Integral gain
     max_torque: 0.05                  # [Nm] Output saturation (differential)
 velocity_control:
   v: # Forward velocity controller
@@ -104,6 +104,8 @@ velocity_control:
 position_control: # Dense path following (pure pursuit)
   kp_angular: 6.0                     # [(rad/s)/rad] Heading error proportional gain
   ki_angular: 0.25                    # [(rad/s)/(rad*s)] Heading error integral gain
+  kp_angular_heading: 0.0            # [(rad/s)/rad] Heading-only kp for turn_to_heading (0 = use kp_angular)
+  ki_angular_heading: 0.0            # [(rad/s)/(rad*s)] Heading-only ki for turn_to_heading (0 = use ki_angular)
   kp_linear: 0.0                      # [1/s] Speed proportional gain (unused when decel_limit > 0)
   ki_linear: 0.012                    # [1/s^2] Speed integral gain
   kd_linear: 0.5                      # [-] Velocity damping factor

@@ -20,7 +20,7 @@ class SmoothOMPLTest(ScenarioFactory):
       - Does the autonomous agent plan around the wall correctly?
     """
 
-    name = "joystick_wall_test"
+    name = "smooth_ompl_test"
 
     @classmethod
     def create(cls) -> ScenarioConfig:

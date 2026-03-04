@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Testbed Creator</title>
+  <link rel="icon" type="image/png" href="/bilbo_logo.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: #0a0a0f;
+      color: #e0e0e0;
+      overflow: hidden;
+      height: 100vh;
+    }
+  </style>
+  <script type="module" crossorigin src="/assets/index-BY6Ogons.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-C5qZinbp.css">
+</head>
+<body>
+  <script>
+    var t = localStorage.getItem('testbed-creator-theme');
+    if (t === 'light') { document.body.style.background = '#f5f6f8'; document.body.style.color = '#2c3040'; }
+  </script>
+  <div id="app"></div>
+</body>
+</html>

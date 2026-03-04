@@ -420,9 +420,18 @@ def _optimize_connection_points(points, zone_centers, zone_radii, obstacles,
 # Spline Fitting & Collision Safety
 # ============================================================================
 
-def _fit_parametric_spline(points):
+def _fit_parametric_spline(points, target_heading=None):
     """
     Fit a parametric cubic spline through a sequence of (x, y) points.
+
+    Parameters
+    ----------
+    points : list[(x, y)]
+        Control points for the spline.
+    target_heading : float or None
+        If given, the spline's tangent at the last point is clamped to this
+        heading angle [rad].  The start boundary condition remains 'natural'.
+        This makes the path arrive at the endpoint with the desired heading.
 
     Returns (cs_x, cs_y, total_arc_length) or (None, None, 0) if degenerate.
     """
@@ -433,13 +442,25 @@ def _fit_parametric_spline(points):
     if total < 1e-9:
         return None, None, 0.0
 
-    cs_x = CubicSpline(t, arr[:, 0], bc_type='natural')
-    cs_y = CubicSpline(t, arr[:, 1], bc_type='natural')
+    if target_heading is not None:
+        # Clamped end: set the derivative at the last knot to point in
+        # the desired heading direction.  The magnitude is set to 1.0
+        # (unit tangent) which CubicSpline interprets as ds/dt direction.
+        dx_end = math.cos(target_heading)
+        dy_end = math.sin(target_heading)
+        bc_x = ((2, 0.0), (1, dx_end))  # natural start, clamped end
+        bc_y = ((2, 0.0), (1, dy_end))
+        cs_x = CubicSpline(t, arr[:, 0], bc_type=bc_x)
+        cs_y = CubicSpline(t, arr[:, 1], bc_type=bc_y)
+    else:
+        cs_x = CubicSpline(t, arr[:, 0], bc_type='natural')
+        cs_y = CubicSpline(t, arr[:, 1], bc_type='natural')
+
     return cs_x, cs_y, total
 
 
 def _ensure_spline_safety(points, obstacles, max_rounds=5,
-                          margin=OBSTACLE_MARGIN):
+                          margin=OBSTACLE_MARGIN, target_heading=None):
     """
     Fit a smooth spline through the polyline and ensure it doesn't collide.
 
@@ -447,12 +468,17 @@ def _ensure_spline_safety(points, obstacles, max_rounds=5,
     insert the midpoint of the offending polyline segment as a new control
     point. Repeat until no collisions remain (or max_rounds exceeded).
 
+    Parameters
+    ----------
+    target_heading : float or None
+        If given, the spline's end tangent is clamped to this heading [rad].
+
     Returns (cs_x, cs_y, total_length, final_control_points).
     """
     pts = list(points)
 
     for _ in range(max_rounds):
-        cs_x, cs_y, L = _fit_parametric_spline(pts)
+        cs_x, cs_y, L = _fit_parametric_spline(pts, target_heading=target_heading)
         if cs_x is None:
             return None, None, 0.0, pts
 
@@ -481,7 +507,7 @@ def _ensure_spline_safety(points, obstacles, max_rounds=5,
         )
         pts.insert(seg_idx + 1, mid)
 
-    cs_x, cs_y, L = _fit_parametric_spline(pts)
+    cs_x, cs_y, L = _fit_parametric_spline(pts, target_heading=target_heading)
     return cs_x, cs_y, L, pts
 
 

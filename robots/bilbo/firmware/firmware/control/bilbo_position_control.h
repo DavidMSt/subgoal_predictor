@@ -197,6 +197,13 @@ struct bilbo_position_control_config_t {
 	float ki_angular = 0.3f;  // [rad/s per rad*s] Integral gain for angular control
 
 	// -------------------------------------------------------------------------
+	// HEADING-ONLY ANGULAR GAINS (turn_to_heading override)
+	// -------------------------------------------------------------------------
+
+	float kp_angular_heading = 0.0f; // [rad/s per rad] Heading-only kp (0 = use kp_angular)
+	float ki_angular_heading = 0.0f; // [rad/s per rad*s] Heading-only ki (0 = use ki_angular)
+
+	// -------------------------------------------------------------------------
 	// LINEAR CONTROL GAINS (speed toward carrot)
 	// -------------------------------------------------------------------------
 

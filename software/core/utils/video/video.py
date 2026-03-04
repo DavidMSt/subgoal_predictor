@@ -34,7 +34,8 @@ def webm_to_mp4(input_path: str, output_path: str | None = None, overwrite: bool
     cmd = ['ffmpeg']
     if overwrite:
         cmd.append('-y')
-    cmd += ['-i', input_path, '-c:v', 'libx264', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p', output_path]
+    cmd += ['-i', input_path, '-c:v', 'libx264', '-preset', 'fast', '-crf', '18',
+            '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2', '-pix_fmt', 'yuv420p', output_path]
 
     subprocess.run(cmd, check=True, capture_output=True)
 

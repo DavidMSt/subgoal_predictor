@@ -67,6 +67,8 @@ class PositionControlConfig:
     Ts: float = 0.01
     kp_angular: float = 8.0
     ki_angular: float = 0.25
+    kp_angular_heading: float = 0.0
+    ki_angular_heading: float = 0.0
     kp_linear: float = 0.0
     ki_linear: float = 0.012
     kd_linear: float = 0.5
@@ -333,11 +335,23 @@ class SimulatedPositionControl:
         else:
             self._dwelling = False
 
-        # PI control
-        max_rate = self._heading_max_angular_speed
-        w = self._pi_angular(heading_error, max_rate)
+        # Resolve effective angular gains (heading-specific overrides, 0 = use base)
+        eff_kp = c.kp_angular_heading if c.kp_angular_heading > 0 else c.kp_angular
+        eff_ki = c.ki_angular_heading if c.ki_angular_heading > 0 else c.ki_angular
 
-        return 0.0, w
+        # PI control with anti-windup (inline with heading-specific gains)
+        max_rate = self._heading_max_angular_speed
+        w_p = eff_kp * heading_error
+        w_unsat = w_p + self._angular_integral
+        w_sat = max(-max_rate, min(max_rate, w_unsat))
+
+        if abs(w_unsat) <= max_rate or (w_unsat * heading_error < 0):
+            self._angular_integral += eff_ki * heading_error * c.Ts
+            if eff_ki > 0:
+                max_i = max_rate / eff_ki
+                self._angular_integral = max(-max_i, min(max_i, self._angular_integral))
+
+        return 0.0, w_sat
 
     # ── Drive to point ──────────────────────────────────────────────────
 

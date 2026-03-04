@@ -845,6 +845,8 @@ class BILBO_DynamicAgent(Agent):
                                  eigenvectors: list | np.ndarray):
         self.K = self.dynamics.eigenstructureAssignment(poles, eigenvectors, apply_poles_to_system=False)
 
+    # ------------------------------------------------------------------------------------------------------------------
+
     # === PRIVATE METHODS ==============================================================================================
     def _controller(self) -> BILBO_3D_Input:
 
@@ -860,7 +862,10 @@ class BILBO_DynamicAgent(Agent):
     # ------------------------------------------------------------------------------------------------------------------
     def _dynamics(self):
         controller_input = self._controller()
-        self.dynamics.step(controller_input)
+        # Skip dynamics integration when lying on the ground in OFF mode —
+        # gravity would re-introduce tiny velocities each step otherwise.
+        if not (self.mode == BILBO_Control_Mode.OFF and getattr(self, '_ground_contact', False)):
+            self.dynamics.step(controller_input)
         self._calculateStateConstraints()
 
     # ------------------------------------------------------------------------------------------------------------------

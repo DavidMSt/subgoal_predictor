@@ -107,6 +107,8 @@ class PositionControl_Config:
     """
     kp_angular: float = 10.0                # [rad/s per rad] Proportional gain for angular control
     ki_angular: float = 0.3                 # [rad/s per rad*s] Integral gain for angular control
+    kp_angular_heading: float = 0.0         # [rad/s per rad] Heading-only proportional (0 = use kp_angular)
+    ki_angular_heading: float = 0.0         # [rad/s per rad*s] Heading-only integral (0 = use ki_angular)
     kp_linear: float = 2.0                  # [1/s] Proportional gain: speed = kp_linear * carrot_distance
     ki_linear: float = 0.0                  # [1/s^2] Integral gain for linear control (usually 0)
     kd_linear: float = 0.5                  # [-] Velocity damping: subtracts kd_linear * |current_v| from speed command

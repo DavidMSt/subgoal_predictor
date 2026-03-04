@@ -392,8 +392,22 @@ class MapWidget(Widget):
         server_host = getHostIP()
         if server_host is None:
             server_host = 'localhost'
-        self.map = Map(f"{self.id}_map", server_host, **kwargs)
-        self.map.start()
+
+        # Auto-find a free port if the default (or specified) port is already in use
+        port = kwargs.pop('server_port', MAP_DEFAULT_WS_PORT)
+        self.map = Map(f"{self.id}_map", server_host, server_port=port, **kwargs)
+
+        max_attempts = 20
+        for attempt in range(max_attempts):
+            try:
+                self.map.start()
+                break
+            except OSError:
+                port += 1
+                self.map.server.port = port
+        else:
+            raise OSError(f"Could not find a free port for map widget '{self.id}' "
+                          f"(tried {MAP_DEFAULT_WS_PORT}–{port - 1})")
 
     # === METHODS ======================================================================================================
     def getPayload(self) -> dict:

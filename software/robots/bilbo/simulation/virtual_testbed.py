@@ -52,7 +52,6 @@ class SimulatedBoxObstacle(SimulatedObstacle):
 class VirtualTestbed_Config:
     enabled: bool = False
     Ts: float = 0.01
-    obstacles: list[BoxObstacle_Config] | None = None
     robots: list | None = None
 
 
@@ -76,20 +75,7 @@ class VirtualTestbed:
 
     # === METHODS ======================================================================================================
     def init(self):
-        # Add obstacles and BILBOs from config
-        if self.config.obstacles is not None:
-            for obstacle_config in self.config.obstacles:
-                # Extract initial state from config if provided as YAML shorthand
-                state = None
-                if hasattr(obstacle_config, 'state') and obstacle_config.state is not None:
-                    s = obstacle_config.state
-                    if isinstance(s, (list, tuple)) and len(s) >= 2:
-                        state = BoxObstacle_State(
-                            x=float(s[0]),
-                            y=float(s[1]),
-                            psi=float(s[2]) if len(s) > 2 else 0
-                        )
-                self.add_box_obstacle(obstacle_config, state=state)
+        pass
 
     # ------------------------------------------------------------------------------------------------------------------
     def start(self):
