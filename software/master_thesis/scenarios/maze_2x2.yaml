@@ -1,0 +1,117 @@
+name: maze_2x2
+limits:
+  - [ -1.0 , 1.0 ]
+  - [ -1.0 , 1.0 ]
+
+obstacles:
+  # Outer boundary
+  - obstacle_id: wall_top
+    x: 0.0
+    y: 1.0
+    length: 2.0
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: wall_bottom
+    x: 0.0
+    y: -1.0
+    length: 2.0
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: wall_left
+    x: -1.0
+    y: 0.0
+    length: 2.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: wall_right
+    x: 1.0
+    y: 0.0
+    length: 2.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  # Internal walls
+  - obstacle_id: maze_1
+    x: -0.5
+    y: 0.5
+    length: 0.5
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_2
+    x: -0.25
+    y: 0.5
+    length: 0.5
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: maze_3
+    x: 0.0
+    y: 0.25
+    length: 0.5
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_4
+    x: 0.5
+    y: 0.5
+    length: 0.5
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: maze_5
+    x: -0.5
+    y: -0.25
+    length: 0.5
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_6
+    x: 0.0
+    y: 0.0
+    length: 0.5
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: maze_7
+    x: 0.5
+    y: -0.25
+    length: 0.5
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_8
+    x: -0.25
+    y: -0.5
+    length: 0.5
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: maze_9
+    x: 0.0
+    y: -0.75
+    length: 0.5
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_10
+    x: 0.5
+    y: -0.5
+    length: 0.5
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+
+agents:
+  - agent_id: frodo1
+    agent_class_name: FRODOOfflineAgent
+    start_config: [ -0.75 , -0.75 , 0.0 ]
+
+tasks:
+  - task_id: goal1
+    x: 0.75
+    y: 0.75
+    psi: 0.0

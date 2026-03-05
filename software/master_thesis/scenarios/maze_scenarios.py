@@ -1,4 +1,9 @@
-"""Maze scenarios: 2x2 single-agent and 4x4 multi-agent."""
+"""Maze scenarios: 2x2 single-agent and 4x4 multi-agent.
+
+GUI-discoverable versions are now defined in the corresponding YAML files
+(maze_2x2.yaml, maze_4x4.yaml, maze_4x4_reactive.yaml).  The config
+functions below are kept for programmatic use (RL training scripts, tests).
+"""
 
 from __future__ import annotations
 
@@ -8,41 +13,10 @@ from master_thesis.scenarios.base import (
     AgentSpec,
     ObstacleSpec,
     ScenarioConfig,
-    ScenarioFactory,
     TaskSpec,
 )
 
 _HALF_PI = math.pi / 2
-
-
-class Maze2x2Scenario(ScenarioFactory):
-    """Single offline agent navigating a 2x2 m maze."""
-
-    name = "maze_2x2"
-
-    @classmethod
-    def create(cls) -> ScenarioConfig:
-        return maze_2x2_config()
-
-
-class Maze4x4Scenario(ScenarioFactory):
-    """Three offline agents navigating a 4x4 m maze."""
-
-    name = "maze_4x4"
-
-    @classmethod
-    def create(cls) -> ScenarioConfig:
-        return maze_4x4_config()
-
-
-class Maze4x4ReactiveScenario(ScenarioFactory):
-    """Three reactive (MPPI) agents navigating a 4x4 m maze."""
-
-    name = "maze_4x4_reactive"
-
-    @classmethod
-    def create(cls) -> ScenarioConfig:
-        return maze_4x4_reactive_config()
 
 
 def maze_2x2_config(

@@ -1,0 +1,26 @@
+name: collision_agents
+limits:
+  - [ -4.0 , 4.0 ]
+  - [ -4.0 , 4.0 ]
+
+agents:
+  - agent_id: vfrodo0
+    agent_class_name: FRODOOfflineAgent
+    start_config: [ -2.0 , 0.0 , 0.0 ]
+  - agent_id: vfrodo1
+    agent_class_name: FRODOOfflineAgent
+    start_config: [ 2.0 , 0.0 , 3.1416 ]
+
+tasks:
+  - task_id: task_right
+    x: 2.0
+    y: 0.0
+    psi: 0.0
+  - task_id: task_left
+    x: -2.0
+    y: 0.0
+    psi: 0.0
+
+assignments:
+  vfrodo0: task_right
+  vfrodo1: task_left

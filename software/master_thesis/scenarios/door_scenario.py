@@ -1,4 +1,8 @@
-"""Door / narrow-passage scenario for MPPI validation."""
+"""Door / narrow-passage scenario for MPPI validation.
+
+The GUI-discoverable version is defined in door_reactive.yaml.
+This config function is kept for programmatic use (tests, parameter sweeps).
+"""
 
 from __future__ import annotations
 
@@ -8,19 +12,8 @@ from master_thesis.scenarios.base import (
     AgentSpec,
     ObstacleSpec,
     ScenarioConfig,
-    ScenarioFactory,
     TaskSpec,
 )
-
-
-class DoorScenario(ScenarioFactory):
-    """Two reactive agents crossing a narrow door passage."""
-
-    name = "door_reactive"
-
-    @classmethod
-    def create(cls) -> ScenarioConfig:
-        return door_scenario_config()
 
 
 def door_scenario_config(

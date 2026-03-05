@@ -1,0 +1,102 @@
+name: test_scenario123
+limits:
+  - [ 0 , 4 ]
+  - [ 0 , 4 ]
+
+obstacles:
+  - obstacle_id: wall-7
+    x: 0.5
+    y: 1.25
+    length: 2.5
+    width: 0.05
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: wall-8
+    x: 1.25
+    y: 2.5
+    length: 1.5
+    width: 0.05
+    psi: 0
+    height: 1.0
+  - obstacle_id: wall-9
+    x: 3
+    y: 2.5
+    length: 1
+    width: 0.05
+    psi: 0
+    height: 1.0
+  - obstacle_id: wall-10
+    x: 3.5
+    y: 1.25
+    length: 2.5
+    width: 0.05
+    psi: -1.5708
+    height: 1.0
+  - obstacle_id: wall-11
+    x: 1.25
+    y: 1.25
+    length: 1.5
+    width: 0.05
+    psi: 0
+    height: 1.0
+  - obstacle_id: wall-12
+    x: 2.25
+    y: 2.25
+    length: 0.7071
+    width: 0.05
+    psi: 2.3562
+    height: 1.0
+  - obstacle_id: wall-13
+    x: 2.5
+    y: 1.75
+    length: 0.5
+    width: 0.05
+    psi: -1.5708
+    height: 1.0
+  - obstacle_id: wall-14
+    x: 2.75
+    y: 1.5
+    length: 0.5
+    width: 0.05
+    psi: -3.1416
+    height: 1.0
+  - obstacle_id: wall-15
+    x: 3
+    y: 2.25
+    length: 0.5
+    width: 0.05
+    psi: -1.5708
+    height: 1.0
+  - obstacle_id: wall-16
+    x: 2.5
+    y: 0.5
+    length: 2
+    width: 0.05
+    psi: -3.1416
+    height: 1.0
+  - obstacle_id: wall-17
+    x: 1.5
+    y: 0.875
+    length: 0.75
+    width: 0.05
+    psi: -1.5708
+    height: 1.0
+
+agents:
+  - agent_id: frodo-1
+    agent_class_name: FRODOOfflineAgent
+    start_config: [ 1.75 , 1.75 , 3.1416 ]
+  - agent_id: frodo-2
+    agent_class_name: FRODOOfflineAgent
+    start_config: [ 2.75 , 1.25 , 0 ]
+  - agent_id: frodo-3
+    agent_class_name: FRODOOfflineAgent
+    start_config: [ 1.25 , 0.75 , 0 ]
+
+tasks:
+  - task_id: task-1
+    x: 0.75
+    y: 3.25
+  - task_id: task-2
+    x: 2.5
+    y: 3.25

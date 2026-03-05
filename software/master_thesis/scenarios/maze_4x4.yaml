@@ -1,0 +1,184 @@
+name: maze_4x4
+limits:
+  - [ -2.0 , 2.0 ]
+  - [ -2.0 , 2.0 ]
+
+obstacles:
+  # Outer boundary
+  - obstacle_id: wall_top
+    x: 0.0
+    y: 2.0
+    length: 4.0
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: wall_bottom
+    x: 0.0
+    y: -2.0
+    length: 4.0
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: wall_left
+    x: -2.0
+    y: 0.0
+    length: 4.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: wall_right
+    x: 2.0
+    y: 0.0
+    length: 4.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  # Top row (y=1.5)
+  - obstacle_id: maze_1
+    x: -1.25
+    y: 1.5
+    length: 1.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_2
+    x: 0.0
+    y: 1.5
+    length: 1.0
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: maze_3
+    x: 1.25
+    y: 1.5
+    length: 1.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  # Upper-middle row (y=0.75)
+  - obstacle_id: maze_4
+    x: -1.5
+    y: 0.75
+    length: 0.5
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: maze_5
+    x: -0.5
+    y: 0.75
+    length: 1.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_6
+    x: 0.5
+    y: 0.75
+    length: 1.0
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: maze_7
+    x: 1.5
+    y: 0.75
+    length: 1.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  # Center row (y=0.0)
+  - obstacle_id: maze_8
+    x: -1.0
+    y: 0.0
+    length: 1.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_9
+    x: 0.0
+    y: 0.0
+    length: 1.0
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: maze_10
+    x: 1.0
+    y: 0.0
+    length: 1.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  # Lower-middle row (y=-0.75)
+  - obstacle_id: maze_11
+    x: -1.5
+    y: -0.75
+    length: 1.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_12
+    x: -0.5
+    y: -0.75
+    length: 1.0
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: maze_13
+    x: 0.5
+    y: -0.75
+    length: 1.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_14
+    x: 1.5
+    y: -0.75
+    length: 0.5
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  # Bottom row (y=-1.5)
+  - obstacle_id: maze_15
+    x: -1.25
+    y: -1.5
+    length: 1.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: maze_16
+    x: 0.0
+    y: -1.5
+    length: 1.0
+    width: 0.1
+    psi: 0.0
+    height: 1.0
+  - obstacle_id: maze_17
+    x: 1.25
+    y: -1.5
+    length: 1.0
+    width: 0.1
+    psi: 1.5708
+    height: 1.0
+
+agents:
+  - agent_id: frodo1
+    agent_class_name: FRODOOfflineAgent
+    start_config: [ -1.75 , 1.75 , 0.0 ]
+  - agent_id: frodo2
+    agent_class_name: FRODOOfflineAgent
+    start_config: [ 0.0 , 1.75 , 0.0 ]
+  - agent_id: frodo3
+    agent_class_name: FRODOOfflineAgent
+    start_config: [ 1.75 , 1.75 , 0.0 ]
+
+tasks:
+  - task_id: goal1
+    x: -1.75
+    y: -1.75
+    psi: 0.0
+  - task_id: goal2
+    x: 0.0
+    y: -1.75
+    psi: 0.0
+  - task_id: goal3
+    x: 1.75
+    y: -1.75
+    psi: 0.0

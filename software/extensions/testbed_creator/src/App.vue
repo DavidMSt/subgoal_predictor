@@ -21,7 +21,7 @@
           Snap: {{ snapEnabled ? 'ON' : 'OFF' }}
         </button>
         <button class="btn btn-clear" @click="clearAll">Clear</button>
-        <button class="btn btn-export" @click="exportYaml">Copy YAML</button>
+        <button class="btn btn-export" @click="exportYaml">Copy Scenario</button>
         <button class="btn btn-import" @click="showImportModal = true">Import YAML</button>
         <span class="header-sep"></span>
         <button class="btn btn-icon btn-theme" @click="toggleTheme"
@@ -140,6 +140,16 @@
           <h3 class="panel-title">Point</h3>
           <div class="hint">Click to place a named point.</div>
         </section>
+
+        <section class="panel" v-if="activeTool === 'frodo'">
+          <h3 class="panel-title">FRODO Robot</h3>
+          <div class="hint">Click to place a FRODO start position.</div>
+        </section>
+
+        <section class="panel" v-if="activeTool === 'task'">
+          <h3 class="panel-title">Task</h3>
+          <div class="hint">Click to place a task marker.</div>
+        </section>
       </aside>
 
       <!-- Canvas -->
@@ -199,6 +209,13 @@
               <span class="field-unit">deg</span>
             </div>
           </template>
+          <template v-if="selectedObstacle.type === 'frodo'">
+            <div class="field-row">
+              <label>Angle</label>
+              <input type="number" v-model.number="selectedAngleDeg" step="1" @focus="onPropertyFocus" @keydown.stop class="field-full">
+              <span class="field-unit">deg</span>
+            </div>
+          </template>
           <div class="field-row">
             <label>X</label>
             <input type="number" v-model.number="selectedObstacle.x" step="0.01" @focus="onPropertyFocus" @keydown.stop class="field-full">
@@ -243,6 +260,36 @@
           </div>
           <div class="hint" v-else>No points yet.</div>
         </section>
+
+        <!-- FRODO List -->
+        <section class="panel">
+          <h3 class="panel-title">FRODO Robots <span class="badge">{{ frodoItems.length }}</span></h3>
+          <div class="obstacle-list" v-if="frodoItems.length > 0">
+            <div v-for="(o, idx) in frodoItems" :key="'frodo-' + idx"
+              :class="['obstacle-item', { selected: selectedId === o.id }]"
+              @click="selectObstacle(o.id)">
+              <span class="type-dot frodo"></span>
+              <span class="obstacle-id">{{ o.id }}</span>
+              <button class="item-delete" @click.stop="deleteObstacle(o.id)" title="Delete">&times;</button>
+            </div>
+          </div>
+          <div class="hint" v-else>No FRODO robots yet.</div>
+        </section>
+
+        <!-- Task List -->
+        <section class="panel">
+          <h3 class="panel-title">Tasks <span class="badge">{{ taskItems.length }}</span></h3>
+          <div class="obstacle-list" v-if="taskItems.length > 0">
+            <div v-for="(o, idx) in taskItems" :key="'task-' + idx"
+              :class="['obstacle-item', { selected: selectedId === o.id }]"
+              @click="selectObstacle(o.id)">
+              <span class="type-dot task"></span>
+              <span class="obstacle-id">{{ o.id }}</span>
+              <button class="item-delete" @click.stop="deleteObstacle(o.id)" title="Delete">&times;</button>
+            </div>
+          </div>
+          <div class="hint" v-else>No tasks yet.</div>
+        </section>
       </aside>
     </div>
 
@@ -268,6 +315,9 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 
+// FRODO display radius in world metres (matches robot footprint)
+const FRODO_DISPLAY_RADIUS = 0.2
+
 // ============================================================
 // CONSTANTS
 // ============================================================
@@ -277,6 +327,8 @@ const DARK_COLORS = {
   wall:      { stroke: '#feca57', fill: 'rgba(254,202,87,0.25)' },
   line:      { stroke: '#ff9f43', fill: 'rgba(255,159,67,0.25)' },
   point:     { stroke: '#a78bfa', fill: 'rgba(167,139,250,0.3)' },
+  frodo:     { stroke: '#4ade80', fill: 'rgba(74,222,128,0.18)' },
+  task:      { stroke: '#fb923c', fill: 'rgba(251,146,60,0.22)' },
   selected:  '#00d2ff',
   selectedFill: 'rgba(0, 210, 255, 0.2)',
   preview:   'rgba(255,255,255,0.15)',
@@ -298,6 +350,8 @@ const LIGHT_COLORS = {
   wall:      { stroke: '#c49520', fill: 'rgba(196,149,32,0.15)' },
   line:      { stroke: '#d08020', fill: 'rgba(208,128,32,0.15)' },
   point:     { stroke: '#7c5ce0', fill: 'rgba(124,92,224,0.15)' },
+  frodo:     { stroke: '#16a34a', fill: 'rgba(22,163,74,0.15)' },
+  task:      { stroke: '#ea580c', fill: 'rgba(234,88,12,0.15)' },
   selected:  '#0088bb',
   selectedFill: 'rgba(0, 136, 187, 0.12)',
   preview:   'rgba(0,0,0,0.08)',
@@ -329,7 +383,9 @@ const tools = [
   { id: 'rectangle', label: 'Rectangle', icon: '\u25A1', key: '3' },
   { id: 'wall',      label: 'Wall',      icon: '\u2571', key: '4' },
   { id: 'line',      label: 'Line',      icon: '\u2500', key: '5' },
-  { id: 'point',     label: 'Point',     icon: '\u2716', key: '6' }
+  { id: 'point',     label: 'Point',     icon: '\u2716', key: '6' },
+  { id: 'frodo',     label: 'FRODO',     icon: '\u25CE', key: '7' },
+  { id: 'task',      label: 'Task',      icon: '\u25C9', key: '8' },
 ]
 
 // ============================================================
@@ -374,7 +430,7 @@ const defaults = reactive({
   wallThickness: 0.05
 })
 
-const counters = reactive({ circle: 1, box: 1, wall: 1, line: 1, point: 1 })
+const counters = reactive({ circle: 1, box: 1, wall: 1, line: 1, point: 1, frodo: 1, task: 1 })
 
 // Undo/Redo
 const MAX_UNDO = 100
@@ -445,8 +501,11 @@ const selectedObstacle = computed(() =>
 )
 
 const obstacleItems = computed(() =>
-  obstacles.value.filter(o => o.type !== 'point')
+  obstacles.value.filter(o => o.type !== 'point' && o.type !== 'frodo' && o.type !== 'task')
 )
+
+const frodoItems = computed(() => obstacles.value.filter(o => o.type === 'frodo'))
+const taskItems  = computed(() => obstacles.value.filter(o => o.type === 'task'))
 
 const pointItems = computed(() =>
   obstacles.value.filter(o => o.type === 'point')
@@ -455,12 +514,12 @@ const pointItems = computed(() =>
 const selectedAngleDeg = computed({
   get() {
     const o = selectedObstacle.value
-    if (!o || (o.type !== 'box' && o.type !== 'line')) return 0
+    if (!o || (o.type !== 'box' && o.type !== 'line' && o.type !== 'frodo' && o.type !== 'task')) return 0
     return Math.round(o.psi * 180 / Math.PI * 100) / 100
   },
   set(deg) {
     const o = selectedObstacle.value
-    if (o && (o.type === 'box' || o.type === 'line')) {
+    if (o && (o.type === 'box' || o.type === 'line' || o.type === 'frodo' || o.type === 'task')) {
       o.psi = deg * Math.PI / 180
     }
   }
@@ -486,6 +545,8 @@ const canvasCursor = computed(() => {
   if (activeTool.value === 'wall') return 'crosshair'
   if (activeTool.value === 'line') return 'crosshair'
   if (activeTool.value === 'point') return 'crosshair'
+  if (activeTool.value === 'frodo') return 'crosshair'
+  if (activeTool.value === 'task') return 'crosshair'
   return 'copy'
 })
 
@@ -653,9 +714,75 @@ function getLabelStep(gs) {
   return gs
 }
 
+function drawRobotShape(o, isSelected, alpha, colors) {
+  const [cx, cy] = worldToCanvas(o.x, o.y)
+  const r = FRODO_DISPLAY_RADIUS * scale
+  const stroke = isSelected ? COLORS.selected : colors.stroke
+  const fill   = isSelected ? COLORS.selectedFill : colors.fill
+
+  ctx.globalAlpha = alpha
+
+  ctx.beginPath()
+  ctx.arc(cx, cy, r, 0, Math.PI * 2)
+  ctx.fillStyle = fill
+  ctx.fill()
+  ctx.strokeStyle = stroke
+  ctx.lineWidth = isSelected ? 2.5 : 1.5
+  ctx.setLineDash(isSelected ? [5, 3] : [])
+  ctx.stroke()
+  ctx.setLineDash([])
+
+  // Bullseye inner ring for tasks
+  if (o.type === 'task') {
+    ctx.beginPath()
+    ctx.arc(cx, cy, r * 0.42, 0, Math.PI * 2)
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = 1
+    ctx.stroke()
+  }
+
+  // Heading arrow (psi=0 → +X; canvas Y is flipped)
+  const arrowLen = r * 0.78
+  const ax = cx + arrowLen * Math.cos(o.psi)
+  const ay = cy - arrowLen * Math.sin(o.psi)
+  ctx.beginPath()
+  ctx.moveTo(cx, cy)
+  ctx.lineTo(ax, ay)
+  ctx.strokeStyle = stroke
+  ctx.lineWidth = 2
+  ctx.setLineDash([])
+  ctx.stroke()
+  const headLen = Math.min(7, r * 0.32)
+  const ang = Math.atan2(ay - cy, ax - cx)
+  ctx.beginPath()
+  ctx.moveTo(ax, ay)
+  ctx.lineTo(ax - headLen * Math.cos(ang - 0.38), ay - headLen * Math.sin(ang - 0.38))
+  ctx.moveTo(ax, ay)
+  ctx.lineTo(ax - headLen * Math.cos(ang + 0.38), ay - headLen * Math.sin(ang + 0.38))
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+
+  ctx.beginPath()
+  ctx.arc(cx, cy, 2.5, 0, Math.PI * 2)
+  ctx.fillStyle = stroke
+  ctx.fill()
+
+  ctx.font = '11px JetBrains Mono'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'top'
+  ctx.fillStyle = stroke
+  ctx.fillText(o.id, cx, cy + r + 4)
+
+  ctx.globalAlpha = 1
+}
+
 function drawObstacle(o, isSelected, alpha = 1.0) {
   if (o.type === 'point') {
     drawPointShape(o, isSelected, alpha)
+    return
+  }
+  if (o.type === 'frodo' || o.type === 'task') {
+    drawRobotShape(o, isSelected, alpha, COLORS[o.type])
     return
   }
   const colors = o.subtype === 'wall' ? COLORS.wall : COLORS[o.type] || COLORS.box
@@ -805,7 +932,7 @@ function drawBoxShape(wx, wy, width, height, psi, stroke, fill, isSelected, alph
 function getHandlePositions(o) {
   const handles = []
 
-  if (o.type === 'point') return handles
+  if (o.type === 'point' || o.type === 'frodo' || o.type === 'task') return handles
 
   if (o.type === 'circle') {
     handles.push({ type: 'resize-radius', wx: o.x + o.radius, wy: o.y })
@@ -997,6 +1124,10 @@ function drawPlacementPreview() {
     }
   } else if (activeTool.value === 'point') {
     drawPointShape({ id: '?', x: px, y: py, type: 'point' }, false, 0.4)
+  } else if (activeTool.value === 'frodo') {
+    drawRobotShape({ id: '', x: px, y: py, type: 'frodo', psi: 0 }, false, 0.45, COLORS.frodo)
+  } else if (activeTool.value === 'task') {
+    drawRobotShape({ id: '', x: px, y: py, type: 'task', psi: 0 }, false, 0.45, COLORS.task)
   }
 
   // Show snap crosshair
@@ -1033,10 +1164,10 @@ function render() {
   drawCheckerboard()
   drawGrid()
 
-  // Draw non-selected obstacles (obstacles first, then points on top)
+  // Draw non-selected obstacles (obstacles first, then robots/tasks/points on top)
   for (const o of obstacles.value) {
     if (o.id === selectedId.value) continue
-    if (o.type === 'point') continue
+    if (o.type === 'point' || o.type === 'frodo' || o.type === 'task') continue
     drawObstacle(o, false)
     // Draw hover outline
     if (o.id === hoveredId.value && activeTool.value === 'select' && !hoveredHandle.value) {
@@ -1088,18 +1219,31 @@ function render() {
     }
   }
 
-  // Draw non-selected points on top of obstacles
+  // Draw non-selected robots, tasks, and points on top of obstacles
   for (const o of obstacles.value) {
     if (o.id === selectedId.value) continue
-    if (o.type !== 'point') continue
+    if (o.type !== 'point' && o.type !== 'frodo' && o.type !== 'task') continue
     drawObstacle(o, false)
+    if ((o.type === 'frodo' || o.type === 'task') &&
+        o.id === hoveredId.value && activeTool.value === 'select' && !hoveredHandle.value) {
+      const [hcx, hcy] = worldToCanvas(o.x, o.y)
+      ctx.beginPath()
+      ctx.arc(hcx, hcy, FRODO_DISPLAY_RADIUS * scale + 3, 0, Math.PI * 2)
+      ctx.strokeStyle = COLORS[o.type].stroke
+      ctx.lineWidth = 1
+      ctx.globalAlpha = 0.4
+      ctx.setLineDash([4, 4])
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.globalAlpha = 1
+    }
   }
 
   // Draw selected obstacle on top with handles
   const sel = selectedObstacle.value
   if (sel) {
     drawObstacle(sel, true)
-    if (activeTool.value === 'select' && sel.type !== 'point') {
+    if (activeTool.value === 'select' && sel.type !== 'point' && sel.type !== 'frodo' && sel.type !== 'task') {
       drawHandles(sel)
     }
   }
@@ -1108,7 +1252,7 @@ function render() {
   if (activeTool.value === 'wall' || activeTool.value === 'line') {
     drawGridPointHighlight()
     if (wallStart) drawWallPreview()
-  } else if (activeTool.value === 'circle' || activeTool.value === 'rectangle' || activeTool.value === 'point') {
+  } else if (['circle', 'rectangle', 'point', 'frodo', 'task'].includes(activeTool.value)) {
     if (!dragState && !handleDrag) drawPlacementPreview()
   }
 
@@ -1126,6 +1270,10 @@ function hitTest(wx, wy) {
     if (o.type === 'point') {
       const dx = wx - o.x, dy = wy - o.y
       const hitR = POINT_HIT_RADIUS / scale
+      if (dx * dx + dy * dy <= hitR * hitR) return o.id
+    } else if (o.type === 'frodo' || o.type === 'task') {
+      const dx = wx - o.x, dy = wy - o.y
+      const hitR = Math.max(FRODO_DISPLAY_RADIUS, POINT_HIT_RADIUS / scale)
       if (dx * dx + dy * dy <= hitR * hitR) return o.id
     } else if (o.type === 'line') {
       // Distance from point to line segment
@@ -1245,6 +1393,14 @@ function onMouseDown(e) {
     const px = snapEnabled.value ? snapToGrid(wx) : wx
     const py = snapEnabled.value ? snapToGrid(wy) : wy
     addPoint(px, py)
+  } else if (activeTool.value === 'frodo') {
+    const px = snapEnabled.value ? snapToGrid(wx) : wx
+    const py = snapEnabled.value ? snapToGrid(wy) : wy
+    addFrodo(px, py)
+  } else if (activeTool.value === 'task') {
+    const px = snapEnabled.value ? snapToGrid(wx) : wx
+    const py = snapEnabled.value ? snapToGrid(wy) : wy
+    addTask(px, py)
   }
 }
 
@@ -1532,6 +1688,26 @@ function addPoint(wx, wy) {
   selectedId.value = id
 }
 
+function addFrodo(wx, wy) {
+  pushUndo()
+  const id = `frodo-${counters.frodo++}`
+  obstacles.value.push({
+    id, type: 'frodo', subtype: 'frodo',
+    x: wx, y: wy, psi: 0
+  })
+  selectedId.value = id
+}
+
+function addTask(wx, wy) {
+  pushUndo()
+  const id = `task-${counters.task++}`
+  obstacles.value.push({
+    id, type: 'task', subtype: 'task',
+    x: wx, y: wy, psi: 0
+  })
+  selectedId.value = id
+}
+
 function onIdInput(event, obstacle) {
   const newId = event.target.value
   // Update selectedId to track the renamed obstacle
@@ -1570,6 +1746,8 @@ function clearAll() {
   counters.wall = 1
   counters.line = 1
   counters.point = 1
+  counters.frodo = 1
+  counters.task = 1
   wallStart = null
   rectStart = null
   toast('Canvas cleared')
@@ -1614,50 +1792,82 @@ function copyToClipboard(text) {
 }
 
 function exportYaml() {
-  const obs = obstacles.value.filter(o => o.type !== 'point' && o.type !== 'line')
-  const lines = obstacles.value.filter(o => o.type === 'line')
-  const pts = obstacles.value.filter(o => o.type === 'point')
+  const boxItems    = obstacles.value.filter(o => o.type === 'box')
+  const circleItems = obstacles.value.filter(o => o.type === 'circle')
+  const lineItems   = obstacles.value.filter(o => o.type === 'line')
+  const pointItems  = obstacles.value.filter(o => o.type === 'point')
+  const hasContent  = boxItems.length || circleItems.length || lineItems.length ||
+                      pointItems.length || frodoItems.value.length || taskItems.value.length
 
-  if (obs.length === 0 && lines.length === 0 && pts.length === 0) {
-    toast('No obstacles, lines, or points to export')
+  if (!hasContent) {
+    toast('Nothing to export')
     return
   }
 
   let yaml = ''
 
-  if (obs.length > 0) {
-    yaml += '  obstacles:\n'
-    for (const o of obs) {
-      yaml += `    - id: ${o.id}\n`
-      yaml += `      type: ${o.type}\n`
-      if (o.type === 'circle') {
-        yaml += `      radius: ${fmt(o.radius)}\n`
-        yaml += `      state: [ ${fmt(o.x)} , ${fmt(o.y)} , 0 ]\n`
-      } else {
-        yaml += `      size: [ ${fmt(o.width)} , ${fmt(o.height)} ]\n`
-        yaml += `      state: [ ${fmt(o.x)} , ${fmt(o.y)} , ${fmt(o.psi)} ]\n`
+  yaml += `name: my_scenario\n`
+  yaml += `limits:\n`
+  yaml += `  - [ ${fmt(map.xMin)} , ${fmt(map.xMax)} ]\n`
+  yaml += `  - [ ${fmt(map.yMin)} , ${fmt(map.yMax)} ]\n`
+
+  if (boxItems.length || circleItems.length) {
+    yaml += `\nobstacles:\n`
+    for (const o of circleItems) {
+      yaml += `  - obstacle_id: ${o.id}\n`
+      yaml += `    x: ${fmt(o.x)}\n`
+      yaml += `    y: ${fmt(o.y)}\n`
+      yaml += `    radius: ${fmt(o.radius)}\n`
+    }
+    for (const o of boxItems) {
+      // Testbed psi → scenario psi (long axis convention):
+      //   scenario_psi = testbed_psi + PI/2
+      let sp = o.psi + Math.PI / 2
+      sp = ((sp + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI
+      yaml += `  - obstacle_id: ${o.id}\n`
+      yaml += `    x: ${fmt(o.x)}\n`
+      yaml += `    y: ${fmt(o.y)}\n`
+      yaml += `    length: ${fmt(o.height)}\n`   // long axis
+      yaml += `    width: ${fmt(o.width)}\n`     // short axis (thickness)
+      yaml += `    psi: ${fmt(sp)}\n`
+      yaml += `    height: 1.0\n`
+    }
+  }
+
+  if (frodoItems.value.length) {
+    yaml += `\nagents:\n`
+    for (const o of frodoItems.value) {
+      yaml += `  - agent_id: ${o.id}\n`
+      yaml += `    agent_class_name: FRODOOfflineAgent\n`
+      yaml += `    start_config: [ ${fmt(o.x)} , ${fmt(o.y)} , ${fmt(o.psi)} ]\n`
+    }
+  }
+
+  if (taskItems.value.length) {
+    yaml += `\ntasks:\n`
+    for (const o of taskItems.value) {
+      yaml += `  - task_id: ${o.id}\n`
+      yaml += `    x: ${fmt(o.x)}\n`
+      yaml += `    y: ${fmt(o.y)}\n`
+    }
+  }
+
+  if (lineItems.length || pointItems.length) {
+    yaml += `\n# --- reference geometry (not loaded by scenario) ---\n`
+    if (lineItems.length) {
+      yaml += `# lines:\n`
+      for (const o of lineItems) {
+        const cos = Math.cos(o.psi), sin = Math.sin(o.psi), hh = o.length / 2
+        yaml += `#   - id: ${o.id}\n`
+        yaml += `#     start: [ ${fmt(o.x - hh * sin)} , ${fmt(o.y + hh * cos)} ]\n`
+        yaml += `#     end:   [ ${fmt(o.x + hh * sin)} , ${fmt(o.y - hh * cos)} ]\n`
       }
     }
-  }
-
-  if (lines.length > 0) {
-    if (yaml) yaml += '\n'
-    yaml += '  lines:\n'
-    for (const o of lines) {
-      const cos = Math.cos(o.psi), sin = Math.sin(o.psi)
-      const hh = o.length / 2
-      yaml += `    - id: ${o.id}\n`
-      yaml += `      start: [ ${fmt(o.x - hh * sin)} , ${fmt(o.y + hh * cos)} ]\n`
-      yaml += `      end: [ ${fmt(o.x + hh * sin)} , ${fmt(o.y - hh * cos)} ]\n`
-    }
-  }
-
-  if (pts.length > 0) {
-    if (yaml) yaml += '\n'
-    yaml += '  points:\n'
-    for (const p of pts) {
-      yaml += `    - id: ${p.id}\n`
-      yaml += `      position: [ ${fmt(p.x)} , ${fmt(p.y)} ]\n`
+    if (pointItems.length) {
+      yaml += `# points:\n`
+      for (const p of pointItems) {
+        yaml += `#   - id: ${p.id}  position: [ ${fmt(p.x)} , ${fmt(p.y)} ]\n`
+      }
     }
   }
 
@@ -1673,24 +1883,41 @@ function doImport() {
 
     // Clear current state
     obstacles.value = []
-    counters.circle = 1; counters.box = 1; counters.wall = 1; counters.line = 1; counters.point = 1
+    counters.circle = 1; counters.box = 1; counters.wall = 1; counters.line = 1; counters.point = 1; counters.frodo = 1; counters.task = 1
     selectedId.value = null
     wallStart = null
 
     // Simple line-by-line YAML parser for our known format
     const imported = []
-    let currentSection = null  // 'obstacles' | 'lines' | 'points'
+    let currentSection = null  // 'obstacles' | 'lines' | 'points' | 'agents' | 'tasks' | 'limits'
     let currentItem = null
+    const importedLimits = []
 
     for (const rawLine of text.split('\n')) {
       const line = rawLine.replace(/\r$/, '')
       const trimmed = line.trim()
       if (!trimmed || trimmed.startsWith('#')) continue
 
+      // Top-level name: ignored on import
+      if (/^name:\s/.test(trimmed)) continue
+
       // Section headers
       if (/^\s*obstacles:\s*$/.test(line)) { currentSection = 'obstacles'; currentItem = null; continue }
-      if (/^\s*lines:\s*$/.test(line)) { currentSection = 'lines'; currentItem = null; continue }
-      if (/^\s*points:\s*$/.test(line)) { currentSection = 'points'; currentItem = null; continue }
+      if (/^\s*lines:\s*$/.test(line))     { currentSection = 'lines';     currentItem = null; continue }
+      if (/^\s*points:\s*$/.test(line))    { currentSection = 'points';    currentItem = null; continue }
+      if (/^\s*agents:\s*$/.test(line))    { currentSection = 'agents';    currentItem = null; continue }
+      if (/^\s*tasks:\s*$/.test(line))     { currentSection = 'tasks';     currentItem = null; continue }
+      if (/^\s*limits:\s*$/.test(line))    { currentSection = 'limits';    currentItem = null; continue }
+
+      // Limits: each is "- [ val , val ]"
+      if (currentSection === 'limits') {
+        const lm = trimmed.match(/^-\s*(\[.+\])/)
+        if (lm) {
+          const arr = parseArr(lm[1])
+          if (arr && arr.length >= 2) importedLimits.push(arr)
+        }
+        continue
+      }
 
       // New list item
       if (trimmed.startsWith('- ')) {
@@ -1733,25 +1960,54 @@ function doImport() {
 
     for (const item of imported) {
       if (item._section === 'obstacles') {
-        const id = uniqueId(item.id || 'imported')
-        const type = item.type || 'box'
-
-        if (type === 'circle') {
-          const radius = parseFloat(item.radius) || 0.15
-          const state = parseArr(item.state) || [0, 0, 0]
-          obstacles.value.push({
-            id, type: 'circle', subtype: 'circle',
-            x: state[0], y: state[1], radius
-          })
+        // New format: obstacle_id / length / width / psi (scenario convention)
+        // Old format: id / type / size / state (testbed convention)
+        if (item.obstacle_id || item.length !== undefined) {
+          const rawId = item.obstacle_id || item.id || 'imported'
+          const id = uniqueId(rawId)
+          if (item.radius !== undefined) {
+            obstacles.value.push({
+              id, type: 'circle', subtype: 'circle',
+              x: parseFloat(item.x) || 0,
+              y: parseFloat(item.y) || 0,
+              radius: parseFloat(item.radius) || 0.15
+            })
+          } else {
+            const length = parseFloat(item.length) || 0.5
+            const width  = parseFloat(item.width)  || 0.05
+            // scenario_psi → testbed_psi = scenario_psi - PI/2
+            const tp = (parseFloat(item.psi) || 0) - Math.PI / 2
+            const isWall = rawId.startsWith('wall') || width <= 0.15
+            obstacles.value.push({
+              id, type: 'box', subtype: isWall ? 'wall' : 'box',
+              x: parseFloat(item.x) || 0,
+              y: parseFloat(item.y) || 0,
+              width,           // short axis (thickness)
+              height: length,  // long axis
+              psi: tp
+            })
+          }
         } else {
-          const size = parseArr(item.size) || [0.5, 0.5]
-          const state = parseArr(item.state) || [0, 0, 0]
-          const isWall = id.startsWith('wall')
-          obstacles.value.push({
-            id, type: 'box', subtype: isWall ? 'wall' : 'box',
-            x: state[0], y: state[1],
-            width: size[0], height: size[1], psi: state[2]
-          })
+          // Old format
+          const id = uniqueId(item.id || 'imported')
+          const type = item.type || 'box'
+          if (type === 'circle') {
+            const radius = parseFloat(item.radius) || 0.15
+            const state = parseArr(item.state) || [0, 0, 0]
+            obstacles.value.push({
+              id, type: 'circle', subtype: 'circle',
+              x: state[0], y: state[1], radius
+            })
+          } else {
+            const size = parseArr(item.size) || [0.5, 0.5]
+            const state = parseArr(item.state) || [0, 0, 0]
+            const isWall = id.startsWith('wall')
+            obstacles.value.push({
+              id, type: 'box', subtype: isWall ? 'wall' : 'box',
+              x: state[0], y: state[1],
+              width: size[0], height: size[1], psi: state[2]
+            })
+          }
         }
       } else if (item._section === 'lines') {
         const id = uniqueId(item.id || 'line')
@@ -1772,7 +2028,28 @@ function doImport() {
           id, type: 'point', subtype: 'point',
           x: pos[0], y: pos[1]
         })
+      } else if (item._section === 'agents') {
+        const id = uniqueId(item.agent_id || item.id || 'frodo')
+        const sc = parseArr(item.start_config) || [0, 0, 0]
+        obstacles.value.push({
+          id, type: 'frodo', subtype: 'frodo',
+          x: sc[0] || 0, y: sc[1] || 0, psi: sc[2] || 0
+        })
+      } else if (item._section === 'tasks') {
+        const id = uniqueId(item.task_id || item.id || 'task')
+        obstacles.value.push({
+          id, type: 'task', subtype: 'task',
+          x: parseFloat(item.x) || 0,
+          y: parseFloat(item.y) || 0,
+          psi: 0
+        })
       }
+    }
+
+    // Apply imported limits to map if present
+    if (importedLimits.length >= 2) {
+      map.xMin = importedLimits[0][0]; map.xMax = importedLimits[0][1]
+      map.yMin = importedLimits[1][0]; map.yMax = importedLimits[1][1]
     }
 
     // Set counters from highest existing IDs so new elements don't collide
@@ -1789,6 +2066,8 @@ function doImport() {
     counters.wall = maxNum('wall')
     counters.line = maxNum('line')
     counters.point = maxNum('point')
+    counters.frodo = maxNum('frodo')
+    counters.task = maxNum('task')
 
     showImportModal.value = false
     importText.value = ''
@@ -1869,6 +2148,10 @@ function onKeyDown(e) {
     setTool('line')
   } else if (e.key === '6') {
     setTool('point')
+  } else if (e.key === '7') {
+    setTool('frodo')
+  } else if (e.key === '8') {
+    setTool('task')
   } else if (e.key === 's' || e.key === 'S') {
     snapEnabled.value = !snapEnabled.value
   }
@@ -2400,6 +2683,8 @@ watch(
 .type-dot.wall { background: #feca57; border-radius: 2px; }
 .type-dot.line { background: #ff9f43; border-radius: 2px; width: 12px; height: 3px; }
 .type-dot.point { background: #a78bfa; }
+.type-dot.frodo { background: #4ade80; }
+.type-dot.task  { background: #fb923c; border-radius: 3px; }
 
 .item-delete {
   background: none;

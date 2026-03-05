@@ -184,12 +184,18 @@ def _all_subclasses(cls: type) -> list[type]:
 
 
 def discover_scenarios() -> list[ScenarioConfig]:
-    """Import all scenario modules and return one ScenarioConfig per factory.
+    """Discover all scenarios and return one :class:`ScenarioConfig` per entry.
 
-    Each concrete :class:`ScenarioFactory` subclass found in the scenarios
-    package contributes exactly one config via its ``create()`` classmethod.
+    Two sources are combined:
+
+    * **Python** — every ``*.py`` file in the scenarios package is imported;
+      each concrete :class:`ScenarioFactory` subclass contributes one config.
+    * **YAML** — every ``*.yaml`` file in the scenarios package is loaded via
+      :func:`master_thesis.scenarios.testbed_importer.load_scenario_yaml`.
+
     Results are sorted alphabetically by ``ScenarioConfig.name``.
     """
+    # --- Python factories ---
     for path in sorted(_SCENARIOS_DIR.glob("*.py")):
         if path.name in _SKIP_FILES:
             continue
@@ -203,12 +209,24 @@ def discover_scenarios() -> list[ScenarioConfig]:
         if not inspect.isabstract(cls)
     ]
 
-    configs = []
+    configs: list[ScenarioConfig] = []
     for factory in factories:
         try:
             configs.append(factory.create())
         except Exception:
             pass
+
+    # --- YAML scenarios ---
+    try:
+        from master_thesis.scenarios.testbed_importer import load_scenario_yaml
+        for yaml_path in sorted(_SCENARIOS_DIR.glob("*.yaml")):
+            try:
+                cfg = load_scenario_yaml(yaml_path.read_text(encoding="utf-8"))
+                configs.append(cfg)
+            except Exception:
+                pass
+    except ImportError:
+        pass
 
     configs.sort(key=lambda c: c.name)
     return configs
