@@ -425,14 +425,23 @@ class OMPLSmoothPathPlanner(OMPLPlannerFRODOBase):
         """
         lims = self.lwr_container.config.limits
 
-        obstacles = []
-        for obs in self.lwr_container.state.obstacles.values():
-            psi = float(obs.psi)
+        def _aabb(container) -> list[float]:
+            psi = float(container.psi)
             cos_a = abs(np.cos(psi))
             sin_a = abs(np.sin(psi))
-            hw = obs.length / 2 * cos_a + obs.width / 2 * sin_a
-            hh = obs.length / 2 * sin_a + obs.width / 2 * cos_a
-            obstacles.append([obs.x - hw, obs.x + hw, obs.y - hh, obs.y + hh])
+            hw = container.length / 2 * cos_a + container.width / 2 * sin_a
+            hh = container.length / 2 * sin_a + container.width / 2 * cos_a
+            return [container.x - hw, container.x + hw, container.y - hh, container.y + hh]
+
+        obstacles = []
+        for obs in self.lwr_container.state.obstacles.values():
+            obstacles.append(_aabb(obs))
+
+        # Include neighboring agents as obstacles so the Bézier smooth path
+        # does not shortcut through agents that the OMPL geometric planner
+        # correctly avoided via FCL.
+        for neighbor in self.lwr_container.state.neighbors.values():
+            obstacles.append(_aabb(neighbor))
 
         return OptimizationData(
             bound_min=[lims[0][0], lims[1][0]],

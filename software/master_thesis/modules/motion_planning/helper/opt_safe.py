@@ -582,7 +582,7 @@ def main():
         ],
     )
 
-    opt = CarOpt(data=opt_data, dt=0.1)
+    opt = FRODOFlatOpt(data=opt_data, dt=0.1)
 
     opt.find_hyperplanes()
     opt.create_optimization_vars()

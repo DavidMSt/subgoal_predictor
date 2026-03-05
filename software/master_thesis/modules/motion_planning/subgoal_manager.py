@@ -49,9 +49,6 @@ class SubgoalManager:
         # Count of OMPL planning failures in the current episode (used for RL reward shaping)
         self._failed_plans: int = 0
 
-        # Distance threshold for declaring a task reached (metres)
-        self.goal_radius: float = 0.25
-
     @property
     def current_task(self) -> TaskContainer | None:
         """Read assigned task from the TA container (single source of truth)."""
@@ -104,18 +101,24 @@ class SubgoalManager:
 
     # ── Per-tick call ───────────────────────────────────────────────
 
+    def agent_reached_task(self) -> bool:
+        """True when the agent is within the assigned task's goal_tolerance_xy."""
+        task = self.current_task
+        if task is None:
+            return False
+        agent_cont = self.planner.agent_cont
+        dx = task.x - agent_cont.x
+        dy = task.y - agent_cont.y
+        tol = task.goal_tolerance_xy
+        return (dx * dx + dy * dy) <= tol * tol
+
     def tick(self):
         """Called every LOGIC step.  Handles automatic re-planning."""
-        # Proximity-based task completion — runs regardless of execution state
+        # Position-based task completion — runs regardless of execution state
         # so it catches manual (joystick) driving as well as planned execution.
-        if self.current_task is not None:
-            task = self.current_task
-            agent_cont = self.planner.agent_cont
-            dx = task.x - agent_cont.x
-            dy = task.y - agent_cont.y
-            if (dx * dx + dy * dy) <= self.goal_radius ** 2:
-                self._complete_task()
-                return
+        if self.agent_reached_task():
+            self._complete_task()
+            return
 
         if not self._execution_enabled:
             return
@@ -137,9 +140,7 @@ class SubgoalManager:
                 # Reactive replan toward final task (no subgoals remaining)
                 self.logger.debug("SubgoalManager: replanning (executor reached subgoal)")
                 self._do_plan()
-            else:
-                # Final task reached via planned trajectory.
-                self._complete_task()
+            # else: trajectory finished but agent not at goal yet — keep waiting
 
     # ── Internal ────────────────────────────────────────────────────
 
