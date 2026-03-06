@@ -15,9 +15,12 @@ from master_thesis.containers.module_containers.mp_containers.mp_phase_container
 class EXEAgentModule:
     """Manages execution of motion phases."""
 
-    def __init__(self, agent_cont: FRODOAgentContainer, logger: Logger):
+    def __init__(self, agent_cont: FRODOAgentContainer, logger: Logger,
+                 tracking_gain: float = 1.0):
         self.agent_cont = agent_cont
         self.simulation_dt = agent_cont.Ts
+        self.tracking_gain = tracking_gain
+        self._v_min = 0.05  # m/s — minimum speed denominator in Stanley controller
         self.logger = logger
         self.logger.info(f"EXE module initialized with simulation_dt={self.simulation_dt}")
 
@@ -79,6 +82,34 @@ class EXEAgentModule:
 
         return u
     
+    def _path_controller(self, u_ff: np.ndarray, ref_state: np.ndarray) -> np.ndarray:
+        """Stanley path tracking controller.
+
+        Combines heading error and cross-track error into a single ψ̇ correction
+        on top of the feedforward input.
+
+        Args:
+            u_ff:      feedforward input [v, ψ̇]
+            ref_state: reference state   [x_ref, y_ref, ψ_ref]
+        """
+        x_ref, y_ref, psi_ref = ref_state
+        v = max(float(self.agent_cont.v), self._v_min)
+
+        # Heading error — wrap to [-π, π]
+        psi_err = psi_ref - self.agent_cont.psi
+        psi_err = (psi_err + np.pi) % (2 * np.pi) - np.pi
+
+        # Cross-track error: positive when robot is to the RIGHT of the path
+        # (needs left / positive ψ̇ correction)
+        dx = self.agent_cont.x - x_ref
+        dy = self.agent_cont.y - y_ref
+        e_ct = dx * np.sin(psi_ref) - dy * np.cos(psi_ref)
+
+        # Stanley correction
+        psi_dot_correction = psi_err + np.arctan2(self.tracking_gain * e_ct, v)
+
+        return np.array([u_ff[0], u_ff[1] + psi_dot_correction])
+
     def _step_phase(self, phase: MPPhaseContainer) -> np.ndarray:
         """Step through a single phase using its state."""
         state = phase.state
@@ -92,7 +123,10 @@ class EXEAgentModule:
             duration_in_seconds = config.durations[state.index]
             state.ticks_left = max(1, math.ceil(duration_in_seconds / self.simulation_dt))
             
-        u = config.inputs[state.index]
+        u = self._path_controller(
+            u_ff=config.inputs[state.index],
+            ref_state=config.states[state.index],
+        )
         
         # Advance state
         state.ticks_left -= 1

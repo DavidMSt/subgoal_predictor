@@ -39,6 +39,9 @@ class ExecutionConfig:
     waypoint_tolerance_xy: float = 0.15
     waypoint_approach_speed: float = 0.5
 
+    # Controller params
+    Kp = 1
+
 @dataclass(frozen=False, slots=False)
 class AgentExeContainer(BaseContainer):
     """Container for agent execution state and configuration."""
