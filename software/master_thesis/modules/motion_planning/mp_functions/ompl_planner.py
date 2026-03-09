@@ -20,6 +20,7 @@ from typing import Any
 from dataclasses import dataclass
 
 import math
+import time
 import numpy as np
 
 from master_thesis.modules.motion_planning.mp_functions.collisions_fcl import AgentCollisionChecker
@@ -319,10 +320,9 @@ class OMPLSmoothPathPlanner:
             p.setGoalBias(self.config.goal_bias)
         return p
 
-    # Minimum Euclidean distance between consecutive waypoints fed to Bézier.
-    # Near-duplicate waypoints (PRM* edge interpolation artefacts) create
-    # unnecessary corridor junctions and visible kinks in the trajectory.
-    _MIN_WAYPOINT_DIST: float = 0.15
+    # RDP perpendicular tolerance and LOS sampling resolution.
+    _MIN_WAYPOINT_DIST: float = 0.15   # reused as RDP perpendicular tolerance
+    _LOS_STEP: float = 0.07            # ~half robot length, sampling resolution for LOS check
 
     def _extract_waypoints(self) -> list[list[float]]:
         simplifier = og.PathSimplifier(self._active_si)  # type: ignore[attr-defined]
@@ -334,24 +334,60 @@ class OMPLSmoothPathPlanner:
              self._solution_path.getState(i).getY()]
             for i in range(n)
         ]
-        return self._deduplicate_waypoints(raw)
+        pts = self._rdp_simplify(raw, self._MIN_WAYPOINT_DIST)
+        return self._los_shortcut(pts)
 
-    def _deduplicate_waypoints(self, waypoints: list[list[float]]) -> list[list[float]]:
-        """Remove near-duplicate consecutive waypoints below _MIN_WAYPOINT_DIST.
-
-        Always keeps the first and last point.  Intermediate points are only
-        kept if they are at least _MIN_WAYPOINT_DIST from the previous kept point.
-        """
+    def _rdp_simplify(self, waypoints: list[list[float]], eps: float) -> list[list[float]]:
+        """Ramer-Douglas-Peucker: remove intermediate points with perp deviation < eps."""
         if len(waypoints) <= 2:
             return waypoints
-        kept = [waypoints[0]]
-        for wp in waypoints[1:-1]:
-            dx = wp[0] - kept[-1][0]
-            dy = wp[1] - kept[-1][1]
-            if (dx * dx + dy * dy) ** 0.5 >= self._MIN_WAYPOINT_DIST:
-                kept.append(wp)
-        kept.append(waypoints[-1])
-        return kept
+        start, end = np.array(waypoints[0]), np.array(waypoints[-1])
+        chord = end - start
+        chord_len = float(np.linalg.norm(chord))
+        if chord_len < 1e-9:
+            dists = [float(np.linalg.norm(np.array(p) - start)) for p in waypoints[1:-1]]
+        else:
+            u = chord / chord_len
+            dists = [float(np.linalg.norm((np.array(p) - start) - np.dot(np.array(p) - start, u) * u))
+                     for p in waypoints[1:-1]]
+        max_dist = max(dists)
+        max_idx  = dists.index(max_dist) + 1
+        if max_dist >= eps:
+            left  = self._rdp_simplify(waypoints[:max_idx + 1], eps)
+            right = self._rdp_simplify(waypoints[max_idx:], eps)
+            return left[:-1] + right
+        return [waypoints[0], waypoints[-1]]
+
+    def _los_shortcut(self, waypoints: list[list[float]]) -> list[list[float]]:
+        """Remove waypoints where a straight-line A→C shortcut is collision-free.
+
+        Iterates until no further removals are possible.
+        """
+        pts = list(waypoints)
+        changed = True
+        while changed:
+            changed = False
+            i = 0
+            while i < len(pts) - 2:
+                if self._check_los(pts[i], pts[i + 2]):
+                    del pts[i + 1]
+                    changed = True
+                else:
+                    i += 1
+        return pts
+
+    def _check_los(self, a: list[float], c: list[float]) -> bool:
+        dx, dy = c[0] - a[0], c[1] - a[1]
+        dist = math.sqrt(dx * dx + dy * dy)
+        if dist < 1e-6:
+            return True
+        psi = math.atan2(dy, dx)
+        n_steps = max(2, int(dist / self._LOS_STEP) + 1)
+        for k in range(n_steps + 1):
+            t = k / n_steps
+            if self._collision_checker.check_state([a[0] + t * dx, a[1] + t * dy, psi]):
+                return False
+        return True
 
     # ── Bézier pipeline ───────────────────────────────────────────────
 

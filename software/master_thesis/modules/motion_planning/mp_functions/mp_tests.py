@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
@@ -32,8 +33,137 @@ CFG = OMPLPlannerConfig(
     roadmap_time=5.0,
 )
 
+# ── 4×4 maze scenario ─────────────────────────────────────────────────────────
+MAZE_LIMITS = ((-2.0, 2.0), (-2.0, 2.0))
+
+MAZE_OBSTACLES = [
+    # Outer boundary
+    dict(x= 0.0, y= 2.0, length=4.0, width=0.1, height=1.0, psi=0.0),
+    dict(x= 0.0, y=-2.0, length=4.0, width=0.1, height=1.0, psi=0.0),
+    dict(x=-2.0, y= 0.0, length=4.0, width=0.1, height=1.0, psi=1.5708),
+    dict(x= 2.0, y= 0.0, length=4.0, width=0.1, height=1.0, psi=1.5708),
+    # Top row (y=1.5)
+    dict(x=-1.25, y= 1.5, length=1.0, width=0.1, height=1.0, psi=1.5708),
+    dict(x= 0.0,  y= 1.5, length=1.0, width=0.1, height=1.0, psi=0.0),
+    dict(x= 1.25, y= 1.5, length=1.0, width=0.1, height=1.0, psi=1.5708),
+    # Upper-middle row (y=0.75)
+    dict(x=-1.5,  y= 0.75, length=0.5, width=0.1, height=1.0, psi=0.0),
+    dict(x=-0.5,  y= 0.75, length=1.0, width=0.1, height=1.0, psi=1.5708),
+    dict(x= 0.5,  y= 0.75, length=1.0, width=0.1, height=1.0, psi=0.0),
+    dict(x= 1.5,  y= 0.75, length=1.0, width=0.1, height=1.0, psi=1.5708),
+    # Center row (y=0.0)
+    dict(x=-1.0,  y= 0.0, length=1.0, width=0.1, height=1.0, psi=1.5708),
+    dict(x= 0.0,  y= 0.0, length=1.0, width=0.1, height=1.0, psi=0.0),
+    dict(x= 1.0,  y= 0.0, length=1.0, width=0.1, height=1.0, psi=1.5708),
+    # Lower-middle row (y=-0.75)
+    dict(x=-1.5,  y=-0.75, length=1.0, width=0.1, height=1.0, psi=1.5708),
+    dict(x=-0.5,  y=-0.75, length=1.0, width=0.1, height=1.0, psi=0.0),
+    dict(x= 0.5,  y=-0.75, length=1.0, width=0.1, height=1.0, psi=1.5708),
+    dict(x= 1.5,  y=-0.75, length=0.5, width=0.1, height=1.0, psi=0.0),
+    # Bottom row (y=-1.5)
+    dict(x=-1.25, y=-1.5, length=1.0, width=0.1, height=1.0, psi=1.5708),
+    dict(x= 0.0,  y=-1.5, length=1.0, width=0.1, height=1.0, psi=0.0),
+    dict(x= 1.25, y=-1.5, length=1.0, width=0.1, height=1.0, psi=1.5708),
+]
+
+MAZE_QUERIES = [
+    # (name, start [x,y,psi], goal [x,y,psi])
+    ('Agent 1', np.array([-1.75,  1.75, 0.0]), np.array([-1.75, -1.75, 0.0])),
+    ('Agent 2', np.array([ 0.0,   1.75, 0.0]), np.array([ 0.0,  -1.75, 0.0])),
+    ('Agent 3', np.array([ 1.75,  1.75, 0.0]), np.array([ 1.75, -1.75, 0.0])),
+]
+MAZE_COLORS = ['tab:blue', 'tab:orange', 'tab:green']
+
+MAZE_CFG = OMPLPlannerConfig(
+    Ts=0.1,
+    v_max=0.5,
+    psi_dot_max=np.pi / 3,
+    timelimit=30.0,
+    query_timelimit=0.1,   # dense roadmap → connection + A* needs only a few new nodes
+    roadmap_time=120.0,
+)
+
+
+# ── Timed planner (test-only subclass) ────────────────────────────────────────
+
+_MAX_RETRIES = 5   # mirror OMPLTrajectoryPlanner._MAX_BEZIER_RETRIES
+
+
+class _TimedPlanner(OMPLSmoothPathPlanner):
+    """Thin subclass that records per-phase wall-clock times during solve().
+
+    Attributes set after each solve():
+        t_ompl        – cumulative seconds in OMPL across all attempts
+        t_bezier      – cumulative seconds in Bézier across all attempts
+        n_attempts    – number of solve() calls made
+        fail_reason   – 'ompl_timeout' | 'bezier_infeasible' | None (success)
+    """
+
+    t_ompl:      float = 0.0
+    t_bezier:    float = 0.0
+    n_attempts:  int   = 0
+    fail_reason: str | None = None
+
+    def _solve_rrt(self, pdef) -> bool:
+        t0 = time.perf_counter()
+        result = super()._solve_rrt(pdef)
+        self.t_ompl += time.perf_counter() - t0
+        return result
+
+    def _query_roadmap(self, prm, pdef, si) -> bool:
+        t0 = time.perf_counter()
+        result = super()._query_roadmap(prm, pdef, si)
+        self.t_ompl += time.perf_counter() - t0
+        return result
+
+    def _run_bezier_pipeline(self, waypoints, start, goal) -> bool:
+        t0 = time.perf_counter()
+        result = super()._run_bezier_pipeline(waypoints, start, goal)
+        self.t_bezier += time.perf_counter() - t0
+        return result
+
+    def solve_with_retries(
+        self, start, goal, roadmap=None
+    ) -> tuple[bool, float]:
+        """Retry loop matching OMPLTrajectoryPlanner._MAX_BEZIER_RETRIES logic."""
+        self.t_ompl = self.t_bezier = 0.0
+        self.n_attempts = 0
+        self.fail_reason = None
+        active_roadmap = roadmap
+
+        for attempt in range(_MAX_RETRIES):
+            self.n_attempts += 1
+            solved, length = self.solve(start, goal, roadmap=active_roadmap)
+            if solved:
+                return True, length
+
+            opt = getattr(self, '_opt', None)
+            if opt is not None and not opt.feasible:
+                # Bézier failed — try again with a new RRT path
+                if active_roadmap is not None:
+                    active_roadmap = None   # fall back to RRT once
+                self.fail_reason = 'bezier_infeasible'
+            else:
+                # OMPL couldn't find any geometric path — no point retrying
+                self.fail_reason = 'ompl_timeout'
+                return False, 0.0
+
+        return False, 0.0
+
 
 # ── Shared plot helpers ────────────────────────────────────────────────────────
+
+def _draw_maze_obstacles(ax):
+    for obs in MAZE_OBSTACLES:
+        rect = Rectangle(
+            (-obs['length'] / 2, -obs['width'] / 2),
+            obs['length'], obs['width'],
+            linewidth=1, edgecolor='k', facecolor='#888888', alpha=0.6,
+        )
+        t = mtransforms.Affine2D().rotate(obs['psi']).translate(obs['x'], obs['y']) + ax.transData
+        rect.set_transform(t)
+        ax.add_patch(rect)
+
 
 def _draw_obstacles(ax):
     for obs in obstacles:
@@ -189,11 +319,204 @@ def test_prm():
     plt.show()
 
 
+# ── Test: RRT vs PRM* benchmark on 4×4 maze (3 agents) ───────────────────────
+
+def test_benchmark():
+    """Compare RRT and PRM* (2-min roadmap) on the maze_4x4 scenario.
+
+    Measures:
+      - OMPL search time   (RRT solve / PRM* A* query)
+      - Bézier optimisation time
+      - Total planning time per agent
+      - Roadmap build time (amortised across all agents)
+    Saves two figures: trajectory comparison + timing bar chart.
+    """
+    import os
+
+    out_dir = '/tmp/mp_benchmark'
+    os.makedirs(out_dir, exist_ok=True)
+
+    # ── Shared planner factory ────────────────────────────────────────
+    def _make_planner():
+        return _TimedPlanner(
+            limits=MAZE_LIMITS,
+            obstacles=MAZE_OBSTACLES,
+            agent_dims=FRODO_DIMS,
+            config=MAZE_CFG,
+        )
+
+    # ── RRT baseline ─────────────────────────────────────────────────
+    print('=' * 60)
+    print('RRT baseline (one planner per agent, independent solves)')
+    print('=' * 60)
+
+    rrt_results = []
+    for name, start, goal in MAZE_QUERIES:
+        planner = _make_planner()
+        t_wall0 = time.perf_counter()
+        solved, length = planner.solve_with_retries(start, goal)
+        t_wall = time.perf_counter() - t_wall0
+
+        if not solved:
+            print(f'  {name}: FAILED  reason={planner.fail_reason}  attempts={planner.n_attempts}')
+            rrt_results.append(None)
+            continue
+
+        sol = planner.get_solution()
+        rrt_results.append({
+            'name': name, 'start': start, 'goal': goal,
+            'states': np.array(sol['states']),
+            'inputs': np.array(sol['inputs']),
+            'dt': sol['dt'],
+            'length': length,
+            't_ompl': planner.t_ompl,
+            't_bezier': planner.t_bezier,
+            't_total': t_wall,
+            'n_attempts': planner.n_attempts,
+        })
+        r = rrt_results[-1]
+        print(f'  {name}: length={length:.3f} m  steps={len(r["inputs"])}'
+              f'  ompl={r["t_ompl"]:.2f}s  bezier={r["t_bezier"]:.2f}s'
+              f'  total={r["t_total"]:.2f}s  attempts={r["n_attempts"]}')
+
+    # ── PRM* with 2-minute roadmap ────────────────────────────────────
+    print()
+    print('=' * 60)
+    print(f'PRM*  roadmap_time={MAZE_CFG.roadmap_time:.0f}s  query_timelimit={MAZE_CFG.query_timelimit:.1f}s')
+    print('=' * 60)
+
+    print('Building roadmap ...')
+    prm_planner = _make_planner()
+    t_build0 = time.perf_counter()
+    roadmap = prm_planner.build_roadmap()
+    t_build = time.perf_counter() - t_build0
+    print(f'  Roadmap built in {t_build:.1f}s')
+
+    prm_results = []
+    for name, start, goal in MAZE_QUERIES:
+        t_wall0 = time.perf_counter()
+        solved, length = prm_planner.solve_with_retries(start, goal, roadmap=roadmap)
+        t_wall = time.perf_counter() - t_wall0
+
+        if not solved:
+            print(f'  {name}: FAILED  reason={prm_planner.fail_reason}  attempts={prm_planner.n_attempts}')
+            prm_results.append(None)
+            continue
+
+        sol = prm_planner.get_solution()
+        prm_results.append({
+            'name': name, 'start': start, 'goal': goal,
+            'states': np.array(sol['states']),
+            'inputs': np.array(sol['inputs']),
+            'dt': sol['dt'],
+            'length': length,
+            't_ompl': prm_planner.t_ompl,
+            't_bezier': prm_planner.t_bezier,
+            't_total': t_wall,
+            'n_attempts': prm_planner.n_attempts,
+        })
+        r = prm_results[-1]
+        print(f'  {name}: length={length:.3f} m  steps={len(r["inputs"])}'
+              f'  ompl={r["t_ompl"]:.3f}s  bezier={r["t_bezier"]:.2f}s'
+              f'  total={r["t_total"]:.2f}s  attempts={r["n_attempts"]}')
+
+    print()
+    t_prm_total   = sum(r['t_total'] for r in prm_results if r) + t_build
+    t_rrt_total   = sum(r['t_total'] for r in rrt_results if r)
+    t_prm_queries = sum(r['t_total'] for r in prm_results if r)
+    n_rrt_ok = sum(1 for r in rrt_results if r)
+    print(f'RRT total ({n_rrt_ok}/3 succeeded):              {t_rrt_total:.2f}s')
+    print(f'PRM* build + 3 queries:              {t_prm_total:.2f}s  '
+          f'(build={t_build:.1f}s  queries={t_prm_queries:.2f}s)')
+    avg_rrt_q_txt = t_rrt_total / max(n_rrt_ok, 1)
+    avg_prm_q_txt = t_prm_queries / max(len([r for r in prm_results if r]), 1)
+    if avg_rrt_q_txt > avg_prm_q_txt:
+        be = t_build / (avg_rrt_q_txt - avg_prm_q_txt)
+        print(f'Break-even: PRM* pays off after ≈ {be:.0f} queries')
+    else:
+        print(f'Note: PRM* query ({avg_prm_q_txt:.2f}s avg) is slower than RRT ({avg_rrt_q_txt:.2f}s avg) — '
+              f'benefit is reliability / path quality, not raw speed')
+
+    # ── Figure 1: trajectories ────────────────────────────────────────
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+    fig.suptitle('4×4 Maze — RRT vs PRM* trajectories', fontsize=13)
+
+    for ax, title, results in zip(axes, ['RRT', f'PRM*  (roadmap {t_build:.0f}s)'], [rrt_results, prm_results]):
+        ax.set_title(title)
+        ax.set_aspect('equal')
+        ax.set_xlim(MAZE_LIMITS[0])
+        ax.set_ylim(MAZE_LIMITS[1])
+        ax.grid(True, alpha=0.3)
+        _draw_maze_obstacles(ax)
+        for res, color in zip(results, MAZE_COLORS):
+            if res is None:
+                continue
+            _plot_trajectory(ax, res['states'], res['start'], res['goal'],
+                             color=color, label=res['name'])
+        ax.legend(loc='upper right')
+
+    plt.tight_layout()
+    fig.savefig(f'{out_dir}/trajectories.png', dpi=150)
+    print(f'Saved {out_dir}/trajectories.png')
+
+    # ── Figure 2: timing breakdown ────────────────────────────────────
+    fig2, (ax_abs, ax_amort) = plt.subplots(1, 2, figsize=(14, 5))
+    fig2.suptitle('4×4 Maze — planning time comparison', fontsize=13)
+
+    # Align by query name; NaN for failed queries
+    all_names = [name for name, _, _ in MAZE_QUERIES]
+    rrt_by_name = {r['name']: r for r in rrt_results if r}
+    prm_by_name = {r['name']: r for r in prm_results if r}
+
+    def _get(mapping, name, key):
+        return mapping[name][key] if name in mapping else float('nan')
+
+    rrt_ompl   = [_get(rrt_by_name, n, 't_ompl')   for n in all_names]
+    rrt_bezier = [_get(rrt_by_name, n, 't_bezier') for n in all_names]
+    prm_ompl   = [_get(prm_by_name, n, 't_ompl')   for n in all_names]
+    prm_bezier = [_get(prm_by_name, n, 't_bezier') for n in all_names]
+
+    x = np.arange(len(all_names))
+    w = 0.35
+
+    ax_abs.bar(x - w/2, rrt_ompl,   w, label='RRT — OMPL',    color='steelblue')
+    ax_abs.bar(x - w/2, rrt_bezier, w, label='RRT — Bézier',  color='lightblue',  bottom=rrt_ompl)
+    ax_abs.bar(x + w/2, prm_ompl,   w, label='PRM* — OMPL',   color='darkorange')
+    ax_abs.bar(x + w/2, prm_bezier, w, label='PRM* — Bézier', color='moccasin',   bottom=prm_ompl)
+    ax_abs.set_xticks(x); ax_abs.set_xticklabels(all_names)
+    ax_abs.set_ylabel('seconds')
+    ax_abs.set_title('Per-query planning time  (NaN bar = failed)')
+    ax_abs.legend()
+    ax_abs.grid(axis='y', alpha=0.3)
+
+    # Amortised total: RRT × N vs build + N × query
+    n_range = np.arange(1, 31)
+    avg_rrt_q = np.nanmean([_get(rrt_by_name, n, 't_total') for n in all_names])
+    avg_prm_q = np.nanmean([_get(prm_by_name, n, 't_total') for n in all_names])
+    ax_amort.plot(n_range, avg_rrt_q * n_range,           'steelblue',   lw=2, label=f'RRT  (avg {avg_rrt_q:.2f}s/query)')
+    ax_amort.plot(n_range, t_build + avg_prm_q * n_range, 'darkorange',  lw=2, label=f'PRM* build={t_build:.0f}s + avg {avg_prm_q:.2f}s/query')
+    breakeven = t_build / (avg_rrt_q - avg_prm_q) if avg_rrt_q > avg_prm_q else None
+    if breakeven is not None and 0 < breakeven < 100:
+        ax_amort.axvline(breakeven, color='gray', ls='--', label=f'break-even ≈ {breakeven:.0f} queries')
+    ax_amort.set_xlabel('number of agents / queries')
+    ax_amort.set_ylabel('total seconds')
+    ax_amort.set_title('Amortised cost vs number of queries')
+    ax_amort.legend()
+    ax_amort.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    fig2.savefig(f'{out_dir}/timing.png', dpi=150)
+    print(f'Saved {out_dir}/timing.png')
+    plt.close('all')
+
+
 # ── Entry point  (switch MODE to select which test runs) ──────────────────────
-MODE = 'prm'   # 'rrt'  |  'prm'
+MODE = 'benchmark'   # 'rrt'  |  'prm'  |  'benchmark'
 
 if __name__ == '__main__':
-    if MODE == 'prm':
+    if MODE == 'benchmark':
+        test_benchmark()
+    elif MODE == 'prm':
         test_prm()
     else:
         test_rrt()
