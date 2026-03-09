@@ -22,4 +22,7 @@ class ObstacleContainer(BaseContainer):
     object_id: str = field(kw_only=True)
     config: Obstacle_Config = field(default_factory=Obstacle_Config)
     state: None = None
-    
+
+    def to_geometry_dict(self) -> dict:
+        return dict(x=self.x, y=self.y, psi=self.psi,
+                    length=self.length, width=self.width, height=self.height)

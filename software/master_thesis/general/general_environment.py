@@ -13,7 +13,7 @@ from simulation.core.environment import BASE_ENVIRONMENT_ACTIONS
 # master thesis
 from master_thesis.general.general_agent import FRODOGeneralAgent, FRODO_Agent_Config, FRODO_GeneralAgent_CommandSet
 from master_thesis.general.general_obstacle import GeneralObstacle
-from master_thesis.modules.motion_planning.helper.collisions_fcl import WorldCollisionChecker
+from master_thesis.modules.motion_planning.mp_functions.collisions_fcl import WorldCollisionChecker
 from master_thesis.containers.general_containers.environment_container import EnvironmentConfig, EnvironmentContainer
 from master_thesis.general.general_task import GeneralTask
 

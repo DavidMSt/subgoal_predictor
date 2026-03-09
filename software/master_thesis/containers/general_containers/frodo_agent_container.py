@@ -21,6 +21,10 @@ class FRODOAgentContainer(BaseContainer):
     config: FRODO_Agent_Config = field(default_factory=FRODO_Agent_Config)
     state: FRODO_AgentState = field(default_factory= lambda: FRODO_AgentState(0.0,0.0,0.0,0.0,0.0))
 
+    def to_geometry_dict(self) -> dict:
+        return dict(x=self.x, y=self.y, psi=self.psi,
+                    length=self.length, width=self.width, height=self.height)
+
 
 
 

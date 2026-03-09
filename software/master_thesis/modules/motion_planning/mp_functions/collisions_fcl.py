@@ -1,119 +1,69 @@
 import numpy as np
 import fcl
 from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
-from master_thesis.containers.general_containers.local_world_container import LocalWorldContainer
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
 from master_thesis.containers.general_containers.obstacle_container import ObstacleContainer
-from master_thesis.general.general_obstacle import GeneralObstacle
-# import meshcat.transformations as tf
+
 
 class AgentCollisionChecker():
+    """Pure raw-data collision checker — no container dependencies.
 
-    def __init__(self, agent_container: FRODOAgentContainer, lwr_container: LocalWorldContainer):
-        self.lwr_config: LocalWorldContainer = lwr_container
-        self.agent_config: FRODOAgentContainer = agent_container
-        self.collisions_list = [] # initialize dynamic collison list
-        self.initialize_collision_manager(lwr_container, agent_container)
+    All geometry is passed as plain dicts with keys: x, y, psi, length, width, height.
+    """
 
-    def check_agent_state(self):
-        ...
+    def __init__(self, agent_dims: tuple[float, float, float], obstacles: list[dict]):
+        length, width, height = agent_dims
+        geometry = fcl.Box(length, width, height)
+        self.agent_objs = [fcl.CollisionObject(geometry, fcl.Transform())]
+        self.agent_manager = self._create_manager(self.agent_objs)
+        self.collisions_list = []
+        self.env_objects = []
+        self.env_manager = self._create_manager([])
+        self.refresh_env_manager(obstacles)
 
-    def check_env_state(self):
-        ...
+    def refresh_env_manager(self, obstacles: list[dict], frozen_agents: list[dict] | None = None):
+        """Rebuild the environment collision manager.
 
-    def initialize_collision_manager(self, lwr_container, agent_container):
-        self.initialize_env_manager(lwr_container)
-        self.initialize_agent_manager(agent_container)
+        Args:
+            obstacles:     Static obstacle dicts (x, y, psi, length, width, height).
+            frozen_agents: Agent dicts to treat as static obstacles.
+        """
+        env_objs = self._build_env_objects(obstacles, frozen_agents)
+        self.env_objects = env_objs
+        self.env_manager = self._create_manager(env_objs)
 
-    def initialize_agent_manager(self, agent_container):
-        # py-fcl does not expose the objects in a manager for update, therefore they must be accesible here
-        self.agent_objs = self.create_agent_objects(agent_container)
+    def _build_env_objects(self, obstacles: list[dict], frozen_agents: list[dict] | None = None) -> list:
+        objs = []
+        for obs in obstacles:
+            geom = fcl.Box(obs['length'], obs['width'], obs['height'])
+            q = [np.cos(obs['psi'] / 2), 0, 0, np.sin(obs['psi'] / 2)]
+            pos = [obs['x'], obs['y'], 0.0]
+            objs.append(fcl.CollisionObject(geom, fcl.Transform(q, pos)))
+        if frozen_agents:
+            for agent in frozen_agents:
+                geom = fcl.Box(agent['length'], agent['width'], agent['height'])
+                q = [np.cos(agent['psi'] / 2), 0, 0, np.sin(agent['psi'] / 2)]
+                pos = [agent['x'], agent['y'], 0.0]
+                objs.append(fcl.CollisionObject(geom, fcl.Transform(q, pos)))
+        return objs
 
-        self.agent_manager = self.create_collision_manager(self.agent_objs)
-
-
-    def initialize_env_manager(self, lwr_container: LocalWorldContainer):
-        if not isinstance(lwr_container, LocalWorldContainer):
-            raise TypeError('Did not pass valid local world container, argument of type: ', type(lwr_container))
-        obstacle_objects_list = self.create_environment_objects()
-        self.env_objects = obstacle_objects_list  # keep list for clearance queries
-        self.env_manager = self.create_collision_manager(obstacle_objects_list)
-    
     def check_state(self, testing_state):  # state = [x, y, psi]
         """Check a single configuration for collision."""
-
         x, y, psi = testing_state
-
-        # ----------------------------------------------------
-        # 1) Update the transform of the single agent object
-        # ----------------------------------------------------
         q = [np.cos(psi / 2), 0, 0, np.sin(psi / 2)]
-        pos = [x, y, 0.0]
-
-        tf = fcl.Transform(q, pos)
-
-        
-        agent_obj = self.agent_objs[0]
-        agent_obj.setTransform(tf)
+        self.agent_objs[0].setTransform(fcl.Transform(q, [x, y, 0.0]))
         self.agent_manager.update()
 
-
-        # ----------------------------------------------------
-        # 2) Perform the actual collision check
-        # ----------------------------------------------------
         req = fcl.CollisionRequest(num_max_contacts=1, enable_contact=False)
         data = fcl.CollisionData(request=req)
-
         self.agent_manager.collide(self.env_manager, data, fcl.defaultCollisionCallback)
-
         return data.result.is_collision
-    
+
     def check_state_ompl(self, state):
         x = state.getX()
         y = state.getY()
         theta = state.getYaw()
-        config = [x, y, theta]
-
-
-        valid = self.check_state(config)
-
-        return not valid # ompl expects collision as return here
-
-    # def check_states(self, states):
-    #     """Check multiple configurations"""
-    #     return [self.check_state(s) for s in states]
-
-    def broadphase_collision_checking(self, states):
-        self.collisions_list = [self.check_state(state) for state in states]
-
-    # def create_agent_objects(self, state):
-    #     objs = self.create_objects_frodo(state)
-
-    #     return objs
-
-    def create_environment_objects(self, frozen_agents: list | None = None):
-        obstacle_list = []
-        for obstacle in self.lwr_config.state.obstacles.values():
-            _obs = self.create_env_collision_object(obstacle)
-            obstacle_list.append(_obs)
-        if frozen_agents:
-            # Freeze specific agents that caused a collision event so the
-            # RRT replan avoids them.
-            for agent_cont in frozen_agents:
-                obstacle_list.append(self.create_collision_box(container=agent_cont))
-        return obstacle_list
-
-    def refresh_env_manager(self, frozen_agents: list | None = None):
-        """Rebuild the environment collision manager.
-
-        Args:
-            frozen_agents: Agent containers to treat as static obstacles.
-                Pass only the agent(s) that triggered a collision event.
-                None (default) rebuilds with static obstacles only.
-        """
-        obstacle_objects_list = self.create_environment_objects(frozen_agents=frozen_agents)
-        self.env_objects = obstacle_objects_list
-        self.env_manager = self.create_collision_manager(obstacle_objects_list)
+        return not self.check_state([x, y, theta])
 
     def clearance_for_state(self, x: float, y: float, psi: float) -> float:
         """Minimum distance from agent footprint at (x, y, psi) to any obstacle.
@@ -131,43 +81,12 @@ class AgentCollisionChecker():
             fcl.distance(self.agent_objs[0], env_obj, req, res)
             min_dist = min(min_dist, res.min_distance)
         return max(0.0, min_dist)
-    
-    def create_agent_objects(self, agent_container: FRODOAgentContainer):
-        """
-        Create the initial FCL collision object for the FRODO agent.
-        The agent is initialized at state and its transform
-        will be updated later inside check_state().
-        """
 
-        obj = self.create_collision_box(container= agent_container)
-        return [obj]
-    
-    def create_env_collision_object(self, obstacle_container: ObstacleContainer):
-        if obstacle_container.shape == "box":
-            _obs = self.create_collision_box(container=obstacle_container)
-        else:
-            raise ValueError
-        return _obs
+    def broadphase_collision_checking(self, states):
+        self.collisions_list = [self.check_state(state) for state in states]
 
     @staticmethod
-    def create_collision_box(container : FRODOAgentContainer | ObstacleContainer):
-        # FCL box expects (x_size, y_size, z_size)
-        geometry = fcl.Box(container.length, container.width, container.height)
-
-        # position
-        pos = [container.x, container.y, 0.0]
-
-        # default rotation: yaw = state.psi
-        yaw = container.psi
-        q = [np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]
-
-        # create transform
-        transform = fcl.Transform(q, pos)
-
-        return fcl.CollisionObject(geometry, transform)
-
-    @staticmethod
-    def create_collision_manager(objects: list):
+    def _create_manager(objects: list):
         manager = fcl.DynamicAABBTreeCollisionManager()
         manager.registerObjects(objects)
         manager.setup()
