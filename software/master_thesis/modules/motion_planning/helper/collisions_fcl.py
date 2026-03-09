@@ -36,6 +36,7 @@ class AgentCollisionChecker():
         if not isinstance(lwr_container, LocalWorldContainer):
             raise TypeError('Did not pass valid local world container, argument of type: ', type(lwr_container))
         obstacle_objects_list = self.create_environment_objects()
+        self.env_objects = obstacle_objects_list  # keep list for clearance queries
         self.env_manager = self.create_collision_manager(obstacle_objects_list)
     
     def check_state(self, testing_state):  # state = [x, y, psi]
@@ -95,14 +96,9 @@ class AgentCollisionChecker():
         for obstacle in self.lwr_config.state.obstacles.values():
             _obs = self.create_env_collision_object(obstacle)
             obstacle_list.append(_obs)
-        # Include all visible neighbors as static obstacles so OMPL plans
-        # paths that avoid other agents at their current positions.
-        for neighbor in self.lwr_config.state.neighbors.values():
-            obstacle_list.append(self.create_collision_box(container=neighbor))
         if frozen_agents:
-            # Additionally freeze specific agents that caused a collision event.
-            # Their positions are added again (duplicate FCL objects are harmless)
-            # to ensure they are registered even if outside the local world range.
+            # Freeze specific agents that caused a collision event so the
+            # RRT replan avoids them.
             for agent_cont in frozen_agents:
                 obstacle_list.append(self.create_collision_box(container=agent_cont))
         return obstacle_list
@@ -116,7 +112,25 @@ class AgentCollisionChecker():
                 None (default) rebuilds with static obstacles only.
         """
         obstacle_objects_list = self.create_environment_objects(frozen_agents=frozen_agents)
+        self.env_objects = obstacle_objects_list
         self.env_manager = self.create_collision_manager(obstacle_objects_list)
+
+    def clearance_for_state(self, x: float, y: float, psi: float) -> float:
+        """Minimum distance from agent footprint at (x, y, psi) to any obstacle.
+
+        Returns 0.0 when in collision, positive otherwise.
+        Used by OMPL's MaximizeMinClearanceObjective via FCLStateValidityChecker.
+        """
+        q = [np.cos(psi / 2), 0, 0, np.sin(psi / 2)]
+        self.agent_objs[0].setTransform(fcl.Transform(q, [x, y, 0.0]))
+
+        min_dist = float('inf')
+        for env_obj in self.env_objects:
+            req = fcl.DistanceRequest()
+            res = fcl.DistanceResult()
+            fcl.distance(self.agent_objs[0], env_obj, req, res)
+            min_dist = min(min_dist, res.min_distance)
+        return max(0.0, min_dist)
     
     def create_agent_objects(self, agent_container: FRODOAgentContainer):
         """

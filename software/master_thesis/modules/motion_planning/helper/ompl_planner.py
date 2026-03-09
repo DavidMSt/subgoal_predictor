@@ -38,6 +38,22 @@ from master_thesis.containers.module_containers.mp_containers.mp_planner_contain
 from master_thesis.containers.module_containers.mp_containers.mp_phase_container import MPPhaseContainer, MPPhaseConfig
 
 
+class FCLStateValidityChecker(ob.StateValidityChecker):  # type: ignore[misc]
+    """Class-based SVC so OMPL can invoke clearance() for MaximizeMinClearanceObjective."""
+
+    def __init__(self, si: ob.SpaceInformation, checker: "AgentCollisionChecker"):  # type: ignore[attr-defined]
+        super().__init__(si)
+        self._checker = checker
+
+    def isValid(self, state) -> bool:
+        return self._checker.check_state_ompl(state)
+
+    def clearance(self, state) -> float:
+        return self._checker.clearance_for_state(
+            state.getX(), state.getY(), state.getYaw()
+        )
+
+
 class SamplerType(Enum):
     UNIFORM = ob.UniformValidStateSampler # type: ignore[attr-defined]
     GAUSSIAN = ob.GaussianValidStateSampler # type: ignore[attr-defined]
@@ -380,6 +396,23 @@ class OMPLSmoothPathPlanner(OMPLPlannerFRODOBase):
     Control bounds are read from AgentMPPlannerConfig (single source of truth).
     """
 
+    # ── Shared PRM roadmap (class-level) ──────────────────────────────────────
+    # Built once by the first agent that plans; reused by all subsequent agents
+    # in the same environment.  Invalidated when the static environment changes.
+    _shared_prm: Any = None
+    _shared_si:  Any = None
+    # Explicit Python-level reference to the SVC so it is never GC'd while the
+    # shared SI (and therefore the shared PRM) is alive.  boost::python virtual
+    # dispatch on a GC'd Python subclass causes SIGSEGV.
+    _shared_svc: Any = None
+
+    @classmethod
+    def invalidate_roadmap(cls) -> None:
+        """Discard the shared roadmap (call when the static environment changes)."""
+        cls._shared_prm = None
+        cls._shared_si  = None
+        cls._shared_svc = None
+
     def __init__(self, mp_container: AgentMPPlannerContainer,
                  agent_container: FRODOAgentContainer,
                  lwr_container: LocalWorldContainer,
@@ -405,9 +438,10 @@ class OMPLSmoothPathPlanner(OMPLPlannerFRODOBase):
 
     def _create_space_info(self) -> ob.SpaceInformation:  # type: ignore[attr-defined]
         si = ob.SpaceInformation(self._space)  # type: ignore[attr-defined]
-        si.setStateValidityChecker(
-            ob.StateValidityCheckerFn(self._collision_checker.check_state_ompl)  # type: ignore[attr-defined]
-        )
+        # Store SVC as instance attribute so the Python object is not GC'd while
+        # the C++ SI holds a raw vtable pointer into it (boost::python SIGSEGV).
+        self._svc = FCLStateValidityChecker(si, self._collision_checker)
+        si.setStateValidityChecker(self._svc)
         si.setValidStateSamplerAllocator(
             ob.ValidStateSamplerAllocator(self.sampler)  # type: ignore[attr-defined]
         )
@@ -437,12 +471,6 @@ class OMPLSmoothPathPlanner(OMPLPlannerFRODOBase):
         for obs in self.lwr_container.state.obstacles.values():
             obstacles.append(_aabb(obs))
 
-        # Include neighboring agents as obstacles so the Bézier smooth path
-        # does not shortcut through agents that the OMPL geometric planner
-        # correctly avoided via FCL.
-        for neighbor in self.lwr_container.state.neighbors.values():
-            obstacles.append(_aabb(neighbor))
-
         return OptimizationData(
             bound_min=[lims[0][0], lims[1][0]],
             bound_high=[lims[0][1], lims[1][1]],
@@ -453,7 +481,45 @@ class OMPLSmoothPathPlanner(OMPLPlannerFRODOBase):
             start_psi=float(self.mp_container.start[2]),
         )
 
-    def solve_problem(self, verbose: bool = False) -> tuple[bool, float]:
+    def _extract_waypoints(self) -> list[list[float]]:
+        """Simplify solution path and return waypoints as [[x, y], ...]."""
+        simplifier = og.PathSimplifier(self._si)  # type: ignore[attr-defined]
+        # Collapse near-duplicate nodes first (common in PRM* paths), then simplify.
+        simplifier.collapseCloseVertices(self._solution_path)  # type: ignore[attr-defined]
+        simplifier.simplifyMax(self._solution_path)  # type: ignore[attr-defined]
+        n = self._solution_path.getStateCount()
+        return [
+            [self._solution_path.getState(i).getX(),
+             self._solution_path.getState(i).getY()]
+            for i in range(n)
+        ]
+
+    def _run_bezier_pipeline(self, waypoints: list[list[float]]) -> bool:
+        """Run Bézier SVM optimisation + TOPP on waypoints. Returns feasibility."""
+        _, v_hi = self.mp_container.v_bounds
+        _, w_hi = self.mp_container.theta_dot_bounds
+        self._opt = FRODOFlatOpt(
+            self._build_opt_data(waypoints),
+            dt=self.agent_container.Ts,
+            v_max=v_hi,
+            psi_dot_max=w_hi,
+        )
+        self._opt.find_hyperplanes()
+        self._opt.create_optimization_vars()
+        self._opt.create_bezier()
+        if not self._opt.feasible:
+            return False
+        self._opt.bezier_to_configurations()
+        return True
+
+    def solve_problem(self, verbose: bool = False,
+                      use_prm: bool = False) -> tuple[bool, float]:
+        if use_prm:
+            return self._solve_prm()
+        return self._solve_rrt()
+
+    def _solve_rrt(self) -> tuple[bool, float]:
+        """Single-query RRT-based solve (used for replanning with frozen agents)."""
         self._pdef = self._create_pdef()
         self._planner = self.create_planner()
         self._planner.setProblemDefinition(self._pdef)
@@ -465,38 +531,59 @@ class OMPLSmoothPathPlanner(OMPLPlannerFRODOBase):
             return False, 0
 
         self._solution_path = self._pdef.getSolutionPath()
+        waypoints = self._extract_waypoints()
+        if not self._run_bezier_pipeline(waypoints):
+            return False, 0
+        return True, self._solution_path.length()
 
-        # Reduce redundant intermediate waypoints.  simplifyMax() uses the same
-        # FCL state-validity checker so it only removes a vertex when the direct
-        # connection is collision-free — safe to use with the tight-AABB approach.
-        simplifier = og.PathSimplifier(self._si)  # type: ignore[attr-defined]
-        simplifier.simplifyMax(self._solution_path)  # type: ignore[attr-defined]
+    def _solve_prm(self) -> tuple[bool, float]:
+        """Multi-query PRM* solve (used for initial plans against static env).
 
-        n = self._solution_path.getStateCount()
-        waypoints = [
-            [self._solution_path.getState(i).getX(),
-             self._solution_path.getState(i).getY()]
-            for i in range(n)
-        ]
+        The roadmap is shared across all OMPLSmoothPathPlanner instances (class-level).
+        The first agent builds it; subsequent agents reuse it via clearQuery().
+        A combined termination condition exits as soon as a path is found, making
+        per-query latency independent of the roadmap growth budget.
+        """
+        cls = OMPLSmoothPathPlanner
 
-        opt_data = self._build_opt_data(waypoints)
-        _, v_hi  = self.mp_container.v_bounds
-        _, w_hi  = self.mp_container.theta_dot_bounds
+        if cls._shared_prm is None:
+            # First planner to run: build roadmap using this instance's SI.
+            self._si.setup()  # type: ignore[attr-defined]
+            cls._shared_si  = self._si
+            cls._shared_svc = self._svc   # pin Python object → no GC while PRM lives
+            cls._shared_prm = og.PRMstar(self._si)  # type: ignore[attr-defined]
+            time_budget = self.mp_container.roadmap_time
+        else:
+            # Reuse the shared SI so the pdef is compatible with the existing PRM.
+            self._si    = cls._shared_si
+            self._space = cls._shared_si.getStateSpace()
+            cls._shared_prm.clearQuery()
+            time_budget = self.mp_container.timelimit
 
-        self._opt = FRODOFlatOpt(
-            opt_data,
-            dt=self.agent_container.Ts,
-            v_max=v_hi,
-            psi_dot_max=w_hi,
-        )
-        self._opt.find_hyperplanes()
-        self._opt.create_optimization_vars()
-        self._opt.create_bezier()
+        self._pdef = self._create_pdef()
+        self.check_pdef_validity()
+        self._solution_path = None
 
-        if not self._opt.feasible:
+        # Clearance-weighted objective: prefer paths away from walls.
+        obj = ob.MultiOptimizationObjective(self._si)  # type: ignore[attr-defined]
+        obj.addObjective(ob.PathLengthOptimizationObjective(self._si), 1.0)  # type: ignore[attr-defined]
+        obj.addObjective(ob.MaximizeMinClearanceObjective(self._si), 0.5)  # type: ignore[attr-defined]
+        self._pdef.setOptimizationObjective(obj)
+
+        cls._shared_prm.setProblemDefinition(self._pdef)
+
+        # PRM* adds solutions only after its main loop ends, so the timer is the
+        # only effective termination condition.  Use the full budget on first call
+        # (roadmap_time) and a short query limit on subsequent calls (timelimit).
+        solved = cls._shared_prm.solve(ob.timedPlannerTerminationCondition(time_budget))  # type: ignore[attr-defined]
+
+        if not solved or not self._pdef.hasExactSolution():  # type: ignore[attr-defined]
             return False, 0
 
-        self._opt.bezier_to_configurations()
+        self._solution_path = self._pdef.getSolutionPath()
+        waypoints = self._extract_waypoints()
+        if not self._run_bezier_pipeline(waypoints):
+            return False, 0
         return True, self._solution_path.length()
 
     def _create_solution_cont(self) -> MPPhaseContainer:
@@ -549,5 +636,106 @@ class OMPLSmoothPathPlanner(OMPLPlannerFRODOBase):
 
 
 if __name__ == "__main__":
-    ...
+    import matplotlib.pyplot as plt
+
+    from master_thesis.modules.motion_planning.helper.opt_safe import Plotter
+
+    from master_thesis.containers.general_containers.frodo_agent_container import (
+        FRODOAgentContainer, FRODO_AgentState, FRODO_Agent_Config,
+    )
+    from master_thesis.containers.module_containers.mp_containers.mp_planner_container import (
+        AgentMPPlannerContainer, AgentMPPlannerConfig,
+    )
+    from master_thesis.containers.general_containers.local_world_container import (
+        LocalWorldContainer, LocalWorldConfig, LocalWorldState,
+    )
+    from master_thesis.containers.general_containers.obstacle_container import (
+        ObstacleContainer, Obstacle_Config,
+    )
+
+    # ── Scenario ──────────────────────────────────────────────────────────────
+    limits = ((0.0, 3.0), (-1.0, 1.0))
+    start  = np.array([0.25,  0.75, 0.0])
+    goal   = np.array([2.75, -0.75, 0.0])
+
+    walls = [
+        dict(id='wall-1', x=2.5,  y=-0.5,  length=1.0, width=0.05, psi=-np.pi    ),
+        dict(id='wall-2', x=1.5,  y=-0.5,  length=1.0, width=0.05, psi=-np.pi/2  ),
+        dict(id='wall-3', x=0.5,  y=-0.25, length=0.5, width=0.05, psi=-np.pi/2  ),
+        dict(id='wall-4', x=0.75, y=-0.5,  length=0.5, width=0.05, psi=0.0       ),
+        dict(id='wall-5', x=1.0,  y=0.5,   length=1.0, width=0.05, psi=np.pi/2   ),
+        dict(id='wall-6', x=0.25, y=-0.5,  length=0.5, width=0.05, psi=-np.pi    ),
+        dict(id='wall-7', x=2.5,  y=0.0,   length=1.0, width=0.05, psi=0.0       ),
+        dict(id='wall-8', x=1.75, y=0.75,  length=0.5, width=0.05, psi=-np.pi/2  ),
+    ]
+
+    # ── Containers ────────────────────────────────────────────────────────────
+    agent_cont = FRODOAgentContainer(
+        agent_id='frodo-1',
+        config=FRODO_Agent_Config(Ts=0.1),
+        state=FRODO_AgentState(x=start[0], y=start[1], v=0.0, psi=start[2], psi_dot=0.0),
+    )
+
+    mp_cont = AgentMPPlannerContainer(config=AgentMPPlannerConfig(timelimit=10.0))
+    mp_cont.start = start
+    mp_cont.goal  = goal
+
+    obs_dict = {
+        w['id']: ObstacleContainer(
+            object_id=w['id'],
+            config=Obstacle_Config(x=w['x'], y=w['y'], psi=w['psi'],
+                                   length=w['length'], width=w['width']),
+        )
+        for w in walls
+    }
+    lwr_cont = LocalWorldContainer(
+        config=LocalWorldConfig(limits=limits),
+        state=LocalWorldState(obstacles=obs_dict),
+    )
+
+    # ── Plan ──────────────────────────────────────────────────────────────────
+    planner = OMPLSmoothPathPlanner(
+        mp_container=mp_cont,
+        agent_container=agent_cont,
+        lwr_container=lwr_cont,
+    )
+
+    solved, length = planner.solve_problem()
+    if not solved:
+        print("Planning failed")
+        raise SystemExit(1)
+
+    print(f"Solved! geometric path length: {length:.3f} m")
+    solution = planner._create_solution_cont()
+
+    states  = np.array(solution.config.states)   # (N+1, 3)  [x, y, psi]
+    actions = np.array(solution.config.inputs)   # (N,   2)  [v, psi_dot]
+    t       = np.cumsum([0.0] + list(solution.config.durations))
+
+    print(f"Steps: {len(actions)},  T = {t[-1]:.2f} s")
+    print(f"v    [{actions[:,0].min():.3f}, {actions[:,0].max():.3f}] m/s")
+    print(f"ψ̇   [{actions[:,1].min():.3f}, {actions[:,1].max():.3f}] rad/s")
+
+    # ── Plot ──────────────────────────────────────────────────────────────────
+    opt = planner._opt
+    fig, (ax_path, ax_ctrl) = plt.subplots(1, 2, figsize=(12, 5))
+
+    ax_path.set_title('Planned trajectory')
+    ax_path.set_aspect('equal')
+    ax_path.grid(True, alpha=0.3)
+    Plotter.assignment04_plot(ax_path, opt.setup, opt.curve_function_segments, opt.hyperplanes)
+    ax_path.plot(states[:, 0], states[:, 1], 'b-', lw=1.5, label='trajectory')
+    ax_path.plot(*start[:2], 'go', ms=8, label='start')
+    ax_path.plot(*goal[:2],  'r*', ms=10, label='goal')
+    ax_path.legend()
+
+    ax_ctrl.set_title('Control inputs')
+    ax_ctrl.step(t[:-1], actions[:, 0], where='post', label='v [m/s]')
+    ax_ctrl.step(t[:-1], actions[:, 1], where='post', label='ψ̇ [rad/s]')
+    ax_ctrl.set_xlabel('time [s]')
+    ax_ctrl.legend()
+    ax_ctrl.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
 

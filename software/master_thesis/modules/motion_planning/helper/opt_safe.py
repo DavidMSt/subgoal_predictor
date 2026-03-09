@@ -5,13 +5,22 @@ import math
 from abc import abstractmethod, ABC
 
 
-def svm_separator(line_pts, obs_pts):
+def svm_separator(path_line_pts, obs_pts):
+    """ Create seperating hyperplane between two consecutive points in our geometric solution path and an obstacle.
 
-    w = cp.Variable(len(line_pts))
+    Args:
+        path_line_pts (_type_): Two (conesecutive) points of geometric solution we are planning the bezier spline-segment for
+        obs_pts (_type_): Corner points of an obstacle
+
+    Returns:
+        _type_: _description_
+    """
+
+    w = cp.Variable(len(path_line_pts[0])) # weight-vector has same dimension as a data point
     b = cp.Variable()
 
     # positive class must lie at least 1 unit "above" the boundary
-    pos_constraints = [ w @ x + b >= 1 for x in line_pts ]
+    pos_constraints = [ w @ x + b >= 1 for x in path_line_pts ]
     # negative class must lie no farther than 0 ("on or below" the boundary)
     neg_constraints = [ w @ x + b <= 0 for x in obs_pts ]
 
@@ -26,15 +35,12 @@ def svm_separator(line_pts, obs_pts):
 
 
 # ---------------------------------------------------------------------------
-# OptimizationData — in-memory replacement for YAML file input
+# OptimizationData
 # ---------------------------------------------------------------------------
 
 @dataclass
 class OptimizationData:
     """Structured input for the Bezier / flat-output optimiser.
-
-    Replaces the YAML-file-only ``OptimizerSetup`` so that the optimiser can
-    be driven directly from simulation state without touching the file system.
 
     Attributes
     ----------
@@ -48,7 +54,7 @@ class OptimizationData:
     """
     bound_min:    list
     bound_high:   list
-    start:        list
+    start:        list          
     goal:         list
     path:         list        # waypoints [(x,y), ...]
     obstacles:    list        # AABBs [xmin, xmax, ymin, ymax]
@@ -177,31 +183,12 @@ class BezierCalculator():
         return np.vstack(z_vals), np.vstack(dot_z_vals), np.vstack(ddot_z_vals)
 
 
-# ---------------------------------------------------------------------------
-# OptimizerSetup — accepts OptimizationData (in-memory) or a YAML file path
-# ---------------------------------------------------------------------------
-
-class OptimizerSetup:
-    """Wraps an ``OptimizationData`` instance as the single source of truth
-    for ``OptSafeBase`` and all subclasses.
-    """
-
-    def __init__(self, data: OptimizationData) -> None:
-        self.output_path  = data.output_path
-        self.bound_min    = data.bound_min
-        self.bound_high   = data.bound_high
-        self.start        = data.start
-        self.goal         = data.goal
-        self.path         = data.path
-        self.obstacles    = data.obstacles
-        self.start_psi    = data.start_psi
-        self.robot_radius = data.robot_radius
-
 
 class Plotter:
 
     @staticmethod
     def plot_environment(ax, bound_min, bound_high, obstacles):
+        import matplotlib.patches as patches
         for obstacle in obstacles:
             ax.add_patch(patches.Rectangle((obstacle[0], obstacle[2]),
                                         obstacle[1] - obstacle[0],
@@ -227,6 +214,8 @@ class Plotter:
 
     @staticmethod
     def set_colors(curve_functions):
+        import matplotlib.pyplot as plt
+        
         return list(plt.cm.Reds(np.linspace(0.3, 1, len(curve_functions))))
 
     @staticmethod
@@ -242,9 +231,13 @@ class Plotter:
 
 
     @staticmethod
-    def plot_path_points(path, ax):
-        for point in path:
-                ax.plot(point[0], point[1], marker='o', color='black', markersize=4)
+    def plot_path_points(path, ax, colors=None):
+        # Each segment i spans path[i] → path[i+1] and has color colors[i].
+        # Assign point i the color of segment i (last point gets color of last segment).
+        for i, point in enumerate(path):
+            color = colors[min(i, len(colors) - 1)] if colors is not None else 'black'
+            ax.plot(point[0], point[1], marker='o', color=color, markersize=6,
+                    markeredgecolor='black', markeredgewidth=0.8)
 
     @classmethod
     def assignment04_plot(cls, ax, setup, curve_functions, hyperplanes):
@@ -258,13 +251,13 @@ class Plotter:
             [setup.bound_high] * len(hyperplanes),
             colors
         )
-        cls.plot_path_points(setup.path, ax)
+        cls.plot_path_points(setup.path, ax, colors=colors)
 
 
 class OptSafeBase:
 
     def __init__(self, data: OptimizationData) -> None:
-        self.setup = OptimizerSetup(data)
+        self.setup = data
         self.variables = []
         self.constraints = []
         self.feasible = True
@@ -290,10 +283,11 @@ class OptSafeBase:
         satisfy the half-space, the full smooth curve does too.
         """
         self.hyperplanes = []
-        for i in range(len(self.setup.path) - 1):
+        for i in range(len(self.setup.path) - 1): # For each geoemtric point
             hyperplanes_for_segment = []
             pa = self.setup.path[i]
             pb = self.setup.path[i + 1]
+            
             for obstacle in self.setup.obstacles:  # [xmin, xmax, ymin, ymax]
                 xmin, xmax, ymin, ymax = obstacle
                 corners = [[obstacle[j % 2], obstacle[2 + (j // 2)]] for j in range(4)]
@@ -555,6 +549,101 @@ class FRODOFlatOpt(FlatOutputOpt):
         psi_dot_ok = np.all(np.abs(actions[:, 1]) <= self.psi_dot_max)
         return bool(v_ok and psi_dot_ok)
 
+    def bezier_to_configurations(self):
+        """Time-optimal pointwise velocity profile (continuous TOPP).
+
+        At every point s on each Bézier segment, compute the maximum parameter
+        speed ṡ that satisfies both constraints simultaneously:
+
+            ṡ_max(s) = min( v_max / |z'(s)|,  ψ̇_max / |κ(s)| )
+
+        where κ(s) = (z''_y · z'_x - z'_y · z''_x) / |z'|²  is the local
+        curvature in s-space (ψ̇ per unit ṡ).
+
+        Integrating dt = ds / ṡ_max gives the time-optimal axis without
+        iteration, replacing the global scaling while-loop in the base class.
+        """
+        if not self.control_points:
+            raise RuntimeError('Optimization not executed yet')
+
+        N_s = 500
+        s   = np.linspace(0, 1, N_s)
+        ds  = s[1] - s[0]
+
+        t_pieces       = []
+        z_pieces       = []
+        v_pieces       = []
+        psi_pieces     = []
+        psi_dot_pieces = []
+        t_offset       = 0.0
+
+        for ctrl_pts in self.control_points:
+            z_s   = BezierCalculator.bezier_func(ctrl_pts)(s)       # (N_s, 2)
+            zp_s  = BezierCalculator.bezier_dot_func(ctrl_pts)(s)   # (N_s, 2)  z'  = dz/ds
+            zpp_s = BezierCalculator.bezier_ddot_func(ctrl_pts)(s)  # (N_s, 2)  z'' = d²z/ds²
+
+            speed = np.linalg.norm(zp_s, axis=1)                    # |z'(s)|
+            denom = np.maximum(speed**2, 1e-8)
+
+            # κ(s) = (z''_y · z'_x - z'_y · z''_x) / |z'|²  — ψ̇ per unit ṡ
+            kappa = (zpp_s[:, 1] * zp_s[:, 0] - zp_s[:, 1] * zpp_s[:, 0]) / denom
+
+            # maximum parameter speed satisfying both constraints pointwise
+            s_dot_max = np.minimum(
+                self.v_max       / np.maximum(speed,          1e-8),
+                self.psi_dot_max / np.maximum(np.abs(kappa), 1e-8),
+            )
+
+            # integrate dt = ds / ṡ_max → cumulative local time
+            dt_arr = ds / np.maximum(s_dot_max, 1e-8)
+            t_seg  = np.concatenate([[0.0], np.cumsum(dt_arr[:-1])])
+
+            t_pieces.append(t_seg + t_offset)
+            z_pieces.append(z_s)
+            v_pieces.append(speed * s_dot_max)           # v   = |z'| · ṡ
+            psi_pieces.append(np.arctan2(zp_s[:, 1], zp_s[:, 0]))
+            psi_dot_pieces.append(kappa * s_dot_max)     # ψ̇  = κ · ṡ
+
+            t_offset += float(t_seg[-1])
+
+        # Concatenate, dropping duplicate junction points
+        def _cat(pieces):
+            return np.concatenate([pieces[0]] + [p[1:] for p in pieces[1:]])
+
+        t_all       = _cat(t_pieces)
+        z_all       = np.vstack([z_pieces[0]] + [z[1:] for z in z_pieces[1:]])
+        v_all       = _cat(v_pieces)
+        psi_all     = np.unwrap(_cat(psi_pieces))  # unwrap for smooth interpolation
+        psi_dot_all = _cat(psi_dot_pieces)
+
+        self.T_guess      = float(t_all[-1])
+        self._t_opt       = t_all
+        self._z_opt       = z_all
+        self._v_opt       = v_all
+        self._psi_opt     = psi_all
+        self._psi_dot_opt = psi_dot_all
+
+        # populate self.states / self.actions at self.dt for backward compatibility
+        self.states, self.actions = self.get_trajectory(self.dt)
+
+    def get_trajectory(self, dt: float) -> tuple[np.ndarray, np.ndarray]:
+        """Resample the optimal trajectory at a uniform timestep dt."""
+        if not hasattr(self, '_t_opt'):
+            raise RuntimeError('Call bezier_to_configurations() first.')
+
+        t = np.arange(0, self.T_guess + dt / 2, dt)
+
+        x       = np.interp(t, self._t_opt, self._z_opt[:, 0])
+        y       = np.interp(t, self._t_opt, self._z_opt[:, 1])
+        psi     = np.interp(t, self._t_opt, self._psi_opt)
+        psi     = (psi + np.pi) % (2 * np.pi) - np.pi  # re-wrap to [-π, π]
+        v       = np.interp(t, self._t_opt, self._v_opt)
+        psi_dot = np.interp(t, self._t_opt, self._psi_dot_opt)
+
+        states  = np.stack([x, y, psi], axis=1)   # (N+1, 3)
+        actions = np.stack([v, psi_dot], axis=1)   # (N+1, 2)
+        return states, actions[:-1]                # (N+1, 3), (N, 2)
+
     def create_plan_content(self) -> dict:
         # Not used in the FRODO simulation pipeline (trajectory goes via MPPhaseContainer)
         return {}
@@ -572,8 +661,8 @@ def main():
         goal=[9.0, 9.0],
         path=[
             [1.0, 1.0],
-            [3.0, 4.0],
-            [6.0, 6.0],
+            [2.0, 3.0],
+            [7.0, 3.0],
             [9.0, 9.0],
         ],
         obstacles=[
