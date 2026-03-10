@@ -30,6 +30,7 @@ class SubgoalManager:
 
     def __init__(self, planner: PathPlannerBase, executor: MotionExecutorBase,
                  ta_cont: AgentTAContainer, logger: Logger):
+        
         self.planner = planner
         self.executor = executor
         self._ta_cont = ta_cont
@@ -129,18 +130,12 @@ class SubgoalManager:
 
         if self.executor.is_goal_reached():
             if self._has_pending_subgoal:
-                # Advance to next subgoal and replan (offline and reactive)
                 self._subgoal_idx += 1
                 self.logger.debug(
                     f"SubgoalManager: subgoal reached, advancing to "
                     f"{self._subgoal_idx}/{len(self._subgoal_queue)}"
                 )
-                self._do_plan()
-            elif self.planner.needs_replan():
-                # Reactive replan toward final task (no subgoals remaining)
-                self.logger.debug("SubgoalManager: replanning (executor reached subgoal)")
-                self._do_plan()
-            # else: trajectory finished but agent not at goal yet — keep waiting
+            self._do_plan()
 
     # ── Internal ────────────────────────────────────────────────────
 
@@ -154,6 +149,8 @@ class SubgoalManager:
 
     def _do_plan(self, phase_key: str = 'default'):
         target = self._current_target()
+
+        # TODO: remove - since this is handled by the motion planner anyway? 
         if target is None:
             self.logger.warning("SubgoalManager: _do_plan called but no task assigned")
             return

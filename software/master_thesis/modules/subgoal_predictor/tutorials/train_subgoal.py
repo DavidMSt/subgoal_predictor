@@ -205,17 +205,19 @@ class FrodoGymWrapper(gym.Env):
         individual_times = [None] * self.n_agents  # step at which each agent reached its goal
         terminated = False
 
+        # Cache task refs before the loop — SubgoalManager._complete_task() clears
+        # agent.assigned_task mid-step, which would cause us to miss completion events.
+        agents_list = list(self.sim.agents.values())
+        task_conts  = [agent.assigned_task for agent in agents_list]
+
         for step in range(self.max_steps):
             self.sim.step()
 
             # track per-agent arrivals
-            env_cont = self.sim.environment.environment_container
-            agents   = list(env_cont.agent_conts.values())
-            tasks    = list(env_cont.task_conts.values())
-            for i, (agent_cont, task_cont) in enumerate(zip(agents, tasks)):
+            for i, (agent, task_cont) in enumerate(zip(agents_list, task_conts)):
                 if individual_times[i] is None:
-                    dx  = agent_cont.x - task_cont.x
-                    dy  = agent_cont.y - task_cont.y
+                    dx  = agent.container.x - task_cont.x
+                    dy  = agent.container.y - task_cont.y
                     tol = task_cont.goal_tolerance_xy
                     if dx*dx + dy*dy < tol*tol:
                         individual_times[i] = step + 1
@@ -261,11 +263,11 @@ class FrodoGymWrapper(gym.Env):
 
         neighbor_states = self._neighbor_arrays(agent_states)  # (n_agents, n_agents-1, 3)
 
-        # goal-related observations
+        # goal-related observations — keyed by agent to match agent_states row order
         goal_states = np.array([
-            self._goal_to_xy(cont)
-            for cont in env_cont.task_conts.values()
-        ], dtype=np.float32)  # (n_agents, 2) — agent i assigned to task i
+            self._goal_to_xy(agent.assigned_task)
+            for agent in self.sim.agents.values()
+        ], dtype=np.float32)  # (n_agents, 2)
 
         neighbor_goals = self._neighbor_arrays(goal_states)  # (n_agents, n_agents-1, 2)
 
@@ -326,12 +328,12 @@ class FrodoGymWrapper(gym.Env):
             return -makespan - alpha * sum(individual_times) - gamma * n_failed
 
         # distance fallback for agents that did not reach their goal
-        env_cont = self.sim.environment.environment_container
-        agents   = list(env_cont.agent_conts.values())
-        tasks    = list(env_cont.task_conts.values())
+        # (completed agents have assigned_task cleared — their distance contribution is 0)
         total_dist = sum(
-            np.sqrt((a.x - t.x)**2 + (a.y - t.y)**2)
-            for a, t in zip(agents, tasks)
+            np.hypot(agent.container.x - agent.assigned_task.x,
+                     agent.container.y - agent.assigned_task.y)
+            for agent in self.sim.agents.values()
+            if agent.assigned_task is not None
         )
         return -beta * total_dist - gamma * n_failed
 
