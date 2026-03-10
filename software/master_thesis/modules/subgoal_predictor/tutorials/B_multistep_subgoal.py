@@ -335,9 +335,6 @@ class FrodoGymWrapper(gym.Env):
         )
         return -beta * total_dist - gamma * n_failed
 
-    # def _check_termination(self, obs) -> bool:
-    #     ...
-
     def render(self):
         ...
 
@@ -346,30 +343,46 @@ class FrodoGymWrapper(gym.Env):
 
 
 def train(n_updates, batch_size, log_dir: str = 'runs/subgoal_B'):
+
+    # For logging training process
     from torch.utils.tensorboard import SummaryWriter
     writer = SummaryWriter(log_dir)
 
+    # load environment (agents, tasks, obstacles/ maze walls)
     env = FrodoGymWrapper(scenario=maze_2x2_3agents_config())
+
+    # get the grid shape (discretization of env to determine free workspace)
     grid_shape = env.sim.environment.environment_container.occupancy_grid_static.shape
+
+    # Create policy instance (NN that predicts our subgoals)
     policy = subgoal_nn_base(n=env.n_agents, n_subgoals=env.n_subgoals, grid_shape=grid_shape)
+
+    # Learnable Parameter (Used only during training) to enable/ increase exploration during RL
     log_std = torch.nn.Parameter(torch.zeros(env.n_agents, env.n_subgoals * 2))
+
+    # Selected optimizer to perform optimization step, uses policy parameters + learnable parameter (latter will converge to zero during (successful) training)
     optimizer = torch.optim.Adam([*policy.parameters(), log_std])
 
     print(f"Training: {n_updates} updates * {batch_size} episodes | logdir={log_dir}")
     print(f"{'Update':>8}  {'loss':>8}  {'reward':>12}  {'done':>8}  {'makespan':>10}  {'failed':>8}")
 
+    # perform # updates, each over a given batch size
     for update in range(n_updates):
-
+        
+        # initialize lists to log results during for each batch within an update
         raw_rewards, log_probs = [], []
         ep_terminated, ep_makespans, ep_failed = [], [], []
 
+        # go through whole batch, measure performance for each episode
         for episode in range(batch_size):
+            # reset environment to initial conditions
             obs, _ = env.reset()
 
-            # convert numpy obs dict to float32 tensors
+            # convert numpy obs dict to float32 tensors (gym expected datatype)
             obs_t = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in obs.items()}
             n     = env.n_agents
 
+            # Use policy prediction as mean, add noise to facilitate exploration
             mean = policy(
                 obs_t["agent_states"],                                        # (N, 3)
                 obs_t["neighbor_states"].flatten(-2),                         # (N, (N-1)*3)
@@ -378,11 +391,15 @@ def train(n_updates, batch_size, log_dir: str = 'runs/subgoal_B'):
                 obs_t["occupancy_grid"].unsqueeze(0).expand(n, -1, -1, -1),  # (N, 1, H, W)
             )  # → (N, n_subgoals*2)
             dist = torch.distributions.Normal(mean, log_std.exp())
+
+            # keep track of action - noise pair, needed to optimize log_std param via optimizer
             action = dist.sample()
             log_prob = dist.log_prob(action).sum()
 
+            # perform action, receive reward, info if goal (each robot reached assigned goal in timelimit) was accomplished (= terminated) or timeout (= truncated)
             _, reward, terminated, truncated, info = env.step(action.flatten().numpy())
 
+            # log episode results
             raw_rewards.append(reward)
             log_probs.append(log_prob)
             ep_terminated.append(info['terminated'])
@@ -394,6 +411,7 @@ def train(n_updates, batch_size, log_dir: str = 'runs/subgoal_B'):
         normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
         loss       = -(torch.stack(log_probs) * normalized).mean()
 
+        # perform this updates' optimization step
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -407,10 +425,11 @@ def train(n_updates, batch_size, log_dir: str = 'runs/subgoal_B'):
         mean_makespan = float(np.mean(done_spans)) if done_spans else float(env.max_steps)
         mean_failed  = float(np.mean(ep_failed))
 
-        writer.add_scalar('train/loss',           float(loss),  update)
-        writer.add_scalar('train/mean_reward',    mean_reward,  update)
+        # add information to tensorboard
+        writer.add_scalar('train/loss', float(loss),  update)
+        writer.add_scalar('train/mean_reward', mean_reward,  update)
         writer.add_scalar('train/frac_terminated', frac_done,   update)
-        writer.add_scalar('train/mean_makespan',  mean_makespan, update)
+        writer.add_scalar('train/mean_makespan', mean_makespan, update)
         writer.add_scalar('train/mean_failed_plans', mean_failed, update)
 
         print(
