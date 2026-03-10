@@ -9,7 +9,7 @@ from master_thesis.modules.task_assignment.ta_agent_module import TAAgentModule
 # Pipeline abstractions
 from master_thesis.modules.motion_planning.path_planner_base import PathPlannerBase, PlanResult
 from master_thesis.modules.execution.motion_executor_base import MotionExecutorBase
-from master_thesis.modules.motion_planning.subgoal_manager import SubgoalManager
+from master_thesis.modules.subgoal_predictor.subgoal_manager import SubgoalManager
 
 # Containers
 from master_thesis.containers.general_containers.environment_container import EnvironmentContainer
