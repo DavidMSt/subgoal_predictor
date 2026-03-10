@@ -25,7 +25,7 @@ class FRODORLAgent(FRODOUniversalAgent):
         super().__init__(env_container, agent_id, Ts, start_config, color, log_level)
 
     def _build_pipeline(self) -> tuple[PathPlannerBase, MotionExecutorBase]:
-        from master_thesis.modules.motion_planning.rl_subgoal_predictor import RLSubgoalPredictor
+        from master_thesis.modules.subgoal_predictor.rl_subgoal_predictor import RLSubgoalPredictor
         from master_thesis.modules.execution.trajectory_executor import TrajectoryExecutor
 
         planner = RLSubgoalPredictor(

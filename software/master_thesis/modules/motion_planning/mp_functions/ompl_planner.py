@@ -182,6 +182,7 @@ class OMPLSmoothPathPlanner:
 
         self._solution_path = pdef.getSolutionPath()  # type: ignore[attr-defined]
         waypoints = self._extract_waypoints()
+        self._last_waypoints: list[list[float]] = waypoints
         if not self._run_bezier_pipeline(waypoints, start, goal):
             return False, 0.0
 
@@ -221,7 +222,12 @@ class OMPLSmoothPathPlanner:
             all_states  = states_np
             all_actions = actions_np
 
-        return {'states': all_states, 'inputs': all_actions, 'dt': dt}
+        return {
+            'states': all_states,
+            'inputs': all_actions,
+            'dt': dt,
+            'waypoints': getattr(self, '_last_waypoints', []),
+        }
 
     # ── OMPL helpers ─────────────────────────────────────────────────
 
@@ -321,8 +327,9 @@ class OMPLSmoothPathPlanner:
         return p
 
     # RDP perpendicular tolerance and LOS sampling resolution.
-    _MIN_WAYPOINT_DIST: float = 0.15   # reused as RDP perpendicular tolerance
-    _LOS_STEP: float = 0.07            # ~half robot length, sampling resolution for LOS check
+    _RDP_EPS: float = 0.03             # RDP perpendicular tolerance — small enough to only remove collinear points
+    _LOS_STEP: float = 0.05            # sampling resolution — must be < wall half-width (0.05m)
+    _LOS_MIN_CLEARANCE: float = 0.03   # FCL clearance required at every sample (rejects near-misses)
 
     def _extract_waypoints(self) -> list[list[float]]:
         simplifier = og.PathSimplifier(self._active_si)  # type: ignore[attr-defined]
@@ -334,8 +341,7 @@ class OMPLSmoothPathPlanner:
              self._solution_path.getState(i).getY()]
             for i in range(n)
         ]
-        pts = self._rdp_simplify(raw, self._MIN_WAYPOINT_DIST)
-        return self._los_shortcut(pts)
+        return self._los_shortcut(raw)
 
     def _rdp_simplify(self, waypoints: list[list[float]], eps: float) -> list[list[float]]:
         """Ramer-Douglas-Peucker: remove intermediate points with perp deviation < eps."""
@@ -385,7 +391,9 @@ class OMPLSmoothPathPlanner:
         n_steps = max(2, int(dist / self._LOS_STEP) + 1)
         for k in range(n_steps + 1):
             t = k / n_steps
-            if self._collision_checker.check_state([a[0] + t * dx, a[1] + t * dy, psi]):
+            x, y = a[0] + t * dx, a[1] + t * dy
+            clearance = self._collision_checker.clearance_for_state(x, y, psi)
+            if clearance < self._LOS_MIN_CLEARANCE:
                 return False
         return True
 

@@ -1,13 +1,15 @@
+import os
 import numpy as np
 import gymnasium as gym
+from tqdm import tqdm
 from gymnasium import spaces
 import torch
 import torch.nn as nn
 
 from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
-from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer
+from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer, FRODO_Agent_Config
 from master_thesis.scenarios.base import ScenarioConfig, AgentSpec, TaskSpec
-from master_thesis.scenarios.maze_scenarios import maze_2x2_config
+from master_thesis.scenarios.testbed_importer import load_scenario_yaml
 
 class subgoal_nn_base(nn.Module):
     def __init__(self, n=3, agent_dim=3, task_dim=2, out_dim=64, n_subgoals=1, grid_shape=(60, 60)) -> None:
@@ -77,7 +79,7 @@ def maze_2x2_3agents_config(
         ],
         tasks=[
             TaskSpec("goal1", x=-0.65, y=-0.75),
-            TaskSpec("goal2", x= 0.0,  y=-0.75),
+            TaskSpec("goal2", x= 0.3,  y=-0.75),
             TaskSpec("goal3", x= 0.65, y=-0.75),
         ],
     )
@@ -112,7 +114,8 @@ class FrodoGymWrapper(gym.Env):
     ) -> None:
         super().__init__()
 
-        self.scenario       = scenario if scenario is not None else maze_2x2_3agents_config()
+        _yaml_path = f'{_SUBGOAL_DIR}/../../scenarios/maze_2x2_3agents.yaml'
+        self.scenario       = scenario if scenario is not None else load_scenario_yaml(open(_yaml_path).read())
         self.n_subgoals     = n_subgoals
         self.max_steps      = max_steps
         self.agent_log_level = agent_log_level
@@ -124,8 +127,16 @@ class FrodoGymWrapper(gym.Env):
         y_lo, y_hi = lim[1]
         agent_lo    = np.array([x_lo, y_lo, -np.pi], dtype=np.float32)
         agent_hi    = np.array([x_hi, y_hi,  np.pi], dtype=np.float32)
-        goal_lo     = np.array([x_lo, y_lo], dtype=np.float32)
-        goal_hi     = np.array([x_hi, y_hi], dtype=np.float32)
+        # Shrink subgoal action space away from outer walls so that a subgoal at the
+        # boundary can never land inside a wall.  Margin = wall half-thickness +
+        # robot bounding-circle radius (worst-case corner distance from robot centre).
+        _wall_thickness = self.scenario.obstacles[0].width  # outer boundary walls are first
+        _robot_cfg = FRODO_Agent_Config()
+        _robot_radius = np.hypot(_robot_cfg.length / 2, _robot_cfg.width / 2)
+        _clearance = 0.02  # 2 cm safety buffer on top of the geometric minimum
+        _sg_margin = float(_wall_thickness / 2 + _robot_radius + _clearance)
+        goal_lo     = np.array([x_lo + _sg_margin, y_lo + _sg_margin], dtype=np.float32)
+        goal_hi     = np.array([x_hi - _sg_margin, y_hi - _sg_margin], dtype=np.float32)
 
         # ----- simulation (created once, reset each episode) ----------------------
         self.sim = FRODO_Universal_Simulation(limits=lim, grid_resolution=grid_resolution)
@@ -215,7 +226,7 @@ class FrodoGymWrapper(gym.Env):
 
             # track per-agent arrivals
             for i, (agent, task_cont) in enumerate(zip(agents_list, task_conts)):
-                if individual_times[i] is None:
+                if individual_times[i] is None and task_cont is not None:
                     dx  = agent.container.x - task_cont.x
                     dy  = agent.container.y - task_cont.y
                     tol = task_cont.goal_tolerance_xy
@@ -231,9 +242,10 @@ class FrodoGymWrapper(gym.Env):
         obs       = self._get_obs()
         reward    = self._compute_reward(terminated, makespan, individual_times)
         info      = {
-            'terminated': terminated,
-            'makespan':   makespan,
-            'n_failed':   sum(agent.sgm._failed_plans for agent in self.sim.agents.values()),
+            'terminated':        terminated,
+            'makespan':          makespan,
+            'n_failed':          sum(agent.sgm._failed_plans      for agent in self.sim.agents.values()),
+            'n_skipped_subgoals': sum(agent.sgm._skipped_subgoals for agent in self.sim.agents.values()),
         }
 
         return obs, reward, terminated, truncated, info
@@ -265,7 +277,8 @@ class FrodoGymWrapper(gym.Env):
 
         # goal-related observations — keyed by agent to match agent_states row order
         goal_states = np.array([
-            self._goal_to_xy(agent.assigned_task)
+            self._goal_to_xy(agent.assigned_task) if agent.assigned_task is not None
+            else np.zeros(2, dtype=np.float32)
             for agent in self.sim.agents.values()
         ], dtype=np.float32)  # (n_agents, 2)
 
@@ -344,14 +357,17 @@ class FrodoGymWrapper(gym.Env):
         ...
 
 
-def train(n_updates, batch_size, log_dir: str = 'runs/subgoal_B'):
+_SUBGOAL_DIR = '/Users/davidstoll/Documents/TU/bilbolab_thesis/software/master_thesis/modules/subgoal_predictor'
 
-    # For logging training process
+def train(n_updates, batch_size, n_subgoals = 3,
+          log_dir: str = f'{_SUBGOAL_DIR}/runs/subgoal_B',
+          checkpoint_path: str | None = f'{_SUBGOAL_DIR}/checkpoints/subgoal_B.pt',
+          save_every: int = 50):
     from torch.utils.tensorboard import SummaryWriter
-    writer = SummaryWriter(log_dir)
 
-    # load environment (agents, tasks, obstacles/ maze walls)
-    env = FrodoGymWrapper(scenario=maze_2x2_3agents_config())
+    # load environment — ERROR level suppresses expected OMPL/SubgoalManager warnings
+    scenario = load_scenario_yaml(open(f'{_SUBGOAL_DIR}/../../scenarios/maze_2x2_3agents.yaml').read())
+    env = FrodoGymWrapper(scenario=scenario, agent_log_level='ERROR', n_subgoals=n_subgoals)
 
     # get the grid shape (discretization of env to determine free workspace)
     grid_shape = env.sim.environment.environment_container.occupancy_grid_static.shape
@@ -365,85 +381,118 @@ def train(n_updates, batch_size, log_dir: str = 'runs/subgoal_B'):
     # Selected optimizer to perform optimization step, uses policy parameters + learnable parameter (latter will converge to zero during (successful) training)
     optimizer = torch.optim.Adam([*policy.parameters(), log_std])
 
-    print(f"Training: {n_updates} updates * {batch_size} episodes | logdir={log_dir}")
-    print(f"{'Update':>8}  {'loss':>8}  {'reward':>12}  {'done':>8}  {'makespan':>10}  {'failed':>8}")
+    # Resume from checkpoint if provided
+    start_update = 0
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        ckpt = torch.load(checkpoint_path)
+        policy.load_state_dict(ckpt['policy'])
+        log_std.data = ckpt['log_std']
+        optimizer.load_state_dict(ckpt['optimizer'])
+        start_update = ckpt['update'] + 1
+        print(f"Resumed from '{checkpoint_path}' at update {start_update}")
 
-    # perform # updates, each over a given batch size
-    for update in range(n_updates):
-        
-        # initialize lists to log results during for each batch within an update
-        raw_rewards, log_probs = [], []
-        ep_terminated, ep_makespans, ep_failed = [], [], []
+    # TensorBoard — append to existing run when resuming
+    writer = SummaryWriter(log_dir)
 
-        # go through whole batch, measure performance for each episode
-        for episode in range(batch_size):
-            # reset environment to initial conditions
-            obs, _ = env.reset()
+    print(f"Training: updates {start_update}–{start_update + n_updates - 1} * {batch_size} episodes | logdir={log_dir}")
 
-            # convert numpy obs dict to float32 tensors (gym expected datatype)
-            obs_t = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in obs.items()}
-            n     = env.n_agents
+    update_pbar = tqdm(range(start_update, start_update + n_updates), desc='Updates')
 
-            # Use policy prediction as mean, add noise to facilitate exploration
-            mean = policy(
-                obs_t["agent_states"],                                        # (N, 3)
-                obs_t["neighbor_states"].flatten(-2),                         # (N, (N-1)*3)
-                obs_t["goal_states"],                                         # (N, 2)
-                obs_t["neighbor_goals"].flatten(-2),                          # (N, (N-1)*2)
-                obs_t["occupancy_grid"].unsqueeze(0).expand(n, -1, -1, -1),  # (N, 1, H, W)
-            )  # → (N, n_subgoals*2)
-            dist = torch.distributions.Normal(mean, log_std.exp())
+    try:
+        for update in update_pbar:
+            raw_rewards, log_probs = [], []
+            ep_terminated, ep_makespans, ep_failed, ep_skipped = [], [], [], []
 
-            # keep track of action - noise pair, needed to optimize log_std param via optimizer
-            action = dist.sample()
-            log_prob = dist.log_prob(action).sum()
+            for episode in tqdm(range(batch_size), desc='Episodes', leave=False):
+                obs, _ = env.reset()
 
-            # perform action, receive reward, info if goal (each robot reached assigned goal in timelimit) was accomplished (= terminated) or timeout (= truncated)
-            _, reward, terminated, truncated, info = env.step(action.flatten().numpy())
+                obs_t = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in obs.items()}
+                n     = env.n_agents
 
-            # log episode results
-            raw_rewards.append(reward)
-            log_probs.append(log_prob)
-            ep_terminated.append(info['terminated'])
-            ep_makespans.append(info['makespan'])
-            ep_failed.append(info['n_failed'])
+                # Use policy prediction as mean, add noise to facilitate exploration
+                mean = policy(
+                    obs_t["agent_states"],                                        # (N, 3)
+                    obs_t["neighbor_states"].flatten(-2),                         # (N, (N-1)*3)
+                    obs_t["goal_states"],                                         # (N, 2)
+                    obs_t["neighbor_goals"].flatten(-2),                          # (N, (N-1)*2)
+                    obs_t["occupancy_grid"].unsqueeze(0).expand(n, -1, -1, -1),  # (N, 1, H, W)
+                )  # → (N, n_subgoals*2)
+                dist = torch.distributions.Normal(mean, log_std.exp())
 
-        # REINFORCE update
-        rewards_t  = torch.tensor(raw_rewards)
-        normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
-        loss       = -(torch.stack(log_probs) * normalized).mean()
+                action   = dist.sample()
+                log_prob = dist.log_prob(action).sum()
 
-        # perform this updates' optimization step
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+                _, reward, terminated, truncated, info = env.step(action.flatten().numpy())
 
-        # ── metrics ────────────────────────────────────────────────────
-        mean_reward  = float(rewards_t.mean())
-        std_reward   = float(rewards_t.std())
-        n_done       = sum(ep_terminated)
-        frac_done    = n_done / batch_size
-        done_spans   = [m for m, t in zip(ep_makespans, ep_terminated) if t]
-        mean_makespan = float(np.mean(done_spans)) if done_spans else float(env.max_steps)
-        mean_failed  = float(np.mean(ep_failed))
+                raw_rewards.append(reward)
+                log_probs.append(log_prob)
+                ep_terminated.append(info['terminated'])
+                ep_makespans.append(info['makespan'])
+                ep_failed.append(info['n_failed'])
+                ep_skipped.append(info['n_skipped_subgoals'])
 
-        # add information to tensorboard
-        writer.add_scalar('train/loss', float(loss),  update)
-        writer.add_scalar('train/mean_reward', mean_reward,  update)
-        writer.add_scalar('train/frac_terminated', frac_done,   update)
-        writer.add_scalar('train/mean_makespan', mean_makespan, update)
-        writer.add_scalar('train/mean_failed_plans', mean_failed, update)
+            # REINFORCE update
+            rewards_t  = torch.tensor(raw_rewards)
+            normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
+            loss       = -(torch.stack(log_probs) * normalized).mean()
 
-        print(
-            f"{update+1:>8d}  "
-            f"{float(loss):>+8.3f}  "
-            f"{mean_reward:>+8.1f}±{std_reward:<4.1f}  "
-            f"{n_done:>4d}/{batch_size:<3d}  "
-            f"{mean_makespan:>10.1f}  "
-            f"{mean_failed:>8.2f}"
-        )
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            mean_reward   = float(rewards_t.mean())
+            std_reward    = float(rewards_t.std())
+            n_done        = sum(ep_terminated)
+            frac_done     = n_done / batch_size
+            done_spans    = [m for m, t in zip(ep_makespans, ep_terminated) if t]
+            mean_makespan = float(np.mean(done_spans)) if done_spans else float(env.max_steps)
+            mean_failed   = float(np.mean(ep_failed))
+            mean_skipped  = float(np.mean(ep_skipped))
+
+            writer.add_scalar('train/loss',                 float(loss),   update)
+            writer.add_scalar('train/mean_reward',          mean_reward,   update)
+            writer.add_scalar('train/std_reward',           std_reward,    update)
+            writer.add_scalar('train/frac_terminated',      frac_done,     update)
+            writer.add_scalar('train/mean_makespan',        mean_makespan, update)
+            writer.add_scalar('train/mean_failed_plans',    mean_failed,   update)
+            writer.add_scalar('train/mean_skipped_subgoals', mean_skipped, update)
+            writer.flush()
+
+            update_pbar.set_postfix({
+                'loss':   f'{float(loss):+.3f}',
+                'rew':    f'{mean_reward:+.1f}',
+                'done':   f'{n_done}/{batch_size}',
+                'span':   f'{mean_makespan:.0f}',
+                'failed': f'{mean_failed:.1f}',
+            })
+
+            if checkpoint_path and (update + 1) % save_every == 0:
+                os.makedirs(os.path.dirname(checkpoint_path) or '.', exist_ok=True)
+                torch.save({
+                    'update':    update,
+                    'policy':    policy.state_dict(),
+                    'log_std':   log_std.data,
+                    'optimizer': optimizer.state_dict(),
+                }, checkpoint_path)
+
+    except KeyboardInterrupt:
+        tqdm.write("Interrupted — saving checkpoint...")
+        if checkpoint_path:
+            os.makedirs(os.path.dirname(checkpoint_path) or '.', exist_ok=True)
+            torch.save({
+                'update':    update,
+                'policy':    policy.state_dict(),
+                'log_std':   log_std.data,
+                'optimizer': optimizer.state_dict(),
+            }, checkpoint_path)
+            tqdm.write(f"Saved to '{checkpoint_path}' at update {update}")
 
     writer.close()
 
 if __name__ == "__main__":
-    train(n_updates=100, batch_size = 32)
+    # Fresh run and resume both use the same call — checkpoint presence is auto-detected.
+    # Start with n_subgoals=1 (6-dim actions) — easier for REINFORCE to learn.
+    # Once converged, transfer encoder weights to n_subgoals=3 via finetune_from_checkpoint().
+    train(n_updates=500, batch_size=32, n_subgoals=1,
+          log_dir=f'{_SUBGOAL_DIR}/runs/subgoal_B_sg1',
+          checkpoint_path=f'{_SUBGOAL_DIR}/checkpoints/subgoal_B_sg1.pt')

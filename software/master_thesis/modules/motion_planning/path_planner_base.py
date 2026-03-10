@@ -20,6 +20,7 @@ class PlanResult:
     phase_container: 'MPPhaseContainer | None' = None  # for trajectory planners (OMPL)
     subgoal: np.ndarray | None = None                   # for reactive planners [x, y, psi]
     requires_reactive: bool = False
+    waypoints: list | None = None                       # simplified geometric waypoints [[x,y], ...]
 
 
 # ── Abstract base ───────────────────────────────────────────────────

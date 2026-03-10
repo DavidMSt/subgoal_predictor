@@ -49,6 +49,8 @@ class SubgoalManager:
 
         # Count of OMPL planning failures in the current episode (used for RL reward shaping)
         self._failed_plans: int = 0
+        # Count of subgoals skipped due to planning failure (excludes final-task failures)
+        self._skipped_subgoals: int = 0
 
     @property
     def current_task(self) -> TaskContainer | None:
@@ -177,11 +179,13 @@ class SubgoalManager:
                     f"SubgoalManager: planning failed, skipping subgoal "
                     f"{self._subgoal_idx} → trying {self._subgoal_idx + 1}"
                 )
+                self._skipped_subgoals += 1
                 self._subgoal_idx += 1
                 self._do_plan(phase_key)
             else:
-                # Final task is unreachable — agent stays put.
+                # Final task is unreachable — agent stays put, stop retrying.
                 self.logger.warning("SubgoalManager: planner returned success=False (final task unreachable)")
+                self._plan_active = False
 
     def reset(self):
         """Full reset (used between episodes in RL training)."""
@@ -192,4 +196,5 @@ class SubgoalManager:
         self._subgoal_queue = []
         self._subgoal_idx = 0
         self._failed_plans = 0
+        self._skipped_subgoals = 0
         self.executor.clear()

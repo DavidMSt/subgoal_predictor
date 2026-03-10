@@ -88,6 +88,7 @@ class RobotGUIContainer:
     assignment_circle: CircleDrawing | None = None
     trajectory_lines: list = dataclasses.field(default_factory=list)
     subgoal_markers: list = dataclasses.field(default_factory=list)
+    waypoint_markers: list = dataclasses.field(default_factory=list)
     _last_plan_result: object = None
     _last_trajectory_update: float = 0.0
     joystick: Joystick | None = None
@@ -653,6 +654,40 @@ class ThesisGUI:
                     self.babylon_visualization.addObject(marker)
                 existing_markers.append(marker)
 
+        # Draw geometric waypoints (after RDP+LOS simplification, before Bézier)
+        raw_waypoints = plan_result.waypoints or []
+        existing_wp = robot.waypoint_markers
+        needed_wp = len(raw_waypoints)
+
+        while len(existing_wp) > needed_wp:
+            try:
+                self.babylon_visualization.removeObject(existing_wp.pop())
+            except Exception:
+                pass
+
+        for i, wp in enumerate(raw_waypoints):
+            x, y = float(wp[0]), float(wp[1])
+            if i < len(existing_wp):
+                existing_wp[i].setPosition(x, y)
+            else:
+                wp_marker = CircleDrawing(
+                    f"wp_{agent_id}_{i}",
+                    x=x, y=y,
+                    radius=0.03,
+                    fill_color=[*task_color[:3], 0.9],
+                    border_color=[*task_color[:3], 1.0],
+                    border_width=0.006,
+                )
+                try:
+                    self.babylon_visualization.addObject(wp_marker)
+                except ValueError:
+                    try:
+                        self.babylon_visualization.removeObject(wp_marker)
+                    except Exception:
+                        pass
+                    self.babylon_visualization.addObject(wp_marker)
+                existing_wp.append(wp_marker)
+
     # ------------------------------------------------------------------------------------------------------------------
     def _clearVisualizationOverlays(self):
         """Remove all assignment circles and trajectory lines from Babylon."""
@@ -675,6 +710,12 @@ class ThesisGUI:
                 except Exception:
                     pass
             robot.subgoal_markers.clear()
+            for marker in robot.waypoint_markers:
+                try:
+                    self.babylon_visualization.removeObject(marker)
+                except Exception:
+                    pass
+            robot.waypoint_markers.clear()
             robot._last_plan_result = None
 
     # === PRIVATE METHODS ==============================================================================================

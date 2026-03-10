@@ -110,13 +110,18 @@ class OMPLTrajectoryPlanner(PathPlannerBase):
                 return PlanResult(success=False)
 
             if solved:
-                solution_cont = _traj_dict_to_container(self._motion_planner.get_solution())
+                solution_dict = self._motion_planner.get_solution()
+                solution_cont = _traj_dict_to_container(solution_dict)
                 self._planner_cont.phases[phase_key] = solution_cont
                 self.logger.info(
                     f"Found solution with {len(solution_cont.states)} states, "
                     f"total length {path_length}, end config: {solution_cont.states[-1]}"
                 )
-                return PlanResult(success=True, phase_container=solution_cont)
+                return PlanResult(
+                    success=True,
+                    phase_container=solution_cont,
+                    waypoints=solution_dict.get('waypoints'),
+                )
 
             opt = getattr(self._motion_planner, '_opt', None)
             if opt is not None and not opt.feasible:
