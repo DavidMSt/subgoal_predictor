@@ -108,7 +108,12 @@ class EXEAgentModule:
         # Stanley correction
         psi_dot_correction = psi_err + np.arctan2(self.tracking_gain * e_ct, v)
 
-        return np.array([u_ff[0], u_ff[1] + psi_dot_correction])
+        # Scale velocity down with cross-track error: large deviation → slow down.
+        # Factor halves speed at ~0.15 m cross-track error.
+        v_scale = 1.0 / (1.0 + 5.0 * e_ct ** 2)
+        v_cmd = u_ff[0] * v_scale
+
+        return np.array([v_cmd, u_ff[1] + psi_dot_correction])
 
     def _step_phase(self, phase: MPPhaseContainer) -> np.ndarray:
         """Step through a single phase using its state."""

@@ -274,16 +274,41 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
             if checker.check_state([ag_cont.x, ag_cont.y, ag_cont.psi]):
                 continue
 
-            # Agent moved from a valid position into a wall — revert.
-            agent.state.x    = ag_cont.x
-            agent.state.y    = ag_cont.y
-            agent.state.psi  = ag_cont.psi
-            agent.input.v      = 0.0
+            # Try to back up 10 cm along the reverse heading to create clearance
+            # for replanning. 10 cm > agent half-length (7.85 cm) so the first
+            # step of the new plan can turn without immediately re-clipping the wall.
+            _BACKUP_DIST = 0.10
+            backup_x = ag_cont.x - _BACKUP_DIST * np.cos(ag_cont.psi)
+            backup_y = ag_cont.y - _BACKUP_DIST * np.sin(ag_cont.psi)
+
+            if not checker.check_state([backup_x, backup_y, ag_cont.psi]):
+                # Backup position is free — use it.
+                agent.state.x   = backup_x
+                agent.state.y   = backup_y
+                agent.state.psi = ag_cont.psi
+                self.logger.warning(
+                    f"Hard constraint: {aid} wall hit at "
+                    f"({new_x:.3f}, {new_y:.3f}, psi={new_psi:.3f}) — "
+                    f"backed up to ({backup_x:.3f}, {backup_y:.3f})"
+                )
+            else:
+                # Backup also blocked (narrow corridor) — plain revert.
+                agent.state.x   = ag_cont.x
+                agent.state.y   = ag_cont.y
+                agent.state.psi = ag_cont.psi
+                self.logger.warning(
+                    f"Hard constraint: {aid} wall hit at "
+                    f"({new_x:.3f}, {new_y:.3f}, psi={new_psi:.3f}) — "
+                    f"backup blocked, reverted to ({ag_cont.x:.3f}, {ag_cont.y:.3f})"
+                )
+
+            agent.input.v       = 0.0
             agent.input.psi_dot = 0.0
-            self.logger.warning(
-                f"Hard constraint: {aid} moved into static obstacle at "
-                f"({new_x:.3f}, {new_y:.3f}) — reverted to ({ag_cont.x:.3f}, {ag_cont.y:.3f})"
-            )
+
+            # Trigger a replan from the (backed-up) position.
+            if (agent.sgm.current_task is not None
+                    and agent.sgm.start_planning_flag is None):
+                agent.sgm.start_planning_flag = 'default'
 
     def new_agent(self, # type: ignore[override]
                   agent_id: str,

@@ -33,6 +33,10 @@ class OMPLPlannerConfig:
     Ts: float = 0.1
     v_max: float = 0.3
     psi_dot_max: float = np.pi / 3
+    # Safety factor applied to v_max and psi_dot_max in the Bézier optimizer only.
+    # Keeps planned trajectories below the kinematic limits so Euler integration
+    # errors and minor disturbances don't push the agent past the limits.
+    bezier_safety_factor: float = 0.66
     timelimit: float = 10.0
     query_timelimit: float = 1.0   # time budget for PRM* queries — A* on existing graph is ~free
     roadmap_time: float = 60.0     # invest here: denser roadmap = better paths for all queries
@@ -207,7 +211,7 @@ class OMPLSmoothPathPlanner:
         pre_actions: list[np.ndarray] = []
 
         if abs(delta_psi) > 0.05:   # ~3°
-            n_rot = math.ceil(abs(delta_psi) / (self.config.psi_dot_max * dt))
+            n_rot = math.ceil(abs(delta_psi) / (self.config.psi_dot_max * self.config.bezier_safety_factor * dt))
             psi_dot_rot = delta_psi / (n_rot * dt)
             x0, y0 = states_np[0, 0], states_np[0, 1]
             for k in range(n_rot):
@@ -402,11 +406,12 @@ class OMPLSmoothPathPlanner:
     def _run_bezier_pipeline(
         self, waypoints: list[list[float]], start: np.ndarray, goal: np.ndarray
     ) -> bool:
+        sf = self.config.bezier_safety_factor
         self._opt = FRODOFlatOpt(
             self._build_opt_data(waypoints, start, goal),
             dt=self.config.Ts,
-            v_max=self.config.v_max,
-            psi_dot_max=self.config.psi_dot_max,
+            v_max=self.config.v_max * sf,
+            psi_dot_max=self.config.psi_dot_max * sf,
         )
         self._opt.find_hyperplanes()
         self._opt.create_optimization_vars()
