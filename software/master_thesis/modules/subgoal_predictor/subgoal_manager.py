@@ -39,6 +39,7 @@ class SubgoalManager:
         self._plan_active: bool = False
         self._execution_enabled: bool = False
         self._last_result: PlanResult | None = None
+        self._recovery_needed: bool = False  # set when start-in-collision; agent reads and handles
 
         # Flag set by sim-level trigger (sim.start_mp → sets this to a phase key string)
         self.start_planning_flag: str | None = None
@@ -171,7 +172,16 @@ class SubgoalManager:
                 self.executor.start_execution()
         else:
             self._failed_plans += 1
-            if self._has_pending_subgoal:
+            if result.start_in_collision:
+                # Transient failure: agent's position overlaps a frozen agent.
+                # Signal the agent to reverse its recent inputs to physically
+                # separate before replanning.  tick() will not interfere since
+                # _plan_active stays False; the agent re-triggers planning via
+                # start_planning_flag once recovery is complete.
+                self.logger.warning("SubgoalManager: start-in-collision — requesting input-reversal recovery")
+                self._plan_active = False
+                self._recovery_needed = True
+            elif self._has_pending_subgoal:
                 # Skip the unreachable RL-predicted subgoal and try the next one.
                 # Bounded by the remaining subgoal count — recursion terminates when
                 # the queue is exhausted or a reachable target is found.
@@ -197,4 +207,5 @@ class SubgoalManager:
         self._subgoal_idx = 0
         self._failed_plans = 0
         self._skipped_subgoals = 0
+        self._recovery_needed = False
         self.executor.clear()

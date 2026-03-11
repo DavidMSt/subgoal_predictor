@@ -71,6 +71,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent, ABC):
             logger=self.logger,
         )
 
+
     @abstractmethod
     def _build_pipeline(self) -> tuple[PathPlannerBase, MotionExecutorBase]:
         """Build planner + executor pair."""
@@ -137,6 +138,13 @@ class FRODOUniversalAgent(FRODOGeneralAgent, ABC):
             self.sgm.start_planning(phase_key)
             self.sgm.start_planning_flag = None
 
+            if self.sgm._recovery_needed:
+                self.sgm._recovery_needed = False
+                self.logger.warning(
+                    f"Start-in-collision at ({self.state.x:.3f}, {self.state.y:.3f})"
+                    f" — planner could not escape; agent paused"
+                )
+
     def _action_planning_tick(self):
         """Every tick: check replan for reactive modes."""
         self.sgm.tick()
@@ -147,6 +155,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent, ABC):
             self.input.v = 0.0
             self.input.psi_dot = 0.0
             return
+
         u = self.executor.step()
         self.input.v = float(u[0])
         self.input.psi_dot = float(u[1])

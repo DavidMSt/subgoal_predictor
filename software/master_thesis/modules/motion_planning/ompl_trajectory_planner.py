@@ -102,12 +102,40 @@ class OMPLTrajectoryPlanner(PathPlannerBase):
             frozen_agents=frozen_dicts,
         )
 
+        # If start is in collision (e.g. agent on wall boundary), nudge to nearest free position.
+        if self._motion_planner._collision_checker.check_state(start.tolist()):
+            psi = start[2]
+            escape_dirs = [
+                psi + np.pi,          # backward
+                psi,                  # forward
+                psi + np.pi / 2,      # left
+                psi - np.pi / 2,      # right
+            ]
+            escaped = False
+            for dist in [0.05, 0.10, 0.15, 0.20]:
+                for angle in escape_dirs:
+                    candidate = start.copy()
+                    candidate[0] += dist * np.cos(angle)
+                    candidate[1] += dist * np.sin(angle)
+                    if not self._motion_planner._collision_checker.check_state(candidate.tolist()):
+                        self.logger.info(
+                            f"Start nudged {dist:.2f}m (angle={angle:.2f}rad) to escape start-in-collision"
+                        )
+                        start = candidate
+                        escaped = True
+                        break
+                if escaped:
+                    break
+            if not escaped:
+                self.logger.warning("Start-in-collision: could not find free start position")
+                return PlanResult(success=False, start_in_collision=True)
+
         for attempt in range(self._MAX_BEZIER_RETRIES):
             try:
                 solved, path_length = self._motion_planner.solve(start, goal, roadmap=active_roadmap)
             except ValueError as e:
                 self.logger.warning(f"OMPL problem invalid: {e}")
-                return PlanResult(success=False)
+                return PlanResult(success=False, start_in_collision=True)
 
             if solved:
                 solution_dict = self._motion_planner.get_solution()

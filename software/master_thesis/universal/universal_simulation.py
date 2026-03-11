@@ -22,6 +22,7 @@ from master_thesis.modules.task_assignment.strategies.base_strategy import BaseS
 from master_thesis.modules.task_assignment.strategies.centralized_strategies import HungarianStrategyCent
 from master_thesis.modules.task_assignment.strategies.decentralized_strategies import GreedyNearestStrategy
 from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyType
+from master_thesis.modules.motion_planning.mp_functions.collisions_fcl import AgentCollisionChecker
 
 # Module Containers
 from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerContainer
@@ -118,6 +119,7 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
         self.mp_containers: dict[str, AgentMPPlannerContainer] = {}
         self.ta_containers: dict[str, AgentTAContainer] = {}
         self.exe_containers: dict[str, AgentExeContainer] = {}
+        self._wall_checker: AgentCollisionChecker | None = None
 
         env_cont = self.environment.environment_container
 
@@ -128,9 +130,9 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
 
         self.cli = FRODO_General_CommandSet(self)
 
-        # Pre-move collision prevention — runs AFTER INPUT (10) sets input.v, AFTER LOGIC (40)
-        # picks up any existing replan flags, but BEFORE DYNAMICS (50) integrates kinematics.
-        # Priority 48 places it between LOGIC and DYNAMICS.
+        # Agent-agent collision detection — after INPUT (10) sets velocity, before
+        # DYNAMICS (50) integrates.  Only triggers a replan; does NOT zero velocity.
+        # Walls are handled exclusively by the priority-99 hard constraint below.
         core.scheduling.Action(
             action_id='collision_prevention',
             object=self.environment,
@@ -139,30 +141,36 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
             parent=self.environment.scheduling.actions['objects'],
         )
 
+        # Hard post-dynamics obstacle constraint — runs AFTER DYNAMICS (50) updates
+        # agent.state.x/y/psi and BEFORE OUTPUT (70) syncs them to the container.
+        # Reverts agent position if DYNAMICS moved it into a static obstacle.
+        core.scheduling.Action(
+            action_id='post_dynamics_constraint',
+            object=self.environment,
+            function=self._post_dynamics_constraint,
+            priority=65,   # must be after PHYSICS (60) and before OUTPUT (70)
+            parent=self.environment.scheduling.actions['objects'],
+        )
+
     def _collision_prevention(self):
-        """Zero velocity and trigger OMPL replan when prospective position collides.
+        """Trigger a replan when an agent is about to physically overlap another agent.
 
-        Called at scheduling priority 48 (after INPUT sets v, before DYNAMICS integrates).
+        Handles agent-agent only — walls are handled by _post_dynamics_constraint.
+        Does NOT zero velocity; the agent continues on its current plan for one
+        more tick while the new plan is computed.
 
-        Two independent checks, each purely local (decentralised):
-
-        1. FCL (agent-vs-wall): reliable because walls span many grid cells.
-        2. Occupancy grid (agent-vs-agent): each agent builds a cell map of all
-           OTHER agents' current footprints and checks whether its own prospective
-           footprint overlaps any of those cells.  Two agents approaching each
-           other both trigger independently — symmetric stop as an emergent
-           consequence of two decentralised checks, not explicit coordination.
-
-        FCL bounding boxes (FRODO: 0.157 × 0.115 m, Ts=0.01 s) are too small
-        for reliable one-tick lookahead in the agent-agent case, hence the grid.
+        Loop-prevention: INPUT zeros v when start_planning_flag is set, so on the
+        very next tick Guard 2 (abs(v) < 1e-3) skips agent-agent detection and
+        collision_prevention does not re-trigger until the new plan is active.
         """
         if self.environment.collision_checker is None:
             return
 
         env = self.environment
         Ts  = env.Ts
+        agent_conts = env.environment_container.state.agent_conts
 
-        # ── Prospective positions ────────────────────────────────────────────
+        # One-step-ahead prospective positions.
         prospective: dict[str, tuple[float, float, float]] = {}
         for aid, agent in self.agents.items():
             x, y, psi = agent.state.x, agent.state.y, agent.state.psi
@@ -173,90 +181,109 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
                 psi,
             )
 
-        # ── 1. FCL: agent-vs-wall ────────────────────────────────────────────
-        # Returns {agent_id: [list of colliding ids]} for walls and agents.
-        # Use sets throughout to avoid duplicate blocker entries.
-        fcl_hits = env.collision_checker.check_prospective(prospective)
-        collisions: dict[str, set[str]] = {
-            aid: set(hits) for aid, hits in fcl_hits.items()
-        }
-
-        # ── 2. Grid: agent-vs-agent ──────────────────────────────────────────
-        # Build a map: grid cell → agent_id that currently occupies it.
-        agent_conts = env.environment_container.state.agent_conts
+        # Grid: cell → agent currently occupying it.
         cell_to_agent: dict[tuple[int, int], str] = {}
         for aid, ag_cont in agent_conts.items():
             for cell in env.footprint_cells(
-                ag_cont.x, ag_cont.y, ag_cont.psi,
-                ag_cont.length, ag_cont.width,
+                ag_cont.x, ag_cont.y, ag_cont.psi, ag_cont.length, ag_cont.width
             ):
                 cell_to_agent[cell] = aid
 
-        # Each agent independently checks its own prospective footprint.
-        for aid, (px, py, ppsi) in prospective.items():
-            ag_cont = agent_conts[aid]
-            for cell in env.footprint_cells(px, py, ppsi, ag_cont.length, ag_cont.width):
-                blocker = cell_to_agent.get(cell)
-                if blocker is not None and blocker != aid:
-                    collisions[aid].add(blocker)
-
-        # ── Response ─────────────────────────────────────────────────────────
-        for aid, hits in collisions.items():
-            if not hits:
+        for aid, agent in self.agents.items():
+            # Guard: only trigger when the agent is executing (has task, not already replanning).
+            if agent.sgm.start_planning_flag is not None:
+                continue
+            if agent.sgm.current_task is None:
                 continue
 
-            agent = self.agents[aid]
-            ax, ay = agent.state.x, agent.state.y
-            px, py, _ = prospective[aid]
             v = agent.input.v
+            if abs(v) < 1e-3:
+                continue  # Guard 2: not translating — no collision threat.
 
-            # Filter hits using two directional guards so that an agent that is
-            # already departing (or only rotating) is not unnecessarily stopped.
-            #
-            # Guard 1 — translation: skip agent-agent hits where the prospective
-            #   centre moves *away* from the blocker (d_next > d_now).  Wall hits
-            #   from FCL are always kept regardless of direction.
-            #
-            # Guard 2 — rotation: skip agent-agent hits when the agent is in
-            #   pure in-place rotation (|v| < ε).  The centre does not translate
-            #   so the grid overlap is a bounding-box artefact, not a real
-            #   approach.  Agent-vs-wall is still enforced by FCL above.
-            real_hits: set[str] = set()
-            for hit_id in hits:
-                if hit_id not in self.agents:
-                    # Wall or static obstacle from FCL — always block.
-                    real_hits.add(hit_id)
-                    continue
+            ax, ay = agent.state.x, agent.state.y
+            px, py, ppsi = prospective[aid]
+            ag_cont = agent_conts[aid]
 
-                # Agent-agent: apply directional guards.
-                if abs(v) < 1e-3:
-                    # Guard 2: pure rotation — skip.
-                    continue
+            # Find agents whose CURRENT footprint overlaps this agent's prospective footprint.
+            blocking: set[str] = set()
+            for cell in env.footprint_cells(px, py, ppsi, ag_cont.length, ag_cont.width):
+                blk = cell_to_agent.get(cell)
+                if blk is not None and blk != aid:
+                    blocking.add(blk)
 
-                bx, by = agent_conts[hit_id].x, agent_conts[hit_id].y
+            if not blocking:
+                continue
+
+            # Guard 1: skip blockers that this agent is already moving away from.
+            real_blocking: set[str] = set()
+            for blk_id in blocking:
+                bx, by = agent_conts[blk_id].x, agent_conts[blk_id].y
                 d_now  = (ax - bx) ** 2 + (ay - by) ** 2
                 d_next = (px - bx) ** 2 + (py - by) ** 2
-                if d_next > d_now:
-                    # Guard 1: moving away — skip.
-                    continue
+                if d_next < d_now:
+                    real_blocking.add(blk_id)
 
-                real_hits.add(hit_id)
-
-            if not real_hits:
+            if not real_blocking:
                 continue
 
+            # Trigger replan with the blocking agents frozen as static obstacles.
+            agent.sgm.start_planning_flag = 'default'
+            if isinstance(agent.planner, OMPLTrajectoryPlanner):
+                agent.planner._freeze_agents = [
+                    agent_conts[blk_id] for blk_id in real_blocking
+                ]
+
+    def _post_dynamics_constraint(self):
+        """Revert agent position if DYNAMICS integrated it into a static obstacle.
+
+        Runs at priority 65 — after DYNAMICS (50) updates agent.state.x/y/psi
+        and before OUTPUT (70) syncs those values to the container.
+
+        Uses AgentCollisionChecker (exact FCL Box shapes, same as OMPL) so the
+        boundary matches the planner exactly — no AABB overestimation, no grid
+        quantization.
+
+        At this point:
+          agent.state.x/y/psi  — new position (just written by DYNAMICS)
+          ag_cont.x/y/psi      — old position (from the previous OUTPUT)
+        """
+        env = self.environment
+        obstacle_conts = env.environment_container.state.obstacle_conts
+        agent_conts    = env.environment_container.state.agent_conts
+
+        if not obstacle_conts or not agent_conts:
+            return
+
+        # Build the checker once; obstacles are static so it stays valid until reset.
+        if self._wall_checker is None:
+            first_ag = next(iter(agent_conts.values()))
+            agent_dims = (first_ag.length, first_ag.width, first_ag.height)
+            obstacles = [obs.to_geometry_dict() for obs in obstacle_conts.values()]
+            self._wall_checker = AgentCollisionChecker(agent_dims, obstacles)
+
+        checker = self._wall_checker
+
+        for aid, agent in self.agents.items():
+            ag_cont = agent_conts[aid]
+            new_x, new_y, new_psi = agent.state.x, agent.state.y, agent.state.psi
+
+            if not checker.check_state([new_x, new_y, new_psi]):
+                continue  # No wall collision — nothing to do.
+
+            # Already inside a wall at the old position — allow movement so it can escape.
+            if checker.check_state([ag_cont.x, ag_cont.y, ag_cont.psi]):
+                continue
+
+            # Agent moved from a valid position into a wall — revert.
+            agent.state.x    = ag_cont.x
+            agent.state.y    = ag_cont.y
+            agent.state.psi  = ag_cont.psi
             agent.input.v      = 0.0
             agent.input.psi_dot = 0.0
-            if agent.sgm.start_planning_flag is None and agent.sgm.current_task is not None:
-                agent.sgm.start_planning_flag = 'default'
-                if isinstance(agent.planner, OMPLTrajectoryPlanner):
-                    # Freeze only the specific agents blocking this one.
-                    # Static obstacles are already permanent in the FCL env.
-                    agent.planner._freeze_agents = [
-                        agent_conts[hit_id]
-                        for hit_id in real_hits
-                        if hit_id in self.agents
-                    ]
+            self.logger.warning(
+                f"Hard constraint: {aid} moved into static obstacle at "
+                f"({new_x:.3f}, {new_y:.3f}) — reverted to ({ag_cont.x:.3f}, {ag_cont.y:.3f})"
+            )
 
     def new_agent(self, # type: ignore[override]
                   agent_id: str,
@@ -317,6 +344,7 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
         # Disable collision checker early so the scheduler won't use the old
         # checker after agent_conts is cleared (_collision_checking guards None).
         self.environment.collision_checker = None
+        self._wall_checker = None  # Force rebuild after obstacles are re-added.
 
         # Remove all agents from environment (proper cleanup with scheduler removal)
         for agent_id in list(self.agents.keys()):

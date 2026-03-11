@@ -21,6 +21,7 @@ class PlanResult:
     subgoal: np.ndarray | None = None                   # for reactive planners [x, y, psi]
     requires_reactive: bool = False
     waypoints: list | None = None                       # simplified geometric waypoints [[x,y], ...]
+    start_in_collision: bool = False                    # True when OMPL rejected start state (transient — agent inside wall)
 
 
 # ── Abstract base ───────────────────────────────────────────────────

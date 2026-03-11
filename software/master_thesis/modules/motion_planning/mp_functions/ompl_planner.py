@@ -31,7 +31,7 @@ from master_thesis.modules.motion_planning.mp_functions.opt_safe import FRODOFla
 class OMPLPlannerConfig:
     """Planner tuning and robot kinematics for OMPLSmoothPathPlanner."""
     Ts: float = 0.1
-    v_max: float = 0.5
+    v_max: float = 0.3
     psi_dot_max: float = np.pi / 3
     timelimit: float = 10.0
     query_timelimit: float = 1.0   # time budget for PRM* queries — A* on existing graph is ~free
