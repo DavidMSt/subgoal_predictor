@@ -67,6 +67,7 @@ from master_thesis.scenarios.base import (
     AgentSpec,
     ObstacleSpec,
     ScenarioConfig,
+    SpawnRegion,
     TASK_COLORS,
     TaskSpec,
 )
@@ -137,17 +138,25 @@ def _parse_yaml(text: str) -> dict[str, Any]:
         'agents': [],
         'tasks': [],
         'assignments': {},
+        'agent_spawn_region': None,
+        'task_spawn_region': None,
     }
 
     # Section headers we recognise (list-of-items sections)
     _SECTIONS = {'obstacles', 'agents', 'tasks'}
+    # Region sections store a single dict of key-value pairs
+    _REGION_SECTIONS = {'agent_spawn_region', 'task_spawn_region'}
     current_section: str | None = None
     current_item: dict | None = None
     limits_list: list[list[float]] = []
+    region_buf: dict = {}  # accumulates key-value pairs for the current region section
 
     def _flush():
-        nonlocal current_item
+        nonlocal current_item, region_buf
         if current_item is None:
+            if region_buf and current_section in _REGION_SECTIONS:
+                result[current_section] = dict(region_buf)
+                region_buf = {}
             return
         sec = current_item.pop('_section', None)
         if sec == 'obstacles':
@@ -184,6 +193,20 @@ def _parse_yaml(text: str) -> dict[str, Any]:
             _flush()
             current_section = 'assignments'
             current_item = None
+            region_buf = {}
+            continue
+
+        # Spawn-region section headers (key-value blocks, not lists)
+        _region_header_matched = False
+        for rsec in _REGION_SECTIONS:
+            if re.match(rf'^\s*{rsec}:\s*$', line):
+                _flush()
+                current_section = rsec
+                current_item = None
+                region_buf = {}
+                _region_header_matched = True
+                break
+        if _region_header_matched:
             continue
 
         # List-of-items section headers
@@ -192,6 +215,7 @@ def _parse_yaml(text: str) -> dict[str, Any]:
                 _flush()
                 current_section = sec
                 current_item = None
+                region_buf = {}
                 break
         else:
             # Not a section header → parse content
@@ -210,6 +234,13 @@ def _parse_yaml(text: str) -> dict[str, Any]:
                 m_a = re.match(r'^([\w_-]+):\s*(.+)$', stripped)
                 if m_a:
                     result['assignments'][m_a.group(1).strip()] = m_a.group(2).strip()
+                continue
+
+            if current_section in _REGION_SECTIONS:
+                # Key-value lines for spawn region
+                m_r = re.match(r'^([\w_]+):\s*(.*)$', stripped)
+                if m_r:
+                    region_buf[m_r.group(1)] = m_r.group(2).strip()
                 continue
 
             if current_section in _SECTIONS:
@@ -280,6 +311,9 @@ def _build_config(
 
     assignments: dict[str, str] = parsed.get('assignments') or {}
 
+    agent_region, n_agents = _parse_spawn_region(parsed.get('agent_spawn_region'))
+    task_region, n_tasks   = _parse_spawn_region(parsed.get('task_spawn_region'))
+
     return ScenarioConfig(
         name=cfg_name,
         limits=limits,
@@ -287,7 +321,23 @@ def _build_config(
         agents=agents,
         tasks=tasks,
         assignments=assignments,
+        agent_spawn_region=agent_region,
+        n_agents_random=n_agents,
+        task_spawn_region=task_region,
+        n_tasks_random=n_tasks,
     )
+
+
+def _parse_spawn_region(d: dict | None) -> tuple['SpawnRegion | None', int]:
+    """Parse a spawn-region dict from the YAML parser into a SpawnRegion + count."""
+    if not d:
+        return None, 0
+    return SpawnRegion(
+        x_min=float(d.get('x_min', -5)),
+        x_max=float(d.get('x_max', 5)),
+        y_min=float(d.get('y_min', -5)),
+        y_max=float(d.get('y_max', 5)),
+    ), int(d.get('n', 0))
 
 
 def _normalise_psi(psi: float) -> float:

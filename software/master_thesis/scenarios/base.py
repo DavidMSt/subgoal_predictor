@@ -56,6 +56,15 @@ class ObstacleSpec:
 
 
 @dataclass
+class SpawnRegion:
+    """Rectangular region for random agent/task spawning."""
+    x_min: float
+    x_max: float
+    y_min: float
+    y_max: float
+
+
+@dataclass
 class ScenarioConfig:
     """
     Pure-data scenario description.
@@ -75,6 +84,10 @@ class ScenarioConfig:
     tasks: list[TaskSpec] = field(default_factory=list)
     obstacles: list[ObstacleSpec] = field(default_factory=list)
     assignments: dict[str, str] = field(default_factory=dict)  # agent_id → task_id
+    agent_spawn_region: SpawnRegion | None = None  # if set, spawn n_agents_random agents randomly in this region
+    task_spawn_region: SpawnRegion | None = None   # if set, spawn n_tasks_random tasks randomly in this region
+    n_agents_random: int = 0
+    n_tasks_random: int = 0
 
     def build(self, sim, log_level: str = 'INFO') -> None:
         """Apply this scenario to *sim* (creates obstacles, agents, tasks).
@@ -103,10 +116,27 @@ class ScenarioConfig:
                 **agent_spec.kwargs,
             )
 
+        if self.agent_spawn_region is not None and self.n_agents_random > 0:
+            r = self.agent_spawn_region
+            agent_cls = _resolve_agent_class(
+                self.agents[0].agent_class_name if self.agents else 'FRODOUniversalAgent'
+            )
+            sim.spawn_agents(
+                n=self.n_agents_random, agent_class=agent_cls, log_level=log_level,
+                x_bounds=(r.x_min, r.x_max), y_bounds=(r.y_min, r.y_max),
+            )
+
         for task_spec in self.tasks:
             sim.new_task(
                 task_id=task_spec.task_id,
                 x=task_spec.x, y=task_spec.y, psi=task_spec.psi,
+            )
+
+        if self.task_spawn_region is not None and self.n_tasks_random > 0:
+            r = self.task_spawn_region
+            sim.spawn_tasks(
+                n=self.n_tasks_random,
+                x_bounds=(r.x_min, r.x_max), y_bounds=(r.y_min, r.y_max),
             )
 
         self.apply_assignments(sim)

@@ -212,7 +212,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
 
         return agent
 
-    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent, log_level: str = 'INFO') -> Sequence[FRODOGeneralAgent]:
+    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOGeneralAgent, log_level: str = 'INFO',
+                     x_bounds: tuple[float, float] | None = None,
+                     y_bounds: tuple[float, float] | None = None) -> Sequence[FRODOGeneralAgent]:
         """
         Spawn multiple agents in collision-free positions using hybrid approach (grid + FCL).
         If configurations is None, agents are spawned uniformly at random inside env limits.
@@ -222,6 +224,8 @@ class FRODO_general_Simulation(FRODO_Simulation):
             configurations: Optional list of (x, y, psi) tuples for agent positions
             agent_class: Agent class to instantiate
             log_level: Logging level for agent loggers (default: 'INFO')
+            x_bounds: Optional (x_min, x_max) to restrict random sampling region
+            y_bounds: Optional (y_min, y_max) to restrict random sampling region
 
         Returns:
             List of created agent objects
@@ -234,38 +238,38 @@ class FRODO_general_Simulation(FRODO_Simulation):
         temp_config = FRODO_Agent_Config()
         agent_length, agent_width = temp_config.length, temp_config.width
 
-        # Get environment limits
-        x_lim = self.environment.environment_container.limits[0]
-        y_lim = self.environment.environment_container.limits[1]
+        # Get environment limits (overridden by explicit bounds)
+        x_lim = x_bounds or self.environment.environment_container.limits[0]
+        y_lim = y_bounds or self.environment.environment_container.limits[1]
 
-        # Generate collision-free configurations if none provided
-        if configurations is None:
-            configurations = []
-            max_attempts = 100
+        agents = []
+        max_attempts = 100
+
+        if configurations is not None:
+            # Spawn at explicitly provided positions
+            for config in configurations:
+                agent_id = f"vfrodo{len(self.agents)}"
+                agent = self.new_agent(agent_id=agent_id, agent_class=agent_class, start_config=config, log_level=log_level)
+                if agent:
+                    agents.append(agent)
+        else:
+            # Generate collision-free positions and spawn immediately so each
+            # new agent is marked in occupancy_grid_full before the next is sampled.
             for i in range(n):
                 success = False
                 for attempt in range(max_attempts):
-                    # Sample random position
                     x = np.random.uniform(x_lim[0], x_lim[1])
                     y = np.random.uniform(y_lim[0], y_lim[1])
                     psi = (np.random.uniform(0.0, 2.0 * np.pi) + np.pi) % (2.0 * np.pi) - np.pi
-
-                    # Check if position is free using occupancy grid
                     if self.environment.is_position_free(x, y, psi, agent_length, agent_width, check_grid='full'):
-                        configurations.append((x, y, psi))
+                        agent_id = f"vfrodo{len(self.agents)}"
+                        agent = self.new_agent(agent_id=agent_id, agent_class=agent_class, start_config=(x, y, psi), log_level=log_level)
+                        if agent:
+                            agents.append(agent)
                         success = True
                         break
-
                 if not success:
                     self.logger.warning(f'Could not find collision-free position for agent {i+1}/{n} after {max_attempts} attempts')
-
-        # Spawn the agents
-        agents = []
-        for config in configurations:
-            agent_id = f"vfrodo{len(self.agents)}"
-            agent = self.new_agent(agent_id=agent_id, agent_class=agent_class, start_config=config, log_level=log_level)
-            if agent:
-                agents.append(agent)
 
         return agents
     
@@ -316,7 +320,9 @@ class FRODO_general_Simulation(FRODO_Simulation):
         self.logger.info(f'Task with ID {task.object_id} added')
         return task
 
-    def spawn_tasks(self, n: int, configurations: list[tuple[float, float, float]] | None = None) -> list[GeneralTask]:
+    def spawn_tasks(self, n: int, configurations: list[tuple[float, float, float]] | None = None,
+                    x_bounds: tuple[float, float] | None = None,
+                    y_bounds: tuple[float, float] | None = None) -> list[GeneralTask]:
         """
         Spawn multiple tasks in collision-free positions using hybrid approach (grid + FCL).
         If configurations is None, tasks are spawned uniformly at random inside env limits.
@@ -324,6 +330,8 @@ class FRODO_general_Simulation(FRODO_Simulation):
         Args:
             n: Number of tasks to spawn
             configurations: Optional list of (x, y, psi) tuples for task positions
+            x_bounds: Optional (x_min, x_max) to restrict random sampling region
+            y_bounds: Optional (y_min, y_max) to restrict random sampling region
 
         Returns:
             List of created Task objects
@@ -335,39 +343,38 @@ class FRODO_general_Simulation(FRODO_Simulation):
         # Task marker size (used for collision checking during spawn)
         task_size = 0.3  # 30cm marker footprint
 
-        # Get environment limits
-        x_lim = self.environment.environment_container.limits[0]
-        y_lim = self.environment.environment_container.limits[1]
+        # Get environment limits (overridden by explicit bounds)
+        x_lim = x_bounds or self.environment.environment_container.limits[0]
+        y_lim = y_bounds or self.environment.environment_container.limits[1]
 
-        # Generate collision-free positions if none provided
-        if configurations is None:
-            configurations = []
-            max_attempts = 100
+        tasks = []
+        max_attempts = 100
+
+        if configurations is not None:
+            for config in configurations:
+                task_id = f"task_{len(self.tasks)}"
+                x, y, psi = config
+                task = GeneralTask(id=task_id, x=x, y=y, psi=psi)
+                self.add_task(task)
+                tasks.append(task)
+        else:
+            # Generate collision-free positions and register immediately so each
+            # new task is marked in occupancy_grid_full before the next is sampled.
             for i in range(n):
                 success = False
                 for attempt in range(max_attempts):
-                    # Sample random position
                     x = np.random.uniform(x_lim[0], x_lim[1])
                     y = np.random.uniform(y_lim[0], y_lim[1])
                     psi = (np.random.uniform(0.0, 2.0 * np.pi) + np.pi) % (2.0 * np.pi) - np.pi
-
-                    # Check if position is free using occupancy grid
                     if self.environment.is_position_free(x, y, psi, task_size, task_size, check_grid='full'):
-                        configurations.append((x, y, psi))
+                        task_id = f"task_{len(self.tasks)}"
+                        task = GeneralTask(id=task_id, x=x, y=y, psi=psi)
+                        self.add_task(task)
+                        tasks.append(task)
                         success = True
                         break
-
                 if not success:
                     self.logger.warning(f'Could not find collision-free position for task {i+1}/{n} after {max_attempts} attempts')
-
-        # Spawn the tasks
-        tasks = []
-        for i, config in enumerate(configurations):
-            task_id = f"task_{len(self.tasks)}"
-            x, y, psi = config
-            task = GeneralTask(id=task_id, x=x, y=y, psi=psi)
-            self.add_task(task)
-            tasks.append(task)
 
         return tasks
 

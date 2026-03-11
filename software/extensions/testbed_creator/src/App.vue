@@ -150,6 +150,16 @@
           <h3 class="panel-title">Task</h3>
           <div class="hint">Click to place a task marker.</div>
         </section>
+
+        <section class="panel" v-if="activeTool === 'agent_zone'">
+          <h3 class="panel-title">Agent Spawn Zone</h3>
+          <div class="hint">Click and drag to define the region where agents will spawn randomly.</div>
+        </section>
+
+        <section class="panel" v-if="activeTool === 'task_zone'">
+          <h3 class="panel-title">Task Spawn Zone</h3>
+          <div class="hint">Click and drag to define the region where tasks will spawn randomly.</div>
+        </section>
       </aside>
 
       <!-- Canvas -->
@@ -214,6 +224,24 @@
               <label>Angle</label>
               <input type="number" v-model.number="selectedAngleDeg" step="1" @focus="onPropertyFocus" @keydown.stop class="field-full">
               <span class="field-unit">deg</span>
+            </div>
+          </template>
+          <template v-if="selectedObstacle.type === 'spawn_zone'">
+            <div class="field-row">
+              <label>Type</label>
+              <span style="flex:1; padding: 3px 6px; opacity:0.75; font-size:12px">{{ selectedObstacle.zone_type === 'agents' ? 'Agent Zone' : 'Task Zone' }}</span>
+            </div>
+            <div class="field-row">
+              <label>N</label>
+              <input type="number" v-model.number="selectedObstacle.n" step="1" min="0" @focus="onPropertyFocus" @keydown.stop class="field-full">
+            </div>
+            <div class="field-row">
+              <label>Width</label>
+              <input type="number" v-model.number="selectedObstacle.width" step="0.01" min="0.01" @focus="onPropertyFocus" @keydown.stop class="field-full">
+            </div>
+            <div class="field-row">
+              <label>Height</label>
+              <input type="number" v-model.number="selectedObstacle.height" step="0.01" min="0.01" @focus="onPropertyFocus" @keydown.stop class="field-full">
             </div>
           </template>
           <div class="field-row">
@@ -290,6 +318,21 @@
           </div>
           <div class="hint" v-else>No tasks yet.</div>
         </section>
+
+        <!-- Spawn Zones List -->
+        <section class="panel">
+          <h3 class="panel-title">Spawn Zones <span class="badge">{{ spawnZoneItems.length }}</span></h3>
+          <div class="obstacle-list" v-if="spawnZoneItems.length > 0">
+            <div v-for="(o, idx) in spawnZoneItems" :key="'zone-' + idx"
+              :class="['obstacle-item', { selected: selectedId === o.id }]"
+              @click="selectObstacle(o.id)">
+              <span :class="['type-dot', o.zone_type === 'agents' ? 'frodo' : 'task']"></span>
+              <span class="obstacle-id">{{ o.id }} (n={{ o.n ?? 0 }})</span>
+              <button class="item-delete" @click.stop="deleteObstacle(o.id)" title="Delete">&times;</button>
+            </div>
+          </div>
+          <div class="hint" v-else>No spawn zones yet.</div>
+        </section>
       </aside>
     </div>
 
@@ -315,20 +358,25 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 
-// FRODO display radius in world metres (matches robot footprint)
-const FRODO_DISPLAY_RADIUS = 0.2
+// FRODO actual dimensions in world metres
+const FRODO_LENGTH = 0.157
+const FRODO_WIDTH  = 0.115
+const FRODO_DISPLAY_RADIUS = 0.08  // kept for task circles
+const FRODO_BOUNDING_RADIUS = Math.hypot(FRODO_LENGTH / 2, FRODO_WIDTH / 2)
 
 // ============================================================
 // CONSTANTS
 // ============================================================
 const DARK_COLORS = {
-  circle:    { stroke: '#4ecdc4', fill: 'rgba(78,205,196,0.2)' },
-  box:       { stroke: '#ff6b6b', fill: 'rgba(255,107,107,0.2)' },
-  wall:      { stroke: '#feca57', fill: 'rgba(254,202,87,0.25)' },
-  line:      { stroke: '#ff9f43', fill: 'rgba(255,159,67,0.25)' },
-  point:     { stroke: '#a78bfa', fill: 'rgba(167,139,250,0.3)' },
-  frodo:     { stroke: '#4ade80', fill: 'rgba(74,222,128,0.18)' },
-  task:      { stroke: '#fb923c', fill: 'rgba(251,146,60,0.22)' },
+  circle:     { stroke: '#4ecdc4', fill: 'rgba(78,205,196,0.2)' },
+  box:        { stroke: '#ff6b6b', fill: 'rgba(255,107,107,0.2)' },
+  wall:       { stroke: '#feca57', fill: 'rgba(254,202,87,0.25)' },
+  line:       { stroke: '#ff9f43', fill: 'rgba(255,159,67,0.25)' },
+  point:      { stroke: '#a78bfa', fill: 'rgba(167,139,250,0.3)' },
+  frodo:      { stroke: '#4ade80', fill: 'rgba(74,222,128,0.18)' },
+  task:       { stroke: '#fb923c', fill: 'rgba(251,146,60,0.22)' },
+  agent_zone: { stroke: '#ff9500', fill: 'rgba(255,149,0,0.08)' },
+  task_zone:  { stroke: '#1e90ff', fill: 'rgba(30,144,255,0.08)' },
   selected:  '#00d2ff',
   selectedFill: 'rgba(0, 210, 255, 0.2)',
   preview:   'rgba(255,255,255,0.15)',
@@ -345,13 +393,15 @@ const DARK_COLORS = {
 }
 
 const LIGHT_COLORS = {
-  circle:    { stroke: '#1a9e96', fill: 'rgba(26,158,150,0.12)' },
-  box:       { stroke: '#d94040', fill: 'rgba(217,64,64,0.12)' },
-  wall:      { stroke: '#c49520', fill: 'rgba(196,149,32,0.15)' },
-  line:      { stroke: '#d08020', fill: 'rgba(208,128,32,0.15)' },
-  point:     { stroke: '#7c5ce0', fill: 'rgba(124,92,224,0.15)' },
-  frodo:     { stroke: '#16a34a', fill: 'rgba(22,163,74,0.15)' },
-  task:      { stroke: '#ea580c', fill: 'rgba(234,88,12,0.15)' },
+  circle:     { stroke: '#1a9e96', fill: 'rgba(26,158,150,0.12)' },
+  box:        { stroke: '#d94040', fill: 'rgba(217,64,64,0.12)' },
+  wall:       { stroke: '#c49520', fill: 'rgba(196,149,32,0.15)' },
+  line:       { stroke: '#d08020', fill: 'rgba(208,128,32,0.15)' },
+  point:      { stroke: '#7c5ce0', fill: 'rgba(124,92,224,0.15)' },
+  frodo:      { stroke: '#16a34a', fill: 'rgba(22,163,74,0.15)' },
+  task:       { stroke: '#ea580c', fill: 'rgba(234,88,12,0.15)' },
+  agent_zone: { stroke: '#c97400', fill: 'rgba(201,116,0,0.08)' },
+  task_zone:  { stroke: '#0066cc', fill: 'rgba(0,102,204,0.08)' },
   selected:  '#0088bb',
   selectedFill: 'rgba(0, 136, 187, 0.12)',
   preview:   'rgba(0,0,0,0.08)',
@@ -378,14 +428,16 @@ const POINT_RADIUS = 5        // point marker radius in px
 const POINT_HIT_RADIUS = 10   // point hit detection in px
 
 const tools = [
-  { id: 'select',    label: 'Select',    icon: '\u25FB', key: '1' },
-  { id: 'circle',    label: 'Circle',    icon: '\u25CB', key: '2' },
-  { id: 'rectangle', label: 'Rectangle', icon: '\u25A1', key: '3' },
-  { id: 'wall',      label: 'Wall',      icon: '\u2571', key: '4' },
-  { id: 'line',      label: 'Line',      icon: '\u2500', key: '5' },
-  { id: 'point',     label: 'Point',     icon: '\u2716', key: '6' },
-  { id: 'frodo',     label: 'FRODO',     icon: '\u25CE', key: '7' },
-  { id: 'task',      label: 'Task',      icon: '\u25C9', key: '8' },
+  { id: 'select',     label: 'Select',     icon: '\u25FB', key: '1' },
+  { id: 'circle',     label: 'Circle',     icon: '\u25CB', key: '2' },
+  { id: 'rectangle',  label: 'Rectangle',  icon: '\u25A1', key: '3' },
+  { id: 'wall',       label: 'Wall',       icon: '\u2571', key: '4' },
+  { id: 'line',       label: 'Line',       icon: '\u2500', key: '5' },
+  { id: 'point',      label: 'Point',      icon: '\u2716', key: '6' },
+  { id: 'frodo',      label: 'FRODO',      icon: '\u25CE', key: '7' },
+  { id: 'task',       label: 'Task',       icon: '\u25C9', key: '8' },
+  { id: 'agent_zone', label: 'Agent Zone', icon: '\u25A6', key: '9' },
+  { id: 'task_zone',  label: 'Task Zone',  icon: '\u25A7', key: '0' },
 ]
 
 // ============================================================
@@ -430,7 +482,7 @@ const defaults = reactive({
   wallThickness: 0.05
 })
 
-const counters = reactive({ circle: 1, box: 1, wall: 1, line: 1, point: 1, frodo: 1, task: 1 })
+const counters = reactive({ circle: 1, box: 1, wall: 1, line: 1, point: 1, frodo: 1, task: 1, agent_zone: 1, task_zone: 1 })
 
 // Undo/Redo
 const MAX_UNDO = 100
@@ -480,6 +532,7 @@ let dragState = null
 let handleDrag = null
 let wallStart = null
 let rectStart = null
+let zoneStart = null
 let dragSnapshotted = false
 let clipboard = null
 
@@ -501,11 +554,12 @@ const selectedObstacle = computed(() =>
 )
 
 const obstacleItems = computed(() =>
-  obstacles.value.filter(o => o.type !== 'point' && o.type !== 'frodo' && o.type !== 'task')
+  obstacles.value.filter(o => o.type !== 'point' && o.type !== 'frodo' && o.type !== 'task' && o.type !== 'spawn_zone')
 )
 
 const frodoItems = computed(() => obstacles.value.filter(o => o.type === 'frodo'))
 const taskItems  = computed(() => obstacles.value.filter(o => o.type === 'task'))
+const spawnZoneItems = computed(() => obstacles.value.filter(o => o.type === 'spawn_zone'))
 
 const pointItems = computed(() =>
   obstacles.value.filter(o => o.type === 'point')
@@ -547,6 +601,8 @@ const canvasCursor = computed(() => {
   if (activeTool.value === 'point') return 'crosshair'
   if (activeTool.value === 'frodo') return 'crosshair'
   if (activeTool.value === 'task') return 'crosshair'
+  if (activeTool.value === 'agent_zone') return 'crosshair'
+  if (activeTool.value === 'task_zone') return 'crosshair'
   return 'copy'
 })
 
@@ -716,24 +772,40 @@ function getLabelStep(gs) {
 
 function drawRobotShape(o, isSelected, alpha, colors) {
   const [cx, cy] = worldToCanvas(o.x, o.y)
-  const r = FRODO_DISPLAY_RADIUS * scale
   const stroke = isSelected ? COLORS.selected : colors.stroke
   const fill   = isSelected ? COLORS.selectedFill : colors.fill
 
   ctx.globalAlpha = alpha
 
-  ctx.beginPath()
-  ctx.arc(cx, cy, r, 0, Math.PI * 2)
-  ctx.fillStyle = fill
-  ctx.fill()
-  ctx.strokeStyle = stroke
-  ctx.lineWidth = isSelected ? 2.5 : 1.5
-  ctx.setLineDash(isSelected ? [5, 3] : [])
-  ctx.stroke()
-  ctx.setLineDash([])
-
-  // Bullseye inner ring for tasks
-  if (o.type === 'task') {
+  if (o.type === 'frodo') {
+    // Draw as oriented rectangle matching actual FRODO footprint
+    const hw = (FRODO_LENGTH / 2) * scale
+    const hh = (FRODO_WIDTH  / 2) * scale
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.rotate(-o.psi)  // canvas Y is flipped so negate psi
+    ctx.beginPath()
+    ctx.rect(-hw, -hh, hw * 2, hh * 2)
+    ctx.fillStyle = fill
+    ctx.fill()
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = isSelected ? 2.5 : 1.5
+    ctx.setLineDash(isSelected ? [5, 3] : [])
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.restore()
+  } else {
+    // task: bullseye circle
+    const r = FRODO_DISPLAY_RADIUS * scale
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.fillStyle = fill
+    ctx.fill()
+    ctx.strokeStyle = stroke
+    ctx.lineWidth = isSelected ? 2.5 : 1.5
+    ctx.setLineDash(isSelected ? [5, 3] : [])
+    ctx.stroke()
+    ctx.setLineDash([])
     ctx.beginPath()
     ctx.arc(cx, cy, r * 0.42, 0, Math.PI * 2)
     ctx.strokeStyle = stroke
@@ -742,7 +814,7 @@ function drawRobotShape(o, isSelected, alpha, colors) {
   }
 
   // Heading arrow (psi=0 → +X; canvas Y is flipped)
-  const arrowLen = r * 0.78
+  const arrowLen = (o.type === 'frodo' ? FRODO_LENGTH / 2 : FRODO_DISPLAY_RADIUS) * scale * 0.9
   const ax = cx + arrowLen * Math.cos(o.psi)
   const ay = cy - arrowLen * Math.sin(o.psi)
   ctx.beginPath()
@@ -752,7 +824,7 @@ function drawRobotShape(o, isSelected, alpha, colors) {
   ctx.lineWidth = 2
   ctx.setLineDash([])
   ctx.stroke()
-  const headLen = Math.min(7, r * 0.32)
+  const headLen = Math.min(7, arrowLen * 0.35)
   const ang = Math.atan2(ay - cy, ax - cx)
   ctx.beginPath()
   ctx.moveTo(ax, ay)
@@ -767,11 +839,43 @@ function drawRobotShape(o, isSelected, alpha, colors) {
   ctx.fillStyle = stroke
   ctx.fill()
 
+  const labelOffset = (o.type === 'frodo' ? FRODO_WIDTH / 2 : FRODO_DISPLAY_RADIUS) * scale + 4
   ctx.font = '11px JetBrains Mono'
   ctx.textAlign = 'center'
   ctx.textBaseline = 'top'
   ctx.fillStyle = stroke
-  ctx.fillText(o.id, cx, cy + r + 4)
+  ctx.fillText(o.id, cx, cy + labelOffset)
+
+  ctx.globalAlpha = 1
+}
+
+function drawSpawnZone(o, isSelected, alpha = 1.0) {
+  const colors = COLORS[o.zone_type === 'agents' ? 'agent_zone' : 'task_zone']
+  const strokeColor = isSelected ? COLORS.selected : colors.stroke
+  const fillColor   = isSelected ? COLORS.selectedFill : colors.fill
+
+  const [cx, cy] = worldToCanvas(o.x, o.y)
+  const w = o.width  * scale
+  const h = o.height * scale
+
+  ctx.globalAlpha = alpha
+  ctx.fillStyle = fillColor
+  ctx.fillRect(cx - w / 2, cy - h / 2, w, h)
+  ctx.strokeStyle = strokeColor
+  ctx.lineWidth = isSelected ? 2.5 : 1.5
+  ctx.setLineDash([8, 4])
+  ctx.strokeRect(cx - w / 2, cy - h / 2, w, h)
+  ctx.setLineDash([])
+
+  ctx.font = 'bold 11px JetBrains Mono'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = strokeColor
+  ctx.globalAlpha = alpha * 0.75
+  ctx.fillText(o.zone_type === 'agents' ? 'AGENTS' : 'TASKS', cx, cy - 8)
+  ctx.font = '10px JetBrains Mono'
+  ctx.globalAlpha = alpha * 0.55
+  ctx.fillText(`n = ${o.n ?? 0}`, cx, cy + 8)
 
   ctx.globalAlpha = 1
 }
@@ -779,6 +883,10 @@ function drawRobotShape(o, isSelected, alpha, colors) {
 function drawObstacle(o, isSelected, alpha = 1.0) {
   if (o.type === 'point') {
     drawPointShape(o, isSelected, alpha)
+    return
+  }
+  if (o.type === 'spawn_zone') {
+    drawSpawnZone(o, isSelected, alpha)
     return
   }
   if (o.type === 'frodo' || o.type === 'task') {
@@ -933,6 +1041,20 @@ function getHandlePositions(o) {
   const handles = []
 
   if (o.type === 'point' || o.type === 'frodo' || o.type === 'task') return handles
+
+  if (o.type === 'spawn_zone') {
+    // Axis-aligned handles without rotation
+    const hw = o.width / 2, hh = o.height / 2
+    handles.push({ type: 'resize-t',  wx: o.x,      wy: o.y + hh })
+    handles.push({ type: 'resize-b',  wx: o.x,      wy: o.y - hh })
+    handles.push({ type: 'resize-r',  wx: o.x + hw, wy: o.y      })
+    handles.push({ type: 'resize-l',  wx: o.x - hw, wy: o.y      })
+    handles.push({ type: 'resize-tr', wx: o.x + hw, wy: o.y + hh })
+    handles.push({ type: 'resize-tl', wx: o.x - hw, wy: o.y + hh })
+    handles.push({ type: 'resize-br', wx: o.x + hw, wy: o.y - hh })
+    handles.push({ type: 'resize-bl', wx: o.x - hw, wy: o.y - hh })
+    return handles
+  }
 
   if (o.type === 'circle') {
     handles.push({ type: 'resize-radius', wx: o.x + o.radius, wy: o.y })
@@ -1128,6 +1250,34 @@ function drawPlacementPreview() {
     drawRobotShape({ id: '', x: px, y: py, type: 'frodo', psi: 0 }, false, 0.45, COLORS.frodo)
   } else if (activeTool.value === 'task') {
     drawRobotShape({ id: '', x: px, y: py, type: 'task', psi: 0 }, false, 0.45, COLORS.task)
+  } else if (activeTool.value === 'agent_zone' || activeTool.value === 'task_zone') {
+    const colors = COLORS[activeTool.value === 'agent_zone' ? 'agent_zone' : 'task_zone']
+    if (zoneStart) {
+      const w = Math.abs(px - zoneStart.x)
+      const h = Math.abs(py - zoneStart.y)
+      if (w > 0.001 && h > 0.001) {
+        const zcx = (zoneStart.x + px) / 2
+        const zcy = (zoneStart.y + py) / 2
+        const [ccx, ccy] = worldToCanvas(zcx, zcy)
+        const sw = w * scale, sh = h * scale
+        ctx.globalAlpha = 0.4
+        ctx.fillStyle = colors.fill
+        ctx.fillRect(ccx - sw / 2, ccy - sh / 2, sw, sh)
+        ctx.strokeStyle = colors.stroke
+        ctx.lineWidth = 1.5
+        ctx.setLineDash([8, 4])
+        ctx.strokeRect(ccx - sw / 2, ccy - sh / 2, sw, sh)
+        ctx.setLineDash([])
+        ctx.globalAlpha = 1
+      }
+      const [scx, scy] = worldToCanvas(zoneStart.x, zoneStart.y)
+      ctx.beginPath()
+      ctx.arc(scx, scy, 4, 0, Math.PI * 2)
+      ctx.fillStyle = colors.stroke
+      ctx.globalAlpha = 0.6
+      ctx.fill()
+      ctx.globalAlpha = 1
+    }
   }
 
   // Show snap crosshair
@@ -1164,10 +1314,17 @@ function render() {
   drawCheckerboard()
   drawGrid()
 
+  // Draw spawn zones first (they are background layers)
+  for (const o of obstacles.value) {
+    if (o.type !== 'spawn_zone') continue
+    if (o.id === selectedId.value) continue
+    drawObstacle(o, false)
+  }
+
   // Draw non-selected obstacles (obstacles first, then robots/tasks/points on top)
   for (const o of obstacles.value) {
     if (o.id === selectedId.value) continue
-    if (o.type === 'point' || o.type === 'frodo' || o.type === 'task') continue
+    if (o.type === 'point' || o.type === 'frodo' || o.type === 'task' || o.type === 'spawn_zone') continue
     drawObstacle(o, false)
     // Draw hover outline
     if (o.id === hoveredId.value && activeTool.value === 'select' && !hoveredHandle.value) {
@@ -1222,13 +1379,14 @@ function render() {
   // Draw non-selected robots, tasks, and points on top of obstacles
   for (const o of obstacles.value) {
     if (o.id === selectedId.value) continue
-    if (o.type !== 'point' && o.type !== 'frodo' && o.type !== 'task') continue
+    if (o.type !== 'point' && o.type !== 'frodo' && o.type !== 'task' && o.type !== 'spawn_zone') continue
+    if (o.type === 'spawn_zone') continue  // already drawn above
     drawObstacle(o, false)
     if ((o.type === 'frodo' || o.type === 'task') &&
         o.id === hoveredId.value && activeTool.value === 'select' && !hoveredHandle.value) {
       const [hcx, hcy] = worldToCanvas(o.x, o.y)
       ctx.beginPath()
-      ctx.arc(hcx, hcy, FRODO_DISPLAY_RADIUS * scale + 3, 0, Math.PI * 2)
+      ctx.arc(hcx, hcy, (o.type === 'frodo' ? FRODO_BOUNDING_RADIUS : FRODO_DISPLAY_RADIUS) * scale + 3, 0, Math.PI * 2)
       ctx.strokeStyle = COLORS[o.type].stroke
       ctx.lineWidth = 1
       ctx.globalAlpha = 0.4
@@ -1252,7 +1410,7 @@ function render() {
   if (activeTool.value === 'wall' || activeTool.value === 'line') {
     drawGridPointHighlight()
     if (wallStart) drawWallPreview()
-  } else if (['circle', 'rectangle', 'point', 'frodo', 'task'].includes(activeTool.value)) {
+  } else if (['circle', 'rectangle', 'point', 'frodo', 'task', 'agent_zone', 'task_zone'].includes(activeTool.value)) {
     if (!dragState && !handleDrag) drawPlacementPreview()
   }
 
@@ -1271,9 +1429,14 @@ function hitTest(wx, wy) {
       const dx = wx - o.x, dy = wy - o.y
       const hitR = POINT_HIT_RADIUS / scale
       if (dx * dx + dy * dy <= hitR * hitR) return o.id
+    } else if (o.type === 'spawn_zone') {
+      const dx = wx - o.x, dy = wy - o.y
+      const halfW = Math.max(o.width / 2, minHit)
+      const halfH = Math.max(o.height / 2, minHit)
+      if (Math.abs(dx) <= halfW && Math.abs(dy) <= halfH) return o.id
     } else if (o.type === 'frodo' || o.type === 'task') {
       const dx = wx - o.x, dy = wy - o.y
-      const hitR = Math.max(FRODO_DISPLAY_RADIUS, POINT_HIT_RADIUS / scale)
+      const hitR = Math.max(o.type === 'frodo' ? FRODO_BOUNDING_RADIUS : FRODO_DISPLAY_RADIUS, POINT_HIT_RADIUS / scale)
       if (dx * dx + dy * dy <= hitR * hitR) return o.id
     } else if (o.type === 'line') {
       // Distance from point to line segment
@@ -1401,6 +1564,11 @@ function onMouseDown(e) {
     const px = snapEnabled.value ? snapToGrid(wx) : wx
     const py = snapEnabled.value ? snapToGrid(wy) : wy
     addTask(px, py)
+  } else if (activeTool.value === 'agent_zone' || activeTool.value === 'task_zone') {
+    const px = snapEnabled.value ? snapToGrid(wx) : wx
+    const py = snapEnabled.value ? snapToGrid(wy) : wy
+    zoneStart = { x: px, y: py, zone_type: activeTool.value === 'agent_zone' ? 'agents' : 'tasks' }
+    isDragging.value = true
   }
 }
 
@@ -1576,6 +1744,33 @@ function onMouseMove(e) {
 }
 
 function onMouseUp() {
+  // Spawn zone drag-to-create: finalize on mouse up
+  if (zoneStart && (activeTool.value === 'agent_zone' || activeTool.value === 'task_zone')) {
+    const ex = snapEnabled.value ? snapToGrid(mouseWorld.x) : mouseWorld.x
+    const ey = snapEnabled.value ? snapToGrid(mouseWorld.y) : mouseWorld.y
+    const w = Math.abs(ex - zoneStart.x)
+    const h = Math.abs(ey - zoneStart.y)
+    const effectiveGs = fineSnap.value ? map.gridSize / snapSubdivision.value : map.gridSize
+    const minSize = snapEnabled.value ? effectiveGs : 0.01
+    if (w >= minSize && h >= minSize) {
+      const cx = (zoneStart.x + ex) / 2
+      const cy = (zoneStart.y + ey) / 2
+      pushUndo()
+      const zoneType = zoneStart.zone_type
+      const counterKey = zoneType === 'agents' ? 'agent_zone' : 'task_zone'
+      const idPrefix  = zoneType === 'agents' ? 'agent-zone' : 'task-zone'
+      const id = `${idPrefix}-${counters[counterKey]++}`
+      obstacles.value.push({
+        id, type: 'spawn_zone', zone_type: zoneType,
+        x: cx, y: cy, width: w, height: h, n: 5, psi: 0
+      })
+      selectedId.value = id
+    }
+    zoneStart = null
+    isDragging.value = false
+    return
+  }
+
   // Rectangle drag-to-create: finalize on mouse up
   if (rectStart && activeTool.value === 'rectangle') {
     const ex = snapEnabled.value ? snapToGrid(mouseWorld.x) : mouseWorld.x
@@ -1618,6 +1813,7 @@ function onMouseLeave() {
   dragState = null
   handleDrag = null
   rectStart = null
+  zoneStart = null
   isDragging.value = false
   hoveredId.value = null
   hoveredHandle.value = null
@@ -1748,8 +1944,11 @@ function clearAll() {
   counters.point = 1
   counters.frodo = 1
   counters.task = 1
+  counters.agent_zone = 1
+  counters.task_zone = 1
   wallStart = null
   rectStart = null
+  zoneStart = null
   toast('Canvas cleared')
 }
 
@@ -1757,6 +1956,7 @@ function setTool(id) {
   activeTool.value = id
   wallStart = null
   rectStart = null
+  zoneStart = null
   if (id !== 'select') selectedId.value = null
 }
 
@@ -1797,7 +1997,8 @@ function exportYaml() {
   const lineItems   = obstacles.value.filter(o => o.type === 'line')
   const pointItems  = obstacles.value.filter(o => o.type === 'point')
   const hasContent  = boxItems.length || circleItems.length || lineItems.length ||
-                      pointItems.length || frodoItems.value.length || taskItems.value.length
+                      pointItems.length || frodoItems.value.length || taskItems.value.length ||
+                      spawnZoneItems.value.length
 
   if (!hasContent) {
     toast('Nothing to export')
@@ -1852,6 +2053,29 @@ function exportYaml() {
     }
   }
 
+  const agentZones = spawnZoneItems.value.filter(o => o.zone_type === 'agents')
+  const taskZones  = spawnZoneItems.value.filter(o => o.zone_type === 'tasks')
+
+  if (agentZones.length > 0) {
+    const z = agentZones[0]
+    yaml += `\nagent_spawn_region:\n`
+    yaml += `  x_min: ${fmt(z.x - z.width  / 2)}\n`
+    yaml += `  x_max: ${fmt(z.x + z.width  / 2)}\n`
+    yaml += `  y_min: ${fmt(z.y - z.height / 2)}\n`
+    yaml += `  y_max: ${fmt(z.y + z.height / 2)}\n`
+    yaml += `  n: ${z.n ?? 0}\n`
+  }
+
+  if (taskZones.length > 0) {
+    const z = taskZones[0]
+    yaml += `\ntask_spawn_region:\n`
+    yaml += `  x_min: ${fmt(z.x - z.width  / 2)}\n`
+    yaml += `  x_max: ${fmt(z.x + z.width  / 2)}\n`
+    yaml += `  y_min: ${fmt(z.y - z.height / 2)}\n`
+    yaml += `  y_max: ${fmt(z.y + z.height / 2)}\n`
+    yaml += `  n: ${z.n ?? 0}\n`
+  }
+
   if (lineItems.length || pointItems.length) {
     yaml += `\n# --- reference geometry (not loaded by scenario) ---\n`
     if (lineItems.length) {
@@ -1889,9 +2113,10 @@ function doImport() {
 
     // Simple line-by-line YAML parser for our known format
     const imported = []
-    let currentSection = null  // 'obstacles' | 'lines' | 'points' | 'agents' | 'tasks' | 'limits'
+    let currentSection = null  // 'obstacles' | 'lines' | 'points' | 'agents' | 'tasks' | 'limits' | 'agent_spawn_region' | 'task_spawn_region'
     let currentItem = null
     const importedLimits = []
+    const importedRegions = { agent_spawn_region: {}, task_spawn_region: {} }
 
     for (const rawLine of text.split('\n')) {
       const line = rawLine.replace(/\r$/, '')
@@ -1902,12 +2127,14 @@ function doImport() {
       if (/^name:\s/.test(trimmed)) continue
 
       // Section headers
-      if (/^\s*obstacles:\s*$/.test(line)) { currentSection = 'obstacles'; currentItem = null; continue }
-      if (/^\s*lines:\s*$/.test(line))     { currentSection = 'lines';     currentItem = null; continue }
-      if (/^\s*points:\s*$/.test(line))    { currentSection = 'points';    currentItem = null; continue }
-      if (/^\s*agents:\s*$/.test(line))    { currentSection = 'agents';    currentItem = null; continue }
-      if (/^\s*tasks:\s*$/.test(line))     { currentSection = 'tasks';     currentItem = null; continue }
-      if (/^\s*limits:\s*$/.test(line))    { currentSection = 'limits';    currentItem = null; continue }
+      if (/^\s*obstacles:\s*$/.test(line))          { currentSection = 'obstacles';          currentItem = null; continue }
+      if (/^\s*lines:\s*$/.test(line))              { currentSection = 'lines';              currentItem = null; continue }
+      if (/^\s*points:\s*$/.test(line))             { currentSection = 'points';             currentItem = null; continue }
+      if (/^\s*agents:\s*$/.test(line))             { currentSection = 'agents';             currentItem = null; continue }
+      if (/^\s*tasks:\s*$/.test(line))              { currentSection = 'tasks';              currentItem = null; continue }
+      if (/^\s*limits:\s*$/.test(line))             { currentSection = 'limits';             currentItem = null; continue }
+      if (/^\s*agent_spawn_region:\s*$/.test(line)) { currentSection = 'agent_spawn_region'; currentItem = null; continue }
+      if (/^\s*task_spawn_region:\s*$/.test(line))  { currentSection = 'task_spawn_region';  currentItem = null; continue }
 
       // Limits: each is "- [ val , val ]"
       if (currentSection === 'limits') {
@@ -1916,6 +2143,13 @@ function doImport() {
           const arr = parseArr(lm[1])
           if (arr && arr.length >= 2) importedLimits.push(arr)
         }
+        continue
+      }
+
+      // Spawn region key-value lines
+      if (currentSection === 'agent_spawn_region' || currentSection === 'task_spawn_region') {
+        const rm = trimmed.match(/^(\w+):\s*(.+)$/)
+        if (rm) importedRegions[currentSection][rm[1]] = rm[2].trim()
         continue
       }
 
@@ -2052,6 +2286,27 @@ function doImport() {
       map.yMin = importedLimits[1][0]; map.yMax = importedLimits[1][1]
     }
 
+    // Import spawn regions
+    for (const [regionKey, zoneType] of [['agent_spawn_region', 'agents'], ['task_spawn_region', 'tasks']]) {
+      const rd = importedRegions[regionKey]
+      if (rd.x_min !== undefined || rd.x_max !== undefined) {
+        const xMin = parseFloat(rd.x_min ?? -5)
+        const xMax = parseFloat(rd.x_max ??  5)
+        const yMin = parseFloat(rd.y_min ?? -5)
+        const yMax = parseFloat(rd.y_max ??  5)
+        const n   = parseInt(rd.n ?? 0)
+        const counterKey = zoneType === 'agents' ? 'agent_zone' : 'task_zone'
+        const idPrefix   = zoneType === 'agents' ? 'agent-zone' : 'task-zone'
+        const id = uniqueId(`${idPrefix}-${counters[counterKey]++}`)
+        obstacles.value.push({
+          id, type: 'spawn_zone', zone_type: zoneType,
+          x: (xMin + xMax) / 2, y: (yMin + yMax) / 2,
+          width: xMax - xMin, height: yMax - yMin,
+          n, psi: 0
+        })
+      }
+    }
+
     // Set counters from highest existing IDs so new elements don't collide
     const maxNum = (prefix) => {
       let max = 0
@@ -2068,6 +2323,8 @@ function doImport() {
     counters.point = maxNum('point')
     counters.frodo = maxNum('frodo')
     counters.task = maxNum('task')
+    counters.agent_zone = maxNum('agent-zone')
+    counters.task_zone  = maxNum('task-zone')
 
     showImportModal.value = false
     importText.value = ''
@@ -2152,6 +2409,10 @@ function onKeyDown(e) {
     setTool('frodo')
   } else if (e.key === '8') {
     setTool('task')
+  } else if (e.key === '9') {
+    setTool('agent_zone')
+  } else if (e.key === '0') {
+    setTool('task_zone')
   } else if (e.key === 's' || e.key === 'S') {
     snapEnabled.value = !snapEnabled.value
   }
