@@ -55,11 +55,10 @@ class FRODO_general_Simulation(FRODO_Simulation):
         if self.environment.environment_container.entities_creation_frozen:
             raise RuntimeError("Cannot add obstacles after simulation has started. Entity creation is frozen.")
 
-        # Mark obstacle in both grids (static obstacle)
+        # Mark obstacle in the static occupancy grid (used by RL observations and wall checks)
         self.environment.mark_object_in_grid(
             x=obstacle.container.x, y=obstacle.container.y, psi=obstacle.container.psi,
             length=obstacle.container.length, width=obstacle.container.width,
-            mark_full=True, mark_static=True
         )
 
         self.obstacles[obstacle.obstacle_id] = obstacle
@@ -136,13 +135,6 @@ class FRODO_general_Simulation(FRODO_Simulation):
         # Validate bounds BEFORE any state mutations
         self.environment.check_limits(agent.container.x, agent.container.y)
 
-        # Mark agent in occupancy_grid_full (not static)
-        self.environment.mark_object_in_grid(
-            x=agent.container.x, y=agent.container.y, psi=agent.container.psi,
-            length=agent.container.length, width=agent.container.width,
-            mark_full=True, mark_static=False
-        )
-
         self.agents[agent.agent_id] = agent
 
         # Enforce Ts on agent
@@ -216,8 +208,11 @@ class FRODO_general_Simulation(FRODO_Simulation):
                      x_bounds: tuple[float, float] | None = None,
                      y_bounds: tuple[float, float] | None = None) -> Sequence[FRODOGeneralAgent]:
         """
-        Spawn multiple agents in collision-free positions using hybrid approach (grid + FCL).
-        If configurations is None, agents are spawned uniformly at random inside env limits.
+        Spawn multiple agents in collision-free positions.
+
+        Wall/obstacle collision is checked via FCL (exact geometry, no grid discretization).
+        Agent-agent clearance uses bounding-circle distance checks (diameter = agent diagonal),
+        which guarantees agents never overlap regardless of orientation.
 
         Args:
             n: Number of agents to spawn
@@ -230,44 +225,58 @@ class FRODO_general_Simulation(FRODO_Simulation):
         Returns:
             List of created agent objects
         """
+        from master_thesis.modules.motion_planning.mp_functions.collisions_fcl import AgentCollisionChecker
+
         if configurations is not None and n != len(configurations):
             self.logger.error('Spawning agents: If configurations is not None, n must equal amount of agents to be spawned')
             return []
 
-        # Get default agent dimensions
-        temp_config = FRODO_Agent_Config()
-        agent_length, agent_width = temp_config.length, temp_config.width
+        agent_cfg = FRODO_Agent_Config()
+        agent_length, agent_width = agent_cfg.length, agent_cfg.width
+        # Bounding-circle diameter: minimum gap guaranteeing no overlap at any orientation
+        bounding_diag = np.sqrt(agent_length ** 2 + agent_width ** 2)
 
-        # Get environment limits (overridden by explicit bounds)
         x_lim = x_bounds or self.environment.environment_container.limits[0]
         y_lim = y_bounds or self.environment.environment_container.limits[1]
+
+        # Build FCL checker once from current static obstacles
+        env_cont = self.environment.environment_container
+        obstacle_dicts = [
+            {'x': o.x, 'y': o.y, 'psi': o.psi, 'length': o.length, 'width': o.width, 'height': o.height}
+            for o in env_cont.obstacle_conts.values()
+        ]
+        fcl_checker = AgentCollisionChecker(agent_dims=(agent_length, agent_width, 1.0), obstacles=obstacle_dicts)
+
+        # Seed with agents already present so new ones don't overlap existing ones
+        placed: list[tuple[float, float]] = [(a.container.x, a.container.y) for a in self.agents.values()]
 
         agents = []
         max_attempts = 100
 
         if configurations is not None:
-            # Spawn at explicitly provided positions
             for config in configurations:
                 agent_id = f"vfrodo{len(self.agents)}"
                 agent = self.new_agent(agent_id=agent_id, agent_class=agent_class, start_config=config, log_level=log_level)
                 if agent:
                     agents.append(agent)
         else:
-            # Generate collision-free positions and spawn immediately so each
-            # new agent is marked in occupancy_grid_full before the next is sampled.
             for i in range(n):
                 success = False
-                for attempt in range(max_attempts):
+                for _ in range(max_attempts):
                     x = np.random.uniform(x_lim[0], x_lim[1])
                     y = np.random.uniform(y_lim[0], y_lim[1])
                     psi = (np.random.uniform(0.0, 2.0 * np.pi) + np.pi) % (2.0 * np.pi) - np.pi
-                    if self.environment.is_position_free(x, y, psi, agent_length, agent_width, check_grid='full'):
-                        agent_id = f"vfrodo{len(self.agents)}"
-                        agent = self.new_agent(agent_id=agent_id, agent_class=agent_class, start_config=(x, y, psi), log_level=log_level)
-                        if agent:
-                            agents.append(agent)
-                        success = True
-                        break
+                    if fcl_checker.check_state([x, y, psi]):
+                        continue  # wall/obstacle collision
+                    if any(np.hypot(x - px, y - py) < bounding_diag for px, py in placed):
+                        continue  # too close to another agent
+                    placed.append((x, y))
+                    agent_id = f"vfrodo{len(self.agents)}"
+                    agent = self.new_agent(agent_id=agent_id, agent_class=agent_class, start_config=(x, y, psi), log_level=log_level)
+                    if agent:
+                        agents.append(agent)
+                    success = True
+                    break
                 if not success:
                     self.logger.warning(f'Could not find collision-free position for agent {i+1}/{n} after {max_attempts} attempts')
 
@@ -301,14 +310,6 @@ class FRODO_general_Simulation(FRODO_Simulation):
         if self.environment.environment_container.entities_creation_frozen:
             raise RuntimeError("Cannot add tasks after simulation has started. Entity creation is frozen.")
 
-        # Mark task in occupancy_grid_full (small footprint for task marker)
-        task_size = 0.3  # 30cm marker size to block grid cells in environment
-        self.environment.mark_object_in_grid(
-            x=task.container.x, y=task.container.y, psi=task.container.psi,
-            length=task_size, width=task_size,
-            mark_full=True, mark_static=False
-        )
-
         self.tasks[task.object_id] = task
 
         # Add to environment
@@ -324,8 +325,12 @@ class FRODO_general_Simulation(FRODO_Simulation):
                     x_bounds: tuple[float, float] | None = None,
                     y_bounds: tuple[float, float] | None = None) -> list[GeneralTask]:
         """
-        Spawn multiple tasks in collision-free positions using hybrid approach (grid + FCL).
-        If configurations is None, tasks are spawned uniformly at random inside env limits.
+        Spawn multiple tasks in collision-free positions.
+
+        Wall/obstacle collision is checked via FCL (exact geometry).  Task-task clearance
+        uses explicit Euclidean distance checks with the agent bounding-circle diameter
+        (sqrt(length² + width²)) as the minimum separation, guaranteeing an agent can
+        always navigate between any two adjacent tasks from any approach angle.
 
         Args:
             n: Number of tasks to spawn
@@ -336,16 +341,28 @@ class FRODO_general_Simulation(FRODO_Simulation):
         Returns:
             List of created Task objects
         """
+        from master_thesis.modules.motion_planning.mp_functions.collisions_fcl import AgentCollisionChecker
+
         if configurations is not None and n != len(configurations):
             self.logger.error('Spawning tasks: If configurations is not None, n must equal amount of tasks to be spawned')
             return []
 
-        # Task marker size (used for collision checking during spawn)
-        task_size = 0.3  # 30cm marker footprint
+        agent_cfg = FRODO_Agent_Config()
+        min_task_dist = np.sqrt(agent_cfg.length ** 2 + agent_cfg.width ** 2)
 
-        # Get environment limits (overridden by explicit bounds)
         x_lim = x_bounds or self.environment.environment_container.limits[0]
         y_lim = y_bounds or self.environment.environment_container.limits[1]
+
+        # Build FCL checker once from current static obstacles
+        env_cont = self.environment.environment_container
+        obstacle_dicts = [
+            {'x': o.x, 'y': o.y, 'psi': o.psi, 'length': o.length, 'width': o.width, 'height': o.height}
+            for o in env_cont.obstacle_conts.values()
+        ]
+        fcl_checker = AgentCollisionChecker(agent_dims=(min_task_dist, min_task_dist, 1.0), obstacles=obstacle_dicts)
+
+        # Seed with tasks already present
+        placed: list[tuple[float, float]] = [(t.container.x, t.container.y) for t in self.tasks.values()]
 
         tasks = []
         max_attempts = 100
@@ -358,21 +375,23 @@ class FRODO_general_Simulation(FRODO_Simulation):
                 self.add_task(task)
                 tasks.append(task)
         else:
-            # Generate collision-free positions and register immediately so each
-            # new task is marked in occupancy_grid_full before the next is sampled.
             for i in range(n):
                 success = False
-                for attempt in range(max_attempts):
+                for _ in range(max_attempts):
                     x = np.random.uniform(x_lim[0], x_lim[1])
                     y = np.random.uniform(y_lim[0], y_lim[1])
-                    psi = (np.random.uniform(0.0, 2.0 * np.pi) + np.pi) % (2.0 * np.pi) - np.pi
-                    if self.environment.is_position_free(x, y, psi, task_size, task_size, check_grid='full'):
-                        task_id = f"task_{len(self.tasks)}"
-                        task = GeneralTask(id=task_id, x=x, y=y, psi=psi)
-                        self.add_task(task)
-                        tasks.append(task)
-                        success = True
-                        break
+                    psi = 0.0
+                    if fcl_checker.check_state([x, y, psi]):
+                        continue  # wall/obstacle collision
+                    if any(np.hypot(x - px, y - py) < min_task_dist for px, py in placed):
+                        continue  # too close to another task
+                    placed.append((x, y))
+                    task_id = f"task_{len(self.tasks)}"
+                    task = GeneralTask(id=task_id, x=x, y=y, psi=psi)
+                    self.add_task(task)
+                    tasks.append(task)
+                    success = True
+                    break
                 if not success:
                     self.logger.warning(f'Could not find collision-free position for task {i+1}/{n} after {max_attempts} attempts')
 

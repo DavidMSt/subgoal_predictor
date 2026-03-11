@@ -401,6 +401,48 @@ class ThesisGUI:
             color = t.color if t.color is not None else TASK_COLORS[i % len(TASK_COLORS)]
             self.newTask(t.task_id, x=t.x, y=t.y, psi=t.psi, color=color)
 
+        # Random agents from spawn region
+        if config.agent_spawn_region is not None and config.n_agents_random > 0:
+            r = config.agent_spawn_region
+            agent_cls = _resolve_agent_class(
+                config.agents[0].agent_class_name if config.agents else 'FRODOOfflineAgent'
+            )
+            agent_color = AGENT_TYPE_COLORS.get(agent_cls, [1, 1, 1])
+            start_idx = len(self.robots)
+            spawned_agents = self.sim.spawn_agents(
+                n=config.n_agents_random, agent_class=agent_cls,
+                x_bounds=(r.x_min, r.x_max), y_bounds=(r.y_min, r.y_max),
+            )
+            for i, agent in enumerate(spawned_agents):
+                agent_id = agent.agent_id
+                robot_babylon = BabylonFrodo(
+                    object_id=agent_id, color=agent_color, fov=0,
+                    text=str(start_idx + i + 1),
+                )
+                robot_babylon.setState(x=agent.state.x, y=agent.state.y, psi=agent.state.psi)
+                self.babylon_visualization.addObject(robot_babylon)
+                self.robots[agent_id] = RobotGUIContainer(babylon=robot_babylon, sim_agent=agent)
+                self.logger.info(f'Agent {agent_id} spawned at ({agent.state.x:.2f}, {agent.state.y:.2f})')
+
+        # Random tasks from spawn region
+        if config.task_spawn_region is not None and config.n_tasks_random > 0:
+            r = config.task_spawn_region
+            color_offset = len(self.tasks)
+            spawned_tasks = self.sim.spawn_tasks(
+                n=config.n_tasks_random,
+                x_bounds=(r.x_min, r.x_max), y_bounds=(r.y_min, r.y_max),
+            )
+            for i, task in enumerate(spawned_tasks):
+                task_id = task.object_id
+                color = TASK_COLORS[(color_offset + i) % len(TASK_COLORS)]
+                task_visual = BabylonTask(
+                    object_id=task_id, color=color,
+                    x=task.container.x, y=task.container.y,
+                )
+                self.babylon_visualization.addObject(task_visual)
+                self.tasks[task_id] = TaskGUIContainer(babylon=task_visual, sim_task=task)
+                self.logger.info(f'Task {task_id} spawned at ({task.container.x:.2f}, {task.container.y:.2f})')
+
         config.apply_assignments(self.sim)
 
         self.logger.info(

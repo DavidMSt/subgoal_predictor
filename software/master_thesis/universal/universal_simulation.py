@@ -301,9 +301,12 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
 
         return agent
 
-    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOOfflineAgent, log_level: str = 'INFO') -> Sequence[FRODOUniversalAgent]:
+    def spawn_agents(self, n: int, configurations: list[tuple[float, float, float]] | None = None, agent_class: type[FRODOGeneralAgent] = FRODOOfflineAgent, log_level: str = 'INFO',
+                     x_bounds: tuple[float, float] | None = None,
+                     y_bounds: tuple[float, float] | None = None) -> Sequence[FRODOUniversalAgent]:
         # Pass log_level to parent - agents will be created with correct logger level from the start
-        result = super().spawn_agents(n, configurations, agent_class, log_level=log_level)
+        result = super().spawn_agents(n, configurations, agent_class, log_level=log_level,
+                                      x_bounds=x_bounds, y_bounds=y_bounds)
 
         return cast(Sequence[FRODOUniversalAgent], result)
 

@@ -265,11 +265,10 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         n_x = int(np.ceil((x_max - x_min) / container.grid_resolution))
         n_y = int(np.ceil((y_max - y_min) / container.grid_resolution))
 
-        # Initialize both grids as free (False = free, True = occupied)
-        container.occupancy_grid_full = np.zeros((n_y, n_x), dtype=bool)
+        # Initialize static grid (obstacles only; dynamic objects use FCL/explicit checks)
         container.occupancy_grid_static = np.zeros((n_y, n_x), dtype=bool)
 
-        self.logger.info(f"Initialized occupancy grids: {n_y}x{n_x} cells ({container.grid_resolution}m resolution)")
+        self.logger.info(f"Initialized static occupancy grid: {n_y}x{n_x} cells ({container.grid_resolution}m resolution)")
 
     def world_to_grid(self, x: float, y: float) -> tuple[int, int]:
         """Convert world coordinates to grid indices."""
@@ -299,52 +298,40 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
 
         return x, y
 
-    def mark_object_in_grid(self, x: float, y: float, psi: float, length: float, width: float,
-                           mark_full: bool = True, mark_static: bool = False):
-        """
-        Mark cells occupied by an object in the occupancy grids.
+    def mark_object_in_grid(self, x: float, y: float, psi: float, length: float, width: float):
+        """Mark cells occupied by a static obstacle in the static occupancy grid.
+
+        Only obstacles are marked; agents and tasks are handled via FCL / explicit
+        distance checks during spawning, so they do not appear in the grid.
 
         Args:
             x, y, psi: Object pose
             length, width: Object dimensions
-            mark_full: Whether to mark in occupancy_grid_full
-            mark_static: Whether to mark in occupancy_grid_static
         """
         container = self.environment_container
 
-        # Compute object's corner points in world frame
-        # Assuming object center at (x, y) with orientation psi
         half_l, half_w = length / 2, width / 2
         corners_local = np.array([
-            [half_l, half_w],
+            [half_l,  half_w],
             [half_l, -half_w],
             [-half_l, -half_w],
-            [-half_l, half_w]
+            [-half_l,  half_w],
         ])
 
-        # Rotation matrix
         cos_psi, sin_psi = np.cos(psi), np.sin(psi)
         R = np.array([[cos_psi, -sin_psi], [sin_psi, cos_psi]])
-
-        # Transform to world frame
         corners_world = (R @ corners_local.T).T + np.array([x, y])
 
-        # Find bounding box in world coordinates
         x_min, y_min = corners_world.min(axis=0)
         x_max, y_max = corners_world.max(axis=0)
 
-        # Convert to grid coordinates
         grid_y_min, grid_x_min = self.world_to_grid(x_min, y_min)
         grid_y_max, grid_x_max = self.world_to_grid(x_max, y_max)
 
-        # Mark all cells in bounding box (conservative approach)
-        grid_shape = container.occupancy_grid_full.shape
+        grid_shape = container.occupancy_grid_static.shape
         for gy in range(max(0, grid_y_min), min(grid_shape[0], grid_y_max + 1)):
             for gx in range(max(0, grid_x_min), min(grid_shape[1], grid_x_max + 1)):
-                if mark_full:
-                    container.occupancy_grid_full[gy, gx] = True
-                if mark_static:
-                    container.occupancy_grid_static[gy, gx] = True
+                container.occupancy_grid_static[gy, gx] = True
 
     def footprint_cells(
         self, x: float, y: float, psi: float, length: float, width: float
@@ -356,7 +343,7 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
         the occupancy grid without modifying it.
         """
         container = self.environment_container
-        grid_shape = container.occupancy_grid_full.shape
+        grid_shape = container.occupancy_grid_static.shape
 
         half_l, half_w = length / 2, width / 2
         corners_local = np.array([
@@ -381,22 +368,18 @@ class FrodoGeneralEnvironment(FrodoEnvironment):
                 cells.append((gy, gx))
         return cells
 
-    def is_position_free(self, x: float, y: float, psi: float, length: float, width: float,
-                        check_grid: str = 'full') -> bool:
-        """
-        Check if a position is collision-free using the occupancy grid.
+    def is_position_free(self, x: float, y: float, psi: float, length: float, width: float) -> bool:
+        """Check if a position is free of static obstacles using the occupancy grid.
 
         Args:
             x, y, psi: Pose to check
             length, width: Object dimensions
-            check_grid: Which grid to check ('full' or 'static')
 
         Returns:
             True if position is free, False if occupied
         """
         container = self.environment_container
-        grid = (container.occupancy_grid_full if check_grid == 'full'
-                else container.occupancy_grid_static)
+        grid = container.occupancy_grid_static
 
         # Compute object's bounding box
         half_l, half_w = length / 2, width / 2

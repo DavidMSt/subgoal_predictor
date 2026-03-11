@@ -1,4 +1,4 @@
-name: my_scenario
+name: rl_5n_random_2x2
 limits:
   - [ -1 , 1 ]
   - [ -1 , 1 ]

@@ -28,8 +28,7 @@ class EnvironmentState:
     obstacle_conts: dict[str, ObstacleContainer] = field(default_factory=dict)
     agent_conts: dict[str, FRODOAgentContainer] = field(default_factory=dict)
     task_conts: dict[str, TaskContainer] = field(default_factory=dict)
-    occupancy_grid_full: np.ndarray | None = None  # obstacles + agents + tasks (for spawning)
-    occupancy_grid_static: np.ndarray | None = None  # obstacles only (for RL observations)
+    occupancy_grid_static: np.ndarray | None = None  # obstacles only (for RL observations + wall collision)
     entities_creation_frozen: bool = False  # locked after sim.start()
 
 #

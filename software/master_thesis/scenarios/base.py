@@ -119,7 +119,7 @@ class ScenarioConfig:
         if self.agent_spawn_region is not None and self.n_agents_random > 0:
             r = self.agent_spawn_region
             agent_cls = _resolve_agent_class(
-                self.agents[0].agent_class_name if self.agents else 'FRODOUniversalAgent'
+                self.agents[0].agent_class_name if self.agents else 'FRODOOfflineAgent'
             )
             sim.spawn_agents(
                 n=self.n_agents_random, agent_class=agent_cls, log_level=log_level,
