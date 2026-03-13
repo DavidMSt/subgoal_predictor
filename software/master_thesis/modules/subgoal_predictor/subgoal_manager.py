@@ -47,6 +47,10 @@ class SubgoalManager:
         # RL subgoal queue — set via set_subgoals() before execution
         self._subgoal_queue: list[np.ndarray] = []
         self._subgoal_idx: int = 0
+        # Wait-time support: ticks to hold at each subgoal before replanning
+        self._wait_ticks_per_subgoal: list[int] = []
+        self._current_wait_ticks: int = 0
+        self._subgoal_wait_started: bool = False
 
         # Count of OMPL planning failures in the current episode (used for RL reward shaping)
         self._failed_plans: int = 0
@@ -65,14 +69,22 @@ class SubgoalManager:
 
     # ── RL subgoal interface ─────────────────────────────────────────
 
-    def set_subgoals(self, subgoals: list[np.ndarray]):
+    def set_subgoals(self, subgoals: list[np.ndarray], wait_ticks: list[int] | None = None):
         """Load RL-predicted subgoal sequence.
 
         Each entry is a (3,) array [x, y, psi].  The manager will plan to
         each subgoal in order, then fall back to the final assigned task.
+
+        Args:
+            subgoals: List of (3,) arrays [x, y, psi].
+            wait_ticks: Number of sim ticks to hold at each subgoal before
+                replanning.  Defaults to [0] * len(subgoals).
         """
         self._subgoal_queue = list(subgoals)
         self._subgoal_idx = 0
+        self._wait_ticks_per_subgoal = list(wait_ticks) if wait_ticks else [0] * len(subgoals)
+        self._current_wait_ticks = 0
+        self._subgoal_wait_started = False
         self.logger.debug(f"SubgoalManager: {len(subgoals)} subgoals loaded")
 
     @property
@@ -132,8 +144,20 @@ class SubgoalManager:
             return
 
         if self.executor.is_goal_reached():
+            # Wait-time countdown: hold position, don't replan yet
+            if self._current_wait_ticks > 0:
+                self._current_wait_ticks -= 1
+                return
             if self._has_pending_subgoal:
+                # Initiate wait at this subgoal if not yet started
+                if not self._subgoal_wait_started:
+                    w = self._wait_ticks_per_subgoal[self._subgoal_idx]
+                    if w > 0:
+                        self._current_wait_ticks = w
+                        self._subgoal_wait_started = True
+                        return
                 self._subgoal_idx += 1
+                self._subgoal_wait_started = False
                 self.logger.debug(
                     f"SubgoalManager: subgoal reached, advancing to "
                     f"{self._subgoal_idx}/{len(self._subgoal_queue)}"
@@ -205,6 +229,9 @@ class SubgoalManager:
         self.start_planning_flag = None
         self._subgoal_queue = []
         self._subgoal_idx = 0
+        self._wait_ticks_per_subgoal = []
+        self._current_wait_ticks = 0
+        self._subgoal_wait_started = False
         self._failed_plans = 0
         self._skipped_subgoals = 0
         self._recovery_needed = False

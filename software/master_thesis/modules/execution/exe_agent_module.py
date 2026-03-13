@@ -121,7 +121,15 @@ class EXEAgentModule:
         config = phase.config
 
         assert isinstance(config, MPPhaseConfig)
-        
+
+        # Defensive guard: if index is out of bounds, force phase-end transition.
+        # This covers any edge-case where the index advanced past the last waypoint
+        # without _pending_end being set (e.g. due to a race in replan logic).
+        if state.index >= len(config.inputs):
+            if self.exe_cont.state.active_phase != 'idle':
+                self._pending_end = True
+            return np.zeros(2)
+
         # Initialize ticks if needed
         if state.ticks_left is None or state.ticks_left == 0:
             # durations are in seconds, convert to simulation ticks

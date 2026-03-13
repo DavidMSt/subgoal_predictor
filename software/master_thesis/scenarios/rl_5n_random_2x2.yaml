@@ -61,9 +61,24 @@ agent_spawn_region:
   y_max: 0.875
   n: 5
 
-task_spawn_region:
-  x_min: -0.875
-  x_max: 0.875
-  y_min: -0.875
-  y_max: -0.125
-  n: 5
+tasks:
+  - task_id: task_0
+    x: -0.7
+    y: -0.7
+    psi: 0
+  - task_id: task_1
+    x: -0.35
+    y: -0.7
+    psi: 0
+  - task_id: task_2
+    x: 0.0
+    y: -0.7
+    psi: 0
+  - task_id: task_3
+    x: 0.35
+    y: -0.7
+    psi: 0
+  - task_id: task_4
+    x: 0.7
+    y: -0.7
+    psi: 0

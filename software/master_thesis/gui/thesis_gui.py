@@ -129,6 +129,7 @@ class ThesisGUI:
         self.robots = {}
         self.obstacles = {}
         self.tasks = {}
+        self._last_scenario = None  # set by loadScenario(), read by run_subgoal_policy()
 
         self.joystick_manager = JoystickManager()
         self.joystick_manager.callbacks.new_joystick.register(self._newJoystick_callback)
@@ -379,6 +380,7 @@ class ThesisGUI:
     # ------------------------------------------------------------------------------------------------------------------
     def loadScenario(self, config: ScenarioConfig):
         """Load a :class:`ScenarioConfig` into the GUI (sim + Babylon objects)."""
+        self.reset()
         self.sim.environment.set_limits(limits=config.limits)
 
         for obs in config.obstacles:
@@ -444,6 +446,9 @@ class ThesisGUI:
                 self.logger.info(f'Task {task_id} spawned at ({task.container.x:.2f}, {task.container.y:.2f})')
 
         config.apply_assignments(self.sim)
+
+        # Store for run_subgoal_policy() to read gap_geometry etc.
+        self._last_scenario = config
 
         self.logger.info(
             f"Scenario '{config.name}' loaded: "
@@ -549,6 +554,124 @@ class ThesisGUI:
             if robot.joystick is joystick:
                 robot.joystick = None
                 robot._joystick_action = None
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def run_subgoal_policy(self, checkpoint_path: str | None = None) -> None:
+        """Load trained subgoal policy and inject subgoals for all agents.
+
+        Reads the checkpoint produced by train_subgoal.py, builds the free-workspace
+        grid from the current simulation environment, runs the policy for each agent,
+        and calls agent.sgm.set_subgoals() so that Start MP plans to the predicted
+        subgoal first and then to the assigned task.
+        """
+        import torch
+        from master_thesis.modules.subgoal_predictor.train_subgoal import (
+            subgoal_nn_base, N_WAIT_BINS, WAIT_TIMES, _SUBGOAL_DIR,
+        )
+
+        if checkpoint_path is None:
+            checkpoint_path = f'{_SUBGOAL_DIR}/checkpoints/subgoal_B.pt'
+
+        if not os.path.exists(checkpoint_path):
+            self.logger.warning(f"Subgoal checkpoint not found: {checkpoint_path}")
+            return
+
+        agents = list(self.sim.agents.values())
+        n_gui = len(agents)
+        if n_gui == 0:
+            self.logger.warning("No agents present — spawn agents first")
+            return
+
+        # --- Load checkpoint (includes training-time free_positions and n_agents) ---
+        ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+
+        free_positions = ckpt.get('free_positions')
+        n_ckpt         = ckpt.get('n_agents')
+
+        if free_positions is None or n_ckpt is None:
+            self.logger.warning(
+                "Checkpoint predates free_positions/n_agents fields. "
+                "Re-train to get a compatible checkpoint."
+            )
+            return
+
+        n_positions = len(free_positions)
+        n = n_ckpt  # use training-time n for policy architecture
+
+        if n_gui != n:
+            self.logger.warning(
+                f"GUI has {n_gui} agents but policy was trained with {n}. "
+                f"Spawning mismatch — subgoals will only be set for first {min(n_gui, n)} agents."
+            )
+
+        policy = subgoal_nn_base(n=n, n_positions=n_positions, n_wait_bins=N_WAIT_BINS)
+        policy.load_state_dict(ckpt['policy'])
+        policy.eval()
+        self.logger.info(f"Loaded subgoal policy from '{checkpoint_path}' (update {ckpt.get('update', '?')})")
+
+        # --- Build observations (use first n agents to match training-time architecture) ---
+        env_cont    = self.sim.environment.environment_container
+        agents_n    = agents[:n]  # clamp to training n
+        agent_conts = list(env_cont.agent_conts.values())[:n]
+
+        agent_states = np.array([[c.x, c.y, c.psi] for c in agent_conts], dtype=np.float32)  # (n, 3)
+        goal_states  = np.array([
+            [a.assigned_task.x, a.assigned_task.y] if a.assigned_task is not None else [0.0, 0.0]
+            for a in agents_n
+        ], dtype=np.float32)  # (n, 2)
+
+        # Neighbor arrays: (n, n-1, d)
+        neighbor_states = np.stack([np.delete(agent_states, i, axis=0) for i in range(n)])  # (n,n-1,3)
+        neighbor_goals  = np.stack([np.delete(goal_states,  i, axis=0) for i in range(n)])  # (n,n-1,2)
+
+        # Gap feature
+        scenario = self._last_scenario
+        gap = getattr(scenario, 'gap_geometry', None) if scenario is not None else None
+        dist_to_gap = np.zeros((n, 2), dtype=np.float32)
+        for i, c in enumerate(agent_conts):
+            if gap is not None:
+                y_wall = float(gap.get('y_wall', 0.0))
+                dy = c.y - y_wall
+                side = float(np.sign(dy))
+                if 'half_gap' in gap:
+                    closest_x = float(np.clip(c.x, -gap['half_gap'], gap['half_gap']))
+                    dist = float(np.sqrt((c.x - closest_x) ** 2 + dy ** 2))
+                elif 'gaps' in gap:
+                    min_dist = float('inf')
+                    for g in gap['gaps']:
+                        cx, hg = g['x_center'], g['half_gap']
+                        closest_x = float(np.clip(c.x, cx - hg, cx + hg))
+                        d = float(np.sqrt((c.x - closest_x) ** 2 + dy ** 2))
+                        min_dist = min(min_dist, d)
+                    dist = min_dist
+                else:
+                    dist = abs(dy)
+                dist_to_gap[i] = [dist, side]
+
+        # --- Run policy ---
+        with torch.no_grad():
+            pos_logits, wait_logits = policy(
+                torch.as_tensor(agent_states),
+                torch.as_tensor(neighbor_states.reshape(n, -1)),
+                torch.as_tensor(goal_states),
+                torch.as_tensor(neighbor_goals.reshape(n, -1)),
+                torch.as_tensor(dist_to_gap),
+            )
+            a_pos  = torch.argmax(pos_logits,  dim=-1).numpy()  # (n,) greedy
+            a_wait = torch.argmax(wait_logits, dim=-1).numpy()  # (n,) greedy
+
+        # --- Inject subgoals ---
+        for agent, pos_idx, wait_idx in zip(agents_n, a_pos, a_wait):
+            sx, sy     = free_positions[int(pos_idx)]
+            wait_ticks = int(WAIT_TIMES[int(wait_idx)] / self.sim.Ts)
+            agent.sgm.set_subgoals(
+                [np.array([float(sx), float(sy), 0.0])],
+                wait_ticks=[wait_ticks],
+            )
+            self.logger.info(
+                f"Agent {agent.agent_id}: subgoal ({sx:.2f}, {sy:.2f}), "
+                f"wait {WAIT_TIMES[int(wait_idx)]}s ({wait_ticks} ticks)"
+            )
 
     # ------------------------------------------------------------------------------------------------------------------
     def runPipeline(self):
@@ -863,6 +986,14 @@ class ThesisGUI:
         page1.addWidget(Button(text="Local TA", callback=Callback(
             function=self.sim.start_ta,
             inputs={'strategy': StrategyType.GREEDY_NEAREST},
+            discard_inputs=True,
+        )), height=2, width=4)
+
+        # ── Subgoal RL ─────────────────────────────────────────────────
+
+        page1.addWidget(Button(text="Subgoal RL", callback=Callback(
+            function=self.run_subgoal_policy,
+            inputs={},
             discard_inputs=True,
         )), height=2, width=4)
 

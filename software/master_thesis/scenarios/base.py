@@ -88,6 +88,7 @@ class ScenarioConfig:
     task_spawn_region: SpawnRegion | None = None   # if set, spawn n_tasks_random tasks randomly in this region
     n_agents_random: int = 0
     n_tasks_random: int = 0
+    gap_geometry: dict | None = None  # {'half_gap': 0.4, 'x_center': 0.0, 'y_wall': 0.0}
 
     def build(self, sim, log_level: str = 'INFO') -> None:
         """Apply this scenario to *sim* (creates obstacles, agents, tasks).
