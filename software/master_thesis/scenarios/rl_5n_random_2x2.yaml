@@ -61,6 +61,14 @@ agent_spawn_region:
   y_max: 0.875
   n: 5
 
+gap_geometry:
+  y_wall: 0.0
+  gaps:
+    - x_center: -0.5
+      half_gap: 0.125
+    - x_center: 0.5
+      half_gap: 0.125
+
 tasks:
   - task_id: task_0
     x: -0.7

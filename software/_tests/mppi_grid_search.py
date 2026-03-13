@@ -11,7 +11,10 @@ import sys
 
 from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
 from master_thesis.universal.reactive_agent import FRODOReactiveAgent
-from master_thesis.scenarios.maze_scenarios import maze_4x4_config
+from pathlib import Path
+from master_thesis.scenarios.testbed_importer import load_scenario_yaml
+
+_MAZE_4X4_YAML = Path(__file__).parent.parent / 'master_thesis' / 'scenarios' / 'maze_4x4.yaml'
 from master_thesis.modules.local_control.mppi_controller import MPPIConfig
 from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyType
 
@@ -37,7 +40,7 @@ def run_trial(
     sim.init()
 
     # Load maze obstacles
-    cfg = maze_4x4_config()
+    cfg = load_scenario_yaml(_MAZE_4X4_YAML.read_text())
     for obs in cfg.obstacles:
         sim.new_obstacle(obs.obstacle_id, x=obs.x, y=obs.y, psi=obs.psi,
                          length=obs.length, width=obs.width, height=obs.height)

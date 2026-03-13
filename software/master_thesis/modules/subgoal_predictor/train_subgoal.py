@@ -8,9 +8,12 @@ import torch.nn as nn
 
 from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
 from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer, FRODO_Agent_Config
+from pathlib import Path
+
 from master_thesis.scenarios.base import ScenarioConfig, AgentSpec, TaskSpec
 from master_thesis.scenarios.testbed_importer import load_scenario_yaml
-from master_thesis.scenarios.door_scenario import two_gap_rl_scenario_config
+
+_SCENARIOS_DIR = Path(__file__).parent.parent.parent / 'scenarios'
 
 N_WAIT_BINS = 6
 WAIT_TIMES  = [0, 3, 6, 9, 12, 15]  # seconds per bin (max 15 s)
@@ -50,32 +53,6 @@ class subgoal_nn_base(nn.Module):
         return self.pos_head(h), self.wait_head(h)
 
 
-def maze_2x2_3agents_config(
-    wall_thickness: float = 0.1,
-    agent_class: str = "FRODOOfflineAgent",
-) -> ScenarioConfig:
-    """2×2 maze with 3 agents (top) and 3 tasks (bottom).
-
-    Reuses the 2×2 obstacle layout; agents and tasks are spread across
-    the three accessible columns so they must navigate around walls.
-    """
-    base = maze_2x2_config(wall_thickness=wall_thickness, agent_class=agent_class)
-    return ScenarioConfig(
-        name="maze_2x2_3agents",
-        limits=base.limits,
-        obstacles=base.obstacles,
-        agents=[
-            AgentSpec("frodo1", agent_class, start_config=(-0.65, 0.75, 0.0)),
-            AgentSpec("frodo2", agent_class, start_config=( 0.0,  0.75, 0.0)),
-            AgentSpec("frodo3", agent_class, start_config=( 0.65, 0.75, 0.0)),
-        ],
-        tasks=[
-            TaskSpec("goal1", x=-0.65, y=-0.75),
-            TaskSpec("goal2", x= 0.3,  y=-0.75),
-            TaskSpec("goal3", x= 0.65, y=-0.75),
-        ],
-    )
-
 
 
 class FrodoGymWrapper(gym.Env):
@@ -88,8 +65,9 @@ class FrodoGymWrapper(gym.Env):
     Parameters
     ----------
     scenario:
-        A :class:`ScenarioConfig` describing obstacles, agents, and tasks.
-        Defaults to the constrained 2×2 maze with 3 agents.
+        Name of a YAML file in ``scenarios/`` without the extension,
+        e.g. ``"rl_5n_random_2x2"``.  The agent count is read from
+        ``agent_spawn_region.n`` in that file.
     max_steps:
         Maximum simulation steps before truncation.
     """
@@ -98,8 +76,7 @@ class FrodoGymWrapper(gym.Env):
 
     def __init__(
         self,
-        scenario: ScenarioConfig | None = None,
-        n_agents: int = 3,
+        scenario: str,
         n_subgoals: int = 3,
         max_steps: int = 200,
         grid_resolution: float = 0.05,
@@ -108,9 +85,8 @@ class FrodoGymWrapper(gym.Env):
     ) -> None:
         super().__init__()
 
-        _yaml_path = f'{_SUBGOAL_DIR}/../../scenarios/maze_2x2_3agents.yaml'
-        self.scenario        = scenario if scenario is not None else load_scenario_yaml(open(_yaml_path).read())
-        self.n_agents        = n_agents
+        self.scenario        = load_scenario_yaml((_SCENARIOS_DIR / f'{scenario}.yaml').read_text())
+        self.n_agents        = self.scenario.n_agents_random
         self.n_subgoals      = n_subgoals
         self.max_steps       = max_steps
         self.grid_stride     = grid_stride
@@ -406,29 +382,29 @@ class FrodoGymWrapper(gym.Env):
         """
         n_failed = sum(agent.sgm._failed_plans for agent in self.sim.agents.values())
 
+        # if we completed tasks (all robots reached their assigned goal)
         if terminated:
             makespan_s = makespan * self.sim.Ts
             indiv_s    = [t * self.sim.Ts for t in individual_times]
             return -makespan_s - alpha * sum(indiv_s) - gamma * n_failed
 
-        # --- Truncated: gap-aware distance + crossing/subgoal/diversity bonuses ---
-        gap    = getattr(self.scenario, 'gap_geometry', None)
-        y_wall = float(gap.get('y_wall', 0.0)) if gap else 0.0
-        gaps   = gap.get('gaps', []) if gap else []
+        # Truncated: gap-aware distance + crossing/subgoal/diversity bonuses ---
+        gap_geometry = self.scenario.gap_geometry
+        y_wall       = float(gap_geometry['y_wall'])
+        gaps         = gap_geometry['gaps']
 
         n_crossed          = 0
         n_reached_subgoals = 0
         total_dist         = 0.0
         crossed_xs         = []
         for agent in self.sim.agents.values():
-            # Subgoals actually reached: _subgoal_idx is advanced both by reaching
-            # and by skipping; subtract skips to get genuine navigations.
+            # Subgoals we reached, low-bound at zero
             n_reached_subgoals += max(0, agent.sgm._subgoal_idx - agent.sgm._skipped_subgoals)
 
             ax, ay = agent.container.x, agent.container.y
 
             if agent.assigned_task is None:
-                # Task completed — agent definitely crossed the wall
+                # Task completed — agent crossed the wall (by moving through the passage)
                 n_crossed += 1
                 crossed_xs.append(ax)
                 continue
@@ -465,7 +441,7 @@ class FrodoGymWrapper(gym.Env):
         ...
 
 
-_SUBGOAL_DIR = '/Users/davidstoll/Documents/TU/bilbolab_thesis/software/master_thesis/modules/subgoal_predictor'
+_SUBGOAL_DIR = 'master_thesis/modules/subgoal_predictor'
 
 def train(n_updates, batch_size, max_steps: int = 200,
           log_dir: str = f'{_SUBGOAL_DIR}/runs/subgoal_B',
@@ -473,9 +449,7 @@ def train(n_updates, batch_size, max_steps: int = 200,
           save_every: int = 50):
     from torch.utils.tensorboard import SummaryWriter
 
-    N_AGENTS  = 5
-    scenario  = two_gap_rl_scenario_config(n_agents=N_AGENTS)
-    env = FrodoGymWrapper(scenario=scenario, n_agents=N_AGENTS, max_steps=max_steps,
+    env = FrodoGymWrapper('rl_5n_random_2x2', max_steps=max_steps,
                           grid_stride=0.15, agent_log_level='ERROR')
 
     # warm-start reset to build _free_positions and get n_positions
@@ -514,27 +488,32 @@ def train(n_updates, batch_size, max_steps: int = 200,
             for episode in tqdm(range(batch_size), desc='Episodes', leave=False):
                 obs, _ = env.reset()
 
-                obs_t = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in obs.items()}
-
                 pos_logits, wait_logits = policy(
-                    obs_t["agent_states"],               # (N, 3)
-                    obs_t["neighbor_states"].flatten(-2), # (N, (N-1)*3)
-                    obs_t["goal_states"],                 # (N, 2)
-                    obs_t["neighbor_goals"].flatten(-2),  # (N, (N-1)*2)
-                    obs_t["dist_to_gap"],                 # (N, 2)
+                    torch.as_tensor(obs["agent_states"],    dtype=torch.float32),
+                    torch.as_tensor(obs["neighbor_states"], dtype=torch.float32).flatten(-2),
+                    torch.as_tensor(obs["goal_states"],     dtype=torch.float32),
+                    torch.as_tensor(obs["neighbor_goals"],  dtype=torch.float32).flatten(-2),
+                    torch.as_tensor(obs["dist_to_gap"],     dtype=torch.float32),
                 )  # → (N, n_positions), (N, N_WAIT_BINS)
 
+                # create distributions to sample from for exploration
                 dist_pos  = torch.distributions.Categorical(logits=pos_logits)
                 dist_wait = torch.distributions.Categorical(logits=wait_logits)
-                a_pos  = dist_pos.sample()   # (N,)
-                a_wait = dist_wait.sample()  # (N,)
-                log_prob = dist_pos.log_prob(a_pos).sum() + dist_wait.log_prob(a_wait).sum()
+
+                # sampling draws one index according to pmf
+                sample_pos  = dist_pos.sample()   # (N,)
+                sample_wait = dist_wait.sample()  # (N,)
+
+                # how likely was drawing this sample pair from the distributions, log enbales us to simply add both probs and keeps us numerically stable preventing underflow
+                log_prob = dist_pos.log_prob(sample_pos).sum() + dist_wait.log_prob(sample_wait).sum()
                 entropy  = dist_pos.entropy().sum() + dist_wait.entropy().sum()
 
+                # create action array
                 action = np.empty(2 * env.n_agents, dtype=np.int64)
-                action[0::2] = a_pos.numpy()
-                action[1::2] = a_wait.numpy()
+                action[0::2] = sample_pos.numpy()
+                action[1::2] = sample_wait.numpy()
 
+                # Use action in current episode - bandit setting: Single action per episode
                 _, reward, terminated, truncated, info = env.step(action)
 
                 raw_rewards.append(reward)
