@@ -1,7 +1,7 @@
 # Master Thesis — Consensus Through Learning
 ### Graph Neural Networks for Task Allocation under Motion Constraints
 
-This directory contains all thesis-specific code built on top of the upstream [BilboLab](../README.md) framework. The research investigates how learned policies — graph neural networks and reinforcement learning — can replace classical task assignment algorithms in multi-agent robot systems, while respecting real motion constraints such as narrow passages and inter-agent collisions.
+This directory contains all thesis-specific code built on top of the upstream [BilboLab](../README.md) framework. The research investigates how learned policies, specifically graph neural networks and reinforcement learning can replace classical task assignment algorithms in multi-agent robot systems. While respecting real motion constraints such as narrow passages and inter-agent collisions.
 
 ---
 
@@ -42,8 +42,8 @@ master_thesis/
 
 Two simulation tiers build on each other:
 
-- **`FRODO_general_Simulation`** — basic simulation with agents, tasks, and obstacles. Use this for manual control, scripted tests, and collision experiments.
-- **`FRODO_Universal_Simulation`** — extends the general simulation with the full TA → MP → EXE pipeline. Use this for autonomous multi-agent coordination and RL training.
+- **`FRODO_general_Simulation`**: basic simulation with agents, tasks, and obstacles. Use this for manual control, scripted tests, and collision experiments.
+- **`FRODO_Universal_Simulation`**: extends the general simulation with the full TA → MP → EXE pipeline. Use this for autonomous multi-agent coordination and RL training.
 
 Each simulation step follows a fixed scheduling order: **COMMUNICATION → LOGIC → INPUT → DYNAMICS → OUTPUT**.
 
@@ -51,8 +51,8 @@ Each simulation step follows a fixed scheduling order: **COMMUNICATION → LOGIC
 
 Every domain object (agent, task, obstacle, environment) is represented as a `BaseContainer` with two layers:
 
-- **Config** (frozen dataclass) — immutable parameters set at creation (e.g. robot dimensions, color).
-- **State** (mutable dataclass) — runtime values that change during simulation (e.g. x, y, psi, velocity).
+- **Config** (frozen dataclass): Immutable parameters set at creation (e.g. robot dimensions, color).
+- **State** (mutable dataclass): Runtime values that change during simulation (e.g. x, y, psi, velocity).
 
 Attribute access on the container transparently resolves to state first, then config. Containers are the single source of truth — never bypass them to read engine state directly.
 
