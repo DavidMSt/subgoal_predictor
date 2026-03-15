@@ -1,3 +1,4 @@
+import collections
 import os
 import numpy as np
 import gymnasium as gym
@@ -15,13 +16,12 @@ from master_thesis.scenarios.testbed_importer import load_scenario_yaml
 
 _SCENARIOS_DIR = Path(__file__).parent.parent.parent / 'scenarios'
 
-N_WAIT_BINS = 6
 WAIT_TIMES  = [0, 3, 6, 9, 12, 15]  # seconds per bin (max 15 s)
 
 
 class subgoal_nn_base(nn.Module):
     def __init__(self, n=3, agent_dim=3, task_dim=2, out_dim=64,
-                 n_positions=100, n_wait_bins=N_WAIT_BINS) -> None:
+                 n_positions=100, n_wait_bins=len(WAIT_TIMES)) -> None:
         super().__init__()
 
         self.enc_agent          = nn.Linear(agent_dim,            out_dim)
@@ -156,7 +156,7 @@ class FrodoGymWrapper(gym.Env):
         # Flat: [pos_0, wait_0, pos_1, wait_1, ..., pos_{N-1}, wait_{N-1}]
         # N_positions is determined after first reset(); placeholder set here.
         self.action_space = spaces.MultiDiscrete(
-            np.array([[1, N_WAIT_BINS]] * self.n_agents).flatten()
+            np.array([[1, len(WAIT_TIMES)]] * self.n_agents).flatten()
         )
 
     # ------------------------------------------------------------------
@@ -175,7 +175,7 @@ class FrodoGymWrapper(gym.Env):
     # ------------------------------------------------------------------
     def step(self, action):
 
-        self._assign_subgoals(action)
+        predicted_positions = self._assign_subgoals(action)
         self.sim.start_mp()
         self.sim.start_exe()
 
@@ -206,10 +206,9 @@ class FrodoGymWrapper(gym.Env):
         makespan  = step + 1
         truncated = not terminated
         obs       = self._get_obs()
-        reward    = self._compute_reward(terminated, makespan, individual_times)
+        reward    = self._compute_reward(terminated, makespan, individual_times, predicted_positions)
 
-        _gap    = getattr(self.scenario, 'gap_geometry', None)
-        _y_wall = float(_gap.get('y_wall', 0.0)) if _gap else 0.0
+        _y_wall = float(self.scenario.gap_geometry['y_wall'])
         info = {
             'terminated':          terminated,
             'makespan':            makespan,
@@ -248,53 +247,45 @@ class FrodoGymWrapper(gym.Env):
                 y += stride
             x += stride
 
+        # Restrict subgoals to the agents' starting side of the wall —
+        # subgoals exist to coordinate gap approach, not to route after crossing.
+        y_wall = float(self.scenario.gap_geometry['y_wall'])
+        free   = [p for p in free if p[1] > y_wall]
+
         self._free_positions = np.array(free, dtype=np.float32)
         self.action_space = spaces.MultiDiscrete(
-            np.array([[len(self._free_positions), N_WAIT_BINS]] * self.n_agents).flatten()
+            np.array([[len(self._free_positions), len(WAIT_TIMES)]] * self.n_agents).flatten()
         )
 
     # ------------------------------------------------------------------
     def _compute_dist_to_gap(self, agent_x: float, agent_y: float) -> np.ndarray:
-        """[dist_to_nearest_gap, side] — handles single-gap and multi-gap geometry."""
-        gap = getattr(self.scenario, 'gap_geometry', None)
-        if gap is None:
-            return np.array([0.0, 0.0], dtype=np.float32)
-
-        y_wall = float(gap.get('y_wall', 0.0))
+        """[dist_to_nearest_gap, side] — distance to nearest gap entrance, sign of which side."""
+        gap_geometry = self.scenario.gap_geometry
+        y_wall = float(gap_geometry['y_wall'])
         side   = float(np.sign(agent_y - y_wall))
         dy     = agent_y - y_wall
 
-        if 'half_gap' in gap:
-            # Single centered gap (legacy)
-            half_gap  = gap['half_gap']
-            closest_x = float(np.clip(agent_x, -half_gap, half_gap))
-            dist      = float(np.sqrt((agent_x - closest_x) ** 2 + dy ** 2))
-        elif 'gaps' in gap:
-            # Multiple gaps: distance to nearest gap entrance
-            min_dist = float('inf')
-            for g in gap['gaps']:
-                cx = g['x_center']
-                hg = g['half_gap']
-                closest_x = float(np.clip(agent_x, cx - hg, cx + hg))
-                d = float(np.sqrt((agent_x - closest_x) ** 2 + dy ** 2))
-                min_dist = min(min_dist, d)
-            dist = min_dist
-        else:
-            dist = abs(dy)
+        min_dist = float('inf')
+        for g in gap_geometry['gaps']:
+            closest_x = float(np.clip(agent_x, g['x_center'] - g['half_gap'], g['x_center'] + g['half_gap']))
+            min_dist  = min(min_dist, float(np.sqrt((agent_x - closest_x) ** 2 + dy ** 2)))
 
-        return np.array([dist, side], dtype=np.float32)
+        return np.array([min_dist, side], dtype=np.float32)
 
     # ------------------------------------------------------------------
-    def _assign_subgoals(self, action: np.ndarray) -> None:
-        """Decode discrete (pos_idx, wait_idx) per agent and inject subgoals."""
+    def _assign_subgoals(self, action: np.ndarray) -> list[tuple[float, float]]:
+        """Decode discrete (pos_idx, wait_idx) per agent, inject subgoals, return positions."""
         decoded = action.reshape(self.n_agents, 2)
+        positions = []
         for agent, (a_pos, a_wait) in zip(self.sim.agents.values(), decoded):
-            sx, sy    = self._free_positions[int(a_pos)]
+            sx, sy     = self._free_positions[int(a_pos)]
             wait_ticks = int(WAIT_TIMES[int(a_wait)] / self.sim.Ts)
             agent.sgm.set_subgoals(
                 [np.array([float(sx), float(sy), 0.0])],
                 wait_ticks=[wait_ticks],
             )
+            positions.append((float(sx), float(sy)))
+        return positions
 
     # ------------------------------------------------------------------
     def _get_obs(self) -> dict:
@@ -351,12 +342,14 @@ class FrodoGymWrapper(gym.Env):
         terminated: bool,
         makespan: int,
         individual_times: list[int | None],
+        predicted_positions: list[tuple[float, float]],
         alpha: float = 0.3,
         beta: float = 1.0,
         gamma: float = 10.0,
         crossing_bonus: float = 1.5,
         subgoal_bonus: float = 0.5,
-        gap_split_bonus: float = 2.0,
+        diversity_bonus: float = 0.2,
+        diversity_sigma: float = 0.2,
     ) -> float:
         """Compute reward signal.
 
@@ -368,17 +361,18 @@ class FrodoGymWrapper(gym.Env):
         incur an extra horizontal-misalignment penalty, incentivising gap
         alignment over mere proximity.  A per-agent crossing bonus rewards
         actually passing through the wall; a per-agent subgoal bonus rewards
-        navigating to the predicted subgoal; and a gap-diversity bonus rewards
-        spreading agents across distinct gaps rather than piling into one.
+        navigating to the predicted subgoal; and a Gaussian pairwise repulsion
+        rewards spreading predicted subgoal positions across the workspace.
 
         Parameters
         ----------
-        alpha:           weight of individual times relative to makespan (terminated)
-        beta:            scale of distance penalty (truncated)
-        gamma:           penalty per failed OMPL plan
-        crossing_bonus:  per-agent reward for crossing the dividing wall (truncated)
-        subgoal_bonus:   per-agent reward for reaching the predicted subgoal (truncated)
-        gap_split_bonus: per-distinct-gap reward for using multiple gaps (truncated)
+        alpha:            weight of individual times relative to makespan (terminated)
+        beta:             scale of distance penalty (truncated)
+        gamma:            penalty per failed OMPL plan
+        crossing_bonus:   per-agent reward for crossing the dividing wall (truncated)
+        subgoal_bonus:    per-agent reward for reaching the predicted subgoal (truncated)
+        diversity_bonus:  scale of pairwise Gaussian repulsion between predicted subgoals
+        diversity_sigma:  bandwidth of the Gaussian kernel in metres
         """
         n_failed = sum(agent.sgm._failed_plans for agent in self.sim.agents.values())
 
@@ -419,19 +413,21 @@ class FrodoGymWrapper(gym.Env):
                 crossed_xs.append(ax)
             total_dist += dist
 
-        # Gap-diversity bonus: count how many distinct gaps the crossed agents used
-        n_gaps_used = 0
-        if gaps and crossed_xs:
-            used = {min(range(len(gaps)), key=lambda j: abs(x - gaps[j]['x_center']))
-                    for x in crossed_xs}
-            n_gaps_used = len(used)
+        # Gaussian pairwise repulsion: penalise pairs of predicted subgoals that are close
+        repulsion = sum(
+            float(np.exp(-np.hypot(predicted_positions[i][0] - predicted_positions[j][0],
+                                   predicted_positions[i][1] - predicted_positions[j][1]) ** 2
+                         / (2 * diversity_sigma ** 2)))
+            for i in range(len(predicted_positions))
+            for j in range(i + 1, len(predicted_positions))
+        )
 
         return (
-            - beta            * total_dist
-            + crossing_bonus  * n_crossed
-            + subgoal_bonus   * n_reached_subgoals
-            + gap_split_bonus * n_gaps_used
-            - gamma           * n_failed
+            - beta           * total_dist
+            + crossing_bonus * n_crossed
+            + subgoal_bonus  * n_reached_subgoals
+            - diversity_bonus * repulsion
+            - gamma          * n_failed
         )
 
     def render(self):
@@ -443,43 +439,57 @@ class FrodoGymWrapper(gym.Env):
 
 _SUBGOAL_DIR = 'master_thesis/modules/subgoal_predictor'
 
-def train(n_updates, batch_size, max_steps: int = 200,
+
+def _model_score(frac_terminated: float, mean_n_crossed: float) -> float:
+    """Higher is better — termination dominates, crossing breaks ties."""
+    return frac_terminated * 10.0 + mean_n_crossed
+
+def train(n_updates, batch_size, max_steps: int = 600,
           log_dir: str = f'{_SUBGOAL_DIR}/runs/subgoal_B',
-          checkpoint_path: str | None = f'{_SUBGOAL_DIR}/checkpoints/subgoal_B.pt',
-          save_every: int = 50):
+          saving_path: str,
+          initial_weights: str | None = None,
+          save_every: int = 50,
+          n_subgoals: int = 3):
+    from datetime import datetime
     from torch.utils.tensorboard import SummaryWriter
 
     env = FrodoGymWrapper('rl_5n_random_2x2', max_steps=max_steps,
-                          grid_stride=0.15, agent_log_level='ERROR')
+                          grid_stride=0.15, agent_log_level='ERROR',
+                          n_subgoals=n_subgoals)
 
     # warm-start reset to build _free_positions and get n_positions
     env.reset()
     n_positions = int(env.action_space.nvec[0])
 
     # Create policy instance
-    policy = subgoal_nn_base(n=env.n_agents, n_positions=n_positions, n_wait_bins=N_WAIT_BINS)
-    optimizer = torch.optim.Adam(policy.parameters())
+    policy = subgoal_nn_base(n=env.n_agents, n_positions=n_positions, n_wait_bins=len(WAIT_TIMES))
+    optimizer = torch.optim.Adam(policy.parameters(), lr=3e-4)
 
-    # Resume from checkpoint if provided
-    start_update = 0
-    if checkpoint_path and os.path.exists(checkpoint_path):
-        ckpt = torch.load(checkpoint_path, weights_only=False)
+    # Optionally warm-start from existing weights (fresh optimizer, update counter resets)
+    if initial_weights and os.path.exists(initial_weights):
+        ckpt = torch.load(initial_weights, weights_only=False)
         policy.load_state_dict(ckpt['policy'])
-        optimizer.load_state_dict(ckpt['optimizer'])
-        start_update = ckpt['update'] + 1
-        print(f"Resumed from '{checkpoint_path}' at update {start_update}")
+        print(f"Loaded initial weights from '{initial_weights}'")
 
-    # TensorBoard — append to existing run when resuming
+    # Each run gets its own timestamp — shared by TensorBoard dir and checkpoint filename
+    run_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+    log_dir = os.path.join(log_dir, run_ts)
+    base, ext = os.path.splitext(saving_path)
+    saving_path = f'{base}_{run_ts}{ext}'
+    os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
 
-    print(f"Training: updates {start_update}–{start_update + n_updates - 1} * {batch_size} episodes"
+    print(f"Training: {n_updates} updates * {batch_size} episodes"
           f" | n_agents={env.n_agents} | n_positions={n_positions} | logdir={log_dir}")
 
-    update_pbar = tqdm(range(start_update, start_update + n_updates), desc='Updates')
+    best_score    = float('-inf')
+    recent_crossed = collections.deque(maxlen=5)
+    recent_frac    = collections.deque(maxlen=5)
+    update_pbar = tqdm(range(n_updates), desc='Updates')
 
     try:
         for update in update_pbar:
-            ENTROPY_COEFF = 0.01
+            ENTROPY_COEFF = 0.05 - (0.05 - 0.01) * (update / (n_updates - 1))
 
             raw_rewards, log_probs, entropies = [], [], []
             ep_terminated, ep_makespans, ep_failed, ep_skipped = [], [], [], []
@@ -569,32 +579,48 @@ def train(n_updates, batch_size, max_steps: int = 200,
                 'entropy': f'{mean_entropy_val:.2f}',
             })
 
-            if checkpoint_path and (update + 1) % save_every == 0:
-                os.makedirs(os.path.dirname(checkpoint_path) or '.', exist_ok=True)
+            recent_crossed.append(mean_crossed)
+            recent_frac.append(frac_done)
+            smooth_score = _model_score(np.mean(recent_frac), np.mean(recent_crossed))
+            if smooth_score > best_score:
+                best_score = smooth_score
+                os.makedirs(os.path.dirname(saving_path) or '.', exist_ok=True)
                 torch.save({
                     'update':         update,
                     'policy':         policy.state_dict(),
                     'optimizer':      optimizer.state_dict(),
                     'free_positions': env._free_positions,
                     'n_agents':       env.n_agents,
-                }, checkpoint_path)
+                    'log_dir':        log_dir,
+                }, saving_path)
+                tqdm.write(f"  ✓ saved (update {update}, score {smooth_score:+.2f}, crossed {np.mean(recent_crossed):.2f})")
 
     except KeyboardInterrupt:
         tqdm.write("Interrupted — saving checkpoint...")
-        if checkpoint_path:
-            os.makedirs(os.path.dirname(checkpoint_path) or '.', exist_ok=True)
-            torch.save({
-                'update':         update,
-                'policy':         policy.state_dict(),
-                'optimizer':      optimizer.state_dict(),
-                'free_positions': env._free_positions,
-                'n_agents':       env.n_agents,
-            }, checkpoint_path)
-            tqdm.write(f"Saved to '{checkpoint_path}' at update {update}")
+        os.makedirs(os.path.dirname(saving_path) or '.', exist_ok=True)
+        torch.save({
+            'update':         update,
+            'policy':         policy.state_dict(),
+            'optimizer':      optimizer.state_dict(),
+            'free_positions': env._free_positions,
+            'n_agents':       env.n_agents,
+        }, saving_path)
+        tqdm.write(f"Saved to '{saving_path}' at update {update}")
 
     writer.close()
 
 if __name__ == "__main__":
-    train(n_updates=500, batch_size=32,
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--loadw',      type=str, default=None, help='path to weights file to warm-start from')
+    parser.add_argument('--save',       type=str, required=True, help='path to save checkpoints (timestamp appended automatically)')
+    parser.add_argument('--updates',    type=int, default=500)
+    parser.add_argument('--batch',      type=int, default=64)
+    parser.add_argument('--n_subgoals', type=int, default=3, help='number of subgoal positions predicted per agent')
+    args = parser.parse_args()
+
+    train(n_updates=args.updates, batch_size=args.batch,
           log_dir=f'{_SUBGOAL_DIR}/runs/subgoal_B',
-          checkpoint_path=f'{_SUBGOAL_DIR}/checkpoints/subgoal_B.pt')
+          saving_path=args.save,
+          initial_weights=args.loadw,
+          n_subgoals=args.n_subgoals)

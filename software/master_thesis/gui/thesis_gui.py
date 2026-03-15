@@ -566,11 +566,12 @@ class ThesisGUI:
         """
         import torch
         from master_thesis.modules.subgoal_predictor.train_subgoal import (
-            subgoal_nn_base, N_WAIT_BINS, WAIT_TIMES, _SUBGOAL_DIR,
+            subgoal_nn_base, WAIT_TIMES, _SUBGOAL_DIR,
         )
 
         if checkpoint_path is None:
-            checkpoint_path = f'{_SUBGOAL_DIR}/checkpoints/subgoal_B.pt'
+            checkpoint_path = f'{_SUBGOAL_DIR}/checkpoints/subgoal_B_20260314_144414.pt'
+            
 
         if not os.path.exists(checkpoint_path):
             self.logger.warning(f"Subgoal checkpoint not found: {checkpoint_path}")
@@ -604,7 +605,7 @@ class ThesisGUI:
                 f"Spawning mismatch — subgoals will only be set for first {min(n_gui, n)} agents."
             )
 
-        policy = subgoal_nn_base(n=n, n_positions=n_positions, n_wait_bins=N_WAIT_BINS)
+        policy = subgoal_nn_base(n=n, n_positions=n_positions, n_wait_bins=len(WAIT_TIMES))
         policy.load_state_dict(ckpt['policy'])
         policy.eval()
         self.logger.info(f"Loaded subgoal policy from '{checkpoint_path}' (update {ckpt.get('update', '?')})")
