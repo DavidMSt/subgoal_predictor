@@ -77,7 +77,7 @@ class FrodoGymWrapper(gym.Env):
     def __init__(
         self,
         scenario: str,
-        n_subgoals: int = 3,
+        n_subgoals: int = 1,
         max_steps: int = 200,
         grid_resolution: float = 0.05,
         grid_stride: float = 0.5,
@@ -156,7 +156,8 @@ class FrodoGymWrapper(gym.Env):
         # Flat: [pos_0, wait_0, pos_1, wait_1, ..., pos_{N-1}, wait_{N-1}]
         # N_positions is determined after first reset(); placeholder set here.
         self.action_space = spaces.MultiDiscrete(
-            np.array([[1, len(WAIT_TIMES)]] * self.n_agents).flatten()
+            np.array([[1, len(WAIT_TIMES)]] * (self.n_agents * self.n_subgoals)).flatten()
+            if self.n_subgoals > 0 else np.array([1])
         )
 
     # ------------------------------------------------------------------
@@ -175,7 +176,7 @@ class FrodoGymWrapper(gym.Env):
     # ------------------------------------------------------------------
     def step(self, action):
 
-        predicted_positions = self._assign_subgoals(action)
+        predicted_positions = self._assign_subgoals(action) if self.n_subgoals > 0 else []
         self.sim.start_mp()
         self.sim.start_exe()
 
@@ -254,7 +255,8 @@ class FrodoGymWrapper(gym.Env):
 
         self._free_positions = np.array(free, dtype=np.float32)
         self.action_space = spaces.MultiDiscrete(
-            np.array([[len(self._free_positions), len(WAIT_TIMES)]] * self.n_agents).flatten()
+            np.array([[len(self._free_positions), len(WAIT_TIMES)]] * (self.n_agents * self.n_subgoals)).flatten()
+            if self.n_subgoals > 0 else np.array([1])
         )
 
     # ------------------------------------------------------------------
@@ -274,17 +276,17 @@ class FrodoGymWrapper(gym.Env):
 
     # ------------------------------------------------------------------
     def _assign_subgoals(self, action: np.ndarray) -> list[tuple[float, float]]:
-        """Decode discrete (pos_idx, wait_idx) per agent, inject subgoals, return positions."""
-        decoded = action.reshape(self.n_agents, 2)
+        """Decode discrete (pos_idx, wait_idx) per agent×subgoal, inject subgoals, return positions."""
+        decoded = action.reshape(self.n_agents, self.n_subgoals, 2)
         positions = []
-        for agent, (a_pos, a_wait) in zip(self.sim.agents.values(), decoded):
-            sx, sy     = self._free_positions[int(a_pos)]
-            wait_ticks = int(WAIT_TIMES[int(a_wait)] / self.sim.Ts)
-            agent.sgm.set_subgoals(
-                [np.array([float(sx), float(sy), 0.0])],
-                wait_ticks=[wait_ticks],
-            )
-            positions.append((float(sx), float(sy)))
+        for agent, agent_sgs in zip(self.sim.agents.values(), decoded):
+            subgoal_coords, wait_ticks = [], []
+            for a_pos, a_wait in agent_sgs:
+                sx, sy = self._free_positions[int(a_pos)]
+                subgoal_coords.append(np.array([float(sx), float(sy), 0.0]))
+                wait_ticks.append(int(WAIT_TIMES[int(a_wait)] / self.sim.Ts))
+                positions.append((float(sx), float(sy)))
+            agent.sgm.set_subgoals(subgoal_coords, wait_ticks=wait_ticks)
         return positions
 
     # ------------------------------------------------------------------
@@ -440,16 +442,26 @@ class FrodoGymWrapper(gym.Env):
 _SUBGOAL_DIR = 'master_thesis/modules/subgoal_predictor'
 
 
+def latest_subgoal_checkpoint(checkpoints_dir: str | None = None) -> str | None:
+    """Return the path to the most recently saved checkpoint, or None if none exist."""
+    import glob
+    directory = checkpoints_dir or f'{_SUBGOAL_DIR}/checkpoints'
+    files = sorted(glob.glob(f'{directory}/*.pt'))
+    return files[-1] if files else None
+
+
 def _model_score(frac_terminated: float, mean_n_crossed: float) -> float:
     """Higher is better — termination dominates, crossing breaks ties."""
     return frac_terminated * 10.0 + mean_n_crossed
 
 def train(n_updates, batch_size, max_steps: int = 600,
           log_dir: str = f'{_SUBGOAL_DIR}/runs/subgoal_B',
-          saving_path: str,
+          save_dir: str = f'{_SUBGOAL_DIR}/checkpoints',
           initial_weights: str | None = None,
           save_every: int = 50,
-          n_subgoals: int = 3):
+          n_subgoals: int = 1,
+          lr: float = 3e-4,
+          entropy_coeff: float = 0.003):
     from datetime import datetime
     from torch.utils.tensorboard import SummaryWriter
 
@@ -457,16 +469,18 @@ def train(n_updates, batch_size, max_steps: int = 600,
                           grid_stride=0.15, agent_log_level='ERROR',
                           n_subgoals=n_subgoals)
 
-    # warm-start reset to build _free_positions and get n_positions
+    # warm-start reset to build _free_positions
     env.reset()
-    n_positions = int(env.action_space.nvec[0])
 
-    # Create policy instance
-    policy = subgoal_nn_base(n=env.n_agents, n_positions=n_positions, n_wait_bins=len(WAIT_TIMES))
-    optimizer = torch.optim.Adam(policy.parameters(), lr=3e-4)
+    if n_subgoals > 0:
+        n_positions = int(env.action_space.nvec[0])
+        policy = subgoal_nn_base(n=env.n_agents, n_positions=n_positions, n_wait_bins=len(WAIT_TIMES))
+        optimizer = torch.optim.Adam(policy.parameters(), lr=lr)
+    else:
+        policy, optimizer, n_positions = None, None, 0
 
     # Optionally warm-start from existing weights (fresh optimizer, update counter resets)
-    if initial_weights and os.path.exists(initial_weights):
+    if initial_weights and os.path.exists(initial_weights) and policy is not None:
         ckpt = torch.load(initial_weights, weights_only=False)
         policy.load_state_dict(ckpt['policy'])
         print(f"Loaded initial weights from '{initial_weights}'")
@@ -474,8 +488,7 @@ def train(n_updates, batch_size, max_steps: int = 600,
     # Each run gets its own timestamp — shared by TensorBoard dir and checkpoint filename
     run_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
     log_dir = os.path.join(log_dir, run_ts)
-    base, ext = os.path.splitext(saving_path)
-    saving_path = f'{base}_{run_ts}{ext}'
+    saving_path = os.path.join(save_dir, f'{run_ts}.pt')
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
 
@@ -489,7 +502,6 @@ def train(n_updates, batch_size, max_steps: int = 600,
 
     try:
         for update in update_pbar:
-            ENTROPY_COEFF = 0.05 - (0.05 - 0.01) * (update / (n_updates - 1))
 
             raw_rewards, log_probs, entropies = [], [], []
             ep_terminated, ep_makespans, ep_failed, ep_skipped = [], [], [], []
@@ -498,37 +510,33 @@ def train(n_updates, batch_size, max_steps: int = 600,
             for episode in tqdm(range(batch_size), desc='Episodes', leave=False):
                 obs, _ = env.reset()
 
-                pos_logits, wait_logits = policy(
-                    torch.as_tensor(obs["agent_states"],    dtype=torch.float32),
-                    torch.as_tensor(obs["neighbor_states"], dtype=torch.float32).flatten(-2),
-                    torch.as_tensor(obs["goal_states"],     dtype=torch.float32),
-                    torch.as_tensor(obs["neighbor_goals"],  dtype=torch.float32).flatten(-2),
-                    torch.as_tensor(obs["dist_to_gap"],     dtype=torch.float32),
-                )  # → (N, n_positions), (N, N_WAIT_BINS)
+                if env.n_subgoals > 0:
+                    pos_logits, wait_logits = policy(  # type: ignore[union-attr]
+                        torch.as_tensor(obs["agent_states"],    dtype=torch.float32),  # type: ignore[index]
+                        torch.as_tensor(obs["neighbor_states"], dtype=torch.float32).flatten(-2),  # type: ignore[index]
+                        torch.as_tensor(obs["goal_states"],     dtype=torch.float32),  # type: ignore[index]
+                        torch.as_tensor(obs["neighbor_goals"],  dtype=torch.float32).flatten(-2),  # type: ignore[index]
+                        torch.as_tensor(obs["dist_to_gap"],     dtype=torch.float32),  # type: ignore[index]
+                    )  # → (N, n_positions), (N, N_WAIT_BINS)
 
-                # create distributions to sample from for exploration
-                dist_pos  = torch.distributions.Categorical(logits=pos_logits)
-                dist_wait = torch.distributions.Categorical(logits=wait_logits)
+                    dist_pos  = torch.distributions.Categorical(logits=pos_logits)
+                    dist_wait = torch.distributions.Categorical(logits=wait_logits)
 
-                # sampling draws one index according to pmf
-                sample_pos  = dist_pos.sample()   # (N,)
-                sample_wait = dist_wait.sample()  # (N,)
+                    sample_pos  = dist_pos.sample((env.n_subgoals,))   # (n_subgoals, N)
+                    sample_wait = dist_wait.sample((env.n_subgoals,))  # (n_subgoals, N)
 
-                # how likely was drawing this sample pair from the distributions, log enbales us to simply add both probs and keeps us numerically stable preventing underflow
-                log_prob = dist_pos.log_prob(sample_pos).sum() + dist_wait.log_prob(sample_wait).sum()
-                entropy  = dist_pos.entropy().sum() + dist_wait.entropy().sum()
+                    log_prob = dist_pos.log_prob(sample_pos).sum() + dist_wait.log_prob(sample_wait).sum()
+                    entropy  = dist_pos.entropy().sum() + dist_wait.entropy().sum()
 
-                # create action array
-                action = np.empty(2 * env.n_agents, dtype=np.int64)
-                action[0::2] = sample_pos.numpy()
-                action[1::2] = sample_wait.numpy()
+                    action = np.stack([sample_pos.T.numpy(), sample_wait.T.numpy()], axis=-1).reshape(-1)
+                    log_probs.append(log_prob)
+                    entropies.append(entropy)
+                else:
+                    action = np.array([0], dtype=np.int64)  # dummy — ignored by step()
 
-                # Use action in current episode - bandit setting: Single action per episode
                 _, reward, terminated, truncated, info = env.step(action)
 
                 raw_rewards.append(reward)
-                log_probs.append(log_prob)
-                entropies.append(entropy)
                 ep_terminated.append(info['terminated'])
                 ep_makespans.append(info['makespan'])
                 ep_failed.append(info['n_failed'])
@@ -536,15 +544,19 @@ def train(n_updates, batch_size, max_steps: int = 600,
                 ep_crossed.append(info['n_crossed'])
                 ep_reached_sg.append(info['n_reached_subgoals'])
 
-            # REINFORCE update with entropy regularisation
-            rewards_t  = torch.tensor(raw_rewards)
-            normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
-            mean_entropy = torch.stack(entropies).mean()
-            loss         = -(torch.stack(log_probs) * normalized).mean() - ENTROPY_COEFF * mean_entropy
+            rewards_t = torch.tensor(raw_rewards)
+            if env.n_subgoals > 0:
+                # REINFORCE update with entropy regularisation
+                normalized   = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
+                mean_entropy = torch.stack(entropies).mean()
+                loss         = -(torch.stack(log_probs) * normalized).mean() - entropy_coeff * mean_entropy
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+            else:
+                mean_entropy = torch.tensor(0.0)
+                loss         = torch.tensor(0.0)
 
             mean_reward    = float(rewards_t.mean())
             std_reward     = float(rewards_t.std())
@@ -574,7 +586,7 @@ def train(n_updates, batch_size, max_steps: int = 600,
             update_pbar.set_postfix({
                 'loss':    f'{loss.detach().item():+.3f}',
                 'rew':     f'{mean_reward:+.1f}',
-                'done':    f'{n_done}/{batch_size}',
+                'terminated': f'{n_done}/{batch_size}',
                 'crossed': f'{mean_crossed:.1f}',
                 'entropy': f'{mean_entropy_val:.2f}',
             })
@@ -582,7 +594,7 @@ def train(n_updates, batch_size, max_steps: int = 600,
             recent_crossed.append(mean_crossed)
             recent_frac.append(frac_done)
             smooth_score = _model_score(np.mean(recent_frac), np.mean(recent_crossed))
-            if smooth_score > best_score:
+            if policy is not None and smooth_score > best_score:
                 best_score = smooth_score
                 os.makedirs(os.path.dirname(saving_path) or '.', exist_ok=True)
                 torch.save({
@@ -596,16 +608,17 @@ def train(n_updates, batch_size, max_steps: int = 600,
                 tqdm.write(f"  ✓ saved (update {update}, score {smooth_score:+.2f}, crossed {np.mean(recent_crossed):.2f})")
 
     except KeyboardInterrupt:
-        tqdm.write("Interrupted — saving checkpoint...")
-        os.makedirs(os.path.dirname(saving_path) or '.', exist_ok=True)
-        torch.save({
-            'update':         update,
-            'policy':         policy.state_dict(),
-            'optimizer':      optimizer.state_dict(),
-            'free_positions': env._free_positions,
-            'n_agents':       env.n_agents,
-        }, saving_path)
-        tqdm.write(f"Saved to '{saving_path}' at update {update}")
+        if policy is not None:
+            tqdm.write("Interrupted — saving checkpoint...")
+            os.makedirs(os.path.dirname(saving_path) or '.', exist_ok=True)
+            torch.save({
+                'update':         update,
+                'policy':         policy.state_dict(),
+                'optimizer':      optimizer.state_dict(),
+                'free_positions': env._free_positions,
+                'n_agents':       env.n_agents,
+            }, saving_path)
+            tqdm.write(f"Saved to '{saving_path}' at update {update}")
 
     writer.close()
 
@@ -613,14 +626,18 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--loadw',      type=str, default=None, help='path to weights file to warm-start from')
-    parser.add_argument('--save',       type=str, required=True, help='path to save checkpoints (timestamp appended automatically)')
+    parser.add_argument('--save_dir',   type=str, default=f'{_SUBGOAL_DIR}/checkpoints', help='directory to save checkpoints (filename is auto-generated from timestamp)')
     parser.add_argument('--updates',    type=int, default=500)
-    parser.add_argument('--batch',      type=int, default=64)
-    parser.add_argument('--n_subgoals', type=int, default=3, help='number of subgoal positions predicted per agent')
+    parser.add_argument('--batch',      type=int, default=128)
+    parser.add_argument('--n_subgoals',    type=int,   default=1,     help='number of subgoal positions predicted per agent')
+    parser.add_argument('--lr',            type=float, default=3e-4,  help='Adam learning rate')
+    parser.add_argument('--entropy_coeff', type=float, default=0.003, help='entropy regularisation coefficient')
     args = parser.parse_args()
 
     train(n_updates=args.updates, batch_size=args.batch,
           log_dir=f'{_SUBGOAL_DIR}/runs/subgoal_B',
-          saving_path=args.save,
+          save_dir=args.save_dir,
           initial_weights=args.loadw,
-          n_subgoals=args.n_subgoals)
+          n_subgoals=args.n_subgoals,
+          lr=args.lr,
+          entropy_coeff=args.entropy_coeff)

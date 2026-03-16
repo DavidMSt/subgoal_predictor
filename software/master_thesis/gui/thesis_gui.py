@@ -123,13 +123,14 @@ class ThesisGUI:
     soundsystem: SoundSystem
 
     # === INIT =========================================================================================================
-    def __init__(self):
+    def __init__(self, subgoal_weights: str | None = None):
         self.logger = Logger('BILBO_InteractiveExample', 'DEBUG')
 
         self.robots = {}
         self.obstacles = {}
         self.tasks = {}
         self._last_scenario = None  # set by loadScenario(), read by run_subgoal_policy()
+        self._subgoal_weights = subgoal_weights  # None → auto-select latest checkpoint
 
         self.joystick_manager = JoystickManager()
         self.joystick_manager.callbacks.new_joystick.register(self._newJoystick_callback)
@@ -566,12 +567,15 @@ class ThesisGUI:
         """
         import torch
         from master_thesis.modules.subgoal_predictor.train_subgoal import (
-            subgoal_nn_base, WAIT_TIMES, _SUBGOAL_DIR,
+            subgoal_nn_base, WAIT_TIMES, latest_subgoal_checkpoint,
         )
 
         if checkpoint_path is None:
-            checkpoint_path = f'{_SUBGOAL_DIR}/checkpoints/subgoal_B_20260314_144414.pt'
-            
+            checkpoint_path = self._subgoal_weights or latest_subgoal_checkpoint()
+
+        if checkpoint_path is None:
+            self.logger.warning("No subgoal checkpoint found — train a model first.")
+            return
 
         if not os.path.exists(checkpoint_path):
             self.logger.warning(f"Subgoal checkpoint not found: {checkpoint_path}")
@@ -1177,7 +1181,13 @@ class BILBO_Interactive_CommandSet(CommandSet):
 
 
 def main():
-    example = ThesisGUI()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--subgoal_weights', type=str, default=None,
+                        help='path to subgoal checkpoint .pt file (default: latest in checkpoints/)')
+    args = parser.parse_args()
+
+    example = ThesisGUI(subgoal_weights=args.subgoal_weights)
 
     example.init()
     example.start()
