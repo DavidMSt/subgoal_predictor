@@ -130,6 +130,7 @@ class ThesisGUI:
         self.obstacles = {}
         self.tasks = {}
         self._last_scenario = None  # set by loadScenario(), read by run_subgoal_policy()
+        self._action_grid_dots: list = []
         self._subgoal_weights = subgoal_weights  # None → auto-select latest checkpoint
 
         self.joystick_manager = JoystickManager()
@@ -557,14 +558,8 @@ class ThesisGUI:
                 robot._joystick_action = None
 
     # ------------------------------------------------------------------------------------------------------------------
-    def run_subgoal_policy(self, checkpoint_path: str | None = None) -> None:
-        """Load trained subgoal policy and inject subgoals for all agents.
-
-        Reads the checkpoint produced by train_subgoal.py, builds the free-workspace
-        grid from the current simulation environment, runs the policy for each agent,
-        and calls agent.sgm.set_subgoals() so that Start MP plans to the predicted
-        subgoal first and then to the assigned task.
-        """
+    def _load_subgoal_policy(self, checkpoint_path: str | None = None):
+        """Load checkpoint, return (policy, free_positions, n_gaps) or None on failure."""
         import torch
         from master_thesis.modules.subgoal_predictor.train_subgoal import (
             subgoal_nn_base, WAIT_TIMES, latest_subgoal_checkpoint,
@@ -572,111 +567,128 @@ class ThesisGUI:
 
         if checkpoint_path is None:
             checkpoint_path = self._subgoal_weights or latest_subgoal_checkpoint()
-
         if checkpoint_path is None:
             self.logger.warning("No subgoal checkpoint found — train a model first.")
-            return
-
+            return None
         if not os.path.exists(checkpoint_path):
             self.logger.warning(f"Subgoal checkpoint not found: {checkpoint_path}")
-            return
+            return None
 
-        agents = list(self.sim.agents.values())
-        n_gui = len(agents)
-        if n_gui == 0:
-            self.logger.warning("No agents present — spawn agents first")
-            return
-
-        # --- Load checkpoint (includes training-time free_positions and n_agents) ---
         ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-
         free_positions = ckpt.get('free_positions')
         n_ckpt         = ckpt.get('n_agents')
-
         if free_positions is None or n_ckpt is None:
             self.logger.warning(
-                "Checkpoint predates free_positions/n_agents fields. "
-                "Re-train to get a compatible checkpoint."
+                "Checkpoint predates free_positions/n_agents fields — re-train."
             )
-            return
+            return None
 
+        n_gaps      = ckpt.get('n_gaps', 2)
         n_positions = len(free_positions)
-        n = n_ckpt  # use training-time n for policy architecture
-
-        if n_gui != n:
-            self.logger.warning(
-                f"GUI has {n_gui} agents but policy was trained with {n}. "
-                f"Spawning mismatch — subgoals will only be set for first {min(n_gui, n)} agents."
-            )
-
-        policy = subgoal_nn_base(n=n, n_positions=n_positions, n_wait_bins=len(WAIT_TIMES))
+        # Infer n_wait_bins from the saved weight shape so old checkpoints
+        # (trained with a different WAIT_TIMES list) still load correctly.
+        n_wait_bins = ckpt['policy']['wait_head.bias'].shape[0]
+        # Reconstruct the wait_times list: stored explicitly or fall back to
+        # the first n_wait_bins entries of the current WAIT_TIMES constant.
+        wait_times = list(ckpt.get('wait_times', WAIT_TIMES[:n_wait_bins]))
+        policy = subgoal_nn_base(
+            n=n_ckpt, n_gaps=n_gaps,
+            n_positions=n_positions, n_wait_bins=n_wait_bins,
+        )
         policy.load_state_dict(ckpt['policy'])
         policy.eval()
-        self.logger.info(f"Loaded subgoal policy from '{checkpoint_path}' (update {ckpt.get('update', '?')})")
+        self.logger.info(
+            f"Loaded subgoal policy from '{checkpoint_path}' "
+            f"(update {ckpt.get('update', '?')}, n={n_ckpt}, "
+            f"n_gaps={n_gaps}, wait_bins={n_wait_bins})"
+        )
+        return policy, free_positions, n_ckpt, wait_times
 
-        # --- Build observations (use first n agents to match training-time architecture) ---
-        env_cont    = self.sim.environment.environment_container
-        agents_n    = agents[:n]  # clamp to training n
-        agent_conts = list(env_cont.agent_conts.values())[:n]
+    # ------------------------------------------------------------------------------------------------------------------
+    def run_rl_episode(self, checkpoint_path: str | None = None) -> None:
+        """Replicate exactly one training episode step in the GUI.
 
-        agent_states = np.array([[c.x, c.y, c.psi] for c in agent_conts], dtype=np.float32)  # (n, 3)
-        goal_states  = np.array([
-            [a.assigned_task.x, a.assigned_task.y] if a.assigned_task is not None else [0.0, 0.0]
-            for a in agents_n
-        ], dtype=np.float32)  # (n, 2)
+        Executes the same sequence as FrodoGymWrapper.reset() + step():
+          1. Task assignment (Hungarian)
+          2. Build observation (via build_subgoal_obs — identical to training)
+          3. Run policy greedily → inject subgoals
+          4. start_mp() + start_exe()
 
-        # Neighbor arrays: (n, n-1, d)
-        neighbor_states = np.stack([np.delete(agent_states, i, axis=0) for i in range(n)])  # (n,n-1,3)
-        neighbor_goals  = np.stack([np.delete(goal_states,  i, axis=0) for i in range(n)])  # (n,n-1,2)
+        The real-time simulation then runs the episode to completion, just as
+        training's inner step-loop would, but in wall-clock time.
+        """
+        from master_thesis.modules.subgoal_predictor.train_subgoal import (
+            build_subgoal_obs, run_policy_step,
+        )
 
-        # Gap feature
+        result = self._load_subgoal_policy(checkpoint_path)
+        if result is None:
+            return
+        policy, free_positions, n_ckpt, wait_times = result
+
+        if len(self.sim.agents) == 0:
+            self.logger.warning("No agents present — load a scenario first")
+            return
+        if len(self.sim.agents) != n_ckpt:
+            self.logger.warning(
+                f"GUI has {len(self.sim.agents)} agents but policy trained with {n_ckpt}."
+            )
+
         scenario = self._last_scenario
-        gap = getattr(scenario, 'gap_geometry', None) if scenario is not None else None
-        dist_to_gap = np.zeros((n, 2), dtype=np.float32)
-        for i, c in enumerate(agent_conts):
-            if gap is not None:
-                y_wall = float(gap.get('y_wall', 0.0))
-                dy = c.y - y_wall
-                side = float(np.sign(dy))
-                if 'half_gap' in gap:
-                    closest_x = float(np.clip(c.x, -gap['half_gap'], gap['half_gap']))
-                    dist = float(np.sqrt((c.x - closest_x) ** 2 + dy ** 2))
-                elif 'gaps' in gap:
-                    min_dist = float('inf')
-                    for g in gap['gaps']:
-                        cx, hg = g['x_center'], g['half_gap']
-                        closest_x = float(np.clip(c.x, cx - hg, cx + hg))
-                        d = float(np.sqrt((c.x - closest_x) ** 2 + dy ** 2))
-                        min_dist = min(min_dist, d)
-                    dist = min_dist
-                else:
-                    dist = abs(dy)
-                dist_to_gap[i] = [dist, side]
+        if scenario is None or scenario.gap_geometry is None:
+            self.logger.warning("No scenario with gap_geometry loaded.")
+            return
 
-        # --- Run policy ---
-        with torch.no_grad():
-            pos_logits, wait_logits = policy(
-                torch.as_tensor(agent_states),
-                torch.as_tensor(neighbor_states.reshape(n, -1)),
-                torch.as_tensor(goal_states),
-                torch.as_tensor(neighbor_goals.reshape(n, -1)),
-                torch.as_tensor(dist_to_gap),
-            )
-            a_pos  = torch.argmax(pos_logits,  dim=-1).numpy()  # (n,) greedy
-            a_wait = torch.argmax(wait_logits, dim=-1).numpy()  # (n,) greedy
+        # 1. Clear any leftover SGM state, then assign tasks
+        for agent in self.sim.agents.values():
+            agent.sgm.reset()
+        self.sim.start_ta()
 
-        # --- Inject subgoals ---
-        for agent, pos_idx, wait_idx in zip(agents_n, a_pos, a_wait):
-            sx, sy     = free_positions[int(pos_idx)]
-            wait_ticks = int(WAIT_TIMES[int(wait_idx)] / self.sim.Ts)
-            agent.sgm.set_subgoals(
-                [np.array([float(sx), float(sy), 0.0])],
-                wait_ticks=[wait_ticks],
-            )
-            self.logger.info(
-                f"Agent {agent.agent_id}: subgoal ({sx:.2f}, {sy:.2f}), "
-                f"wait {WAIT_TIMES[int(wait_idx)]}s ({wait_ticks} ticks)"
-            )
+        # 2+3+4. obs → policy → subgoals → start_mp → start_exe
+        obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
+        predicted = run_policy_step(self.sim, policy, free_positions, obs, wait_times=wait_times)
+
+        for i, (sx, sy) in enumerate(predicted):
+            self.logger.info(f"Agent {i}: subgoal ({sx:.2f}, {sy:.2f})")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def run_subgoal_policy(self, checkpoint_path: str | None = None) -> None:
+        """Set subgoals only (no TA, no MP/EXE start).  Kept for manual workflows
+        where TA was already run and MP/EXE are started separately."""
+        from master_thesis.modules.subgoal_predictor.train_subgoal import (
+            build_subgoal_obs, run_policy_step,
+        )
+
+        result = self._load_subgoal_policy(checkpoint_path)
+        if result is None:
+            return
+        policy, free_positions, n_ckpt, wait_times = result
+
+        if len(self.sim.agents) == 0:
+            self.logger.warning("No agents present — load a scenario first")
+            return
+
+        scenario = self._last_scenario
+        if scenario is None or scenario.gap_geometry is None:
+            self.logger.warning("No scenario with gap_geometry loaded.")
+            return
+
+        obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
+        predicted = run_policy_step(self.sim, policy, free_positions, obs, wait_times=wait_times)
+
+        for i, (sx, sy) in enumerate(predicted):
+            self.logger.info(f"Agent {i}: subgoal ({sx:.2f}, {sy:.2f})")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def run_no_subgoal_episode(self):
+        """Baseline episode: TA → MP → EXE with no subgoal predictor.
+        Matches exactly FrodoGymWrapper with n_subgoals=0."""
+        for agent in self.sim.agents.values():
+            agent.sgm.reset()
+        self.sim.start_ta()
+        self.sim.start_mp()
+        self.sim.start_exe()
+        self.logger.info("Baseline episode started: TA → MP → EXE (0 subgoals)")
 
     # ------------------------------------------------------------------------------------------------------------------
     def runPipeline(self):
@@ -686,6 +698,49 @@ class ThesisGUI:
         self.sim.start_exe()
         self.showTrajectories()
         self.logger.info("Pipeline started: TA → MP → EXE")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def toggleActionGrid(self):
+        """Toggle display of the discretized subgoal action-space grid as dots."""
+        if self._action_grid_dots:
+            for dot in self._action_grid_dots:
+                try:
+                    self.babylon_visualization.removeObject(dot)
+                except Exception:
+                    pass
+            self._action_grid_dots.clear()
+            self.logger.info("Action grid hidden")
+            return
+
+        scenario = self._last_scenario
+        if scenario is None:
+            self.logger.warning("Load a scenario first")
+            return
+
+        gap_geo = getattr(scenario, 'gap_geometry', None)
+        if gap_geo is None:
+            self.logger.warning("Scenario has no gap_geometry — cannot build action grid")
+            return
+
+        from master_thesis.modules.subgoal_predictor.train_subgoal import build_free_positions
+        positions = build_free_positions(self.sim, gap_geo, grid_stride=0.15)
+
+        for x, y in positions:
+            dot = CircleDrawing(
+                f"agrid_{len(self._action_grid_dots)}",
+                x=float(x), y=float(y),
+                radius=0.025,
+                fill_color=[0.95, 0.75, 0.1, 0.85],
+                border_color=[1.0, 0.9, 0.2, 1.0],
+                border_width=0.005,
+            )
+            try:
+                self.babylon_visualization.addObject(dot)
+            except ValueError:
+                pass
+            self._action_grid_dots.append(dot)
+
+        self.logger.info(f"Action grid shown: {len(self._action_grid_dots)} positions")
 
     # ------------------------------------------------------------------------------------------------------------------
     def showTrajectories(self):
@@ -904,6 +959,14 @@ class ThesisGUI:
         # Prevent output step from re-adding visuals during cleanup
         self._output_enabled = False
 
+        # Remove action grid dots
+        for dot in self._action_grid_dots:
+            try:
+                self.babylon_visualization.removeObject(dot)
+            except Exception:
+                pass
+        self._action_grid_dots.clear()
+
         # Remove assignment circles and trajectory lines first
         self._clearVisualizationOverlays()
 
@@ -996,8 +1059,16 @@ class ThesisGUI:
 
         # ── Subgoal RL ─────────────────────────────────────────────────
 
-        page1.addWidget(Button(text="Subgoal RL", callback=Callback(
-            function=self.run_subgoal_policy,
+        # ── Training-equivalent episodes (match n_subgoals=0 / n_subgoals=1) ──
+
+        page1.addWidget(Button(text="0 Subgoals", callback=Callback(
+            function=self.run_no_subgoal_episode,
+            inputs={},
+            discard_inputs=True,
+        )), height=2, width=4)
+
+        page1.addWidget(Button(text="1 Subgoal", callback=Callback(
+            function=self.run_rl_episode,
             inputs={},
             discard_inputs=True,
         )), height=2, width=4)
@@ -1032,6 +1103,12 @@ class ThesisGUI:
 
         page1.addWidget(Button(text="Show Trajectories", callback=Callback(
             function=self.showTrajectories,
+            inputs={},
+            discard_inputs=True,
+        )), height=2, width=4)
+
+        page1.addWidget(Button(text="Toggle Action Grid", callback=Callback(
+            function=self.toggleActionGrid,
             inputs={},
             discard_inputs=True,
         )), height=2, width=4)

@@ -56,6 +56,8 @@ class SubgoalManager:
         self._failed_plans: int = 0
         # Count of subgoals skipped due to planning failure (excludes final-task failures)
         self._skipped_subgoals: int = 0
+        # Countdown for retrying after a final-task planning failure (0 = no retry pending)
+        self._retry_ticks: int = 0
 
     @property
     def current_task(self) -> TaskContainer | None:
@@ -139,6 +141,10 @@ class SubgoalManager:
         if not self._execution_enabled:
             return
         if not self._plan_active:
+            if self._retry_ticks > 0:
+                self._retry_ticks -= 1
+                if self._retry_ticks == 0:
+                    self._do_plan()
             return
         if self.current_task is None:
             return
@@ -217,9 +223,11 @@ class SubgoalManager:
                 self._subgoal_idx += 1
                 self._do_plan(phase_key)
             else:
-                # Final task is unreachable — agent stays put, stop retrying.
-                self.logger.warning("SubgoalManager: planner returned success=False (final task unreachable)")
+                # Final task is currently unreachable (e.g. path blocked by other agents).
+                # Schedule a retry after ~10 s so the agent recovers once congestion clears.
+                self.logger.warning("SubgoalManager: planner returned success=False — will retry in 5 ticks")
                 self._plan_active = False
+                self._retry_ticks = 5
 
     def reset(self):
         """Full reset (used between episodes in RL training)."""
@@ -235,4 +243,5 @@ class SubgoalManager:
         self._failed_plans = 0
         self._skipped_subgoals = 0
         self._recovery_needed = False
+        self._retry_ticks = 0
         self.executor.clear()

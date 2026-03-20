@@ -16,43 +16,76 @@ from master_thesis.scenarios.testbed_importer import load_scenario_yaml
 
 _SCENARIOS_DIR = Path(__file__).parent.parent.parent / 'scenarios'
 
-WAIT_TIMES  = [0, 3, 6, 9, 12, 15]  # seconds per bin (max 15 s)
+WAIT_TIMES  = [0]  # single bin — wait disabled; extend to e.g. [0, 3, 9] to re-enable
 
 
 class subgoal_nn_base(nn.Module):
-    def __init__(self, n=3, agent_dim=3, task_dim=2, out_dim=64,
+    """Subgoal-position and wait-time predictor.
+
+    Observation design: see obs_design_notes.md for full rationale.
+    All spatial inputs are relative to the observing agent (translation-invariant).
+    """
+
+    def __init__(self, n=3, n_gaps=2, out_dim=64,
                  n_positions=100, n_wait_bins=len(WAIT_TIMES)) -> None:
         super().__init__()
 
-        self.enc_agent          = nn.Linear(agent_dim,            out_dim)
-        self.enc_neighbors      = nn.Linear((n - 1) * agent_dim,  out_dim)
-        self.enc_goal           = nn.Linear(task_dim,             out_dim)
-        self.enc_goal_neighbors = nn.Linear((n - 1) * task_dim,   out_dim)
-        # Compact gap feature replaces the CNN occupancy-grid encoder
-        self.enc_gap            = nn.Linear(2,                    out_dim)
+        self.enc_agent     = nn.Linear(1,            out_dim)  # own ψ only
+        self.enc_neighbors = nn.Linear((n - 1) * 2, out_dim)  # relative (Δx, Δy) per neighbor
+        self.enc_goal      = nn.Linear(2,            out_dim)  # relative (Δx, Δy) to own task
+        self.enc_gap       = nn.Linear(n_gaps * 2,  out_dim)  # (Δx, Δy) per gap, flattened
 
-        # Two categorical heads instead of a regression head
-        self.pos_head  = nn.Linear(5 * out_dim, n_positions)
-        self.wait_head = nn.Linear(5 * out_dim, n_wait_bins)
+        self.pos_head  = nn.Linear(4 * out_dim, n_positions)
+        self.wait_head = nn.Linear(4 * out_dim, n_wait_bins)
 
     def forward(self,
-                agent_input,         # (B, agent_dim)
-                neighbor_input,      # (B, (N-1)*agent_dim)
-                goal_input,          # (B, task_dim)
-                neighbor_goal_input, # (B, (N-1)*task_dim)
-                gap_input,           # (B, 2)  — [dist_to_gap, side]
+                agent_psi,    # (B, 1)          — own heading
+                neighbor_rel, # (B, (N-1)*2)    — relative (Δx, Δy) per neighbor
+                goal_rel,     # (B, 2)           — relative (Δx, Δy) to own task
+                gap_vectors,  # (B, n_gaps*2)   — (Δx, Δy) to each gap center
                 ):
         h = torch.cat([
-            torch.relu(self.enc_agent(agent_input)),
-            torch.relu(self.enc_neighbors(neighbor_input)),
-            torch.relu(self.enc_goal(goal_input)),
-            torch.relu(self.enc_goal_neighbors(neighbor_goal_input)),
-            torch.relu(self.enc_gap(gap_input)),
+            torch.relu(self.enc_agent(agent_psi)),
+            torch.relu(self.enc_neighbors(neighbor_rel)),
+            torch.relu(self.enc_goal(goal_rel)),
+            torch.relu(self.enc_gap(gap_vectors)),
         ], dim=-1)
 
         return self.pos_head(h), self.wait_head(h)
 
 
+
+
+class subgoal_critic_base(nn.Module):
+    """Scalar value estimator V(obs) for PPO.
+
+    Mirrors the policy observation structure (see obs_design_notes.md):
+    relative spatial inputs only, no absolute positions, no neighbor goals.
+    """
+
+    def __init__(self, n: int = 5, n_gaps: int = 2, out_dim: int = 64) -> None:
+        super().__init__()
+        total_in = (n * 1             # own ψ
+                    + n * (n - 1) * 2  # relative neighbor (Δx, Δy)
+                    + n * 2            # relative goal (Δx, Δy)
+                    + n * n_gaps * 2)  # gap vectors (Δx, Δy) per gap
+        self.net = nn.Sequential(
+            nn.Linear(total_in, out_dim),
+            nn.ReLU(),
+            nn.Linear(out_dim, out_dim),
+            nn.ReLU(),
+            nn.Linear(out_dim, 1),
+        )
+
+    def forward(self, agent_psi, neighbor_rel, goal_rel,
+                gap_vectors) -> torch.Tensor:
+        x = torch.cat([
+            agent_psi.flatten(),
+            neighbor_rel.flatten(),
+            goal_rel.flatten(),
+            gap_vectors.flatten(),
+        ])
+        return self.net(x).squeeze()  # scalar
 
 
 class FrodoGymWrapper(gym.Env):
@@ -82,15 +115,19 @@ class FrodoGymWrapper(gym.Env):
         grid_resolution: float = 0.05,
         grid_stride: float = 0.5,
         agent_log_level: str = 'WARNING',
+        diversity_sigma: float = 0.35,
+        diversity_bonus: float = 1.5,
     ) -> None:
         super().__init__()
 
         self.scenario        = load_scenario_yaml((_SCENARIOS_DIR / f'{scenario}.yaml').read_text())
-        self.n_agents        = self.scenario.n_agents_random
+        self.n_agents        = self.scenario.n_agents_random or len(self.scenario.agents)
         self.n_subgoals      = n_subgoals
         self.max_steps       = max_steps
         self.grid_stride     = grid_stride
         self.agent_log_level = agent_log_level
+        self.diversity_sigma = diversity_sigma
+        self.diversity_bonus = diversity_bonus
 
         lim         = self.scenario.limits
         x_lo, x_hi = lim[0]
@@ -118,36 +155,33 @@ class FrodoGymWrapper(gym.Env):
         # Free-workspace positions — built in reset() after obstacles are placed.
         self._free_positions = None
 
+        self.n_gaps = len(self.scenario.gap_geometry['gaps'])
+
         # ----- observation space --------------------------------------------------
-        # agent_states:    (n_agents, 3)             — own x, y, psi
-        # neighbor_states: (n_agents, n_agents-1, 3) — other agents' x, y, psi
-        # goal_states:     (n_agents, 2)             — own assigned goal x, y (from TA module)
-        # neighbor_goals:  (n_agents, n_agents-1, 2) — neighbors' assigned goals x, y
-        # dist_to_gap:     (n_agents, 2)             — [dist, side] compact gap feature
+        # agent_psi:    (n_agents, 1)              — own heading ψ
+        # neighbor_rel: (n_agents, n_agents-1, 2)  — relative (Δx, Δy) per neighbor
+        # goal_rel:     (n_agents, 2)              — relative (Δx, Δy) to own task
+        # gap_vectors:  (n_agents, n_gaps*2)       — (Δx, Δy) to each gap center
+        # See obs_design_notes.md for rationale.
         self.observation_space = spaces.Dict({
-            "agent_states": spaces.Box(
-                low=np.tile(agent_lo, (self.n_agents, 1)),
-                high=np.tile(agent_hi, (self.n_agents, 1)),
+            "agent_psi": spaces.Box(
+                low=-np.pi, high=np.pi,
+                shape=(self.n_agents, 1),
                 dtype=np.float32,
             ),
-            "neighbor_states": spaces.Box(
-                low=np.tile(agent_lo, (self.n_agents, self.n_agents - 1, 1)),
-                high=np.tile(agent_hi, (self.n_agents, self.n_agents - 1, 1)),
+            "neighbor_rel": spaces.Box(
+                low=-np.inf, high=np.inf,
+                shape=(self.n_agents, self.n_agents - 1, 2),
                 dtype=np.float32,
             ),
-            "goal_states": spaces.Box(
-                low=np.tile(goal_lo, (self.n_agents, 1)),
-                high=np.tile(goal_hi, (self.n_agents, 1)),
-                dtype=np.float32,
-            ),
-            "neighbor_goals": spaces.Box(
-                low=np.tile(goal_lo, (self.n_agents, self.n_agents - 1, 1)),
-                high=np.tile(goal_hi, (self.n_agents, self.n_agents - 1, 1)),
-                dtype=np.float32,
-            ),
-            "dist_to_gap": spaces.Box(
+            "goal_rel": spaces.Box(
                 low=-np.inf, high=np.inf,
                 shape=(self.n_agents, 2),
+                dtype=np.float32,
+            ),
+            "gap_vectors": spaces.Box(
+                low=-np.inf, high=np.inf,
+                shape=(self.n_agents, self.n_gaps * 2),
                 dtype=np.float32,
             ),
         })
@@ -207,7 +241,9 @@ class FrodoGymWrapper(gym.Env):
         makespan  = step + 1
         truncated = not terminated
         obs       = self._get_obs()
-        reward    = self._compute_reward(terminated, makespan, individual_times, predicted_positions)
+        reward    = self._compute_reward(terminated, makespan, individual_times, predicted_positions,
+                                         diversity_sigma=self.diversity_sigma,
+                                         diversity_bonus=self.diversity_bonus)
 
         _y_wall = float(self.scenario.gap_geometry['y_wall'])
         info = {
@@ -229,50 +265,25 @@ class FrodoGymWrapper(gym.Env):
             
     # ------------------------------------------------------------------
     def _build_free_positions(self):
-        """Sample collision-free workspace positions on a grid of self.grid_stride."""
-        env      = self.sim.environment
-        env_cont = env.environment_container
-        grid     = env_cont.occupancy_grid_static  # bool (n_y, n_x)
-        n_y, n_x = grid.shape
-        x_min, x_max = env_cont.limits[0]
-        y_min, y_max = env_cont.limits[1]
-
-        stride, free = self.grid_stride, []
-        x = x_min + stride / 2
-        while x < x_max:
-            y = y_min + stride / 2
-            while y < y_max:
-                gy, gx = env.world_to_grid(x, y)
-                if 0 <= gy < n_y and 0 <= gx < n_x and not grid[gy, gx]:
-                    free.append([x, y])
-                y += stride
-            x += stride
-
-        # Restrict subgoals to the agents' starting side of the wall —
-        # subgoals exist to coordinate gap approach, not to route after crossing.
-        y_wall = float(self.scenario.gap_geometry['y_wall'])
-        free   = [p for p in free if p[1] > y_wall]
-
-        self._free_positions = np.array(free, dtype=np.float32)
+        """Delegate to the shared build_free_positions() — single source of truth."""
+        self._free_positions = build_free_positions(
+            self.sim, self.scenario.gap_geometry, self.grid_stride
+        )
         self.action_space = spaces.MultiDiscrete(
             np.array([[len(self._free_positions), len(WAIT_TIMES)]] * (self.n_agents * self.n_subgoals)).flatten()
             if self.n_subgoals > 0 else np.array([1])
         )
 
     # ------------------------------------------------------------------
-    def _compute_dist_to_gap(self, agent_x: float, agent_y: float) -> np.ndarray:
-        """[dist_to_nearest_gap, side] — distance to nearest gap entrance, sign of which side."""
+    def _compute_gap_vectors(self, agent_x: float, agent_y: float) -> np.ndarray:
+        """(Δx, Δy) from agent to each gap center, flattened. Shape: (n_gaps*2,)."""
         gap_geometry = self.scenario.gap_geometry
         y_wall = float(gap_geometry['y_wall'])
-        side   = float(np.sign(agent_y - y_wall))
-        dy     = agent_y - y_wall
-
-        min_dist = float('inf')
+        result = []
         for g in gap_geometry['gaps']:
-            closest_x = float(np.clip(agent_x, g['x_center'] - g['half_gap'], g['x_center'] + g['half_gap']))
-            min_dist  = min(min_dist, float(np.sqrt((agent_x - closest_x) ** 2 + dy ** 2)))
-
-        return np.array([min_dist, side], dtype=np.float32)
+            result.append(float(g['x_center']) - agent_x)
+            result.append(y_wall - agent_y)
+        return np.array(result, dtype=np.float32)
 
     # ------------------------------------------------------------------
     def _assign_subgoals(self, action: np.ndarray) -> list[tuple[float, float]]:
@@ -291,37 +302,7 @@ class FrodoGymWrapper(gym.Env):
 
     # ------------------------------------------------------------------
     def _get_obs(self) -> dict:
-        env_cont = self.sim.environment.environment_container
-
-        # agent-related observations
-        agent_states = np.array([
-            self._agent_to_xy(cont)
-            for cont in env_cont.agent_conts.values()
-        ], dtype=np.float32)  # (n_agents, 3)
-
-        neighbor_states = self._neighbor_arrays(agent_states)  # (n_agents, n_agents-1, 3)
-
-        # goal-related observations — keyed by agent to match agent_states row order
-        goal_states = np.array([
-            self._goal_to_xy(agent.assigned_task) if agent.assigned_task is not None
-            else np.zeros(2, dtype=np.float32)
-            for agent in self.sim.agents.values()
-        ], dtype=np.float32)  # (n_agents, 2)
-
-        neighbor_goals = self._neighbor_arrays(goal_states)  # (n_agents, n_agents-1, 2)
-
-        dist_to_gap = np.stack([
-            self._compute_dist_to_gap(float(cont.x), float(cont.y))
-            for cont in env_cont.agent_conts.values()
-        ], axis=0)  # (n_agents, 2)
-
-        return {
-            "agent_states":    agent_states,
-            "neighbor_states": neighbor_states,
-            "goal_states":     goal_states,
-            "neighbor_goals":  neighbor_goals,
-            "dist_to_gap":     dist_to_gap,
-        }
+        return build_subgoal_obs(self.sim, self.scenario.gap_geometry)
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -332,11 +313,6 @@ class FrodoGymWrapper(gym.Env):
     def _goal_to_xy(cont) -> np.ndarray:
         return np.array([cont.x, cont.y], dtype=np.float32)
 
-    @staticmethod
-    def _neighbor_arrays(agent_states: np.ndarray) -> np.ndarray:
-        """Return (n_agents, n_agents-1, 3) of each agent's neighbor states."""
-        n = agent_states.shape[0]
-        return np.stack([np.delete(agent_states, i, axis=0) for i in range(n)])
 
     # ------------------------------------------------------------------
     def _compute_reward(
@@ -347,11 +323,14 @@ class FrodoGymWrapper(gym.Env):
         predicted_positions: list[tuple[float, float]],
         alpha: float = 0.3,
         beta: float = 1.0,
-        gamma: float = 10.0,
+        gamma: float = 1.0,
         crossing_bonus: float = 1.5,
-        subgoal_bonus: float = 0.5,
-        diversity_bonus: float = 0.2,
-        diversity_sigma: float = 0.2,
+        # subgoal_bonus set to 0: rewarding any reached subgoal regardless of position
+        # created a perverse incentive — policy converged to easy-to-reach top-corner
+        # positions far from the gap to cheaply earn the bonus.
+        subgoal_bonus: float = 0.0,
+        diversity_bonus: float = 1.5,
+        diversity_sigma: float = 0.35,
     ) -> float:
         """Compute reward signal.
 
@@ -382,7 +361,7 @@ class FrodoGymWrapper(gym.Env):
         if terminated:
             makespan_s = makespan * self.sim.Ts
             indiv_s    = [t * self.sim.Ts for t in individual_times]
-            return -makespan_s - alpha * sum(indiv_s) - gamma * n_failed
+            return 30.0 - makespan_s - alpha * sum(indiv_s) - gamma * n_failed
 
         # Truncated: gap-aware distance + crossing/subgoal/diversity bonuses ---
         gap_geometry = self.scenario.gap_geometry
@@ -394,9 +373,7 @@ class FrodoGymWrapper(gym.Env):
         total_dist         = 0.0
         crossed_xs         = []
         for agent in self.sim.agents.values():
-            # Subgoals we reached, low-bound at zero
             n_reached_subgoals += max(0, agent.sgm._subgoal_idx - agent.sgm._skipped_subgoals)
-
             ax, ay = agent.container.x, agent.container.y
 
             if agent.assigned_task is None:
@@ -443,46 +420,172 @@ _SUBGOAL_DIR = 'master_thesis/modules/subgoal_predictor'
 
 
 def latest_subgoal_checkpoint(checkpoints_dir: str | None = None) -> str | None:
-    """Return the path to the most recently saved checkpoint, or None if none exist."""
+    """Return the path to the most recently *modified* checkpoint, or None if none exist."""
     import glob
     directory = checkpoints_dir or f'{_SUBGOAL_DIR}/checkpoints'
-    files = sorted(glob.glob(f'{directory}/*.pt'))
-    return files[-1] if files else None
+    files = glob.glob(f'{directory}/*.pt')
+    return max(files, key=os.path.getmtime) if files else None
+
+
+def build_free_positions(sim, gap_geometry: dict, grid_stride: float) -> np.ndarray:
+    """Return collision-free grid positions on the agents' side of the wall.
+
+    Covers the full height from y_wall to the arena boundary — not just the
+    lower 0.5 m strip — so that the network can assign "stay-back" positions
+    to agents that start far from the gap.
+
+    Single source of truth: the GUI imports this instead of maintaining its
+    own grid logic.
+    """
+    env      = sim.environment
+    env_cont = env.environment_container
+    grid     = env_cont.occupancy_grid_static  # bool (n_y, n_x)
+    n_y, n_x = grid.shape
+    x_min, x_max = env_cont.limits[0]
+    y_min, y_max = env_cont.limits[1]
+    y_wall = float(gap_geometry['y_wall'])
+
+    free = []
+    x = x_min + grid_stride / 2
+    while x < x_max:
+        y = y_min + grid_stride / 2
+        while y < y_max:
+            if y > y_wall:
+                gy, gx = env.world_to_grid(x, y)
+                if 0 <= gy < n_y and 0 <= gx < n_x and not grid[gy, gx]:
+                    free.append([x, y])
+            y += grid_stride
+        x += grid_stride
+    return np.array(free, dtype=np.float32)
+
+
+def build_subgoal_obs(sim, gap_geometry: dict) -> dict:
+    """Build the policy observation dict from the current sim state.
+
+    Identical logic to FrodoGymWrapper._get_obs(), extracted as a standalone
+    function so the GUI and other evaluation code use the exact same obs
+    construction as training.
+    """
+    env_cont     = sim.environment.environment_container
+    agent_conts  = list(env_cont.agent_conts.values())
+    agents       = list(sim.agents.values())
+
+    xy_psi       = np.array([[c.x, c.y, c.psi] for c in agent_conts], dtype=np.float32)
+    agent_xy     = xy_psi[:, :2]
+    agent_psi    = xy_psi[:, 2:3]
+
+    n            = len(agent_xy)
+    neighbor_rel = np.stack([np.delete(agent_xy, i, axis=0) - agent_xy[i] for i in range(n)])
+
+    goal_abs = np.array([
+        [a.assigned_task.x, a.assigned_task.y] if a.assigned_task is not None else [0.0, 0.0]
+        for a in agents
+    ], dtype=np.float32)
+    goal_rel = goal_abs - agent_xy
+
+    y_wall    = float(gap_geometry['y_wall'])
+    gaps_list = gap_geometry['gaps']
+    gap_vectors = np.array([
+        [v for g in gaps_list for v in (float(g['x_center']) - c.x, y_wall - c.y)]
+        for c in agent_conts
+    ], dtype=np.float32)
+
+    return {
+        "agent_psi":    agent_psi,
+        "neighbor_rel": neighbor_rel,
+        "goal_rel":     goal_rel,
+        "gap_vectors":  gap_vectors,
+    }
+
+
+def run_policy_step(sim, policy, free_positions: np.ndarray, obs: dict,
+                    wait_times: list | None = None) -> list:
+    """Apply policy greedily, inject subgoals, then start MP and EXE.
+
+    Replicates exactly FrodoGymWrapper.step() up to (but not including) the
+    simulation loop — the setup phase that is identical between training and
+    GUI evaluation.  Use this whenever the sim is already running in real-time
+    (GUI) and you just need the one-shot subgoal assignment.
+
+    wait_times: list of wait durations in seconds, one per bin.  Defaults to
+    the module-level WAIT_TIMES constant.  Pass explicitly when loading a
+    checkpoint trained with a different WAIT_TIMES list.
+    """
+    import torch
+
+    _wait_times = wait_times if wait_times is not None else WAIT_TIMES
+
+    with torch.no_grad():
+        pos_logits, wait_logits = policy(
+            torch.as_tensor(obs["agent_psi"],    dtype=torch.float32),
+            torch.as_tensor(obs["neighbor_rel"], dtype=torch.float32).flatten(-2),
+            torch.as_tensor(obs["goal_rel"],     dtype=torch.float32),
+            torch.as_tensor(obs["gap_vectors"],  dtype=torch.float32),
+        )
+        a_pos  = torch.argmax(pos_logits,  dim=-1).numpy()  # (n_agents,) greedy
+        a_wait = torch.argmax(wait_logits, dim=-1).numpy()  # (n_agents,) greedy
+
+    predicted_positions = []
+    for agent, pos_idx, wait_idx in zip(sim.agents.values(), a_pos, a_wait):
+        sx, sy     = free_positions[int(pos_idx)]
+        wait_ticks = int(_wait_times[int(wait_idx)] / sim.Ts)
+        agent.sgm.set_subgoals(
+            [np.array([float(sx), float(sy), 0.0])],
+            wait_ticks=[wait_ticks],
+        )
+        predicted_positions.append((float(sx), float(sy)))
+
+    sim.start_mp()
+    sim.start_exe()
+
+    return predicted_positions
 
 
 def _model_score(frac_terminated: float, mean_n_crossed: float) -> float:
     """Higher is better — termination dominates, crossing breaks ties."""
     return frac_terminated * 10.0 + mean_n_crossed
 
-def train(n_updates, batch_size, max_steps: int = 600,
+def train(n_updates, batch_size, max_steps: int = 400,
           log_dir: str = f'{_SUBGOAL_DIR}/runs/subgoal_B',
           save_dir: str = f'{_SUBGOAL_DIR}/checkpoints',
           initial_weights: str | None = None,
           save_every: int = 50,
           n_subgoals: int = 1,
           lr: float = 3e-4,
-          entropy_coeff: float = 0.003):
+          entropy_coeff: float = 0.003,
+          scenario: str = 'rl_5n_random_2x2',
+          algo: str = 'reinforce',
+          diversity_sigma: float = 0.35):
     from datetime import datetime
     from torch.utils.tensorboard import SummaryWriter
 
-    env = FrodoGymWrapper('rl_5n_random_2x2', max_steps=max_steps,
+    env = FrodoGymWrapper(scenario, max_steps=max_steps,
                           grid_stride=0.15, agent_log_level='ERROR',
-                          n_subgoals=n_subgoals)
+                          n_subgoals=n_subgoals,
+                          diversity_sigma=diversity_sigma)
 
     # warm-start reset to build _free_positions
     env.reset()
 
     if n_subgoals > 0:
         n_positions = int(env.action_space.nvec[0])
-        policy = subgoal_nn_base(n=env.n_agents, n_positions=n_positions, n_wait_bins=len(WAIT_TIMES))
+        policy = subgoal_nn_base(n=env.n_agents, n_gaps=env.n_gaps, n_positions=n_positions, n_wait_bins=len(WAIT_TIMES))
         optimizer = torch.optim.Adam(policy.parameters(), lr=lr)
     else:
         policy, optimizer, n_positions = None, None, 0
+
+    if n_subgoals > 0 and algo == 'ppo':
+        critic = subgoal_critic_base(n=env.n_agents, n_gaps=env.n_gaps)
+        critic_optimizer = torch.optim.Adam(critic.parameters(), lr=lr)
+    else:
+        critic, critic_optimizer = None, None
 
     # Optionally warm-start from existing weights (fresh optimizer, update counter resets)
     if initial_weights and os.path.exists(initial_weights) and policy is not None:
         ckpt = torch.load(initial_weights, weights_only=False)
         policy.load_state_dict(ckpt['policy'])
+        if critic is not None and ckpt.get('critic') is not None:
+            critic.load_state_dict(ckpt['critic'])
         print(f"Loaded initial weights from '{initial_weights}'")
 
     # Each run gets its own timestamp — shared by TensorBoard dir and checkpoint filename
@@ -492,7 +595,7 @@ def train(n_updates, batch_size, max_steps: int = 600,
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
 
-    print(f"Training: {n_updates} updates * {batch_size} episodes"
+    print(f"Training [{algo.upper()}]: {n_updates} updates * {batch_size} episodes"
           f" | n_agents={env.n_agents} | n_positions={n_positions} | logdir={log_dir}")
 
     best_score    = float('-inf')
@@ -504,19 +607,19 @@ def train(n_updates, batch_size, max_steps: int = 600,
         for update in update_pbar:
 
             raw_rewards, log_probs, entropies = [], [], []
+            obs_batch, sample_pos_batch, sample_wait_batch = [], [], []
             ep_terminated, ep_makespans, ep_failed, ep_skipped = [], [], [], []
-            ep_crossed, ep_reached_sg = [], []
+            ep_crossed, ep_reached_sg, ep_subgoal_spread = [], [], []
 
             for episode in tqdm(range(batch_size), desc='Episodes', leave=False):
                 obs, _ = env.reset()
 
                 if env.n_subgoals > 0:
                     pos_logits, wait_logits = policy(  # type: ignore[union-attr]
-                        torch.as_tensor(obs["agent_states"],    dtype=torch.float32),  # type: ignore[index]
-                        torch.as_tensor(obs["neighbor_states"], dtype=torch.float32).flatten(-2),  # type: ignore[index]
-                        torch.as_tensor(obs["goal_states"],     dtype=torch.float32),  # type: ignore[index]
-                        torch.as_tensor(obs["neighbor_goals"],  dtype=torch.float32).flatten(-2),  # type: ignore[index]
-                        torch.as_tensor(obs["dist_to_gap"],     dtype=torch.float32),  # type: ignore[index]
+                        torch.as_tensor(obs["agent_psi"],    dtype=torch.float32),  # type: ignore[index]
+                        torch.as_tensor(obs["neighbor_rel"], dtype=torch.float32).flatten(-2),  # type: ignore[index]
+                        torch.as_tensor(obs["goal_rel"],     dtype=torch.float32),  # type: ignore[index]
+                        torch.as_tensor(obs["gap_vectors"],  dtype=torch.float32),  # type: ignore[index]
                     )  # → (N, n_positions), (N, N_WAIT_BINS)
 
                     dist_pos  = torch.distributions.Categorical(logits=pos_logits)
@@ -531,6 +634,17 @@ def train(n_updates, batch_size, max_steps: int = 600,
                     action = np.stack([sample_pos.T.numpy(), sample_wait.T.numpy()], axis=-1).reshape(-1)
                     log_probs.append(log_prob)
                     entropies.append(entropy)
+
+                    # Mean pairwise distance between predicted subgoal positions —
+                    # collapses to 0 when all agents are sent to the same spot.
+                    sg_xy = env._free_positions[sample_pos[0].numpy()]  # (N, 2)
+                    pairs = [(i, j) for i in range(len(sg_xy)) for j in range(i + 1, len(sg_xy))]
+                    spread = float(np.mean([np.hypot(sg_xy[i,0]-sg_xy[j,0], sg_xy[i,1]-sg_xy[j,1]) for i,j in pairs]))
+                    ep_subgoal_spread.append(spread)
+                    if algo == 'ppo':
+                        obs_batch.append(obs)
+                        sample_pos_batch.append(sample_pos.detach())
+                        sample_wait_batch.append(sample_wait.detach())
                 else:
                     action = np.array([0], dtype=np.int64)  # dummy — ignored by step()
 
@@ -544,8 +658,65 @@ def train(n_updates, batch_size, max_steps: int = 600,
                 ep_crossed.append(info['n_crossed'])
                 ep_reached_sg.append(info['n_reached_subgoals'])
 
-            rewards_t = torch.tensor(raw_rewards)
-            if env.n_subgoals > 0:
+            rewards_t = torch.tensor(raw_rewards, dtype=torch.float32)
+            clip_frac = 0.0
+
+            def _critic_fwd(obs_ep):
+                return critic(  # type: ignore[union-attr]
+                    torch.as_tensor(obs_ep["agent_psi"],    dtype=torch.float32),
+                    torch.as_tensor(obs_ep["neighbor_rel"], dtype=torch.float32).flatten(-2),
+                    torch.as_tensor(obs_ep["goal_rel"],     dtype=torch.float32),
+                    torch.as_tensor(obs_ep["gap_vectors"],  dtype=torch.float32),
+                )
+
+            if algo == 'ppo' and env.n_subgoals > 0:
+                PPO_EPOCHS  = 4
+                CLIP_EPS    = 0.2
+                VALUE_COEFF = 0.5
+
+                log_probs_old = torch.stack(log_probs).detach()
+
+                # Advantages computed once with frozen critic
+                with torch.no_grad():
+                    values_old = torch.stack([_critic_fwd(o) for o in obs_batch])
+                advantages = rewards_t - values_old
+                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
+                for _ in range(PPO_EPOCHS):
+                    new_log_probs, new_entropies = [], []
+                    for obs_ep, sp, sw in zip(obs_batch, sample_pos_batch, sample_wait_batch):
+                        pos_logits, wait_logits = policy(  # type: ignore[union-attr]
+                            torch.as_tensor(obs_ep["agent_psi"],    dtype=torch.float32),
+                            torch.as_tensor(obs_ep["neighbor_rel"], dtype=torch.float32).flatten(-2),
+                            torch.as_tensor(obs_ep["goal_rel"],     dtype=torch.float32),
+                            torch.as_tensor(obs_ep["gap_vectors"],  dtype=torch.float32),
+                        )
+                        d_pos  = torch.distributions.Categorical(logits=pos_logits)
+                        d_wait = torch.distributions.Categorical(logits=wait_logits)
+                        new_log_probs.append(d_pos.log_prob(sp).sum() + d_wait.log_prob(sw).sum())
+                        new_entropies.append(d_pos.entropy().sum() + d_wait.entropy().sum())
+
+                    new_log_probs_t = torch.stack(new_log_probs)
+                    ratio       = torch.exp(new_log_probs_t - log_probs_old)
+                    surr1       = ratio * advantages
+                    surr2       = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * advantages
+                    policy_loss = -torch.min(surr1, surr2).mean()
+                    mean_entropy = torch.stack(new_entropies).mean()
+
+                    values_new = torch.stack([_critic_fwd(o) for o in obs_batch])
+                    value_loss = VALUE_COEFF * nn.functional.mse_loss(values_new, rewards_t)
+
+                    loss = policy_loss + value_loss - entropy_coeff * mean_entropy
+                    optimizer.zero_grad()
+                    critic_optimizer.zero_grad()  # type: ignore[union-attr]
+                    loss.backward()
+                    optimizer.step()
+                    critic_optimizer.step()  # type: ignore[union-attr]
+
+                with torch.no_grad():
+                    clip_frac = ((ratio - 1.0).abs() > CLIP_EPS).float().mean().item()
+
+            elif env.n_subgoals > 0:
                 # REINFORCE update with entropy regularisation
                 normalized   = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
                 mean_entropy = torch.stack(entropies).mean()
@@ -554,6 +725,7 @@ def train(n_updates, batch_size, max_steps: int = 600,
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+
             else:
                 mean_entropy = torch.tensor(0.0)
                 loss         = torch.tensor(0.0)
@@ -569,7 +741,8 @@ def train(n_updates, batch_size, max_steps: int = 600,
             mean_crossed   = float(np.mean(ep_crossed))
             mean_reached_sg = float(np.mean(ep_reached_sg))
 
-            mean_entropy_val = float(mean_entropy.detach())
+            mean_entropy_val   = float(mean_entropy.detach())
+            mean_subgoal_spread = float(np.mean(ep_subgoal_spread)) if ep_subgoal_spread else 0.0
 
             writer.add_scalar('train/loss',                    loss.detach().item(), update)
             writer.add_scalar('train/mean_reward',             mean_reward,      update)
@@ -580,7 +753,10 @@ def train(n_updates, batch_size, max_steps: int = 600,
             writer.add_scalar('train/mean_skipped_subgoals',   mean_skipped,     update)
             writer.add_scalar('train/mean_n_crossed',          mean_crossed,     update)
             writer.add_scalar('train/mean_n_reached_subgoals', mean_reached_sg,  update)
-            writer.add_scalar('train/mean_entropy',            mean_entropy_val, update)
+            writer.add_scalar('train/mean_entropy',            mean_entropy_val,    update)
+            writer.add_scalar('train/mean_subgoal_spread',     mean_subgoal_spread, update)
+            if algo == 'ppo':
+                writer.add_scalar('train/clip_fraction', clip_frac, update)
             writer.flush()
 
             update_pbar.set_postfix({
@@ -598,12 +774,17 @@ def train(n_updates, batch_size, max_steps: int = 600,
                 best_score = smooth_score
                 os.makedirs(os.path.dirname(saving_path) or '.', exist_ok=True)
                 torch.save({
-                    'update':         update,
-                    'policy':         policy.state_dict(),
-                    'optimizer':      optimizer.state_dict(),
-                    'free_positions': env._free_positions,
-                    'n_agents':       env.n_agents,
-                    'log_dir':        log_dir,
+                    'update':            update,
+                    'algo':              algo,
+                    'policy':            policy.state_dict(),
+                    'optimizer':         optimizer.state_dict(),
+                    'critic':            critic.state_dict() if critic is not None else None,
+                    'critic_optimizer':  critic_optimizer.state_dict() if critic_optimizer is not None else None,
+                    'free_positions':    env._free_positions,
+                    'n_agents':          env.n_agents,
+                    'n_gaps':            env.n_gaps,
+                    'wait_times':        WAIT_TIMES,
+                    'log_dir':           log_dir,
                 }, saving_path)
                 tqdm.write(f"  ✓ saved (update {update}, score {smooth_score:+.2f}, crossed {np.mean(recent_crossed):.2f})")
 
@@ -612,11 +793,16 @@ def train(n_updates, batch_size, max_steps: int = 600,
             tqdm.write("Interrupted — saving checkpoint...")
             os.makedirs(os.path.dirname(saving_path) or '.', exist_ok=True)
             torch.save({
-                'update':         update,
-                'policy':         policy.state_dict(),
-                'optimizer':      optimizer.state_dict(),
-                'free_positions': env._free_positions,
-                'n_agents':       env.n_agents,
+                'update':            update,
+                'algo':              algo,
+                'policy':            policy.state_dict(),
+                'optimizer':         optimizer.state_dict(),
+                'critic':            critic.state_dict() if critic is not None else None,
+                'critic_optimizer':  critic_optimizer.state_dict() if critic_optimizer is not None else None,
+                'free_positions':    env._free_positions,
+                'n_agents':          env.n_agents,
+                'n_gaps':            env.n_gaps,
+                'wait_times':        WAIT_TIMES,
             }, saving_path)
             tqdm.write(f"Saved to '{saving_path}' at update {update}")
 
@@ -625,6 +811,7 @@ def train(n_updates, batch_size, max_steps: int = 600,
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument('--scenario',      type=str, default='rl_5n_random_2x2', help='scenario YAML name (without .yaml)')
     parser.add_argument('--loadw',      type=str, default=None, help='path to weights file to warm-start from')
     parser.add_argument('--save_dir',   type=str, default=f'{_SUBGOAL_DIR}/checkpoints', help='directory to save checkpoints (filename is auto-generated from timestamp)')
     parser.add_argument('--updates',    type=int, default=500)
@@ -632,12 +819,22 @@ if __name__ == "__main__":
     parser.add_argument('--n_subgoals',    type=int,   default=1,     help='number of subgoal positions predicted per agent')
     parser.add_argument('--lr',            type=float, default=3e-4,  help='Adam learning rate')
     parser.add_argument('--entropy_coeff', type=float, default=0.003, help='entropy regularisation coefficient')
+    parser.add_argument('--algo',          type=str,   default='reinforce', choices=['reinforce', 'ppo'],
+                        help='policy gradient algorithm')
+    parser.add_argument('--diversity_sigma', type=float, default=0.35,
+                        help='bandwidth of pairwise Gaussian repulsion between subgoals (metres)')
+    parser.add_argument('--max_steps',     type=int,   default=400,
+                        help='max simulation steps per episode before truncation')
     args = parser.parse_args()
 
     train(n_updates=args.updates, batch_size=args.batch,
+          max_steps=args.max_steps,
           log_dir=f'{_SUBGOAL_DIR}/runs/subgoal_B',
           save_dir=args.save_dir,
           initial_weights=args.loadw,
           n_subgoals=args.n_subgoals,
           lr=args.lr,
-          entropy_coeff=args.entropy_coeff)
+          entropy_coeff=args.entropy_coeff,
+          scenario=args.scenario,
+          algo=args.algo,
+          diversity_sigma=args.diversity_sigma)
