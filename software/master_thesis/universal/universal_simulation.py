@@ -364,7 +364,7 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
 
     def reset_simulation(self):
         """Reset the simulation to initial state - clears all agents, tasks, and obstacles."""
-        self.logger.info("Resetting universal simulation...")
+        self.logger.debug("Resetting universal simulation...")
 
         # Disable collision checker early so the scheduler won't use the old
         # checker after agent_conts is cleared (_collision_checking guards None).
@@ -378,23 +378,19 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
             if self.cli is not None and hasattr(agent, 'cli'):
                 try:
                     self.cli.removeChild(agent.cli)
-                    self.logger.debug(f"Agent {agent_id} CLI removed")
                 except Exception as e:
                     self.logger.warning(f"Could not remove CLI for {agent_id}: {e}")
             self.environment.removeObject(agent)
-            self.logger.debug(f"Agent {agent_id} removed from environment")
 
         # Remove all tasks from environment
         for task_id in list(self.tasks.keys()):
             task = self.tasks[task_id]
             self.environment.removeObject(task)
-            self.logger.debug(f"Task {task_id} removed from environment")
 
         # Remove all obstacles from environment
         for obstacle_id in list(self.obstacles.keys()):
             obstacle = self.obstacles[obstacle_id]
             self.environment.removeObject(obstacle)
-            self.logger.debug(f"Obstacle {obstacle_id} removed from environment")
 
         # Clear module-specific containers
         self.ta_containers.clear()

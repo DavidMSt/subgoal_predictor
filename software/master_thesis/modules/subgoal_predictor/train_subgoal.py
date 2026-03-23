@@ -117,6 +117,7 @@ class FrodoGymWrapper(gym.Env):
         agent_log_level: str = 'WARNING',
         diversity_sigma: float = 0.35,
         diversity_bonus: float = 1.5,
+        ompl_timelimit: float = 10.0,
     ) -> None:
         super().__init__()
 
@@ -128,6 +129,7 @@ class FrodoGymWrapper(gym.Env):
         self.agent_log_level = agent_log_level
         self.diversity_sigma = diversity_sigma
         self.diversity_bonus = diversity_bonus
+        self.ompl_timelimit  = ompl_timelimit
 
         lim         = self.scenario.limits
         x_lo, x_hi = lim[0]
@@ -201,6 +203,21 @@ class FrodoGymWrapper(gym.Env):
         self.sim.reset_simulation()
         self.scenario.build(self.sim, log_level=self.agent_log_level)
         self.sim.start_ta()
+
+        # Patch OMPL timelimit on each agent's lazily-created planner.
+        # Must happen after build() (agents exist) and before start_mp() in step()
+        # (planner created on first plan() call).
+        import dataclasses
+        from master_thesis.modules.motion_planning.ompl_trajectory_planner import OMPLTrajectoryPlanner
+        from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerConfig as _AgentMPPlannerConfig
+        for _agent in self.sim.agents.values():
+            if isinstance(_agent.planner, OMPLTrajectoryPlanner):
+                _new_ompl_cfg = dataclasses.replace(
+                    _agent.planner.planner_cont.config.planner_config,
+                    timelimit=self.ompl_timelimit,
+                )
+                _agent.planner.planner_cont.config = _AgentMPPlannerConfig(planner_config=_new_ompl_cfg)
+
         self._build_free_positions()
 
         obs  = self._get_obs()
@@ -359,9 +376,12 @@ class FrodoGymWrapper(gym.Env):
 
         # if we completed tasks (all robots reached their assigned goal)
         if terminated:
-            makespan_s = makespan * self.sim.Ts
-            indiv_s    = [t * self.sim.Ts for t in individual_times]
-            return 30.0 - makespan_s - alpha * sum(indiv_s) - gamma * n_failed
+            # Normalise to [0, 1] relative to max_steps so the termination bonus
+            # always dominates truncated reward (max truncated ≈ crossing_bonus × N ≈ 7.5;
+            # min terminated ≈ 30 - 10 - 3 = 17 >> 7.5).
+            makespan_frac   = makespan / self.max_steps
+            mean_indiv_frac = float(np.mean([t / self.max_steps for t in individual_times]))
+            return 30.0 - 10.0 * makespan_frac - alpha * 10.0 * mean_indiv_frac - gamma * n_failed
 
         # Truncated: gap-aware distance + crossing/subgoal/diversity bonuses ---
         gap_geometry = self.scenario.gap_geometry
@@ -545,6 +565,88 @@ def _model_score(frac_terminated: float, mean_n_crossed: float) -> float:
     """Higher is better — termination dominates, crossing breaks ties."""
     return frac_terminated * 10.0 + mean_n_crossed
 
+
+# ---------------------------------------------------------------------------
+# Multiprocessing worker support
+# Must live at module level (not inside functions) so the 'spawn' start
+# method can pickle and import them in each worker process.
+# ---------------------------------------------------------------------------
+_worker_env = None  # per-process FrodoGymWrapper singleton
+
+
+def _worker_init(scenario: str, max_steps: int, n_subgoals: int,
+                 grid_stride: float, diversity_sigma: float,
+                 diversity_bonus: float, agent_log_level: str,
+                 ompl_timelimit: float = 10.0) -> None:
+    """Create the persistent per-process environment (called once at pool startup)."""
+    global _worker_env
+    _worker_env = FrodoGymWrapper(
+        scenario, max_steps=max_steps, n_subgoals=n_subgoals,
+        grid_stride=grid_stride, agent_log_level=agent_log_level,
+        diversity_sigma=diversity_sigma, diversity_bonus=diversity_bonus,
+        ompl_timelimit=ompl_timelimit,
+    )
+    _worker_env.reset()  # builds _free_positions and warms up OMPL
+
+
+def _worker_run_episode(args: tuple) -> dict:
+    """Run one episode and return obs, sampled actions, reward, and diagnostics.
+
+    Log-prob computation is intentionally deferred to the main process —
+    cross-process autograd is not supported, so gradients must stay local.
+    """
+    policy_weights_np, n_positions, n_agents, n_gaps, n_subgoals = args
+    env = _worker_env
+    obs, _ = env.reset()
+    sample_pos_np = sample_wait_np = None
+    spread = 0.0
+
+    if n_subgoals > 0:
+        policy = subgoal_nn_base(n=n_agents, n_gaps=n_gaps,
+                                 n_positions=n_positions,
+                                 n_wait_bins=len(WAIT_TIMES))
+        policy.load_state_dict(
+            {k: torch.from_numpy(v.copy()) for k, v in policy_weights_np.items()}
+        )
+        policy.eval()
+
+        with torch.no_grad():
+            pos_logits, wait_logits = policy(
+                torch.as_tensor(obs['agent_psi'],    dtype=torch.float32),
+                torch.as_tensor(obs['neighbor_rel'], dtype=torch.float32).flatten(-2),
+                torch.as_tensor(obs['goal_rel'],     dtype=torch.float32),
+                torch.as_tensor(obs['gap_vectors'],  dtype=torch.float32),
+            )
+            dist_pos  = torch.distributions.Categorical(logits=pos_logits)
+            dist_wait = torch.distributions.Categorical(logits=wait_logits)
+            sample_pos  = dist_pos.sample((n_subgoals,))   # (n_subgoals, n_agents)
+            sample_wait = dist_wait.sample((n_subgoals,))  # (n_subgoals, n_agents)
+
+        action = np.stack([sample_pos.T.numpy(), sample_wait.T.numpy()], axis=-1).reshape(-1)
+
+        sg_xy = env._free_positions[sample_pos[0].numpy()]  # (n_agents, 2)
+        n = len(sg_xy)
+        spread = float(np.mean([
+            np.hypot(sg_xy[i, 0] - sg_xy[j, 0], sg_xy[i, 1] - sg_xy[j, 1])
+            for i in range(n) for j in range(i + 1, n)
+        ])) if n > 1 else 0.0
+
+        sample_pos_np  = sample_pos.numpy()
+        sample_wait_np = sample_wait.numpy()
+    else:
+        action = np.array([0], dtype=np.int64)
+
+    _, reward, _, _, info = env.step(action)
+    return {
+        'reward':      reward,
+        'obs':         obs,
+        'sample_pos':  sample_pos_np,
+        'sample_wait': sample_wait_np,
+        'info':        info,
+        'spread':      spread,
+    }
+
+
 def train(n_updates, batch_size, max_steps: int = 400,
           log_dir: str = f'{_SUBGOAL_DIR}/runs/subgoal_B',
           save_dir: str = f'{_SUBGOAL_DIR}/checkpoints',
@@ -555,14 +657,17 @@ def train(n_updates, batch_size, max_steps: int = 400,
           entropy_coeff: float = 0.003,
           scenario: str = 'rl_5n_random_2x2',
           algo: str = 'reinforce',
-          diversity_sigma: float = 0.35):
+          diversity_sigma: float = 0.35,
+          n_workers: int = 0,
+          ompl_timelimit: float = 10.0):
     from datetime import datetime
     from torch.utils.tensorboard import SummaryWriter
 
     env = FrodoGymWrapper(scenario, max_steps=max_steps,
                           grid_stride=0.15, agent_log_level='ERROR',
                           n_subgoals=n_subgoals,
-                          diversity_sigma=diversity_sigma)
+                          diversity_sigma=diversity_sigma,
+                          ompl_timelimit=ompl_timelimit)
 
     # warm-start reset to build _free_positions
     env.reset()
@@ -595,8 +700,17 @@ def train(n_updates, batch_size, max_steps: int = 400,
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
 
+    import multiprocessing as mp
+    _n_workers = n_workers if n_workers > 0 else min(batch_size, mp.cpu_count())
+    pool = mp.Pool(
+        processes=_n_workers,
+        initializer=_worker_init,
+        initargs=(scenario, max_steps, n_subgoals, 0.15, diversity_sigma, 1.5, 'ERROR', ompl_timelimit),
+    )
+
     print(f"Training [{algo.upper()}]: {n_updates} updates * {batch_size} episodes"
-          f" | n_agents={env.n_agents} | n_positions={n_positions} | logdir={log_dir}")
+          f" | n_agents={env.n_agents} | n_positions={n_positions}"
+          f" | workers={_n_workers} | logdir={log_dir}")
 
     best_score    = float('-inf')
     recent_crossed = collections.deque(maxlen=5)
@@ -606,104 +720,109 @@ def train(n_updates, batch_size, max_steps: int = 400,
     try:
         for update in update_pbar:
 
-            raw_rewards, log_probs, entropies = [], [], []
+            raw_rewards = []
             obs_batch, sample_pos_batch, sample_wait_batch = [], [], []
             ep_terminated, ep_makespans, ep_failed, ep_skipped = [], [], [], []
             ep_crossed, ep_reached_sg, ep_subgoal_spread = [], [], []
 
-            for episode in tqdm(range(batch_size), desc='Episodes', leave=False):
-                obs, _ = env.reset()
+            # --- parallel episode collection via worker pool -------------------
+            _pw = ({k: v.detach().numpy() for k, v in policy.state_dict().items()}
+                   if policy is not None else {})
+            _args = [(_pw, n_positions, env.n_agents, env.n_gaps, n_subgoals)] * batch_size
+            _results = pool.map(_worker_run_episode, _args)
 
-                if env.n_subgoals > 0:
-                    pos_logits, wait_logits = policy(  # type: ignore[union-attr]
-                        torch.as_tensor(obs["agent_psi"],    dtype=torch.float32),  # type: ignore[index]
-                        torch.as_tensor(obs["neighbor_rel"], dtype=torch.float32).flatten(-2),  # type: ignore[index]
-                        torch.as_tensor(obs["goal_rel"],     dtype=torch.float32),  # type: ignore[index]
-                        torch.as_tensor(obs["gap_vectors"],  dtype=torch.float32),  # type: ignore[index]
-                    )  # → (N, n_positions), (N, N_WAIT_BINS)
-
-                    dist_pos  = torch.distributions.Categorical(logits=pos_logits)
-                    dist_wait = torch.distributions.Categorical(logits=wait_logits)
-
-                    sample_pos  = dist_pos.sample((env.n_subgoals,))   # (n_subgoals, N)
-                    sample_wait = dist_wait.sample((env.n_subgoals,))  # (n_subgoals, N)
-
-                    log_prob = dist_pos.log_prob(sample_pos).sum() + dist_wait.log_prob(sample_wait).sum()
-                    entropy  = dist_pos.entropy().sum() + dist_wait.entropy().sum()
-
-                    action = np.stack([sample_pos.T.numpy(), sample_wait.T.numpy()], axis=-1).reshape(-1)
-                    log_probs.append(log_prob)
-                    entropies.append(entropy)
-
-                    # Mean pairwise distance between predicted subgoal positions —
-                    # collapses to 0 when all agents are sent to the same spot.
-                    sg_xy = env._free_positions[sample_pos[0].numpy()]  # (N, 2)
-                    pairs = [(i, j) for i in range(len(sg_xy)) for j in range(i + 1, len(sg_xy))]
-                    spread = float(np.mean([np.hypot(sg_xy[i,0]-sg_xy[j,0], sg_xy[i,1]-sg_xy[j,1]) for i,j in pairs]))
-                    ep_subgoal_spread.append(spread)
-                    if algo == 'ppo':
-                        obs_batch.append(obs)
-                        sample_pos_batch.append(sample_pos.detach())
-                        sample_wait_batch.append(sample_wait.detach())
-                else:
-                    action = np.array([0], dtype=np.int64)  # dummy — ignored by step()
-
-                _, reward, terminated, truncated, info = env.step(action)
-
-                raw_rewards.append(reward)
-                ep_terminated.append(info['terminated'])
-                ep_makespans.append(info['makespan'])
-                ep_failed.append(info['n_failed'])
-                ep_skipped.append(info['n_skipped_subgoals'])
-                ep_crossed.append(info['n_crossed'])
-                ep_reached_sg.append(info['n_reached_subgoals'])
+            for r in _results:
+                raw_rewards.append(r['reward'])
+                ep_terminated.append(r['info']['terminated'])
+                ep_makespans.append(r['info']['makespan'])
+                ep_failed.append(r['info']['n_failed'])
+                ep_skipped.append(r['info']['n_skipped_subgoals'])
+                ep_crossed.append(r['info']['n_crossed'])
+                ep_reached_sg.append(r['info']['n_reached_subgoals'])
+                if n_subgoals > 0 and r['sample_pos'] is not None:
+                    obs_batch.append(r['obs'])
+                    sample_pos_batch.append(torch.from_numpy(r['sample_pos']))
+                    sample_wait_batch.append(torch.from_numpy(r['sample_wait']))
+                    ep_subgoal_spread.append(r['spread'])
 
             rewards_t = torch.tensor(raw_rewards, dtype=torch.float32)
             clip_frac = 0.0
 
-            def _critic_fwd(obs_ep):
-                return critic(  # type: ignore[union-attr]
-                    torch.as_tensor(obs_ep["agent_psi"],    dtype=torch.float32),
-                    torch.as_tensor(obs_ep["neighbor_rel"], dtype=torch.float32).flatten(-2),
-                    torch.as_tensor(obs_ep["goal_rel"],     dtype=torch.float32),
-                    torch.as_tensor(obs_ep["gap_vectors"],  dtype=torch.float32),
+            # --- pre-stack observations into batch tensors (once per update) --------
+            B = len(obs_batch)
+            N = env.n_agents
+
+            def _stack_obs(obs_list):
+                """Stack list of per-episode obs dicts → 4 batch tensors."""
+                return (
+                    torch.stack([torch.as_tensor(o['agent_psi'],    dtype=torch.float32) for o in obs_list]),          # (B, N, 1)
+                    torch.stack([torch.as_tensor(o['neighbor_rel'], dtype=torch.float32).flatten(-2) for o in obs_list]),  # (B, N, (N-1)*2)
+                    torch.stack([torch.as_tensor(o['goal_rel'],     dtype=torch.float32) for o in obs_list]),          # (B, N, 2)
+                    torch.stack([torch.as_tensor(o['gap_vectors'],  dtype=torch.float32) for o in obs_list]),          # (B, N, n_gaps*2)
                 )
+
+            def _policy_fwd_batch(ap, nr, gr, gv, sp_t, sw_t):
+                """Single batched policy forward over all B episodes.
+
+                Reshapes (B, N, *) → (B*N, *) for one forward pass, then
+                reshapes logits back to (B, N, bins) for log_prob / entropy.
+                Returns log_prob (B,) and entropy (B,).
+                """
+                pl, wl = policy(  # type: ignore[union-attr]
+                    ap.reshape(B * N, 1),
+                    nr.reshape(B * N, -1),
+                    gr.reshape(B * N, 2),
+                    gv.reshape(B * N, -1),
+                )
+                pl = pl.reshape(B, N, -1)   # (B, N, n_positions)
+                wl = wl.reshape(B, N, -1)   # (B, N, n_wait_bins)
+                dp = torch.distributions.Categorical(logits=pl)
+                dw = torch.distributions.Categorical(logits=wl)
+                # sp_t / sw_t: (B, n_subgoals, N) — sum over subgoals and agents
+                lp = sum(
+                    dp.log_prob(sp_t[:, sg, :]).sum(-1) + dw.log_prob(sw_t[:, sg, :]).sum(-1)
+                    for sg in range(env.n_subgoals)
+                )  # (B,)
+                ent = dp.entropy().sum(-1) + dw.entropy().sum(-1)  # (B,)
+                return lp, ent
+
+            def _critic_fwd_batch(ap, nr, gr, gv):
+                """Single batched critic forward. Bypasses critic.forward() which
+                assumes a single episode; calls critic.net directly with (B, *) input.
+                """
+                x = torch.cat([
+                    ap.reshape(B, -1),
+                    nr.reshape(B, -1),
+                    gr.reshape(B, -1),
+                    gv.reshape(B, -1),
+                ], dim=-1)  # (B, total_in)
+                return critic.net(x).squeeze(-1)  # type: ignore[union-attr]  # (B,)
 
             if algo == 'ppo' and env.n_subgoals > 0:
                 PPO_EPOCHS  = 4
                 CLIP_EPS    = 0.2
                 VALUE_COEFF = 0.5
 
-                log_probs_old = torch.stack(log_probs).detach()
+                ap, nr, gr, gv = _stack_obs(obs_batch)
+                sp_t = torch.stack(sample_pos_batch)   # (B, n_subgoals, N)
+                sw_t = torch.stack(sample_wait_batch)  # (B, n_subgoals, N)
 
-                # Advantages computed once with frozen critic
                 with torch.no_grad():
-                    values_old = torch.stack([_critic_fwd(o) for o in obs_batch])
+                    log_probs_old, _  = _policy_fwd_batch(ap, nr, gr, gv, sp_t, sw_t)
+                    values_old        = _critic_fwd_batch(ap, nr, gr, gv)
+
                 advantages = rewards_t - values_old
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
                 for _ in range(PPO_EPOCHS):
-                    new_log_probs, new_entropies = [], []
-                    for obs_ep, sp, sw in zip(obs_batch, sample_pos_batch, sample_wait_batch):
-                        pos_logits, wait_logits = policy(  # type: ignore[union-attr]
-                            torch.as_tensor(obs_ep["agent_psi"],    dtype=torch.float32),
-                            torch.as_tensor(obs_ep["neighbor_rel"], dtype=torch.float32).flatten(-2),
-                            torch.as_tensor(obs_ep["goal_rel"],     dtype=torch.float32),
-                            torch.as_tensor(obs_ep["gap_vectors"],  dtype=torch.float32),
-                        )
-                        d_pos  = torch.distributions.Categorical(logits=pos_logits)
-                        d_wait = torch.distributions.Categorical(logits=wait_logits)
-                        new_log_probs.append(d_pos.log_prob(sp).sum() + d_wait.log_prob(sw).sum())
-                        new_entropies.append(d_pos.entropy().sum() + d_wait.entropy().sum())
+                    new_log_probs_t, new_entropies_t = _policy_fwd_batch(ap, nr, gr, gv, sp_t, sw_t)
+                    ratio        = torch.exp(new_log_probs_t - log_probs_old)
+                    surr1        = ratio * advantages
+                    surr2        = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * advantages
+                    policy_loss  = -torch.min(surr1, surr2).mean()
+                    mean_entropy = new_entropies_t.mean()
 
-                    new_log_probs_t = torch.stack(new_log_probs)
-                    ratio       = torch.exp(new_log_probs_t - log_probs_old)
-                    surr1       = ratio * advantages
-                    surr2       = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * advantages
-                    policy_loss = -torch.min(surr1, surr2).mean()
-                    mean_entropy = torch.stack(new_entropies).mean()
-
-                    values_new = torch.stack([_critic_fwd(o) for o in obs_batch])
+                    values_new = _critic_fwd_batch(ap, nr, gr, gv)
                     value_loss = VALUE_COEFF * nn.functional.mse_loss(values_new, rewards_t)
 
                     loss = policy_loss + value_loss - entropy_coeff * mean_entropy
@@ -717,10 +836,15 @@ def train(n_updates, batch_size, max_steps: int = 400,
                     clip_frac = ((ratio - 1.0).abs() > CLIP_EPS).float().mean().item()
 
             elif env.n_subgoals > 0:
-                # REINFORCE update with entropy regularisation
+                # REINFORCE: single batched forward pass, no epoch loop
+                ap, nr, gr, gv = _stack_obs(obs_batch)
+                sp_t = torch.stack(sample_pos_batch)
+                sw_t = torch.stack(sample_wait_batch)
+
+                log_probs_t, entropies_t = _policy_fwd_batch(ap, nr, gr, gv, sp_t, sw_t)
                 normalized   = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
-                mean_entropy = torch.stack(entropies).mean()
-                loss         = -(torch.stack(log_probs) * normalized).mean() - entropy_coeff * mean_entropy
+                mean_entropy = entropies_t.mean()
+                loss         = -(log_probs_t * normalized).mean() - entropy_coeff * mean_entropy
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -805,6 +929,11 @@ def train(n_updates, batch_size, max_steps: int = 400,
                 'wait_times':        WAIT_TIMES,
             }, saving_path)
             tqdm.write(f"Saved to '{saving_path}' at update {update}")
+        pool.terminate()
+
+    finally:
+        pool.close()
+        pool.join()
 
     writer.close()
 
@@ -825,6 +954,10 @@ if __name__ == "__main__":
                         help='bandwidth of pairwise Gaussian repulsion between subgoals (metres)')
     parser.add_argument('--max_steps',     type=int,   default=400,
                         help='max simulation steps per episode before truncation')
+    parser.add_argument('--n_workers',     type=int,   default=0,
+                        help='parallel worker processes (0 = auto: min(batch, cpu_count))')
+    parser.add_argument('--ompl_timelimit', type=float, default=10.0,
+                        help='per-solve OMPL time budget in seconds (reduce to limit straggler episodes)')
     args = parser.parse_args()
 
     train(n_updates=args.updates, batch_size=args.batch,
@@ -837,4 +970,6 @@ if __name__ == "__main__":
           entropy_coeff=args.entropy_coeff,
           scenario=args.scenario,
           algo=args.algo,
-          diversity_sigma=args.diversity_sigma)
+          diversity_sigma=args.diversity_sigma,
+          n_workers=args.n_workers,
+          ompl_timelimit=args.ompl_timelimit)
