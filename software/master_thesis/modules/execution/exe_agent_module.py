@@ -52,7 +52,7 @@ class EXEAgentModule:
         if name not in self._phases:
             raise KeyError(f"Unknown phase '{name}'")
 
-        self.logger.info(f"activate_phase called: name={name}, current_active={self.exe_cont.state.active_phase}, pending_end={self._pending_end}, reset={reset}")
+        self.logger.debug(f"activate_phase called: name={name}, current_active={self.exe_cont.state.active_phase}, pending_end={self._pending_end}, reset={reset}")
 
         if reset:
             self._phases[name].state.reset()
@@ -62,7 +62,7 @@ class EXEAgentModule:
         if cut_current or self.exe_cont.state.active_phase == 'idle':
             self.exe_cont.state.active_phase = name
             self.exe_cont.state.execution_mode = 'phase'
-            self.logger.info(f"Active phase set to '{name}', mode={self.exe_cont.state.execution_mode}")
+            self.logger.debug(f"Active phase set to '{name}', mode={self.exe_cont.state.execution_mode}")
         else:
             self.exe_cont.state.queued_phases.append(name)
             self.logger.info(f"Phase '{name}' queued for execution")

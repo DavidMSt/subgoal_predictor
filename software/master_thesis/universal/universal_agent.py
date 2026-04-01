@@ -134,7 +134,7 @@ class FRODOUniversalAgent(FRODOGeneralAgent, ABC):
                 self.sgm.start_planning_flag = None
                 return
 
-            self.logger.info(f"Planning motion to task {task.object_id} at {task.configuration} (phase: {phase_key})")
+            self.logger.debug(f"Planning motion to task {task.object_id} at {task.configuration} (phase: {phase_key})")
             self.sgm.start_planning(phase_key)
             self.sgm.start_planning_flag = None
 

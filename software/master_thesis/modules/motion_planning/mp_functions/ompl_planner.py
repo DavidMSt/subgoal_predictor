@@ -1,3 +1,4 @@
+import os
 import sys
 
 try:
@@ -39,7 +40,7 @@ class OMPLPlannerConfig:
     bezier_safety_factor: float = 0.66
     timelimit: float = 10.0
     query_timelimit: float = 1.0   # time budget for PRM* queries — A* on existing graph is ~free
-    roadmap_time: float = 60.0     # invest here: denser roadmap = better paths for all queries
+    roadmap_time: float = 300.0    # invest here: denser roadmap = better paths for all queries
     planner: str = 'rrt_connect'
     goal_bias: float = 0.1
     goal_eps: float = 0.1
@@ -145,6 +146,47 @@ class OMPLSmoothPathPlanner:
 
         ptc = ob.timedPlannerTerminationCondition(self.config.roadmap_time)  # type: ignore[attr-defined]
         prm.growRoadmap(ptc)  # type: ignore[attr-defined]
+        return PlannerRoadmap(prm=prm, si=self._si, _svc=self._svc)
+
+    def save_roadmap(self, roadmap: PlannerRoadmap, filepath: str) -> None:
+        """Save PRM* vertex positions to a .npy file for later reloading."""
+        pd = ob.PlannerData(roadmap.si)  # type: ignore[attr-defined]
+        roadmap.prm.getPlannerData(pd)
+        verts = []
+        for i in range(pd.numVertices()):
+            s = pd.getVertex(i).getState()
+            if s is not None:
+                verts.append([s.getX(), s.getY(), s.getYaw()])
+        arr = np.array(verts, dtype=np.float64)
+        dirpath = os.path.dirname(os.path.abspath(filepath))
+        os.makedirs(dirpath, exist_ok=True)
+        np.save(filepath, arr)
+
+    def load_roadmap(self, filepath: str) -> PlannerRoadmap:
+        """Reconstruct a PRM* roadmap from a saved .npy vertex file.
+
+        Each saved vertex is re-inserted via PRMstar.addMilestone(), which
+        re-establishes edges to nearby vertices automatically.  This is far
+        faster than a fresh growRoadmap() call (~seconds vs 60 s).
+        """
+        verts = np.load(filepath)
+        self._si.setup()
+        prm = og.PRMstar(self._si)  # type: ignore[attr-defined]
+        sampler = self._si.allocValidStateSampler()
+        s1 = self._si.allocState()
+        s2 = self._si.allocState()
+        sampler.sample(s1)
+        sampler.sample(s2)
+        pdef = ob.ProblemDefinition(self._si)  # type: ignore[attr-defined]
+        pdef.setStartAndGoalStates(s1, s2, self.config.goal_eps)
+        prm.setProblemDefinition(pdef)
+        prm.setup()
+        for v in verts:
+            state = self._si.allocState()
+            state.setX(float(v[0]))
+            state.setY(float(v[1]))
+            state.setYaw(float(v[2]))
+            prm.addMilestone(state)
         return PlannerRoadmap(prm=prm, si=self._si, _svc=self._svc)
 
     def solve(

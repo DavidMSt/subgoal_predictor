@@ -15,7 +15,8 @@ class DirectGoalPlanner(PathPlannerBase):
     def __init__(self, agent_cont: FRODOAgentContainer, lwr_cont: LocalWorldContainer | None, logger: Logger):
         super().__init__(agent_cont, lwr_cont, logger)
 
-    def plan(self, goal_task: TaskContainer, phase_key: str = 'default') -> PlanResult:
+    def plan(self, goal_task: TaskContainer, phase_key: str = 'default',
+             explicit_start=None, use_roadmap: bool = True) -> PlanResult:
         subgoal = np.array([goal_task.x, goal_task.y, goal_task.psi])
         self.logger.debug(f"DirectGoalPlanner: subgoal = {subgoal}")
         return PlanResult(success=True, subgoal=subgoal, requires_reactive=True)

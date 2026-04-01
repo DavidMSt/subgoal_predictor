@@ -50,7 +50,8 @@ class RLSubgoalPredictor(PathPlannerBase):
 
     # ── PathPlannerBase interface ───────────────────────────────────
 
-    def plan(self, goal_task: TaskContainer, phase_key: str = 'default') -> PlanResult:
+    def plan(self, goal_task: TaskContainer, phase_key: str = 'default',
+             explicit_start=None, use_roadmap: bool = True) -> PlanResult:
         goal = np.array([goal_task.x, goal_task.y, goal_task.psi])
         obs = self._build_obs(goal)
 

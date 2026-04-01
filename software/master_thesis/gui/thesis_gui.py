@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import random
+import threading
 import time
 import os
 import signal
@@ -24,6 +25,7 @@ from extensions.cli.cli import CommandSet, CLI, Command, CommandArgument
 from extensions.gui.src.gui import GUI, Category, Page
 from extensions.gui.src.lib.objects.python.babylon_widget import BabylonWidget
 from extensions.gui.src.lib.objects.python.buttons import Button
+from extensions.gui.src.lib.objects.python.text import TextWidget
 from simulation.core.environment import BASE_ENVIRONMENT_ACTIONS
 from simulation.core.scheduling import Action
 # from extensions.simulation.src.objects.bilbo import BILBO_DynamicAgent, BILBO_Control_Mode, DEFAULT_BILBO_MODEL, \
@@ -43,6 +45,10 @@ from master_thesis.scenarios.base import ScenarioConfig, _resolve_agent_class, d
 from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyType
 
 from extensions.babylon.src.lib.objects.drawings import CircleDrawing, LineDrawing
+
+# Directory where per-scenario PRM* roadmap .npy files are stored.
+_ROADMAPS_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'scenarios', 'roadmaps'))
+
 
 class BabylonTask(Box):
     """
@@ -94,6 +100,8 @@ class RobotGUIContainer:
     joystick: Joystick | None = None
     _joystick_action: Action | None = None
     _last_assigned_task_id: str | None = None
+    _alert_active: bool = False
+    _original_color: list = dataclasses.field(default_factory=lambda: [1.0, 1.0, 1.0])
 
 @dataclasses.dataclass
 class ObstacleGUIContainer:
@@ -132,6 +140,14 @@ class ThesisGUI:
         self._last_scenario = None  # set by loadScenario(), read by run_subgoal_policy()
         self._action_grid_dots: list = []
         self._subgoal_weights = subgoal_weights  # None → auto-select latest checkpoint
+
+        # Episode timer (set when an episode button is pressed)
+        self._episode_start_step: int | None = None
+        self._episode_end_step: int | None = None
+        self._episode_had_tasks: bool = False
+
+        # Background PRM* roadmap builder thread
+        self._roadmap_build_thread: threading.Thread | None = None
 
         self.joystick_manager = JoystickManager()
         self.joystick_manager.callbacks.new_joystick.register(self._newJoystick_callback)
@@ -452,12 +468,105 @@ class ThesisGUI:
         # Store for run_subgoal_policy() to read gap_geometry etc.
         self._last_scenario = config
 
+        # Register PRM* roadmap file (loads lazily on first plan() call).
+        self._try_apply_roadmap(config)
+
         self.logger.info(
             f"Scenario '{config.name}' loaded: "
             f"{len(config.agents)} agents, {len(config.tasks)} tasks, "
             f"{len(config.obstacles)} obstacles"
             + (f", {len(config.assignments)} pre-assigned" if config.assignments else "")
         )
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _try_apply_roadmap(self, config: ScenarioConfig) -> None:
+        """Load a saved roadmap for *config* and share it across all agents.
+
+        Loading is done in a background thread (~5 min).  All agents receive
+        the same in-memory PlannerRoadmap object, so the load cost is paid
+        only once rather than once per agent.
+        """
+        filepath = os.path.join(_ROADMAPS_DIR, f"{config.name}.npy")
+        if os.path.exists(filepath):
+            self.logger.info(
+                f"Roadmap found for '{config.name}' — loading in background (~5 min, shared across agents)"
+            )
+            # Register file as fallback (in case background load hasn't finished when
+            # the user triggers the first plan()).
+            self._register_roadmap_file(filepath)
+            threading.Thread(
+                target=self._load_and_share_roadmap_bg, args=(filepath,), daemon=True
+            ).start()
+        else:
+            self.logger.info(f"No roadmap for '{config.name}' — press 'Build Roadmap' to create one (~5 min, one-time)")
+            self._register_roadmap_file(None)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _load_and_share_roadmap_bg(self, filepath: str) -> None:
+        """Background worker: force-load one roadmap and share to all planners."""
+        from master_thesis.modules.motion_planning.ompl_trajectory_planner import OMPLTrajectoryPlanner
+        loader = next(
+            (r.sim_agent.planner for r in self.robots.values()
+             if isinstance(r.sim_agent.planner, OMPLTrajectoryPlanner)),
+            None,
+        )
+        if loader is None:
+            return
+        try:
+            roadmap = loader.load_roadmap_from_file(filepath)
+            self.sim.share_roadmap(roadmap)
+            self.logger.info("PRM* roadmap loaded and shared to all agents")
+        except Exception as exc:
+            self.logger.warning(f"Background roadmap load failed: {exc}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _register_roadmap_file(self, filepath: str | None) -> None:
+        """Call set_roadmap_file() on every OMPLTrajectoryPlanner in the scene."""
+        from master_thesis.modules.motion_planning.ompl_trajectory_planner import OMPLTrajectoryPlanner
+        for robot in self.robots.values():
+            planner = robot.sim_agent.planner
+            if isinstance(planner, OMPLTrajectoryPlanner):
+                planner.set_roadmap_file(filepath)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def buildRoadmap(self) -> None:
+        """Build a PRM* roadmap in a background thread (default ~5 min) and save it.
+
+        After saving, registers the file with all agents so they load it
+        lazily on the next plan() call.
+        """
+        if self._last_scenario is None:
+            self.logger.warning("Load a scenario first")
+            return
+        if self._roadmap_build_thread is not None and self._roadmap_build_thread.is_alive():
+            self.logger.warning("Roadmap build already in progress…")
+            return
+
+        scenario = self._last_scenario
+        filepath = os.path.join(_ROADMAPS_DIR, f"{scenario.name}.npy")
+
+        def _build():
+            from master_thesis.modules.motion_planning.ompl_trajectory_planner import OMPLTrajectoryPlanner
+            self.logger.warning(f"Building PRM* roadmap for '{scenario.name}' — this takes ~5 minutes, GUI remains responsive")
+            builder = None
+            for robot in self.robots.values():
+                if isinstance(robot.sim_agent.planner, OMPLTrajectoryPlanner):
+                    builder = robot.sim_agent.planner
+                    break
+            if builder is None:
+                self.logger.warning("No OMPLTrajectoryPlanner found — load a scenario first")
+                return
+            try:
+                roadmap = builder.build_and_save_roadmap(filepath)
+                self.logger.warning(f"Roadmap build done — saved to {filepath}")
+                # Share the in-memory roadmap to all agents directly.
+                # No need for lazy file re-loads — every planner gets the same object.
+                self.sim.share_roadmap(roadmap)
+            except Exception as exc:
+                self.logger.error(f"Roadmap build failed: {exc}")
+
+        self._roadmap_build_thread = threading.Thread(target=_build, daemon=True)
+        self._roadmap_build_thread.start()
 
     # ------------------------------------------------------------------------------------------------------------------
 
@@ -562,7 +671,7 @@ class ThesisGUI:
         """Load checkpoint, return (policy, free_positions, n_gaps) or None on failure."""
         import torch
         from master_thesis.modules.subgoal_predictor.train_subgoal import (
-            subgoal_nn_base, WAIT_TIMES, latest_subgoal_checkpoint,
+            subgoal_nn_base, subgoal_gnn_base, WAIT_TIMES, latest_subgoal_checkpoint,
         )
 
         if checkpoint_path is None:
@@ -591,7 +700,11 @@ class ThesisGUI:
         # Reconstruct the wait_times list: stored explicitly or fall back to
         # the first n_wait_bins entries of the current WAIT_TIMES constant.
         wait_times = list(ckpt.get('wait_times', WAIT_TIMES[:n_wait_bins]))
-        policy = subgoal_nn_base(
+        # Select architecture from checkpoint; default to GNN (current).
+        # Old checkpoints (MLP) are detected by absence of GNN-specific keys.
+        _is_gnn = 'node_enc.weight' in ckpt['policy']
+        _PolicyCls = subgoal_gnn_base if _is_gnn else subgoal_nn_base
+        policy = _PolicyCls(
             n=n_ckpt, n_gaps=n_gaps,
             n_positions=n_positions, n_wait_bins=n_wait_bins,
         )
@@ -603,6 +716,13 @@ class ThesisGUI:
             f"n_gaps={n_gaps}, wait_bins={n_wait_bins})"
         )
         return policy, free_positions, n_ckpt, wait_times
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _start_episode_timer(self):
+        """Record the current sim step as the episode start; reset completion state."""
+        self._episode_start_step = self.sim.environment.scheduling.tick_global
+        self._episode_end_step = None
+        self._episode_had_tasks = False
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_rl_episode(self, checkpoint_path: str | None = None) -> None:
@@ -639,6 +759,8 @@ class ThesisGUI:
             self.logger.warning("No scenario with gap_geometry loaded.")
             return
 
+        self._start_episode_timer()
+
         # 1. Clear any leftover SGM state, then assign tasks
         for agent in self.sim.agents.values():
             agent.sgm.reset()
@@ -648,8 +770,10 @@ class ThesisGUI:
         obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
         predicted = run_policy_step(self.sim, policy, free_positions, obs, wait_times=wait_times)
 
-        for i, (sx, sy) in enumerate(predicted):
-            self.logger.info(f"Agent {i}: subgoal ({sx:.2f}, {sy:.2f})")
+        for i, ((sx, sy), agent) in enumerate(zip(predicted, self.sim.agents.values())):
+            wait_s = (agent.sgm._wait_ticks_per_subgoal[0] * self.sim.Ts
+                      if agent.sgm._wait_ticks_per_subgoal else 0.0)
+            self.logger.info(f"Agent {i}: subgoal ({sx:.2f}, {sy:.2f}), wait {wait_s:.1f}s")
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_subgoal_policy(self, checkpoint_path: str | None = None) -> None:
@@ -683,6 +807,7 @@ class ThesisGUI:
     def run_no_subgoal_episode(self):
         """Baseline episode: TA → MP → EXE with no subgoal predictor.
         Matches exactly FrodoGymWrapper with n_subgoals=0."""
+        self._start_episode_timer()
         for agent in self.sim.agents.values():
             agent.sgm.reset()
         self.sim.start_ta()
@@ -990,6 +1115,12 @@ class ThesisGUI:
         # Reset simulation (removes all simulation objects and clears internal state)
         self.sim.reset_simulation()
 
+        # Clear episode timer
+        self._episode_start_step = None
+        self._episode_end_step = None
+        self._episode_had_tasks = False
+        self.babylon_visualization.set_ep_step('')
+
         self._output_enabled = True
         self.logger.info("Simulation reset complete")
 
@@ -1113,6 +1244,12 @@ class ThesisGUI:
             discard_inputs=True,
         )), height=2, width=4)
 
+        page1.addWidget(Button(text="Build Roadmap", callback=Callback(
+            function=self.buildRoadmap,
+            inputs={},
+            discard_inputs=True,
+        )), height=2, width=4)
+
     def _buildBabylonFloor(self):
 
         floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
@@ -1200,6 +1337,42 @@ class ThesisGUI:
                     if now - robot._last_trajectory_update >= self.TRAJECTORY_UPDATE_INTERVAL:
                         self._showTrajectoryForRobot(robot)
                         robot._last_trajectory_update = now
+
+            # Alert color: turn red while agent is stuck waiting to retry planning
+            is_stuck = robot.sim_agent.sgm._retry_ticks > 0
+            if is_stuck and not robot._alert_active:
+                robot._original_color = list(robot.babylon.config.get('color', [1.0, 1.0, 1.0]))
+                robot.babylon.config['color'] = [1.0, 0.15, 0.15]
+                robot.babylon.updateConfig()
+                robot._alert_active = True
+            elif not is_stuck and robot._alert_active:
+                robot.babylon.config['color'] = robot._original_color
+                robot.babylon.updateConfig()
+                robot._alert_active = False
+
+        # Update simulation step counter in Babylon top bar
+        tick = self.sim.environment.scheduling.tick_global
+        self.babylon_visualization.set_sim_step(tick)
+
+        # Update episode step counter
+        if self._episode_start_step is not None and self._episode_end_step is None:
+            ep_steps = tick - self._episode_start_step
+            ts = self.sim.environment.scheduling.Ts
+            ep_secs = ep_steps * ts
+
+            if len(self.tasks) > 0:
+                self._episode_had_tasks = True
+
+            if self._episode_had_tasks and len(self.tasks) == 0:
+                all_idle = all(r.sim_agent.assigned_task is None for r in self.robots.values())
+                if all_idle:
+                    self._episode_end_step = tick
+                    self.babylon_visualization.set_ep_step(f"ep: {ep_steps} steps ({ep_secs:.1f}s) ✓")
+                    self.logger.info(f"Episode done: {ep_steps} steps ({ep_secs:.1f}s)")
+                else:
+                    self.babylon_visualization.set_ep_step(f"ep: {ep_steps} ({ep_secs:.1f}s)")
+            else:
+                self.babylon_visualization.set_ep_step(f"ep: {ep_steps} ({ep_secs:.1f}s)")
 
 
 # === BILBO INTERACTIVE CLI ============================================================================================

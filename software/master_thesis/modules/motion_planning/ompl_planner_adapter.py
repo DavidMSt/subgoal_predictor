@@ -23,7 +23,8 @@ class OMPLPlannerAdapter(PathPlannerBase):
 
     # ── PathPlannerBase interface ───────────────────────────────────
 
-    def plan(self, goal_task: TaskContainer, phase_key: str = 'default') -> PlanResult:
+    def plan(self, goal_task: TaskContainer, phase_key: str = 'default',
+             explicit_start=None, use_roadmap: bool = True) -> PlanResult:
         self._mpm.plan_motion(phase_key=phase_key, goal_task=goal_task)
 
         phase = self._mpm.planner_cont.phases.get(phase_key)

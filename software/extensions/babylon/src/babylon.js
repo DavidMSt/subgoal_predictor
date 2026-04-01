@@ -1185,6 +1185,18 @@ export class Babylon extends Scene {
                     this.container.top_bar_title.textContent = params.text ?? '';
                 }
                 break;
+            case 'setSimStep':
+                if (this.container?.top_bar_step) {
+                    this.container.top_bar_step.textContent = `step: ${params.step ?? 0}`;
+                }
+                break;
+            case 'setEpStep':
+                if (this.container?.top_bar_ep) {
+                    const epText = params.text ?? '';
+                    this.container.top_bar_ep.textContent = epText;
+                    this.container.top_bar_ep.style.display = epText ? '' : 'none';
+                }
+                break;
             case 'setLabel':
                 this._handleSetLabel(params);
                 break;
@@ -2437,10 +2449,25 @@ export class BabylonContainer {
         });
         top_bar.appendChild(this._followBadge);
 
+        const time_block = document.createElement('div');
+        time_block.classList.add('time-block');
+
         const top_bar_time = document.createElement('div');
         top_bar_time.classList.add('time');
         top_bar_time.textContent = "00:00:00";
-        top_bar.appendChild(top_bar_time);
+        time_block.appendChild(top_bar_time);
+
+        const top_bar_step = document.createElement('div');
+        top_bar_step.classList.add('sim-step');
+        top_bar_step.textContent = "step: 0";
+        time_block.appendChild(top_bar_step);
+
+        const top_bar_ep = document.createElement('div');
+        top_bar_ep.classList.add('sim-step');
+        top_bar_ep.style.display = 'none';
+        time_block.appendChild(top_bar_ep);
+
+        top_bar.appendChild(time_block);
 
 
         // Overlays
@@ -2523,6 +2550,8 @@ export class BabylonContainer {
         this.top_bar = top_bar;
         this.top_bar_title = top_bar_title;
         this.top_bar_time = top_bar_time;
+        this.top_bar_step = top_bar_step;
+        this.top_bar_ep = top_bar_ep;
 
         // Overlay labels container (fills parent, labels are individually positioned)
         this._overlayLabelsContainer = document.createElement('div');

@@ -22,6 +22,7 @@ class PlanResult:
     requires_reactive: bool = False
     waypoints: list | None = None                       # simplified geometric waypoints [[x,y], ...]
     start_in_collision: bool = False                    # True when OMPL rejected start state (transient — agent inside wall)
+    wall_time: float = 0.0                              # actual wall-clock seconds spent in plan() (for RL reward shaping)
 
 
 # ── Abstract base ───────────────────────────────────────────────────
@@ -35,8 +36,22 @@ class PathPlannerBase(ABC):
         self.logger = logger
 
     @abstractmethod
-    def plan(self, goal_task: TaskContainer, phase_key: str = 'default') -> PlanResult:
-        """Compute a plan toward the goal task."""
+    def plan(self, goal_task: TaskContainer, phase_key: str = 'default',
+             explicit_start: np.ndarray | None = None,
+             use_roadmap: bool = True) -> PlanResult:
+        """Compute a plan toward the goal task.
+
+        Args:
+            goal_task:      Target task or subgoal.
+            phase_key:      Storage key in the planner container.
+            explicit_start: If provided, use this [x, y, psi] as the plan
+                            start instead of the agent's current position.
+                            Used by SubgoalManager for upfront pre-planning.
+            use_roadmap:    If False, skip any stored PRM* roadmap and run a
+                            fresh RRT solve.  Set to False by SubgoalManager
+                            for mid-episode replans so only the initial
+                            plan_all_upfront() uses the roadmap.
+        """
         ...
 
     @abstractmethod

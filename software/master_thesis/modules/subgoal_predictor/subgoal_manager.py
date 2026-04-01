@@ -56,8 +56,18 @@ class SubgoalManager:
         self._failed_plans: int = 0
         # Count of subgoals skipped due to planning failure (excludes final-task failures)
         self._skipped_subgoals: int = 0
+        # Accumulated wall-clock seconds spent in OMPL plan() calls this episode
+        self._total_ompl_wall_time: float = 0.0
         # Countdown for retrying after a final-task planning failure (0 = no retry pending)
         self._retry_ticks: int = 0
+
+        # True after the first start_planning() call in an episode.
+        # Subsequent calls (collision-recovery replans) skip the roadmap and use RRT.
+        self._initial_planning_done: bool = False
+
+        # Upfront pre-planned subsequent segments (sg→goal, sg1→sg2→goal, etc.)
+        # Populated by _plan_all_upfront(); consumed one-by-one as segments complete.
+        self._pre_planned_results: list = []
 
     @property
     def current_task(self) -> TaskContainer | None:
@@ -103,9 +113,20 @@ class SubgoalManager:
     # ── External triggers ───────────────────────────────────────────
 
     def start_planning(self, phase_key: str = 'default'):
-        """Explicit trigger from sim level (sim.start_mp()).  Runs planner once."""
+        """Explicit trigger from sim level (sim.start_mp()).  Runs planner once.
+
+        The first call in an episode uses the PRM* roadmap (upfront pre-planning).
+        All subsequent calls — typically collision-recovery replans — use RRT so
+        that the roadmap is never queried mid-episode.
+        """
+        use_roadmap = not self._initial_planning_done
+        self._initial_planning_done = True
         self.executor.clear()
-        self._do_plan(phase_key)
+        self._pre_planned_results = []
+        if self._has_pending_subgoal:
+            self._plan_all_upfront(phase_key, use_roadmap=use_roadmap)
+        else:
+            self._do_plan(phase_key)
 
     def start_execution(self):
         """Explicit trigger from sim level (sim.start_exe()). Activates executor."""
@@ -150,7 +171,7 @@ class SubgoalManager:
             return
 
         if self.executor.is_goal_reached():
-            # Wait-time countdown: hold position, don't replan yet
+            # Wait-time countdown: hold position, don't advance yet
             if self._current_wait_ticks > 0:
                 self._current_wait_ticks -= 1
                 return
@@ -168,7 +189,16 @@ class SubgoalManager:
                     f"SubgoalManager: subgoal reached, advancing to "
                     f"{self._subgoal_idx}/{len(self._subgoal_queue)}"
                 )
-            self._do_plan()
+            # Activate next pre-planned segment if available; otherwise replan now
+            if self._pre_planned_results:
+                next_result = self._pre_planned_results.pop(0)
+                self._last_result = next_result
+                self.executor.set_plan(next_result, phase_key='default')
+                if self._execution_enabled and hasattr(self.executor, 'start_execution'):
+                    self.executor.start_execution()
+                self.logger.debug("SubgoalManager: activated pre-planned segment")
+            else:
+                self._do_plan()
 
     # ── Internal ────────────────────────────────────────────────────
 
@@ -180,15 +210,85 @@ class SubgoalManager:
         self._plan_active = False
         self.executor.clear()
 
+    def _plan_all_upfront(self, phase_key: str = 'default', use_roadmap: bool = True):
+        """Plan start→sg→...→goal all at once before execution begins.
+
+        Activates the first segment immediately.  Stores remaining pre-planned
+        segments in _pre_planned_results for zero-latency activation as each
+        segment completes.  Falls back to _do_plan() if any segment fails.
+        """
+        # Plan first segment from current agent position
+        target = self._current_target()
+        if target is None:
+            self.logger.warning("SubgoalManager: _plan_all_upfront called but no target")
+            return
+
+        result0 = self.planner.plan(target, phase_key, use_roadmap=use_roadmap)
+        self._total_ompl_wall_time += result0.wall_time
+
+        if not result0.success:
+            self._failed_plans += 1
+            if result0.start_in_collision:
+                self._plan_active = False
+                self._recovery_needed = True
+                self.logger.warning("SubgoalManager: start-in-collision on first segment")
+            elif self._has_pending_subgoal:
+                self._skipped_subgoals += 1
+                self._subgoal_idx += 1
+                self.logger.warning(
+                    f"SubgoalManager: first segment failed, skipping subgoal "
+                    f"{self._subgoal_idx - 1} → trying {self._subgoal_idx}"
+                )
+                self._plan_all_upfront(phase_key, use_roadmap=use_roadmap)
+            else:
+                self._plan_active = False
+                self._retry_ticks = 5
+                self.logger.warning("SubgoalManager: first segment failed — will retry in 5 ticks")
+            return
+
+        # Activate first segment
+        self._last_result = result0
+        self.executor.set_plan(result0, phase_key=phase_key)
+        self._plan_active = True
+        if self._execution_enabled and hasattr(self.executor, 'start_execution'):
+            self.executor.start_execution()
+
+        # Pre-plan all remaining segments from the end of each previous one
+        self._pre_planned_results = []
+        current_start = np.array(result0.phase_container.states[-1][:3], dtype=float)
+
+        remaining_targets = []
+        for i in range(self._subgoal_idx + 1, len(self._subgoal_queue)):
+            sg = self._subgoal_queue[i]
+            remaining_targets.append(SimpleNamespace(
+                x=float(sg[0]), y=float(sg[1]), psi=float(sg[2])
+            ))
+        if self.current_task is not None:
+            remaining_targets.append(self.current_task)
+
+        for tgt in remaining_targets:
+            res = self.planner.plan(tgt, phase_key, explicit_start=current_start, use_roadmap=use_roadmap)
+            self._total_ompl_wall_time += res.wall_time
+            if res.success:
+                self._pre_planned_results.append(res)
+                current_start = np.array(res.phase_container.states[-1][:3], dtype=float)
+            else:
+                self.logger.warning(
+                    "SubgoalManager: upfront pre-plan segment failed — "
+                    "remaining segments will replan at runtime"
+                )
+                break  # keep what we have; runtime fallback handles the rest
+
     def _do_plan(self, phase_key: str = 'default'):
         target = self._current_target()
 
-        # TODO: remove - since this is handled by the motion planner anyway? 
+        # TODO: remove - since this is handled by the motion planner anyway?
         if target is None:
             self.logger.warning("SubgoalManager: _do_plan called but no task assigned")
             return
 
-        result = self.planner.plan(target, phase_key)
+        result = self.planner.plan(target, phase_key, use_roadmap=False)
+        self._total_ompl_wall_time += result.wall_time
         if result.success:
             self._last_result = result
             self.executor.set_plan(result, phase_key=phase_key)
@@ -242,6 +342,9 @@ class SubgoalManager:
         self._subgoal_wait_started = False
         self._failed_plans = 0
         self._skipped_subgoals = 0
+        self._total_ompl_wall_time = 0.0
+        self._initial_planning_done = False
         self._recovery_needed = False
         self._retry_ticks = 0
+        self._pre_planned_results = []
         self.executor.clear()

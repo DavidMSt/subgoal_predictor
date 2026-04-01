@@ -45,7 +45,7 @@ class MPAgentModule():
         if solved:
             solution_cont = _traj_dict_to_container(self.motion_planner.get_solution())
             self.planner_cont.phases[phase_key] = solution_cont
-            self.logger.info(
+            self.logger.debug(
                 f"Found solution with {len(solution_cont.states)} states, "
                 f"total length {path_length}, end config: {solution_cont.states[-1]}"
             )

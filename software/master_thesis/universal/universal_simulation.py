@@ -422,6 +422,17 @@ class FRODO_Universal_Simulation(FRODO_general_Simulation):
 
         self.logger.info("Simulation reset complete")
 
+    def share_roadmap(self, roadmap) -> None:
+        """Inject one PlannerRoadmap instance into every OMPLTrajectoryPlanner.
+
+        Call this after loading or building a roadmap on a single planner so
+        all agents in the process share the same in-memory object, avoiding
+        repeated ~5-min load_roadmap() calls per agent.
+        """
+        for agent in self.agents.values():
+            if hasattr(agent, 'planner') and isinstance(agent.planner, OMPLTrajectoryPlanner):
+                agent.planner.set_roadmap(roadmap)
+
     def start_ta(self, strategy: StrategyType | str = StrategyType.HUNGARIAN) -> SimTAResultContainer | None:
         # start the task assignment, return the result
         result = self.tam.task_assignment(strategy=strategy)

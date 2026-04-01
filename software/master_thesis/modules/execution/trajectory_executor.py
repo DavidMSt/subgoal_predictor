@@ -74,5 +74,5 @@ class TrajectoryExecutor(MotionExecutorBase):
         self._exi.exe_cont.start_execution = True
         if self.exe_cont.state.pending_phase is not None:
             self._exi.activate_phase(self.exe_cont.state.pending_phase)
-            self.logger.info(f"Activated pending phase '{self.exe_cont.state.pending_phase}'")
+            self.logger.debug(f"Activated pending phase '{self.exe_cont.state.pending_phase}'")
             self.exe_cont.state.pending_phase = None

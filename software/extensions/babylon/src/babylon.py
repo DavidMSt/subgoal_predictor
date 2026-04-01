@@ -663,6 +663,16 @@ class BabylonVisualization:
         self.send({'type': 'command', 'command': 'setTitle', 'params': {'text': text}})
 
     # ------------------------------------------------------------------------------------------------------------------
+    def set_sim_step(self, step: int):
+        """Update the simulation step counter shown beneath the clock in the top bar."""
+        self.send({'type': 'command', 'command': 'setSimStep', 'params': {'step': step}})
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def set_ep_step(self, text: str):
+        """Update the episode step counter. Empty string hides the row."""
+        self.send({'type': 'command', 'command': 'setEpStep', 'params': {'text': text}})
+
+    # ------------------------------------------------------------------------------------------------------------------
     def set_label(self, label_id: str, text: str, *,
                   x: float | None = None, y: float | None = None,
                   font_size: float | None = None,
