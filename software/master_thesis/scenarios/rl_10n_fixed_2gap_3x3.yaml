@@ -1,0 +1,164 @@
+name: rl_10n_fixed_2gap_3x3
+limits:
+  - [ -1.5 , 1.5 ]
+  - [ -1   , 2   ]
+
+obstacles:
+  # --- outer boundary ---
+  - obstacle_id: wall-top
+    x: 0
+    y: 2
+    length: 2
+    width: 0.05
+    psi: 0
+    height: 1.0
+  - obstacle_id: wall-bottom
+    x: 0
+    y: -1
+    length: 3
+    width: 0.05
+    psi: -3.1416
+    height: 1.0
+  - obstacle_id: wall-upper-left
+    x: -1
+    y: 1
+    length: 2
+    width: 0.05
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: wall-upper-right
+    x: 1
+    y: 1
+    length: 2
+    width: 0.05
+    psi: -1.5708
+    height: 1.0
+  - obstacle_id: wall-lower-left
+    x: -1.5
+    y: -0.5
+    length: 1
+    width: 0.05
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: wall-lower-right
+    x: 1.5
+    y: -0.5
+    length: 1
+    width: 0.05
+    psi: -1.5708
+    height: 1.0
+  # --- step walls at y=0 widening from 2 m to 3 m ---
+  - obstacle_id: wall-step-left
+    x: -1.25
+    y: 0
+    length: 0.5
+    width: 0.05
+    psi: 0
+    height: 1.0
+  - obstacle_id: wall-step-right
+    x: 1.25
+    y: 0
+    length: 0.5
+    width: 0.05
+    psi: 0
+    height: 1.0
+  # --- dividing wall with two gaps (30 cm each, centred at x=-0.5 and x=+0.5) ---
+  - obstacle_id: wall-gap-far-left
+    x: -0.825
+    y: 0
+    length: 0.35
+    width: 0.05
+    psi: 0
+    height: 1.0
+  - obstacle_id: wall-gap-mid
+    x: 0.0
+    y: 0
+    length: 0.70
+    width: 0.05
+    psi: 0
+    height: 1.0
+  - obstacle_id: wall-gap-far-right
+    x: 0.825
+    y: 0
+    length: 0.35
+    width: 0.05
+    psi: 0
+    height: 1.0
+
+agents:
+  # Row 1 (y=1.70): 5 agents, spacing 0.375 m
+  - agent_id: agent_0
+    start_config: [ -0.75,  1.70,  0.0 ]
+  - agent_id: agent_1
+    start_config: [ -0.375, 1.70,  0.0 ]
+  - agent_id: agent_2
+    start_config: [  0.0,   1.70,  0.0 ]
+  - agent_id: agent_3
+    start_config: [  0.375, 1.70,  0.0 ]
+  - agent_id: agent_4
+    start_config: [  0.75,  1.70,  0.0 ]
+  # Row 2 (y=1.30): 5 agents, staggered
+  - agent_id: agent_5
+    start_config: [ -0.75,  1.30,  0.0 ]
+  - agent_id: agent_6
+    start_config: [ -0.375, 1.30,  0.0 ]
+  - agent_id: agent_7
+    start_config: [  0.0,   1.30,  0.0 ]
+  - agent_id: agent_8
+    start_config: [  0.375, 1.30,  0.0 ]
+  - agent_id: agent_9
+    start_config: [  0.75,  1.30,  0.0 ]
+
+subgoal_limits:
+  - [ -1, 1 ]   # x: upper corridor only
+  - [  0, 2 ]   # y: above the gap only
+
+gap_geometry:
+  y_wall: 0.0
+  gaps:
+    - x_center: -0.5
+      half_gap: 0.15
+    - x_center:  0.5
+      half_gap: 0.15
+
+tasks:
+  - task_id: task_0
+    x: -1.2
+    y: -0.35
+    psi: 0
+  - task_id: task_1
+    x: -0.6
+    y: -0.35
+    psi: 0
+  - task_id: task_2
+    x:  0.0
+    y: -0.35
+    psi: 0
+  - task_id: task_3
+    x:  0.6
+    y: -0.35
+    psi: 0
+  - task_id: task_4
+    x:  1.2
+    y: -0.35
+    psi: 0
+  - task_id: task_5
+    x: -1.2
+    y: -0.75
+    psi: 0
+  - task_id: task_6
+    x: -0.6
+    y: -0.75
+    psi: 0
+  - task_id: task_7
+    x:  0.0
+    y: -0.75
+    psi: 0
+  - task_id: task_8
+    x:  0.6
+    y: -0.75
+    psi: 0
+  - task_id: task_9
+    x:  1.2
+    y: -0.75
+    psi: 0

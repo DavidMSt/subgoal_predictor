@@ -16,7 +16,7 @@ from master_thesis.scenarios.testbed_importer import load_scenario_yaml
 
 _SCENARIOS_DIR = Path(__file__).parent.parent.parent / 'scenarios'
 
-WAIT_TIMES  = [0, 3]  # two possible wait times, TODO: check if 6s should be added
+WAIT_TIMES  = [0, 1, 2, 3, 4, 5]  # 1s spacing, covers staggered queuing for up to 6 agents
 
 
 class subgoal_nn_base(nn.Module):
@@ -27,7 +27,8 @@ class subgoal_nn_base(nn.Module):
     """
 
     def __init__(self, n=3, n_gaps=2, out_dim=64,
-                 n_positions=100, n_wait_bins=len(WAIT_TIMES)) -> None:
+                 n_positions=100, n_wait_bins=len(WAIT_TIMES),
+                 wait_mode: str = 'discrete') -> None:
         super().__init__()
 
         self.enc_agent     = nn.Linear(1,            out_dim)  # own ψ only
@@ -48,14 +49,19 @@ class subgoal_nn_base(nn.Module):
             nn.ReLU(),
         )
 
+        self.wait_mode = wait_mode
         self.pos_head  = nn.Linear(out_dim, n_positions)
-        self.wait_head = nn.Linear(out_dim, n_wait_bins)
+        # Continuous: outputs (mu_raw, log_sigma) per agent; decoded as
+        #   mu = sigmoid(mu_raw) * wait_max,  sigma = exp(log_sigma).clamp(0.1, wait_max/2)
+        # Discrete: outputs n_wait_bins logits, sampled via Categorical.
+        self.wait_head = nn.Linear(out_dim, 2 if wait_mode == 'continuous' else n_wait_bins)
 
     def forward(self,
-                agent_psi,    # (B, 1)          — own heading
-                neighbor_rel, # (B, (N-1)*2)    — relative (Δx, Δy) per neighbor
-                goal_rel,     # (B, 2)           — relative (Δx, Δy) to own task
-                gap_vectors,  # (B, n_gaps*2)   — (Δx, Δy) to each gap center
+                agent_psi,         # (B, 1)          — own heading
+                neighbor_rel,      # (B, (N-1)*2)    — relative (Δx, Δy) per neighbor
+                goal_rel,          # (B, 2)           — relative (Δx, Δy) to own task
+                gap_vectors,       # (B, n_gaps*2)   — (Δx, Δy) to each gap center
+                neighbor_goals=None,  # unused — accepted for call-site compatibility
                 ):
         enc = torch.cat([
             torch.relu(self.enc_agent(agent_psi)),
@@ -99,7 +105,8 @@ class subgoal_gnn_base(nn.Module):
     """
 
     def __init__(self, n: int = 5, n_gaps: int = 2, out_dim: int = 64,
-                 n_positions: int = 100, n_wait_bins: int = len(WAIT_TIMES)) -> None:
+                 n_positions: int = 100, n_wait_bins: int = len(WAIT_TIMES),
+                 wait_mode: str = 'discrete') -> None:
         super().__init__()
 
         node_in = 1 + 2 + n_gaps * 2  # ψ + goal_Δ + gap_Δ (per gap)
@@ -130,16 +137,21 @@ class subgoal_gnn_base(nn.Module):
             nn.ReLU(),
         )
 
+        self.wait_mode = wait_mode
         self.pos_head  = nn.Linear(out_dim, n_positions)
-        self.wait_head = nn.Linear(out_dim, n_wait_bins)
+        # Continuous: outputs (mu_raw, log_sigma) per agent; caller computes
+        #   mu = sigmoid(mu_raw) * wait_max,  sigma = exp(log_sigma).clamp(0.1, wait_max/2)
+        # Discrete: outputs n_wait_bins logits for Categorical sampling.
+        self.wait_head = nn.Linear(out_dim, 2 if wait_mode == 'continuous' else n_wait_bins)
 
         self.n = n  # stored for reference only; forward is N-agnostic
 
     def forward(self,
-                agent_psi,    # (..., N, 1)         — own heading
-                neighbor_rel, # (..., N, (N-1)*2)   — not used; kept for call-site compatibility
-                goal_rel,     # (..., N, 2)          — relative (Δx, Δy) to own task
-                gap_vectors,  # (..., N, n_gaps*2)   — (Δx, Δy) to each gap center
+                agent_psi,         # (..., N, 1)
+                neighbor_rel,      # (..., N, (N-1)*2)   — not used; kept for call-site compatibility
+                goal_rel,          # (..., N, 2)
+                gap_vectors,       # (..., N, n_gaps*2)
+                neighbor_goals=None,  # unused — accepted for call-site compatibility
                 ):
         # --- node encoding ---------------------------------------------------
         x = torch.cat([agent_psi, goal_rel, gap_vectors], dim=-1)  # (..., N, node_in)
@@ -165,6 +177,95 @@ class subgoal_gnn_base(nn.Module):
         # --- shared trunk + prediction heads ---------------------------------
         h_out = self.trunk(h_upd)                             # (..., N, d)
         return self.pos_head(h_out), self.wait_head(h_out)    # (..., N, n_pos/n_wait)
+
+
+class subgoal_bipartite_gnn(nn.Module):
+    """Bipartite star-graph subgoal predictor.
+
+    Each agent constructs its own local star graph:
+      - Ego node   : own state  [ψ, goal_Δx, goal_Δy, gap_Δx₀, gap_Δy₀, ...]
+      - Neighbor nodes: sensor-only  [dx_rel, dy_rel]  — no goal, no gap, no heading
+
+    The information asymmetry between ego and neighbor nodes is explicit in the
+    architecture: two separate encoders, mean-pooled aggregation, then an update
+    MLP that combines ego embedding with the aggregated neighbor signal.
+
+    This is strictly more decentralized than subgoal_gnn_base: neighbor nodes carry
+    only locally-sensed relative positions, not learned embeddings of shared state.
+    The call signature is identical so all existing callers work unchanged.
+    """
+
+    def __init__(self, n: int = 5, n_gaps: int = 2, out_dim: int = 64,
+                 n_positions: int = 100, n_wait_bins: int = len(WAIT_TIMES),
+                 wait_mode: str = 'discrete') -> None:
+        super().__init__()
+
+        self.enc_psi  = nn.Linear(1,           out_dim)  # own heading ψ
+        self.enc_goal = nn.Linear(2,           out_dim)  # relative (Δx, Δy) to own task
+        self.enc_gap  = nn.Linear(n_gaps * 2,  out_dim)  # (Δx, Δy) per gap, flattened
+        # Neighbour node: (dx_rel, dy_rel) from sensor + (goal_Δx, goal_Δy) from DGNN-GA.
+        # The link between the two is valid: DGNN-GA runs on the sensed robot states, so
+        # each agent already knows which sensor reading maps to which task assignment.
+        self.nbr_enc  = nn.Linear(4,           out_dim)  # (dx_rel, dy_rel, goal_Δx, goal_Δy)
+
+        self.upd_mlp = nn.Sequential(
+            nn.Linear(4 * out_dim, out_dim),
+            nn.ReLU(),
+            nn.Linear(out_dim, out_dim),
+        )
+
+        self.trunk = nn.Sequential(
+            nn.Linear(out_dim, out_dim),
+            nn.ReLU(),
+            nn.Linear(out_dim, out_dim),
+            nn.ReLU(),
+        )
+
+        self.wait_mode = wait_mode
+        self.pos_head  = nn.Linear(out_dim, n_positions)
+        self.wait_head = nn.Linear(out_dim, 2 if wait_mode == 'continuous' else n_wait_bins)
+        self.n = n
+
+    def forward(self,
+                agent_psi,       # (..., N, 1)
+                neighbor_rel,    # (..., N, (N-1)*2)   — sensor (Δx, Δy) per neighbour
+                goal_rel,        # (..., N, 2)          — own goal direction
+                gap_vectors,     # (..., N, n_gaps*2)   — own gap vectors
+                neighbor_goals,  # (..., N, (N-1)*2)   — DGNN-GA goal (Δx, Δy) per neighbour
+                ):
+        # reshape flat neighbour vectors → (N-1) individual neighbour features
+        *leading, N, flat = neighbor_rel.shape
+        n_nbrs = flat // 2
+        nbr_pos  = neighbor_rel.reshape(*leading, N, n_nbrs, 2)   # (..., N, N-1, 2)
+        nbr_goal = neighbor_goals.reshape(*leading, N, n_nbrs, 2) # (..., N, N-1, 2)
+
+        # ego encoding — separate encoders preserve feature group semantics
+        h_psi  = torch.relu(self.enc_psi(agent_psi))   # (..., N, d)
+        h_goal = torch.relu(self.enc_goal(goal_rel))   # (..., N, d)
+        h_gap  = torch.relu(self.enc_gap(gap_vectors)) # (..., N, d)
+
+        # neighbour encoding: sensor position + DGNN-GA goal, then mean aggregate
+        nbr_feat = torch.cat([nbr_pos, nbr_goal], dim=-1)  # (..., N, N-1, 4)
+        h_nbr = torch.relu(self.nbr_enc(nbr_feat))         # (..., N, N-1, d)
+        h_agg = h_nbr.mean(dim=-2)                         # (..., N, d)
+
+        # GNN update step: all ego components + aggregated neighbour signal
+        h_upd = torch.relu(self.upd_mlp(
+            torch.cat([h_psi, h_goal, h_gap, h_agg], dim=-1)  # (..., N, 4d)
+        ))                                                      # (..., N, d)
+
+        h_out = self.trunk(h_upd)
+        return self.pos_head(h_out), self.wait_head(h_out)
+
+
+def _make_policy(arch: str, n: int, n_gaps: int, n_positions: int,
+                 n_wait_bins: int, wait_mode: str) -> nn.Module:
+    """Instantiate the requested policy architecture."""
+    if arch == 'bipartite':
+        return subgoal_bipartite_gnn(n=n, n_gaps=n_gaps, n_positions=n_positions,
+                                     n_wait_bins=n_wait_bins, wait_mode=wait_mode)
+    return subgoal_gnn_base(n=n, n_gaps=n_gaps, n_positions=n_positions,
+                            n_wait_bins=n_wait_bins, wait_mode=wait_mode)
 
 
 class subgoal_critic_base(nn.Module):
@@ -230,6 +331,9 @@ class FrodoGymWrapper(gym.Env):
         diversity_bonus: float = 1.5,
         ompl_timelimit: float = 10.0,
         wait_times: list | None = None,
+        wait_mode: str = 'discrete',
+        skip_penalty: float = 4.0,
+        failed_plan_penalty: float = 0.0,
     ) -> None:
         super().__init__()
 
@@ -243,6 +347,9 @@ class FrodoGymWrapper(gym.Env):
         self.diversity_bonus = diversity_bonus
         self.ompl_timelimit  = ompl_timelimit
         self.wait_times      = wait_times if wait_times is not None else WAIT_TIMES
+        self.wait_mode            = wait_mode
+        self.skip_penalty         = skip_penalty
+        self.failed_plan_penalty  = failed_plan_penalty
 
         lim         = self.scenario.limits
         x_lo, x_hi = lim[0]
@@ -270,18 +377,17 @@ class FrodoGymWrapper(gym.Env):
         # Free-workspace positions — built in reset() after obstacles are placed.
         self._free_positions = None
 
-        # Shared PRM* roadmap — loaded once on the first episode and re-injected
-        # into freshly-created planners on every subsequent reset(), eliminating the
-        # ~5 min × n_agents per-episode load cost.
-        self._shared_roadmap = None
+        # PRM* roadmap — loaded once per process via the shared cache in
+        # master_thesis.scenarios.roadmap_utils; no instance-level cache needed.
 
         self.n_gaps = len(self.scenario.gap_geometry['gaps'])
 
         # ----- observation space --------------------------------------------------
-        # agent_psi:    (n_agents, 1)              — own heading ψ
-        # neighbor_rel: (n_agents, n_agents-1, 2)  — relative (Δx, Δy) per neighbor
-        # goal_rel:     (n_agents, 2)              — relative (Δx, Δy) to own task
-        # gap_vectors:  (n_agents, n_gaps*2)       — (Δx, Δy) to each gap center
+        # agent_psi:      (n_agents, 1)              — own heading ψ
+        # neighbor_rel:   (n_agents, n_agents-1, 2)  — sensor (Δx, Δy) per neighbor
+        # goal_rel:       (n_agents, 2)              — relative (Δx, Δy) to own task
+        # gap_vectors:    (n_agents, n_gaps*2)       — (Δx, Δy) to each gap center
+        # neighbor_goals: (n_agents, n_agents-1, 2)  — DGNN-GA goal (Δx, Δy) per neighbor
         # See obs_design_notes.md for rationale.
         self.observation_space = spaces.Dict({
             "agent_psi": spaces.Box(
@@ -297,6 +403,11 @@ class FrodoGymWrapper(gym.Env):
             "goal_rel": spaces.Box(
                 low=-np.inf, high=np.inf,
                 shape=(self.n_agents, 2),
+                dtype=np.float32,
+            ),
+            "neighbor_goals": spaces.Box(
+                low=-np.inf, high=np.inf,
+                shape=(self.n_agents, self.n_agents - 1, 2),
                 dtype=np.float32,
             ),
             "gap_vectors": spaces.Box(
@@ -326,15 +437,11 @@ class FrodoGymWrapper(gym.Env):
         # Must happen after build() (agents exist) and before start_mp() in step()
         # (planner created on first plan() call).
         import dataclasses
-        import os as _os
         from master_thesis.modules.motion_planning.ompl_trajectory_planner import OMPLTrajectoryPlanner
         from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerConfig as _AgentMPPlannerConfig
-        _roadmap_path = _os.path.normpath(_os.path.join(
-            _os.path.dirname(__file__), '..', '..', 'scenarios', 'roadmaps',
-            f"{self.scenario.name}.npy",
-        ))
-        _roadmap_exists = _os.path.exists(_roadmap_path)
-        _ompl_planners = []
+        from master_thesis.scenarios.roadmap_utils import load_and_share_roadmap
+
+        # Patch OMPL timelimit on each agent's planner.
         for _agent in self.sim.agents.values():
             if isinstance(_agent.planner, OMPLTrajectoryPlanner):
                 _new_ompl_cfg = dataclasses.replace(
@@ -342,28 +449,13 @@ class FrodoGymWrapper(gym.Env):
                     timelimit=self.ompl_timelimit,
                 )
                 _agent.planner.planner_cont.config = _AgentMPPlannerConfig(planner_config=_new_ompl_cfg)
-                _ompl_planners.append(_agent.planner)
 
-        if _roadmap_exists and _ompl_planners:
-            if self._shared_roadmap is None:
-                # First episode: load once into the first planner, then share.
-                try:
-                    self._shared_roadmap = _ompl_planners[0].load_roadmap_from_file(_roadmap_path)
-                    for _p in _ompl_planners[1:]:
-                        _p.set_roadmap(self._shared_roadmap)
-                    self.sim.logger.warning(
-                        f"PRM* roadmap loaded once and shared to {len(_ompl_planners)} agents"
-                    )
-                except Exception as _exc:
-                    self.sim.logger.warning(
-                        f"Roadmap load failed ({_exc}) — falling back to per-agent lazy load"
-                    )
-                    for _p in _ompl_planners:
-                        _p.set_roadmap_file(_roadmap_path)
-            else:
-                # Subsequent episodes: inject cached roadmap directly (zero cost).
-                for _p in _ompl_planners:
-                    _p.set_roadmap(self._shared_roadmap)
+        # Share PRM* roadmap — first call loads the file; subsequent calls
+        # (every episode reset) inject the cached object at zero I/O cost.
+        if not load_and_share_roadmap(self.sim, self.scenario.name):
+            self.sim.logger.warning(
+                f"No PRM* roadmap for '{self.scenario.name}' — build one first."
+            )
 
         self._build_free_positions()
 
@@ -410,14 +502,17 @@ class FrodoGymWrapper(gym.Env):
         obs       = self._get_obs()
 
         total_ompl_wall_time = sum(a.sgm._total_ompl_wall_time for a in agents_list)
+        n_failed_plans = sum(a.sgm._failed_plans for a in agents_list)
 
         reward = self._compute_reward(
             terminated, makespan, individual_times, predicted_positions,
             agent_starts=agent_starts,
             task_goals=task_conts,
-            total_ompl_wall_time=total_ompl_wall_time,
             diversity_sigma=self.diversity_sigma,
             diversity_bonus=self.diversity_bonus,
+            skip_penalty=self.skip_penalty,
+            failed_plan_penalty=self.failed_plan_penalty,
+            n_failed_plans=n_failed_plans,
         )
 
         _y_wall = float(self.scenario.gap_geometry['y_wall'])
@@ -443,7 +538,8 @@ class FrodoGymWrapper(gym.Env):
     def _build_free_positions(self):
         """Delegate to the shared build_free_positions() — single source of truth."""
         self._free_positions = build_free_positions(
-            self.sim, self.scenario.gap_geometry, self.grid_stride
+            self.sim, self.scenario.gap_geometry, self.grid_stride,
+            subgoal_limits=self.scenario.subgoal_limits,
         )
         self.action_space = spaces.MultiDiscrete(
             np.array([[len(self._free_positions), len(self.wait_times)]] * (self.n_agents * self.n_subgoals)).flatten()
@@ -463,7 +559,11 @@ class FrodoGymWrapper(gym.Env):
 
     # ------------------------------------------------------------------
     def _assign_subgoals(self, action: np.ndarray) -> list[tuple[float, float]]:
-        """Decode discrete (pos_idx, wait_idx) per agent×subgoal, inject subgoals, return positions."""
+        """Decode (pos_idx, wait) per agent×subgoal, inject subgoals, return positions.
+
+        Discrete: wait slot is an integer bin index into self.wait_times.
+        Continuous: wait slot is a float in seconds directly (output of Normal head).
+        """
         decoded = action.reshape(self.n_agents, self.n_subgoals, 2)
         positions = []
         for agent, agent_sgs in zip(self.sim.agents.values(), decoded):
@@ -471,7 +571,10 @@ class FrodoGymWrapper(gym.Env):
             for a_pos, a_wait in agent_sgs:
                 sx, sy = self._free_positions[int(a_pos)]
                 subgoal_coords.append(np.array([float(sx), float(sy), 0.0]))
-                wait_ticks.append(int(self.wait_times[int(a_wait)] / self.sim.Ts))
+                if self.wait_mode == 'continuous':
+                    wait_ticks.append(int(float(a_wait) / self.sim.Ts))
+                else:
+                    wait_ticks.append(int(self.wait_times[int(a_wait)] / self.sim.Ts))
                 positions.append((float(sx), float(sy)))
             agent.sgm.set_subgoals(subgoal_coords, wait_ticks=wait_ticks)
         return positions
@@ -499,7 +602,6 @@ class FrodoGymWrapper(gym.Env):
         predicted_positions: list[tuple[float, float]],
         agent_starts: list[tuple[float, float]] | None = None,
         task_goals: list | None = None,
-        total_ompl_wall_time: float = 0.0,
         alpha: float = 0.3,
         beta: float = 1.0,
         crossing_bonus: float = 1.5,
@@ -508,10 +610,15 @@ class FrodoGymWrapper(gym.Env):
         # positions far from the gap to cheaply earn the bonus.
         subgoal_bonus: float = 0.0,
         # skip_penalty: penalises subgoals the planner could not reach (planning failure).
-        # Without this, the progress_term gradient pushes subgoals toward the gap edge
-        # where narrow passages cause planning failures — subgoals get skipped and OMPL
-        # routes directly to the task, making the subgoal predictor irrelevant.
-        skip_penalty: float = 0.5,
+        # Applied uniformly in BOTH terminated and truncated branches — skipping is
+        # bad regardless of episode outcome. The bypass exploit (predict gap-edge
+        # subgoal → skip → OMPL direct route → task done) must be closed in the
+        # terminated branch where the 30-point bonus otherwise dwarfs the penalty.
+        # Energy_penalty alone does not stop this (gap-edge positions are collinear
+        # with start→goal and thus incur near-zero extra path length).
+        skip_penalty: float = 4.0,
+        failed_plan_penalty: float = 0.0,
+        n_failed_plans: int = 0,
         diversity_bonus: float = 1.5,
         diversity_sigma: float = 0.35,
         energy_weight: float = 2.0,
@@ -532,27 +639,28 @@ class FrodoGymWrapper(gym.Env):
         beta:            scale of distance penalty (truncated)
         crossing_bonus:  per-agent reward for crossing the dividing wall (truncated)
         subgoal_bonus:   per-agent reward for reaching the predicted subgoal (truncated)
-        skip_penalty:    per-agent penalty for each skipped (unreachable) subgoal (truncated)
+        skip_penalty:    per-agent penalty for each skipped (unreachable) subgoal (both branches)
         diversity_bonus: scale of pairwise Gaussian repulsion between predicted subgoals
         diversity_sigma: bandwidth of the Gaussian kernel in metres
         energy_weight:   scale of the extra-path-length penalty (truncated)
         """
-        # Planning overhead: convert wall-clock OMPL time to equivalent sim steps.
-        # Decentralised factor 2/N: in real deployment one agent blocks at a time;
-        # 2/N is a middle ground between full blocking (1.0) and perfect parallel (1/N).
-        equiv_plan_steps = total_ompl_wall_time * (2.0 / self.n_agents) / self.sim.Ts
+        # Count skips before branching — needed in both terminated and truncated.
+        n_skipped_subgoals = sum(a.sgm._skipped_subgoals for a in self.sim.agents.values())
 
         # All tasks completed ---------------------------------------------------
         if terminated:
             # Normalise to [0, 1] relative to max_steps so the termination bonus
             # always dominates truncated reward (max truncated ≈ crossing_bonus × N ≈ 7.5;
             # min terminated ≈ 30 - 10 - 3 = 17 >> 7.5).
-            # effective_makespan_frac folds in OMPL replanning overhead.
-            effective_makespan_frac = min(1.0, (makespan + equiv_plan_steps) / self.max_steps)
+            # Wall-clock OMPL time is intentionally excluded: it is CPU/scheduler-dependent
+            # and therefore noisy. Failed plans are penalised directly via failed_plan_penalty.
+            makespan_frac = min(1.0, makespan / self.max_steps)
             mean_indiv_frac = float(np.mean([t / self.max_steps for t in individual_times]))
             return (30.0
-                    - 10.0 * effective_makespan_frac
-                    - alpha * 10.0 * mean_indiv_frac)
+                    - 10.0 * makespan_frac
+                    - alpha * 10.0 * mean_indiv_frac
+                    - skip_penalty * n_skipped_subgoals
+                    - failed_plan_penalty * n_failed_plans)
 
         # Truncated: gap-aware distance + crossing/subgoal/diversity bonuses ---
         gap_geometry = self.scenario.gap_geometry
@@ -561,12 +669,10 @@ class FrodoGymWrapper(gym.Env):
 
         n_crossed          = 0
         n_reached_subgoals = 0
-        n_skipped_subgoals = 0
         total_dist         = 0.0
         crossed_xs         = []
         for agent in self.sim.agents.values():
             n_reached_subgoals += max(0, agent.sgm._subgoal_idx - agent.sgm._skipped_subgoals)
-            n_skipped_subgoals += agent.sgm._skipped_subgoals
             ax, ay = agent.container.x, agent.container.y
 
             if agent.assigned_task is None:
@@ -619,17 +725,14 @@ class FrodoGymWrapper(gym.Env):
                 raw_extra += d_start_sg + d_sg_goal - d_start_goal
             energy_penalty = energy_weight * raw_extra / (self.n_agents * arena_diag)
 
-        # Planning overhead penalty: scales with OMPL wall time relative to episode budget.
-        plan_overhead = 10.0 * min(1.0, equiv_plan_steps / self.max_steps)
-
         return (
             - beta           * total_dist
             + crossing_bonus * n_crossed
             + subgoal_bonus  * n_reached_subgoals
-            - skip_penalty   * n_skipped_subgoals
+            - skip_penalty          * n_skipped_subgoals
+            - failed_plan_penalty   * n_failed_plans
             - energy_penalty
             - diversity_bonus * repulsion
-            - plan_overhead
         )
 
     def render(self):
@@ -650,7 +753,84 @@ def latest_subgoal_checkpoint(checkpoints_dir: str | None = None) -> str | None:
     return max(files, key=os.path.getmtime) if files else None
 
 
-def build_free_positions(sim, gap_geometry: dict, grid_stride: float) -> np.ndarray:
+def record_best_episode(env: 'FrodoGymWrapper', policy, save_path: str,
+                        metadata: dict | None = None) -> None:
+    """Run one greedy episode in the main-process env and save a trajectory file.
+
+    Registers a temporary OUTPUT-phase callback on the simulation scheduler to
+    capture (x, y, psi) for every agent at every sim step — same mechanism the
+    GUI uses for its live Babylon feed.  Zero overhead on worker processes.
+
+    Args:
+        env:       The main-process FrodoGymWrapper (already warm-started).
+        policy:    Current policy (subgoal_gnn_base).  None → n_subgoals=0 run.
+        save_path: Where to write the .pkl trajectory file.
+        metadata:  Extra fields to embed (update index, score, etc.).
+    """
+    import pickle
+    from simulation.core.environment import BASE_ENVIRONMENT_ACTIONS
+
+    agent_ids = list(env.sim.agents.keys())
+    frames: list[list] = []          # (n_frames, n_agents, 3)
+    task_frames: list[list] = []     # per frame: list of remaining task_ids
+
+    def _capture():
+        row = []
+        for aid in agent_ids:
+            cont = env.sim.environment.environment_container.agent_conts.get(aid)
+            if cont is not None:
+                row.append([float(cont.x), float(cont.y), float(cont.psi)])
+        frames.append(row)
+        remaining = list(env.sim.environment.environment_container.task_conts.keys())
+        task_frames.append(remaining)
+
+    output_action = env.sim.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT]
+    output_action.addAction(_capture)
+
+    try:
+        obs, _ = env.reset()
+
+        if policy is not None and env.n_subgoals > 0:
+            # Greedy action: argmax (pos) / mean (continuous wait) instead of sample
+            agent_psi       = torch.as_tensor(obs['agent_psi'],      dtype=torch.float32).unsqueeze(0)
+            neighbor_rel    = torch.as_tensor(obs['neighbor_rel'],   dtype=torch.float32).flatten(-2).unsqueeze(0)
+            goal_rel        = torch.as_tensor(obs['goal_rel'],       dtype=torch.float32).unsqueeze(0)
+            gap_vectors     = torch.as_tensor(obs['gap_vectors'],    dtype=torch.float32).unsqueeze(0)
+            neighbor_goals  = torch.as_tensor(obs['neighbor_goals'], dtype=torch.float32).flatten(-2).unsqueeze(0)
+            with torch.no_grad():
+                pos_logits, wait_out = policy(agent_psi, neighbor_rel, goal_rel, gap_vectors, neighbor_goals)
+            action_pos = pos_logits.squeeze(0).argmax(-1).numpy()  # (N,)
+            _wmode = getattr(policy, 'wait_mode', 'discrete')
+            if _wmode == 'continuous':
+                _wait_max   = float(max(env.wait_times))
+                action_wait = (torch.sigmoid(wait_out.squeeze(0)[..., 0]) * _wait_max).numpy()  # float seconds
+            else:
+                action_wait = wait_out.squeeze(0).argmax(-1).numpy()  # (N,) bin idx
+            action = np.stack([action_pos, action_wait], axis=-1).reshape(-1)
+        else:
+            action = np.array([0])
+
+        env.step(action)   # runs full episode; _capture fires each sim step
+
+    finally:
+        output_action.removeAction(_capture)
+
+    traj = {
+        'scenario':    env.scenario.name,
+        'Ts':          env.sim.Ts,
+        'agent_ids':   agent_ids,
+        'positions':   np.array(frames,      dtype=np.float32),   # (F, N, 3)
+        'task_frames': task_frames,
+        'metadata':    metadata or {},
+    }
+    os.makedirs(os.path.dirname(save_path) or '.', exist_ok=True)
+    with open(save_path, 'wb') as f:
+        pickle.dump(traj, f)
+    tqdm.write(f"  🎬 trajectory saved → {os.path.basename(save_path)}")
+
+
+def build_free_positions(sim, gap_geometry: dict, grid_stride: float,
+                         subgoal_limits=None) -> np.ndarray:
     """Return collision-free grid positions on the agents' side of the wall.
 
     Covers the full height from y_wall to the arena boundary — not just the
@@ -659,14 +839,29 @@ def build_free_positions(sim, gap_geometry: dict, grid_stride: float) -> np.ndar
 
     Single source of truth: the GUI imports this instead of maintaining its
     own grid logic.
+
+    The occupancy grid marks obstacle cells without robot-body inflation.  To
+    ensure OMPL's geometric collision checker (which uses the full robot
+    bounding box) also accepts these positions, we require a neighbourhood of
+    cells covering the robot's bounding circle to be free.
     """
+    from master_thesis.containers.general_containers.frodo_agent_container import FRODO_Agent_Config
     env      = sim.environment
     env_cont = env.environment_container
     grid     = env_cont.occupancy_grid_static  # bool (n_y, n_x)
     n_y, n_x = grid.shape
-    x_min, x_max = env_cont.limits[0]
-    y_min, y_max = env_cont.limits[1]
+    res      = env_cont.grid_resolution        # metres per cell
+    if subgoal_limits is not None:
+        x_min, x_max = float(subgoal_limits[0][0]), float(subgoal_limits[0][1])
+        y_min, y_max = float(subgoal_limits[1][0]), float(subgoal_limits[1][1])
+    else:
+        x_min, x_max = env_cont.limits[0]
+        y_min, y_max = env_cont.limits[1]
     y_wall = float(gap_geometry['y_wall'])
+
+    _cfg = FRODO_Agent_Config()
+    robot_radius = float(np.hypot(_cfg.length / 2, _cfg.width / 2))
+    pad = int(np.ceil(robot_radius / res))  # cells to check around each candidate
 
     free = []
     x = x_min + grid_stride / 2
@@ -676,7 +871,13 @@ def build_free_positions(sim, gap_geometry: dict, grid_stride: float) -> np.ndar
             if y > y_wall:
                 gy, gx = env.world_to_grid(x, y)
                 if 0 <= gy < n_y and 0 <= gx < n_x and not grid[gy, gx]:
-                    free.append([x, y])
+                    # Reject if any cell within robot_radius is occupied
+                    gy_lo = max(0, gy - pad)
+                    gy_hi = min(n_y, gy + pad + 1)
+                    gx_lo = max(0, gx - pad)
+                    gx_hi = min(n_x, gx + pad + 1)
+                    if not grid[gy_lo:gy_hi, gx_lo:gx_hi].any():
+                        free.append([x, y])
             y += grid_stride
         x += grid_stride
     return np.array(free, dtype=np.float32)
@@ -706,6 +907,11 @@ def build_subgoal_obs(sim, gap_geometry: dict) -> dict:
     ], dtype=np.float32)
     goal_rel = goal_abs - agent_xy
 
+    # neighbor_goals[i, j] = goal of neighbor j relative to agent i.
+    # Valid without extra communication: DGNN-GA runs on the sensed robot states,
+    # so each agent already knows which sensor reading maps to which task assignment.
+    neighbor_goals = np.stack([np.delete(goal_abs, i, axis=0) - agent_xy[i] for i in range(n)])
+
     y_wall    = float(gap_geometry['y_wall'])
     gaps_list = gap_geometry['gaps']
     gap_vectors = np.array([
@@ -714,15 +920,17 @@ def build_subgoal_obs(sim, gap_geometry: dict) -> dict:
     ], dtype=np.float32)
 
     return {
-        "agent_psi":    agent_psi,
-        "neighbor_rel": neighbor_rel,
-        "goal_rel":     goal_rel,
-        "gap_vectors":  gap_vectors,
+        "agent_psi":      agent_psi,
+        "neighbor_rel":   neighbor_rel,
+        "goal_rel":       goal_rel,
+        "gap_vectors":    gap_vectors,
+        "neighbor_goals": neighbor_goals,
     }
 
 
 def run_policy_step(sim, policy, free_positions: np.ndarray, obs: dict,
-                    wait_times: list | None = None) -> list:
+                    wait_times: list | None = None,
+                    wait_mode: str | None = None) -> list:
     """Apply policy greedily, inject subgoals, then start MP and EXE.
 
     Replicates exactly FrodoGymWrapper.step() up to (but not including) the
@@ -730,28 +938,40 @@ def run_policy_step(sim, policy, free_positions: np.ndarray, obs: dict,
     GUI evaluation.  Use this whenever the sim is already running in real-time
     (GUI) and you just need the one-shot subgoal assignment.
 
-    wait_times: list of wait durations in seconds, one per bin.  Defaults to
-    the module-level WAIT_TIMES constant.  Pass explicitly when loading a
-    checkpoint trained with a different WAIT_TIMES list.
+    wait_times: list of wait durations in seconds, one per bin (discrete) or
+                used only for wait_max (continuous).  Defaults to WAIT_TIMES.
+    wait_mode:  'discrete' or 'continuous'; inferred from policy.wait_mode if None.
     """
     import torch
 
     _wait_times = wait_times if wait_times is not None else WAIT_TIMES
+    _wait_mode  = wait_mode if wait_mode is not None else getattr(policy, 'wait_mode', 'discrete')
 
     with torch.no_grad():
-        pos_logits, wait_logits = policy(
-            torch.as_tensor(obs["agent_psi"],    dtype=torch.float32),
-            torch.as_tensor(obs["neighbor_rel"], dtype=torch.float32).flatten(-2),
-            torch.as_tensor(obs["goal_rel"],     dtype=torch.float32),
-            torch.as_tensor(obs["gap_vectors"],  dtype=torch.float32),
+        pos_logits, wait_out = policy(
+            torch.as_tensor(obs["agent_psi"],      dtype=torch.float32),
+            torch.as_tensor(obs["neighbor_rel"],   dtype=torch.float32).flatten(-2),
+            torch.as_tensor(obs["goal_rel"],       dtype=torch.float32),
+            torch.as_tensor(obs["gap_vectors"],    dtype=torch.float32),
+            torch.as_tensor(obs["neighbor_goals"], dtype=torch.float32).flatten(-2),
         )
-        a_pos  = torch.argmax(pos_logits,  dim=-1).numpy()  # (n_agents,) greedy
-        a_wait = torch.argmax(wait_logits, dim=-1).numpy()  # (n_agents,) greedy
+        a_pos = torch.argmax(pos_logits, dim=-1).numpy()  # (n_agents,) greedy
+
+        if _wait_mode == 'continuous':
+            _wait_max  = float(max(_wait_times))
+            _mu_raw    = wait_out[..., 0]                           # (n_agents,)
+            a_wait_s   = (torch.sigmoid(_mu_raw) * _wait_max).numpy()  # greedy = mean
+        else:
+            a_wait_s = None
+            a_wait   = torch.argmax(wait_out, dim=-1).numpy()      # (n_agents,) bin idx
 
     predicted_positions = []
-    for agent, pos_idx, wait_idx in zip(sim.agents.values(), a_pos, a_wait):
-        sx, sy     = free_positions[int(pos_idx)]
-        wait_ticks = int(_wait_times[int(wait_idx)] / sim.Ts)
+    for i, (agent, pos_idx) in enumerate(zip(sim.agents.values(), a_pos)):
+        sx, sy = free_positions[int(pos_idx)]
+        if _wait_mode == 'continuous':
+            wait_ticks = int(float(a_wait_s[i]) / sim.Ts)
+        else:
+            wait_ticks = int(_wait_times[int(a_wait[i])] / sim.Ts)
         agent.sgm.set_subgoals(
             [np.array([float(sx), float(sy), 0.0])],
             wait_ticks=[wait_ticks],
@@ -781,7 +1001,10 @@ def _worker_init(scenario: str, max_steps: int, n_subgoals: int,
                  grid_stride: float, diversity_sigma: float,
                  diversity_bonus: float, agent_log_level: str,
                  ompl_timelimit: float = 10.0,
-                 wait_times: list | None = None) -> None:
+                 wait_times: list | None = None,
+                 wait_mode: str = 'discrete',
+                 skip_penalty: float = 4.0,
+                 failed_plan_penalty: float = 0.0) -> None:
     """Create the persistent per-process environment (called once at pool startup)."""
     global _worker_env
     _worker_env = FrodoGymWrapper(
@@ -789,6 +1012,8 @@ def _worker_init(scenario: str, max_steps: int, n_subgoals: int,
         grid_stride=grid_stride, agent_log_level=agent_log_level,
         diversity_sigma=diversity_sigma, diversity_bonus=diversity_bonus,
         ompl_timelimit=ompl_timelimit, wait_times=wait_times,
+        wait_mode=wait_mode, skip_penalty=skip_penalty,
+        failed_plan_penalty=failed_plan_penalty,
     )
     _worker_env.reset()  # builds _free_positions and warms up OMPL
 
@@ -799,34 +1024,54 @@ def _worker_run_episode(args: tuple) -> dict:
     Log-prob computation is intentionally deferred to the main process —
     cross-process autograd is not supported, so gradients must stay local.
     """
-    policy_weights_np, n_positions, n_agents, n_gaps, n_subgoals, n_wait_bins, wait_times_list = args
+    policy_weights_np, n_positions, n_agents, n_gaps, n_subgoals, n_wait_bins, wait_times_list, wait_mode, arch = args
     env = _worker_env
     obs, _ = env.reset()
     sample_pos_np = sample_wait_np = None
     spread = 0.0
 
     if n_subgoals > 0:
-        policy = subgoal_gnn_base(n=n_agents, n_gaps=n_gaps,
-                                  n_positions=n_positions,
-                                  n_wait_bins=n_wait_bins)
+        policy = _make_policy(arch, n=n_agents, n_gaps=n_gaps,
+                              n_positions=n_positions,
+                              n_wait_bins=n_wait_bins,
+                              wait_mode=wait_mode)
         policy.load_state_dict(
             {k: torch.from_numpy(v.copy()) for k, v in policy_weights_np.items()}
         )
         policy.eval()
 
         with torch.no_grad():
-            pos_logits, wait_logits = policy(
-                torch.as_tensor(obs['agent_psi'],    dtype=torch.float32),
-                torch.as_tensor(obs['neighbor_rel'], dtype=torch.float32).flatten(-2),
-                torch.as_tensor(obs['goal_rel'],     dtype=torch.float32),
-                torch.as_tensor(obs['gap_vectors'],  dtype=torch.float32),
+            pos_logits, wait_out = policy(
+                torch.as_tensor(obs['agent_psi'],      dtype=torch.float32),
+                torch.as_tensor(obs['neighbor_rel'],   dtype=torch.float32).flatten(-2),
+                torch.as_tensor(obs['goal_rel'],       dtype=torch.float32),
+                torch.as_tensor(obs['gap_vectors'],    dtype=torch.float32),
+                torch.as_tensor(obs['neighbor_goals'], dtype=torch.float32).flatten(-2),
             )
-            dist_pos  = torch.distributions.Categorical(logits=pos_logits)
-            dist_wait = torch.distributions.Categorical(logits=wait_logits)
-            sample_pos  = dist_pos.sample((n_subgoals,))   # (n_subgoals, n_agents)
-            sample_wait = dist_wait.sample((n_subgoals,))  # (n_subgoals, n_agents)
+            dist_pos   = torch.distributions.Categorical(logits=pos_logits)
+            sample_pos = dist_pos.sample((n_subgoals,))  # (n_subgoals, n_agents)
 
-        action = np.stack([sample_pos.T.numpy(), sample_wait.T.numpy()], axis=-1).reshape(-1)
+            if wait_mode == 'continuous':
+                _wait_max = float(max(wait_times_list)) if wait_times_list else 5.0
+                _mu_raw, _log_sigma = wait_out.unbind(-1)          # each (n_agents,)
+                _mu    = torch.sigmoid(_mu_raw) * _wait_max
+                _sigma = torch.exp(_log_sigma).clamp(0.1, _wait_max / 2)
+                _dist_wait   = torch.distributions.Normal(_mu, _sigma)
+                # sample float seconds; clamp to valid range
+                sample_wait_cont = _dist_wait.rsample((n_subgoals,)).clamp(0.0, _wait_max)
+                sample_wait_np   = sample_wait_cont.numpy().astype(np.float32)  # (n_subgoals, n_agents) seconds
+                mean_wait    = float(sample_wait_np.mean())
+                wait_spread  = float(sample_wait_np.std())
+                action = np.stack([sample_pos.T.numpy().astype(np.float32),
+                                   sample_wait_np.T], axis=-1).reshape(-1)
+            else:
+                dist_wait  = torch.distributions.Categorical(logits=wait_out)
+                sample_wait = dist_wait.sample((n_subgoals,))  # (n_subgoals, n_agents) int indices
+                sample_wait_np  = sample_wait.numpy()
+                wait_times_s    = np.array(wait_times_list)[sample_wait_np]
+                mean_wait   = float(wait_times_s.mean())
+                wait_spread = float(wait_times_s.std())
+                action = np.stack([sample_pos.T.numpy(), sample_wait_np.T], axis=-1).reshape(-1)
 
         sg_xy = env._free_positions[sample_pos[0].numpy()]  # (n_agents, 2)
         n = len(sg_xy)
@@ -835,11 +1080,7 @@ def _worker_run_episode(args: tuple) -> dict:
             for i in range(n) for j in range(i + 1, n)
         ])) if n > 1 else 0.0
 
-        sample_pos_np  = sample_pos.numpy()
-        sample_wait_np = sample_wait.numpy()
-        wait_times_s   = np.array(wait_times_list)[sample_wait_np]  # (n_subgoals, n_agents) in seconds
-        mean_wait      = float(wait_times_s.mean())
-        wait_spread    = float(wait_times_s.std())
+        sample_pos_np = sample_pos.numpy()
     else:
         action = np.array([0], dtype=np.int64)
         mean_wait = 0.0
@@ -876,7 +1117,14 @@ def train(n_updates, batch_size, max_steps: int = 400,
           lr_end: float | None = None,
           lr_schedule: str = 'linear',
           run_name_override: str | None = None,
-          resume: bool = False):
+          resume: bool = False,
+          record: bool = False,
+          wait_mode: str = 'discrete',
+          skip_penalty: float = 4.0,
+          failed_plan_penalty: float = 0.0,
+          evaluate: bool = False,
+          eval_out: str | None = None,
+          arch: str = 'gnn'):
     from datetime import datetime
     from torch.utils.tensorboard import SummaryWriter
 
@@ -885,14 +1133,19 @@ def train(n_updates, batch_size, max_steps: int = 400,
                           n_subgoals=n_subgoals,
                           diversity_sigma=diversity_sigma,
                           ompl_timelimit=ompl_timelimit,
-                          wait_times=WAIT_TIMES)
+                          wait_times=WAIT_TIMES,
+                          wait_mode=wait_mode,
+                          skip_penalty=skip_penalty,
+                          failed_plan_penalty=failed_plan_penalty)
 
     # warm-start reset to build _free_positions
     env.reset()
 
     if n_subgoals > 0:
         n_positions = int(env.action_space.nvec[0])
-        policy = subgoal_gnn_base(n=env.n_agents, n_gaps=env.n_gaps, n_positions=n_positions, n_wait_bins=len(env.wait_times))
+        policy = _make_policy(arch, n=env.n_agents, n_gaps=env.n_gaps,
+                              n_positions=n_positions,
+                              n_wait_bins=len(env.wait_times), wait_mode=wait_mode)
         optimizer = torch.optim.Adam(policy.parameters(), lr=lr)
         if lr_end and lr_schedule == 'cosine':
             # Cosine annealing: stays near peak LR early, decays steeply toward the end.
@@ -973,6 +1226,10 @@ def train(n_updates, batch_size, max_steps: int = 400,
         'diversity_sigma': diversity_sigma,
         'ompl_timelimit':  ompl_timelimit,
         'wait_times':      WAIT_TIMES,
+        'wait_mode':       wait_mode,
+        'skip_penalty':         skip_penalty,
+        'failed_plan_penalty':  failed_plan_penalty,
+        'arch':                 arch,
     }
     hparam_dict = {
         **raw_hparams,
@@ -995,6 +1252,8 @@ def train(n_updates, batch_size, max_steps: int = 400,
         f'  --wait_times {" ".join(str(w) for w in WAIT_TIMES)}',
         f'  --entropy_coeff_pos {entropy_coeff_pos} --entropy_coeff_wait {entropy_coeff_wait}',
         f'  --diversity_sigma {diversity_sigma}',
+        f'  --skip_penalty {skip_penalty}',
+        f'  --failed_plan_penalty {failed_plan_penalty}',
         f'  --ompl_timelimit {ompl_timelimit}',
         f'  --n_workers {n_workers}',
         f'  --loadw {initial_weights}' if initial_weights else '',
@@ -1002,9 +1261,26 @@ def train(n_updates, batch_size, max_steps: int = 400,
     ]
     _cmd = ' \\\n'.join(p for p in _cmd_parts if p)
 
+    _reward_doc = (
+        "**Terminated** (all tasks done):\n\n"
+        "    R = 30  −  10 * makespan_frac  −  alpha * 10 * mean_indiv_frac\n"
+        "        −  skip_penalty * n_skipped  −  failed_plan_penalty * n_failed\n\n"
+        "    makespan_frac = makespan / max_steps   [pure sim steps, no wall-time noise]\n\n"
+        "**Truncated** (time limit reached):\n\n"
+        "    R = − beta * total_dist  +  crossing_bonus * n_crossed  +  subgoal_bonus * n_reached\n"
+        "        − skip_penalty * n_skipped  −  failed_plan_penalty * n_failed\n"
+        "        − energy_penalty  −  diversity_bonus * repulsion\n\n"
+        "    energy_penalty = energy_weight * Σ(d(start→sg) + d(sg→goal) − d(start→goal)) / (N * arena_diag)\n"
+        "    repulsion      = Σ_{i<j} exp(−||sg_i − sg_j||² / (2 * diversity_sigma²))\n\n"
+        "    [Wall-clock OMPL time removed from reward — CPU/scheduler-dependent and noisy.\n"
+        "     Failed plans penalised directly via failed_plan_penalty instead.]\n\n"
+        f"**Active coefficients**: alpha={0.3}, beta=1.0, crossing_bonus=1.5, subgoal_bonus=0.0, "
+        f"skip_penalty={skip_penalty}, diversity_bonus=1.5, diversity_sigma={diversity_sigma}, energy_weight=2.0"
+    )
     writer.add_text('run/config',
                     '\n'.join(f'    {k}: {v}' for k, v in hparam_dict.items())
                     + f'\n\n    launch command:\n\n```\n{_cmd}\n```', 0)
+    writer.add_text('run/reward_structure', _reward_doc, 0)
     writer.flush()  # ensure text is on disk before the worker pool blocks for ~5 min
 
     import multiprocessing as mp
@@ -1012,7 +1288,7 @@ def train(n_updates, batch_size, max_steps: int = 400,
     pool = mp.Pool(
         processes=_n_workers,
         initializer=_worker_init,
-        initargs=(scenario, max_steps, n_subgoals, 0.15, diversity_sigma, 1.5, 'ERROR', ompl_timelimit, WAIT_TIMES),
+        initargs=(scenario, max_steps, n_subgoals, 0.15, diversity_sigma, 1.5, 'ERROR', ompl_timelimit, WAIT_TIMES, wait_mode, skip_penalty, failed_plan_penalty),
     )
 
     print(f"Training [{algo.upper()}]: {n_updates} updates * {batch_size} episodes"
@@ -1023,6 +1299,16 @@ def train(n_updates, batch_size, max_steps: int = 400,
     recent_crossed = collections.deque(maxlen=5)
     recent_frac    = collections.deque(maxlen=5)
     update_pbar = tqdm(range(resume_from_update, n_updates), desc='Updates')
+
+    # Evaluation-mode accumulators (populated when evaluate=True)
+    eval_all_terminated:    list[bool]  = []
+    eval_all_makespans:     list[float] = []
+    eval_all_failed:        list[int]   = []
+    eval_all_reached:       list[int]   = []
+    eval_all_rewards:       list[float] = []
+    eval_all_crossed:       list[int]   = []
+    eval_all_wall_time:     list[float] = []
+    eval_all_wait_spread:   list[float] = []
 
     try:
         for update in update_pbar:
@@ -1036,7 +1322,7 @@ def train(n_updates, batch_size, max_steps: int = 400,
             # --- parallel episode collection via worker pool -------------------
             _pw = ({k: v.detach().numpy() for k, v in policy.state_dict().items()}
                    if policy is not None else {})
-            _args = [(_pw, n_positions, env.n_agents, env.n_gaps, n_subgoals, len(WAIT_TIMES), WAIT_TIMES)] * batch_size
+            _args = [(_pw, n_positions, env.n_agents, env.n_gaps, n_subgoals, len(WAIT_TIMES), WAIT_TIMES, wait_mode, arch)] * batch_size
             _results = pool.map(_worker_run_episode, _args)
 
             for r in _results:
@@ -1056,6 +1342,16 @@ def train(n_updates, batch_size, max_steps: int = 400,
                     ep_mean_wait.append(r['mean_wait'])
                     ep_wait_spread.append(r['wait_spread'])
 
+            if evaluate:
+                eval_all_terminated.extend(ep_terminated)
+                eval_all_makespans.extend(ep_makespans)
+                eval_all_failed.extend(ep_failed)
+                eval_all_reached.extend(ep_reached_sg)
+                eval_all_rewards.extend(raw_rewards)
+                eval_all_crossed.extend(ep_crossed)
+                eval_all_wall_time.extend(ep_plan_wall_time)
+                eval_all_wait_spread.extend(ep_wait_spread if ep_wait_spread else [0.0] * len(ep_terminated))
+
             rewards_t = torch.tensor(raw_rewards, dtype=torch.float32)
             clip_frac = 0.0
 
@@ -1064,33 +1360,46 @@ def train(n_updates, batch_size, max_steps: int = 400,
             N = env.n_agents
 
             def _stack_obs(obs_list):
-                """Stack list of per-episode obs dicts → 4 batch tensors."""
+                """Stack list of per-episode obs dicts → 5 batch tensors."""
                 return (
-                    torch.stack([torch.as_tensor(o['agent_psi'],    dtype=torch.float32) for o in obs_list]),          # (B, N, 1)
-                    torch.stack([torch.as_tensor(o['neighbor_rel'], dtype=torch.float32).flatten(-2) for o in obs_list]),  # (B, N, (N-1)*2)
-                    torch.stack([torch.as_tensor(o['goal_rel'],     dtype=torch.float32) for o in obs_list]),          # (B, N, 2)
-                    torch.stack([torch.as_tensor(o['gap_vectors'],  dtype=torch.float32) for o in obs_list]),          # (B, N, n_gaps*2)
+                    torch.stack([torch.as_tensor(o['agent_psi'],      dtype=torch.float32) for o in obs_list]),              # (B, N, 1)
+                    torch.stack([torch.as_tensor(o['neighbor_rel'],   dtype=torch.float32).flatten(-2) for o in obs_list]),  # (B, N, (N-1)*2)
+                    torch.stack([torch.as_tensor(o['goal_rel'],       dtype=torch.float32) for o in obs_list]),              # (B, N, 2)
+                    torch.stack([torch.as_tensor(o['gap_vectors'],    dtype=torch.float32) for o in obs_list]),              # (B, N, n_gaps*2)
+                    torch.stack([torch.as_tensor(o['neighbor_goals'], dtype=torch.float32).flatten(-2) for o in obs_list]),  # (B, N, (N-1)*2)
                 )
 
-            def _policy_fwd_batch(ap, nr, gr, gv, sp_t, sw_t):
+            def _policy_fwd_batch(ap, nr, gr, gv, ng, sp_t, sw_t):
                 """Single batched policy forward over all B episodes.
 
                 The GNN forward accepts (..., N, *) inputs and returns (..., N, bins),
                 so we pass (B, N, *) directly — no flatten/reshape needed.
                 Returns log_prob (B,), pos_entropy (B,), wait_entropy (B,).
+
+                Discrete wait: sw_t holds integer bin indices; uses Categorical.
+                Continuous wait: sw_t holds float seconds; uses Normal(sigmoid(mu)*wait_max, sigma).
                 """
-                pl, wl = policy(ap, nr, gr, gv)  # type: ignore[union-attr]
-                # pl: (B, N, n_positions),  wl: (B, N, n_wait_bins)
+                pl, wl = policy(ap, nr, gr, gv, ng)  # type: ignore[union-attr]
+                # pl: (B, N, n_positions),  wl: (B, N, 2 or n_wait_bins)
                 dp = torch.distributions.Categorical(logits=pl)
-                dw = torch.distributions.Categorical(logits=wl)
-                # sp_t / sw_t: (B, n_subgoals, N) — sum over subgoals and agents
-                lp = sum(
-                    dp.log_prob(sp_t[:, sg, :]).sum(-1) + dw.log_prob(sw_t[:, sg, :]).sum(-1)
-                    for sg in range(env.n_subgoals)
-                )  # (B,)
-                pos_ent  = dp.entropy().sum(-1)  # (B,)
-                wait_ent = dw.entropy().sum(-1)  # (B,)
-                return lp, pos_ent, wait_ent
+                lp_pos  = sum(dp.log_prob(sp_t[:, sg, :]).sum(-1) for sg in range(env.n_subgoals))  # (B,)
+                pos_ent = dp.entropy().sum(-1)  # (B,)
+
+                if wait_mode == 'continuous':
+                    _wait_max = float(max(env.wait_times))
+                    _mu_raw, _log_sigma = wl.unbind(-1)  # each (B, N)
+                    _mu    = torch.sigmoid(_mu_raw) * _wait_max
+                    _sigma = torch.exp(_log_sigma).clamp(0.1, _wait_max / 2)
+                    dw = torch.distributions.Normal(_mu, _sigma)
+                    # sw_t: (B, n_subgoals, N) float seconds
+                    lp_wait  = sum(dw.log_prob(sw_t[:, sg, :].float()).sum(-1) for sg in range(env.n_subgoals))
+                    wait_ent = dw.entropy().sum(-1)  # differential entropy (B,)
+                else:
+                    dw = torch.distributions.Categorical(logits=wl)
+                    lp_wait  = sum(dw.log_prob(sw_t[:, sg, :]).sum(-1) for sg in range(env.n_subgoals))
+                    wait_ent = dw.entropy().sum(-1)  # (B,)
+
+                return lp_pos + lp_wait, pos_ent, wait_ent
 
             def _critic_fwd_batch(ap, nr, gr, gv):
                 """Single batched critic forward. Bypasses critic.forward() which
@@ -1104,24 +1413,28 @@ def train(n_updates, batch_size, max_steps: int = 400,
                 ], dim=-1)  # (B, total_in)
                 return critic.net(x).squeeze(-1)  # type: ignore[union-attr]  # (B,)
 
-            if algo == 'ppo' and env.n_subgoals > 0:
+            if evaluate:
+                mean_pos_entropy  = torch.tensor(0.0)
+                mean_wait_entropy = torch.tensor(0.0)
+                loss              = torch.tensor(0.0)
+            elif algo == 'ppo' and env.n_subgoals > 0:
                 PPO_EPOCHS  = 4
                 CLIP_EPS    = 0.2
                 VALUE_COEFF = 0.5
 
-                ap, nr, gr, gv = _stack_obs(obs_batch)
+                ap, nr, gr, gv, ng = _stack_obs(obs_batch)
                 sp_t = torch.stack(sample_pos_batch)   # (B, n_subgoals, N)
                 sw_t = torch.stack(sample_wait_batch)  # (B, n_subgoals, N)
 
                 with torch.no_grad():
-                    log_probs_old, _, _ = _policy_fwd_batch(ap, nr, gr, gv, sp_t, sw_t)
+                    log_probs_old, _, _ = _policy_fwd_batch(ap, nr, gr, gv, ng, sp_t, sw_t)
                     values_old          = _critic_fwd_batch(ap, nr, gr, gv)
 
                 advantages = rewards_t - values_old
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
                 for _ in range(PPO_EPOCHS):
-                    new_log_probs_t, new_pos_ent_t, new_wait_ent_t = _policy_fwd_batch(ap, nr, gr, gv, sp_t, sw_t)
+                    new_log_probs_t, new_pos_ent_t, new_wait_ent_t = _policy_fwd_batch(ap, nr, gr, gv, ng, sp_t, sw_t)
                     ratio          = torch.exp(new_log_probs_t - log_probs_old)
                     surr1          = ratio * advantages
                     surr2          = torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * advantages
@@ -1148,11 +1461,11 @@ def train(n_updates, batch_size, max_steps: int = 400,
 
             elif env.n_subgoals > 0:
                 # REINFORCE: single batched forward pass, no epoch loop
-                ap, nr, gr, gv = _stack_obs(obs_batch)
+                ap, nr, gr, gv, ng = _stack_obs(obs_batch)
                 sp_t = torch.stack(sample_pos_batch)
                 sw_t = torch.stack(sample_wait_batch)
 
-                log_probs_t, pos_ent_t, wait_ent_t = _policy_fwd_batch(ap, nr, gr, gv, sp_t, sw_t)
+                log_probs_t, pos_ent_t, wait_ent_t = _policy_fwd_batch(ap, nr, gr, gv, ng, sp_t, sw_t)
                 normalized        = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
                 mean_pos_entropy  = pos_ent_t.mean()
                 mean_wait_entropy = wait_ent_t.mean()
@@ -1223,12 +1536,13 @@ def train(n_updates, batch_size, max_steps: int = 400,
             recent_crossed.append(mean_crossed)
             recent_frac.append(frac_done)
             smooth_score = _model_score(np.mean(recent_frac), np.mean(recent_crossed))
-            if policy is not None and smooth_score > best_score:
+            if not evaluate and policy is not None and smooth_score > best_score:
                 best_score = smooth_score
                 os.makedirs(os.path.dirname(saving_path) or '.', exist_ok=True)
                 torch.save({
                     'update':            update,
                     'algo':              algo,
+                    'wait_mode':         wait_mode,
                     'policy':            policy.state_dict(),
                     'optimizer':         optimizer.state_dict(),
                     'scheduler':         scheduler.state_dict() if scheduler is not None else None,
@@ -1242,13 +1556,23 @@ def train(n_updates, batch_size, max_steps: int = 400,
                     'hparams':           raw_hparams,
                 }, saving_path)
                 tqdm.write(f"  ✓ saved (update {update}, score {smooth_score:+.2f}, crossed {np.mean(recent_crossed):.2f})")
+                if record:
+                    traj_path = saving_path.replace('.pt', '_best_trajectory.pkl')
+                    try:
+                        record_best_episode(env, policy, traj_path,
+                                            metadata={'update': update, 'score': smooth_score,
+                                                      'mean_crossed': float(np.mean(recent_crossed)),
+                                                      'frac_terminated': float(np.mean(recent_frac))})
+                    except Exception as _rec_exc:
+                        tqdm.write(f"  ⚠ trajectory recording failed: {_rec_exc}")
 
-            # Always save latest for reliable resume
-            if policy is not None:
+            # Always save latest for reliable resume (skipped in evaluate mode)
+            if not evaluate and policy is not None:
                 os.makedirs(os.path.dirname(latest_path) or '.', exist_ok=True)
                 torch.save({
                     'update':            update,
                     'algo':              algo,
+                    'wait_mode':         wait_mode,
                     'policy':            policy.state_dict(),
                     'optimizer':         optimizer.state_dict(),
                     'scheduler':         scheduler.state_dict() if scheduler is not None else None,
@@ -1269,6 +1593,7 @@ def train(n_updates, batch_size, max_steps: int = 400,
             torch.save({
                 'update':            update,
                 'algo':              algo,
+                'wait_mode':         wait_mode,
                 'policy':            policy.state_dict(),
                 'optimizer':         optimizer.state_dict(),
                 'scheduler':         scheduler.state_dict() if scheduler is not None else None,
@@ -1287,6 +1612,19 @@ def train(n_updates, batch_size, max_steps: int = 400,
         pool.join()
 
     writer.close()
+
+    if evaluate and eval_out is not None:
+        os.makedirs(os.path.dirname(eval_out) or '.', exist_ok=True)
+        np.savez(eval_out,
+                 terminated  = np.array(eval_all_terminated,  dtype=bool),
+                 makespan    = np.array(eval_all_makespans,   dtype=float),
+                 n_failed    = np.array(eval_all_failed,      dtype=int),
+                 n_reached   = np.array(eval_all_reached,     dtype=int),
+                 reward      = np.array(eval_all_rewards,     dtype=float),
+                 n_crossed   = np.array(eval_all_crossed,     dtype=int),
+                 wall_time   = np.array(eval_all_wall_time,   dtype=float),
+                 wait_spread = np.array(eval_all_wait_spread, dtype=float))
+        print(f"Eval data saved to '{eval_out}' ({len(eval_all_terminated)} episodes)")
 
 if __name__ == "__main__":
     import argparse
@@ -1322,14 +1660,36 @@ if __name__ == "__main__":
                         help='LR schedule: linear (Schulman et al. 2017) or cosine (modern PPO default)')
     parser.add_argument('--run_name', type=str, default=None,
                         help='override run name to continue writing into an existing TensorBoard directory')
+    parser.add_argument('--record', action='store_true',
+                        help='save a trajectory recording whenever a new best checkpoint is reached')
+    parser.add_argument('--evaluate', action='store_true',
+                        help='evaluation mode: collect episodes but skip all gradient updates and checkpoint saving')
+    parser.add_argument('--eval_out', type=str, default=None,
+                        help='path to save per-episode evaluation data as .npz (only used with --evaluate)')
     parser.add_argument('--resume', action='store_true',
                         help='full resume: restore optimizer, scheduler and update counter from --loadw checkpoint')
+    parser.add_argument('--skip_penalty', type=float, default=4.0,
+                        help='per-agent penalty for each skipped subgoal (applied in both terminated and truncated branches)')
+    parser.add_argument('--failed_plan_penalty', type=float, default=0.0,
+                        help='per-failed-plan penalty (covers execution replanning failures not captured by skip_penalty)')
+    parser.add_argument('--wait_mode', type=str, default='discrete', choices=['discrete', 'continuous'],
+                        help='wait-time head mode: discrete (Categorical over bins) or continuous (Normal distribution)')
+    parser.add_argument('--arch', type=str, default='gnn', choices=['gnn', 'bipartite'],
+                        help='policy architecture: gnn (homogeneous GNN) or bipartite (star-graph, sensor-only neighbours)')
     args = parser.parse_args()
 
-    # Resume: auto-derive loadw from run_name and restore all hparams from checkpoint
-    if args.resume and args.run_name:
-        latest = os.path.join(args.save_dir, f'{args.run_name}_latest.pt')
-        assert os.path.exists(latest), f"No latest checkpoint found at '{latest}'"
+    # Resume: restore weights + optimizer + scheduler + update counter from checkpoint.
+    # Two modes:
+    #   --resume --loadw <path>      direct checkpoint file (timestamped filename)
+    #   --resume --run_name <name>   legacy: auto-derive path as {save_dir}/{name}_latest.pt
+    if args.resume:
+        if args.loadw:
+            latest = args.loadw
+        elif args.run_name:
+            latest = os.path.join(args.save_dir, f'{args.run_name}_latest.pt')
+        else:
+            raise ValueError("--resume requires either --loadw <checkpoint.pt> or --run_name <name>")
+        assert os.path.exists(latest), f"No checkpoint found at '{latest}'"
         ckpt = torch.load(latest, weights_only=False)
         hp = ckpt.get('hparams', {})
         args.loadw      = latest
@@ -1346,6 +1706,10 @@ if __name__ == "__main__":
         args.diversity_sigma = hp.get('diversity_sigma', args.diversity_sigma)
         args.ompl_timelimit  = hp.get('ompl_timelimit',  args.ompl_timelimit)
         args.stage      = hp.get('stage',            args.stage)
+        args.wait_mode    = hp.get('wait_mode',      args.wait_mode)
+        args.skip_penalty         = hp.get('skip_penalty',        args.skip_penalty)
+        args.failed_plan_penalty  = hp.get('failed_plan_penalty', args.failed_plan_penalty)
+        args.arch                 = hp.get('arch',                args.arch)
         if hp.get('wait_times'):
             WAIT_TIMES = hp['wait_times']
         print(f"Resume: loaded hparams from '{latest}'")
@@ -1370,4 +1734,11 @@ if __name__ == "__main__":
           lr_end=args.lr_end,
           lr_schedule=args.lr_schedule,
           run_name_override=args.run_name,
-          resume=args.resume)
+          resume=args.resume,
+          record=args.record,
+          wait_mode=args.wait_mode,
+          skip_penalty=args.skip_penalty,
+          failed_plan_penalty=args.failed_plan_penalty,
+          evaluate=args.evaluate,
+          eval_out=args.eval_out,
+          arch=args.arch)

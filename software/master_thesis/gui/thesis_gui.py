@@ -46,8 +46,9 @@ from master_thesis.modules.task_assignment.strategies.strategy_registry import S
 
 from extensions.babylon.src.lib.objects.drawings import CircleDrawing, LineDrawing
 
-# Directory where per-scenario PRM* roadmap .npy files are stored.
-_ROADMAPS_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'scenarios', 'roadmaps'))
+from master_thesis.scenarios.roadmap_utils import (
+    load_and_share_roadmap, cache_built_roadmap, roadmap_filepath, is_roadmap_cached,
+)
 
 
 class BabylonTask(Box):
@@ -148,6 +149,16 @@ class ThesisGUI:
 
         # Background PRM* roadmap builder thread
         self._roadmap_build_thread: threading.Thread | None = None
+
+        # Set when the current scenario's PRM* roadmap is loaded and shared to
+        # all agents.  Cleared whenever a new scenario is loaded so that episode
+        # buttons can gate on it being ready.
+        self._roadmap_ready = threading.Event()
+
+        # Trajectory recording / replay
+        self._recording_frames: list | None = None   # None = not recording
+        self._recording_task_frames: list | None = None
+        self._last_trajectory: dict | None = None    # most recently completed recording
 
         self.joystick_manager = JoystickManager()
         self.joystick_manager.callbacks.new_joystick.register(self._newJoystick_callback)
@@ -468,7 +479,7 @@ class ThesisGUI:
         # Store for run_subgoal_policy() to read gap_geometry etc.
         self._last_scenario = config
 
-        # Register PRM* roadmap file (loads lazily on first plan() call).
+        # Start roadmap load/build eagerly so episode buttons are ready ASAP.
         self._try_apply_roadmap(config)
 
         self.logger.info(
@@ -479,54 +490,64 @@ class ThesisGUI:
         )
 
     # ------------------------------------------------------------------------------------------------------------------
+    def _roadmap_progress_bar(self) -> None:
+        """Show a tqdm progress bar in the terminal until _roadmap_ready is set."""
+        import tqdm
+        with tqdm.tqdm(desc="PRM* roadmap", unit="s",
+                       bar_format="{l_bar}{bar}| {n}s elapsed [{elapsed}]") as pbar:
+            while not self._roadmap_ready.wait(timeout=1.0):
+                pbar.update(1)
+        # Bar closes automatically; one final newline lands in the terminal naturally.
+
+    # ------------------------------------------------------------------------------------------------------------------
     def _try_apply_roadmap(self, config: ScenarioConfig) -> None:
-        """Load a saved roadmap for *config* and share it across all agents.
+        """Load (or auto-build) the PRM* roadmap for *config* and share it.
 
-        Loading is done in a background thread (~5 min).  All agents receive
-        the same in-memory PlannerRoadmap object, so the load cost is paid
-        only once rather than once per agent.
+        Three cases, in order of speed:
+          1. Already cached (same scenario reloaded or visited this session):
+             inject synchronously — _roadmap_ready is set before this method
+             returns, so episode buttons are immediately available.
+          2. File exists but not yet cached: load in a background thread;
+             _roadmap_ready is set when the thread finishes.
+          3. No file: auto-build in background (~5 min, one-time per machine).
+
+        In cases 2 and 3 a tqdm progress bar runs in the terminal.
         """
-        filepath = os.path.join(_ROADMAPS_DIR, f"{config.name}.npy")
-        if os.path.exists(filepath):
-            self.logger.info(
-                f"Roadmap found for '{config.name}' — loading in background (~5 min, shared across agents)"
-            )
-            # Register file as fallback (in case background load hasn't finished when
-            # the user triggers the first plan()).
-            self._register_roadmap_file(filepath)
-            threading.Thread(
-                target=self._load_and_share_roadmap_bg, args=(filepath,), daemon=True
-            ).start()
+        self._roadmap_ready.clear()
+        scenario_name = config.name
+
+        if is_roadmap_cached(scenario_name):
+            # Instant path: in-memory object injected into fresh agents.
+            load_and_share_roadmap(self.sim, scenario_name)
+            self.logger.warning(f"PRM* roadmap for '{scenario_name}' shared from cache — ready")
+            self._roadmap_ready.set()
+
+        elif os.path.exists(roadmap_filepath(scenario_name)):
+            self.logger.warning(f"Roadmap found for '{scenario_name}' — loading in background")
+
+            def _load_bg():
+                try:
+                    ok = load_and_share_roadmap(self.sim, scenario_name)
+                    current = self._last_scenario.name if self._last_scenario else None
+                    if current != scenario_name:
+                        self.logger.warning(
+                            f"Roadmap for '{scenario_name}' ready but scenario is now "
+                            f"'{current}' — discarding."
+                        )
+                        return
+                    if ok:
+                        self.logger.warning("PRM* roadmap ready — episode buttons now available")
+                        self._roadmap_ready.set()
+                except Exception as exc:
+                    self.logger.warning(f"Roadmap load failed: {exc}")
+
+            threading.Thread(target=_load_bg, daemon=True).start()
+            threading.Thread(target=self._roadmap_progress_bar, daemon=True).start()
+
         else:
-            self.logger.info(f"No roadmap for '{config.name}' — press 'Build Roadmap' to create one (~5 min, one-time)")
-            self._register_roadmap_file(None)
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _load_and_share_roadmap_bg(self, filepath: str) -> None:
-        """Background worker: force-load one roadmap and share to all planners."""
-        from master_thesis.modules.motion_planning.ompl_trajectory_planner import OMPLTrajectoryPlanner
-        loader = next(
-            (r.sim_agent.planner for r in self.robots.values()
-             if isinstance(r.sim_agent.planner, OMPLTrajectoryPlanner)),
-            None,
-        )
-        if loader is None:
-            return
-        try:
-            roadmap = loader.load_roadmap_from_file(filepath)
-            self.sim.share_roadmap(roadmap)
-            self.logger.info("PRM* roadmap loaded and shared to all agents")
-        except Exception as exc:
-            self.logger.warning(f"Background roadmap load failed: {exc}")
-
-    # ------------------------------------------------------------------------------------------------------------------
-    def _register_roadmap_file(self, filepath: str | None) -> None:
-        """Call set_roadmap_file() on every OMPLTrajectoryPlanner in the scene."""
-        from master_thesis.modules.motion_planning.ompl_trajectory_planner import OMPLTrajectoryPlanner
-        for robot in self.robots.values():
-            planner = robot.sim_agent.planner
-            if isinstance(planner, OMPLTrajectoryPlanner):
-                planner.set_roadmap_file(filepath)
+            self.logger.warning(f"No roadmap for '{scenario_name}' — building automatically (~5 min, one-time)")
+            self.buildRoadmap()  # sets _roadmap_ready when done
+            threading.Thread(target=self._roadmap_progress_bar, daemon=True).start()
 
     # ------------------------------------------------------------------------------------------------------------------
     def buildRoadmap(self) -> None:
@@ -543,7 +564,7 @@ class ThesisGUI:
             return
 
         scenario = self._last_scenario
-        filepath = os.path.join(_ROADMAPS_DIR, f"{scenario.name}.npy")
+        filepath = roadmap_filepath(scenario.name)
 
         def _build():
             from master_thesis.modules.motion_planning.ompl_trajectory_planner import OMPLTrajectoryPlanner
@@ -559,9 +580,11 @@ class ThesisGUI:
             try:
                 roadmap = builder.build_and_save_roadmap(filepath)
                 self.logger.warning(f"Roadmap build done — saved to {filepath}")
-                # Share the in-memory roadmap to all agents directly.
-                # No need for lazy file re-loads — every planner gets the same object.
+                # Store in process-level cache so future resets are instant,
+                # then share to all current agents.
+                cache_built_roadmap(scenario.name, roadmap)
                 self.sim.share_roadmap(roadmap)
+                self._roadmap_ready.set()
             except Exception as exc:
                 self.logger.error(f"Roadmap build failed: {exc}")
 
@@ -715,7 +738,7 @@ class ThesisGUI:
             f"(update {ckpt.get('update', '?')}, n={n_ckpt}, "
             f"n_gaps={n_gaps}, wait_bins={n_wait_bins})"
         )
-        return policy, free_positions, n_ckpt, wait_times
+        return policy, free_positions, n_ckpt, wait_times, n_gaps
 
     # ------------------------------------------------------------------------------------------------------------------
     def _start_episode_timer(self):
@@ -723,6 +746,32 @@ class ThesisGUI:
         self._episode_start_step = self.sim.environment.scheduling.tick_global
         self._episode_end_step = None
         self._episode_had_tasks = False
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _with_roadmap_ready(self, description: str, fn) -> None:
+        """Run *fn* immediately if the PRM* roadmap is ready, otherwise defer it
+        to a background thread that waits and shows a tqdm progress bar.
+
+        The progress bar runs in the terminal and ticks every second.  For
+        loading (seconds) it completes quickly; for building (~5 min) it gives
+        a time-based estimate.
+        """
+        if self._roadmap_ready.is_set():
+            fn()
+            return
+
+        self.logger.info(f"PRM* roadmap in progress — '{description}' will start automatically when ready")
+
+        def _wait_and_run():
+            import tqdm as _tqdm
+            with _tqdm.tqdm(desc="Waiting for PRM* roadmap", unit="s",
+                            bar_format="{l_bar}{bar}| {n}s elapsed [{elapsed}]") as pbar:
+                while not self._roadmap_ready.wait(timeout=1.0):
+                    pbar.update(1)
+            self.logger.info(f"Roadmap ready — starting '{description}'")
+            fn()
+
+        threading.Thread(target=_wait_and_run, daemon=True).start()
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_rl_episode(self, checkpoint_path: str | None = None) -> None:
@@ -737,83 +786,112 @@ class ThesisGUI:
         The real-time simulation then runs the episode to completion, just as
         training's inner step-loop would, but in wall-clock time.
         """
-        from master_thesis.modules.subgoal_predictor.train_subgoal import (
-            build_subgoal_obs, run_policy_step,
-        )
-
-        result = self._load_subgoal_policy(checkpoint_path)
-        if result is None:
-            return
-        policy, free_positions, n_ckpt, wait_times = result
-
-        if len(self.sim.agents) == 0:
-            self.logger.warning("No agents present — load a scenario first")
-            return
-        if len(self.sim.agents) != n_ckpt:
-            self.logger.warning(
-                f"GUI has {len(self.sim.agents)} agents but policy trained with {n_ckpt}."
+        def _impl():
+            from master_thesis.modules.subgoal_predictor.train_subgoal import (
+                build_subgoal_obs, run_policy_step,
             )
 
-        scenario = self._last_scenario
-        if scenario is None or scenario.gap_geometry is None:
-            self.logger.warning("No scenario with gap_geometry loaded.")
-            return
+            result = self._load_subgoal_policy(checkpoint_path)
+            if result is None:
+                return
+            policy, free_positions, n_ckpt, wait_times, n_gaps_ckpt = result
 
-        self._start_episode_timer()
+            if len(self.sim.agents) == 0:
+                self.logger.warning("No agents present — load a scenario first")
+                return
+            if len(self.sim.agents) != n_ckpt:
+                self.logger.warning(
+                    f"GUI has {len(self.sim.agents)} agents but policy trained with {n_ckpt}."
+                )
 
-        # 1. Clear any leftover SGM state, then assign tasks
-        for agent in self.sim.agents.values():
-            agent.sgm.reset()
-        self.sim.start_ta()
+            scenario = self._last_scenario
+            if scenario is None or scenario.gap_geometry is None:
+                self.logger.warning("No scenario with gap_geometry loaded.")
+                return
 
-        # 2+3+4. obs → policy → subgoals → start_mp → start_exe
-        obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
-        predicted = run_policy_step(self.sim, policy, free_positions, obs, wait_times=wait_times)
+            sim_n_gaps = len(scenario.gap_geometry['gaps'])
+            if sim_n_gaps != n_gaps_ckpt:
+                self.logger.warning(
+                    f"Gap count mismatch: policy trained with n_gaps={n_gaps_ckpt} "
+                    f"but current scenario has n_gaps={sim_n_gaps}. "
+                    f"Load a scenario with {n_gaps_ckpt} gap(s)."
+                )
+                return
 
-        for i, ((sx, sy), agent) in enumerate(zip(predicted, self.sim.agents.values())):
-            wait_s = (agent.sgm._wait_ticks_per_subgoal[0] * self.sim.Ts
-                      if agent.sgm._wait_ticks_per_subgoal else 0.0)
-            self.logger.info(f"Agent {i}: subgoal ({sx:.2f}, {sy:.2f}), wait {wait_s:.1f}s")
+            self._start_episode_timer()
+            self._start_recording()
+
+            # 1. Clear any leftover SGM state, then assign tasks
+            for agent in self.sim.agents.values():
+                agent.sgm.reset()
+            self.sim.start_ta()
+
+            # 2+3+4. obs → policy → subgoals → start_mp → start_exe
+            obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
+            predicted = run_policy_step(self.sim, policy, free_positions, obs, wait_times=wait_times)
+
+            for i, ((sx, sy), agent) in enumerate(zip(predicted, self.sim.agents.values())):
+                wait_s = (agent.sgm._wait_ticks_per_subgoal[0] * self.sim.Ts
+                          if agent.sgm._wait_ticks_per_subgoal else 0.0)
+                self.logger.info(f"Agent {i}: subgoal ({sx:.2f}, {sy:.2f}), wait {wait_s:.1f}s")
+
+        self._with_roadmap_ready("RL episode", _impl)
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_subgoal_policy(self, checkpoint_path: str | None = None) -> None:
         """Set subgoals only (no TA, no MP/EXE start).  Kept for manual workflows
         where TA was already run and MP/EXE are started separately."""
-        from master_thesis.modules.subgoal_predictor.train_subgoal import (
-            build_subgoal_obs, run_policy_step,
-        )
+        def _impl():
+            from master_thesis.modules.subgoal_predictor.train_subgoal import (
+                build_subgoal_obs, run_policy_step,
+            )
 
-        result = self._load_subgoal_policy(checkpoint_path)
-        if result is None:
-            return
-        policy, free_positions, n_ckpt, wait_times = result
+            result = self._load_subgoal_policy(checkpoint_path)
+            if result is None:
+                return
+            policy, free_positions, n_ckpt, wait_times, n_gaps_ckpt = result
 
-        if len(self.sim.agents) == 0:
-            self.logger.warning("No agents present — load a scenario first")
-            return
+            if len(self.sim.agents) == 0:
+                self.logger.warning("No agents present — load a scenario first")
+                return
 
-        scenario = self._last_scenario
-        if scenario is None or scenario.gap_geometry is None:
-            self.logger.warning("No scenario with gap_geometry loaded.")
-            return
+            scenario = self._last_scenario
+            if scenario is None or scenario.gap_geometry is None:
+                self.logger.warning("No scenario with gap_geometry loaded.")
+                return
 
-        obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
-        predicted = run_policy_step(self.sim, policy, free_positions, obs, wait_times=wait_times)
+            sim_n_gaps = len(scenario.gap_geometry['gaps'])
+            if sim_n_gaps != n_gaps_ckpt:
+                self.logger.warning(
+                    f"Gap count mismatch: policy trained with n_gaps={n_gaps_ckpt} "
+                    f"but current scenario has n_gaps={sim_n_gaps}. "
+                    f"Load a scenario with {n_gaps_ckpt} gap(s)."
+                )
+                return
 
-        for i, (sx, sy) in enumerate(predicted):
-            self.logger.info(f"Agent {i}: subgoal ({sx:.2f}, {sy:.2f})")
+            obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
+            predicted = run_policy_step(self.sim, policy, free_positions, obs, wait_times=wait_times)
+
+            for i, (sx, sy) in enumerate(predicted):
+                self.logger.info(f"Agent {i}: subgoal ({sx:.2f}, {sy:.2f})")
+
+        self._with_roadmap_ready("subgoal policy", _impl)
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_no_subgoal_episode(self):
         """Baseline episode: TA → MP → EXE with no subgoal predictor.
         Matches exactly FrodoGymWrapper with n_subgoals=0."""
-        self._start_episode_timer()
-        for agent in self.sim.agents.values():
-            agent.sgm.reset()
-        self.sim.start_ta()
-        self.sim.start_mp()
-        self.sim.start_exe()
-        self.logger.info("Baseline episode started: TA → MP → EXE (0 subgoals)")
+        def _impl():
+            self._start_episode_timer()
+            self._start_recording()
+            for agent in self.sim.agents.values():
+                agent.sgm.reset()
+            self.sim.start_ta()
+            self.sim.start_mp()
+            self.sim.start_exe()
+            self.logger.info("Baseline episode started: TA → MP → EXE (0 subgoals)")
+
+        self._with_roadmap_ready("baseline episode", _impl)
 
     # ------------------------------------------------------------------------------------------------------------------
     def runPipeline(self):
@@ -848,7 +926,8 @@ class ThesisGUI:
             return
 
         from master_thesis.modules.subgoal_predictor.train_subgoal import build_free_positions
-        positions = build_free_positions(self.sim, gap_geo, grid_stride=0.15)
+        positions = build_free_positions(self.sim, gap_geo, grid_stride=0.15,
+                                         subgoal_limits=getattr(scenario, 'subgoal_limits', None))
 
         for x, y in positions:
             dot = CircleDrawing(
@@ -1131,7 +1210,7 @@ class ThesisGUI:
         cat1 = Category('cat1', max_pages=10)
 
         # Add a page
-        page1 = Page('page1')
+        page1 = Page('page1', grid_size=(22, 50))
         cat1.addPage(page1)
 
         # Add it to the GUI
@@ -1250,6 +1329,12 @@ class ThesisGUI:
             discard_inputs=True,
         )), height=2, width=4)
 
+        page1.addWidget(Button(text="Replay Last", callback=Callback(
+            function=self.replay_trajectory,
+            inputs={},
+            discard_inputs=True,
+        )), height=2, width=4)
+
     def _buildBabylonFloor(self):
 
         floor = SimpleFloor('floor', size_y=50, size_x=50, texture='floor_bright.png')
@@ -1274,6 +1359,15 @@ class ThesisGUI:
                 y=state.y,
                 psi=state.psi,
             )
+
+        # Trajectory recording
+        if self._recording_frames is not None:
+            frame = [[robot.sim_agent.state.x,
+                      robot.sim_agent.state.y,
+                      robot.sim_agent.state.psi]
+                     for robot in self.robots.values()]
+            self._recording_frames.append(frame)
+            self._recording_task_frames.append(list(self.tasks.keys()))
 
             # Detect task completion → remove assignment circle and task marker
             assigned = robot.sim_agent.assigned_task
@@ -1373,6 +1467,106 @@ class ThesisGUI:
                     self.babylon_visualization.set_ep_step(f"ep: {ep_steps} ({ep_secs:.1f}s)")
             else:
                 self.babylon_visualization.set_ep_step(f"ep: {ep_steps} ({ep_secs:.1f}s)")
+
+            # Auto-stop recording when episode finishes
+            if self._recording_frames is not None and self._episode_end_step is not None:
+                self._stop_recording()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def _start_recording(self):
+        self._recording_frames = []
+        self._recording_task_frames = []
+
+    def _stop_recording(self):
+        if self._recording_frames is None:
+            return
+        import pickle
+        frames = self._recording_frames
+        task_frames = self._recording_task_frames
+        self._recording_frames = None
+        self._recording_task_frames = None
+
+        scenario = self._last_scenario
+        traj = {
+            'scenario':    scenario.name if scenario else 'unknown',
+            'Ts':          self.sim.Ts,
+            'agent_ids':   list(self.robots.keys()),
+            'positions':   np.array(frames, dtype=np.float32),   # (F, N, 3)
+            'task_frames': task_frames,
+            'metadata':    {'source': 'gui'},
+        }
+        self._last_trajectory = traj
+
+        # Auto-save alongside the active checkpoint if one is loaded
+        save_path = os.path.join(
+            os.path.dirname(self._subgoal_weights) if self._subgoal_weights else
+            os.path.join(os.path.dirname(__file__), '..', 'modules', 'subgoal_predictor', 'runs'),
+            'gui_trajectory_latest.pkl',
+        )
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        with open(save_path, 'wb') as f:
+            pickle.dump(traj, f)
+        self.logger.info(f"Trajectory saved ({len(frames)} frames) → {save_path}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def replay_trajectory(self, path: str | None = None, speed: float = 1.0) -> None:
+        """Replay a saved trajectory in Babylon without running the simulation.
+
+        Args:
+            path:  Path to a .pkl trajectory file.  None → use last recorded.
+            speed: Playback speed multiplier (2.0 = 2× real-time).
+        """
+        import pickle
+
+        if path is not None:
+            with open(path, 'rb') as f:
+                traj = pickle.load(f)
+        elif self._last_trajectory is not None:
+            traj = self._last_trajectory
+        else:
+            self.logger.warning("No trajectory available — run an episode first or provide a path")
+            return
+
+        positions   = traj['positions']    # (F, N, 3)
+        agent_ids   = traj['agent_ids']
+        task_frames = traj.get('task_frames', [])
+        Ts          = traj.get('Ts', self.sim.Ts)
+        n_frames    = positions.shape[0]
+
+        self.logger.info(f"Replaying {n_frames} frames at {speed}× speed "
+                         f"(scenario: {traj.get('scenario', '?')})")
+
+        def _replay_thread():
+            self._output_enabled = False   # prevent physics from overwriting positions
+            try:
+                all_task_ids = set(task_frames[0]) if task_frames else set()
+                for frame_idx in range(n_frames):
+                    # Update agent positions
+                    for agent_idx, aid in enumerate(agent_ids):
+                        robot = self.robots.get(aid)
+                        if robot is None:
+                            continue
+                        x, y, psi = positions[frame_idx, agent_idx]
+                        robot.babylon.setState(x=float(x), y=float(y), psi=float(psi))
+
+                    # Hide tasks that have been completed by this frame
+                    if task_frames:
+                        remaining = set(task_frames[frame_idx])
+                        for tid in all_task_ids - remaining:
+                            task_gui = self.tasks.get(tid)
+                            if task_gui and task_gui.babylon is not None:
+                                try:
+                                    self.babylon_visualization.removeObject(task_gui.babylon)
+                                except Exception:
+                                    pass
+
+                    time.sleep(Ts / speed)
+
+                self.logger.info("Replay complete")
+            finally:
+                self._output_enabled = True
+
+        threading.Thread(target=_replay_thread, daemon=True).start()
 
 
 # === BILBO INTERACTIVE CLI ============================================================================================

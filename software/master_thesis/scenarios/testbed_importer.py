@@ -152,6 +152,12 @@ def _build_config(
     assignments: dict[str, str] = parsed.get('assignments') or {}
     gap_geometry: dict | None = parsed.get('gap_geometry')
 
+    raw_sg = parsed.get('subgoal_limits')
+    subgoal_limits = (
+        (float(raw_sg[0][0]), float(raw_sg[0][1])),
+        (float(raw_sg[1][0]), float(raw_sg[1][1])),
+    ) if raw_sg and len(raw_sg) == 2 else None
+
     agent_region, n_agents = _parse_spawn_region(parsed.get('agent_spawn_region'))
     task_region, n_tasks   = _parse_spawn_region(parsed.get('task_spawn_region'))
 
@@ -163,6 +169,7 @@ def _build_config(
         tasks=tasks,
         assignments=assignments,
         gap_geometry=gap_geometry,
+        subgoal_limits=subgoal_limits,
         agent_spawn_region=agent_region,
         n_agents_random=n_agents,
         task_spawn_region=task_region,
