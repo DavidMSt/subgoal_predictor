@@ -200,13 +200,13 @@ class subgoal_bipartite_gnn(nn.Module):
                  wait_mode: str = 'discrete') -> None:
         super().__init__()
 
-        self.enc_psi  = nn.Linear(1,           out_dim)  # own heading ψ
-        self.enc_goal = nn.Linear(2,           out_dim)  # relative (Δx, Δy) to own task
+        self.enc_psi  = nn.Linear(1, out_dim)  # own heading ψ
+        self.enc_goal = nn.Linear(2, out_dim)  # relative (Δx, Δy) to own task
         self.enc_gap  = nn.Linear(n_gaps * 2,  out_dim)  # (Δx, Δy) per gap, flattened
         # Neighbour node: (dx_rel, dy_rel) from sensor + (goal_Δx, goal_Δy) from DGNN-GA.
         # The link between the two is valid: DGNN-GA runs on the sensed robot states, so
         # each agent already knows which sensor reading maps to which task assignment.
-        self.nbr_enc  = nn.Linear(4,           out_dim)  # (dx_rel, dy_rel, goal_Δx, goal_Δy)
+        self.nbr_enc  = nn.Linear(4, out_dim)  # (dx_rel, dy_rel, goal_Δx, goal_Δy)
 
         self.upd_mlp = nn.Sequential(
             nn.Linear(4 * out_dim, out_dim),
@@ -247,9 +247,9 @@ class subgoal_bipartite_gnn(nn.Module):
         # neighbour encoding: sensor position + DGNN-GA goal, then mean aggregate
         nbr_feat = torch.cat([nbr_pos, nbr_goal], dim=-1)  # (..., N, N-1, 4)
         h_nbr = torch.relu(self.nbr_enc(nbr_feat))         # (..., N, N-1, d)
-        h_agg = h_nbr.mean(dim=-2)                         # (..., N, d)
 
         # GNN update step: all ego components + aggregated neighbour signal
+        h_agg = h_nbr.mean(dim=-2)                         # (..., N, d)
         h_upd = torch.relu(self.upd_mlp(
             torch.cat([h_psi, h_goal, h_gap, h_agg], dim=-1)  # (..., N, 4d)
         ))                                                      # (..., N, d)

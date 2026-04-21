@@ -105,27 +105,28 @@ the policy converged to predicting subgoals in the far top corners of the arena 
 to reach without any gap navigation — to cheaply collect the bonus.  Removing the term
 eliminated this mode-collapse.
 
-### Skip penalty (0.5 per skipped subgoal)
-Introduced after observing that the `progress_term` gradient drives subgoals toward the
-gap edge — the positions within the action space that are closest to the task goal.
-These positions are in narrow passages near the wall, causing OMPL planning failures.
-When a subgoal is skipped (planning fails), `SubgoalManager` routes the agent directly
-to its task goal via OMPL, making the subgoal predictor entirely irrelevant: the reward
-still includes the `progress_term` credit (computed from the predicted position regardless
-of reachability), while the actual gap routing is handled by OMPL.
+### Skip penalty — both branches
+Applied in **both terminated and truncated** branches.  The bypass exploit is:
 
-The skip penalty directly counteracts this: any subgoal that induces a planning failure
-costs 0.5, creating gradient pressure away from unreachable positions.
+1. Policy predicts a gap-edge subgoal (approximately collinear with start→goal, so
+   `energy_penalty ≈ 0`).
+2. OMPL cannot reach it (narrow passage) → subgoal skipped.
+3. OMPL routes agent directly to task → episode terminates with high reward.
+4. **Original design**: skip penalty only in truncated branch → terminated episodes paid
+   nothing for skips.  Policy discovered this and locked into the bypass.
 
-**Why 0.5?**  The gap-aware distance term for an agent far from the goal is typically
-1.5–3.0 across the episode, and the crossing bonus is 1.5.  A single skip penalty of 0.5
-is therefore significant relative to other truncated terms without dominating them.
+Fix: skip penalty now applies in both branches with different coefficients:
 
-**Why was this not needed before the progress term?**  Without any directional gradient on
-subgoal positions, subgoals stayed spread across the free-position grid.  That grid is
-pre-filtered to obstacle-free cells by construction, so virtually all positions are
-reachable and `n_skipped ≈ 0`.  The progress term introduced a directional gradient that
-happened to point toward hard-to-reach edge positions, breaking this property.
+- **Terminated branch**: `skip_penalty_terminated = 1.5` per skip.  Must be large
+  relative to the 30-point termination bonus (5 agents skipping → 7.5 penalty, reducing
+  best-case from ~27 to ~19.5).
+- **Truncated branch**: `skip_penalty = 0.5` per skip.  Calibrated relative to crossing
+  bonus (1.5) and distance penalty; same motivation as before.
+
+**Why gap-edge positions have near-zero energy penalty**: the gap is geometrically on the
+straight line between agent start (above wall) and task (below wall).  A subgoal near
+the gap therefore satisfies `d(start→sg) + d(sg→goal) ≈ d(start→goal)`, making
+`extra ≈ 0`.  Energy penalty alone cannot close the bypass for gap-passage scenarios.
 
 ---
 
