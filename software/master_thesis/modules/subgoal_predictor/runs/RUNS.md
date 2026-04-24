@@ -672,7 +672,8 @@ Each phase warm-starts from the best checkpoint of the previous phase.
 | bp_A_ft2 | `bp_A_ft2_20260416_094315.pt` | 450 | 1e-4 fixed | 500 | frac_terminated ~85%, good signal |
 | bp_A_ft3 | `bp_A_ft3_20260416_235148.pt` | 400 | 1e-4 fixed | ~340 | Underperformed — lr too high for tighter constraint |
 | bp_A_ft4 | `bp_A_ft4_20260419_021501.pt` | 400 | 5e-5 fixed | 249 (killed) | Plateau: 78% terminated, rew≈8, flat for 250 updates |
-| bp_A_ft5 | running | **350** | **5e-5 cosine → 5e-6** | in progress | Curriculum step; warm-start from ft4 _latest |
+| bp_A_ft5 | `bp_A_ft5_20260420_121017.pt` | **350** | **5e-5 cosine → 5e-6** | ~392 | Makespan plateau; see below |
+| bp_A_ft2 (resumed) | `bp_A_ft2_20260416_094315_latest.pt` | 450 | 1e-4 fixed | 500 | **FINAL — training stopped, see below** |
 
 **Rationale for curriculum:** tighter max_steps forces makespan reduction.
 LR reduced in ft4 because 400-step constraint creates a harder optimization landscape.
@@ -691,10 +692,43 @@ gain. ft5 warm-started immediately from `bp_A_ft4_20260419_021501_latest.pt`.
   toward end of 500 updates without fighting the harder 350-step constraint early on
 - batch/n_workers unchanged (machine at capacity: 8 workers total across 3 sessions)
 
-**Early ft5 observations (update 59):** terminated=15/32 (47%), rew=+1.7, entropy=17.44.
-Drop from ft4's 78% is expected — some ft4-solved episodes now fail at 350 steps.
-Entropy unchanged (17.44) confirms the policy did not destabilise on warm-start.
-Judgment deferred to update ~150.
+**bp_A_ft5 outcome:** Makespan plateau. frac_terminated recovered to ~85% at max_steps=350
+but makespan did not improve beyond ft2's baseline. The tighter budget forces some episodes
+to fail that were solvable at 450 steps, without producing faster completions for episodes
+that do terminate. Curriculum-tightening approach abandoned.
+
+**bp_A_ft2 resumed (2026-04-21 → 2026-04-24) — FINAL RUN:**
+
+500-update resume of ft2 (lr=1e-4 fixed, batch=32, max_steps=450). Final EMA metrics:
+
+| Metric | Start | End (EMA) | Note |
+|--------|-------|-----------|------|
+| frac_terminated | 0.781 | 0.852 | peaked at 0.933 (step 372), slight regression |
+| mean_makespan | 371 | 339 | steady downward trend |
+| entropy_pos | 10.06 | 8.28 | dropped to ~7.5 at step 310, then bounced back |
+| skipped_subgoals | 1.03 | 1.31 | mild skip growth |
+| clip_fraction | ~0 | ~0 | policy essentially frozen — barely updating |
+
+**Decision: stop bp_A training (2026-04-24).**
+
+Rationale:
+1. clip_fraction ≈ 0 throughout — lr=1e-4 cannot move the policy out of its current basin.
+   Further updates at this LR are wasted compute.
+2. Makespan tightening (ft3/ft4/ft5) consistently failed — reducing max_steps below 450
+   degrades frac_terminated without producing faster completions.
+3. bp_A is the sanity-check scenario (5 agents, 1 gap, 2×2). 85% frac_terminated and
+   makespan 339 is strong enough thesis evidence that the bipartite GNN learns gap queuing.
+4. To push entropy lower would require lr=3e-4 again — which risks destabilising a good policy.
+
+**On attention (considered and rejected):**
+Adding attention (differential neighbour weighting) to the bipartite architecture was
+considered as a way to reduce entropy further. Rejected for two reasons:
+- With 4 neighbours in a 2×2 arena, mean aggregation loses negligible information vs attention.
+  The neighbourhood is too small for differential weighting to matter.
+- The performance bottleneck is training dynamics (clip≈0, lr too small), not model capacity.
+  Attention would not fix this and requires a full retrain from scratch (incompatible weights).
+- Architecture motivation: the bipartite star-graph is specifically the *minimal* principled
+  formulation for decentralised coordination. Adding attention undermines the thesis narrative.
 
 ---
 
@@ -710,27 +744,36 @@ Multiple restarts due to max_steps tuning. Each restart warm-starts from best ch
 | v3 | `bp_C_20260415_120804.pt` | 850 | rl_10n_fixed_2gap_3x3 | 10 | ~10% | Back to 10 agents |
 | v4 | `bp_C_20260415_140332.pt` | 1000 | rl_10n_fixed_2gap_3x3 | 10 | ~19% | makespan ~800 |
 | v5 | `bp_C_20260417_181304.pt` | 1000 | rl_10n_fixed_2gap_3x3 | 10 | ~19-20% | Resumed — entropy 65→60 |
-| v6 (current) | `bp_C_20260419_152645.pt` | **1300** | rl_10n_fixed_2gap_3x3 | 10 | ~34% (update 107) | Warm-start from v5 best — optimizer reset |
+| v6 | `bp_C_20260419_152645.pt` | **1300** | rl_10n_fixed_2gap_3x3 | 10 | ~34% (update 107) | Warm-start from v5 best — optimizer reset |
+| v7 | `bp_C_20260420_203814.pt` | 1300 | rl_10n_fixed_2gap_3x3 | 10 | — | Continuation |
+| v8 | `bp_C_20260420_235105.pt` | **2000** | rl_10n_fixed_2gap_3x3 | 10 | ~50% (EMA, update 122) | max_steps increase; genuine learning — see below |
+| bp_C2 (current) | running | 2000 | rl_10n_fixed_2gap_3x3 | 10 | — | skip_penalty=6.0, entropy_coeff=0.001 |
 
 **Rationale for 1300 max_steps:** frac_terminated ~19% at 1000 steps. Non-terminating episodes
 need more time — 1300 gives headroom for near-complete episodes to cross the threshold.
 frac_terminated doubled (19%→34%) going from 1000→1300, confirming the time budget was binding.
 
-**Current status and concerns (update 107/500, 2026-04-20):**
-- frac_terminated: 19%→28%→34% — slow but monotonically increasing
-- entropy_pos: 55.26 (down from ~65 at v4 start, but still very high)
-- rew: -3.9 (negative — majority of episodes non-terminated, penalty-dominated)
-- Root cause of slow progress: v6 was warm-started with `--loadw` (weights only), which
-  **reset the Adam optimizer state**. The fresh optimizer must re-accumulate gradient history
-  from scratch even though the policy weights themselves are good. This costs ~100-200 updates
-  of effective warmup before learning resumes at full speed.
-- Decision to not increase max_steps further: the bottleneck is optimizer instability, not
-  the time budget. A randomly-exploring policy at max_steps=1800 would only marginally raise
-  frac_terminated through random success — this is noise, not learning signal.
-- Decision to not kill and restart again: doing so would reset the optimizer a third time,
-  wasting the 107 updates of warmup already banked in `bp_C_20260419_152645_latest.pt`.
-- Checkpoint to watch: if entropy_pos has not dropped below 45 by update 200, run is likely
-  stuck and further intervention is warranted.
+**v8 outcome (update 122, 2026-04-22 → 2026-04-23) — genuine learning confirmed:**
+
+| Metric | Start (EMA) | End (EMA) | Note |
+|--------|-------------|-----------|------|
+| frac_terminated | 0.438 | 0.503 | +6.5pp real trend |
+| mean_makespan | 1262 | 1160 | −8% real trend |
+| entropy_pos | 40.09 | 37.69 | declining — policy converging |
+| skipped_subgoals | 1.81 | 2.10 | skip exploit growing |
+| clip_fraction | 0.094 | 0.008 | near-zero, but entropy drop confirms real updates |
+
+Unlike bp_D2 (completely stagnant), bp_C v8 shows genuine learning: entropy_pos declined
+2.4 points and both frac_terminated and makespan improved. The richer gradient signal from
+10 agents / 2 gaps provides enough learning signal even at lr=1e-4. The reward decline seen
+in TB is misleading — as more episodes terminate, the makespan penalty applies to more
+episodes, compressing mean_reward even as performance improves.
+
+**bp_C2 launch (2026-04-23) — warm-start from v8 latest (update 122):**
+- lr: **1e-4 fixed** (unchanged — it's working here, unlike bp_D2)
+- skip_penalty: 4.0 → **6.0** (close growing exploit)
+- entropy_coeff_pos: 0.003 → **0.001** (assist ongoing convergence)
+- batch: 64 (unchanged), n_updates: 300
 
 ---
 
@@ -744,17 +787,35 @@ Reduced from 10 to 8 agents after initial 10-agent run showed ~0% termination at
 |-----|------------|-----------|----------|--------|-----------|-------|
 | v1 | `bp_D_20260415_012145.pt` | 700 | rl_10n_fixed_1gap_3x3 | 10 | ~0% | Killed early — severe congestion |
 | v2 | `bp_D_20260415_110413.pt` | 850 | rl_8n_fixed_1gap_3x3 | 8 | ~19-20% | Ran full; auto-launched bp_D2 |
-| bp_D2 (current) | running | 850 | rl_8n_fixed_1gap_3x3 | 8 | ~53-63% (update 82) | Fresh run — continuation of bp_D curriculum |
+| bp_D2 (v1) | `bp_D2_20260419_234212_latest.pt` | 850 | rl_8n_fixed_1gap_3x3 | 8 | ~53-63% (update 157) | Fresh run from bp_D weights |
+| bp_D2 (v2) | `bp_D2_20260421_144251.pt` | 850 | rl_8n_fixed_1gap_3x3 | 8 | ~61% (EMA, update 99) | lr=1e-4, batch=64 — stagnated, see below |
+| bp_D3 (current) | running | 850 | rl_8n_fixed_1gap_3x3 | 8 | — | lr=3e-4, skip_penalty=6.0, entropy_coeff=0.001 |
 
 **Note on agent count:** 8 agents / 1 gap vs 10 agents / 2 gaps (bp_C) gives comparable
 per-gap load (8 vs 5). 10-agent single-gap was infeasible within reasonable max_steps.
 
-**bp_D2 status (update 82/500, 2026-04-20):**
-- frac_terminated oscillating 53–63% — noisy but trending upward from bp_D's 19-20%
-- entropy_pos ~38-40, declining slowly (high — fresh run, no warmstart from bp_D weights)
-- rew: -2.4 to +4.0 per update — high variance consistent with 32-episode batch noise;
-  point estimates unreliable, smoothed trend is the meaningful signal
-- No intervention planned — run is progressing normally for a fresh-start 8-agent scenario
-- Key comparison vs bp_C: bp_D2 has higher frac_terminated (53-63%) at similar update count
-  (82 vs 107) despite comparable per-gap agent load. Likely because 1-gap coordination is
-  simpler (only one queue to learn) vs 2-gap assignment (policy must also choose which gap).
+**bp_D2 v2 outcome (100 updates, 2026-04-21 → 2026-04-23):**
+
+Run used `--loadw bp_D2_20260419_234212.pt` (weights only, fresh optimizer) with lr=1e-4,
+batch=64, n_updates=100. Final EMA metrics:
+
+| Metric | Start | End (EMA) | Note |
+|--------|-------|-----------|------|
+| frac_terminated | 0.625 | 0.614 | flat — no real trend |
+| mean_makespan | 654 | 671 | slightly worse |
+| entropy_pos | 36.58 | 36.46 | completely flat — no convergence |
+| skipped_subgoals | 1.06 | 2.07 | skip exploit worsening monotonically |
+| clip_fraction | 0.25→0 | ~0 | policy frozen after update 10 |
+
+Root cause: lr=1e-4 with a fresh-reset Adam optimizer produced near-zero effective updates
+for 90/100 updates (clip_fraction≈0 from step 10). The advantage estimates were too noisy
+relative to the step size. Note: smoothed frac_terminated does show a mid-run bump (peak
+EMA ~0.64 at step 40) and partial recovery, but no net improvement end-to-end.
+
+**bp_D3 launch (2026-04-23) — warm-start from bp_D2 v2 best checkpoint (update 90):**
+- lr: 1e-4 → **3e-4 fixed** (restore productive learning rate)
+- skip_penalty: 4.0 → **6.0** (close skip exploit that worsened in D2)
+- entropy_coeff_pos: 0.003 → **0.001** (allow convergence; policy at ~60% frac_term)
+- batch: 64 (unchanged)
+- n_updates: 300
+- Warm-start: `bp_D2_20260421_144251.pt` (best checkpoint, frac_term=0.75 at update 90)

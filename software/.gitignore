@@ -3,6 +3,12 @@ wheels-*
 logs*
 *.pt
 *.tfevents.*
+master_thesis/scenarios/roadmaps
+master_thesis/modules/subgoal_predictor/results
+
+# Thesis artifacts: track subgoal_predictor weights + TensorBoard run logs
+!master_thesis/modules/subgoal_predictor/checkpoints/*.pt
+!master_thesis/modules/subgoal_predictor/runs/**/*.tfevents.*
 
 # Exercise files (personal learning notes)
 master_thesis/exercises/
