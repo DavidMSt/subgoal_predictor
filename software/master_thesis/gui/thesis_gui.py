@@ -1210,7 +1210,7 @@ class ThesisGUI:
         cat1 = Category('cat1', max_pages=10)
 
         # Add a page
-        page1 = Page('page1', grid_size=(22, 50))
+        page1 = Page('page1', grid_size=(22, 100))
         cat1.addPage(page1)
 
         # Add it to the GUI
