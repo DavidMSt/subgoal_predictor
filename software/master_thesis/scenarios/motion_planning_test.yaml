@@ -1,0 +1,86 @@
+name: mp_scenario
+limits:
+  - [ 0 , 3.5 ]
+  - [ 0 , 1 ]
+
+obstacles:
+  - obstacle_id: wall-11
+    x: 1
+    y: 0.825
+    length: 0.35
+    width: 0.05
+    psi: -1.5708
+    height: 1.0
+  - obstacle_id: wall-12
+    x: 1
+    y: 0.175
+    length: 0.35
+    width: 0.05
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: wall-19
+    x: 1.5
+    y: 0.65
+    length: 0.7
+    width: 0.05
+    psi: -1.5708
+    height: 1.0
+  - obstacle_id: wall-20
+    x: 2
+    y: 0.35
+    length: 0.7
+    width: 0.05
+    psi: -1.5708
+    height: 1.0
+  - obstacle_id: wall-22
+    x: 2.5
+    y: 0.75
+    length: 0.5
+    width: 0.05
+    psi: -1.5708
+    height: 1.0
+  - obstacle_id: wall-23
+    x: 2.825
+    y: 0.5
+    length: 0.65
+    width: 0.05
+    psi: 0
+    height: 1.0
+  - obstacle_id: wall-24
+    x: 1.75
+    y: 1
+    length: 3.5
+    width: 0.05
+    psi: 0
+    height: 1.0
+  - obstacle_id: wall-25
+    x: 3.5
+    y: 0.5
+    length: 1
+    width: 0.05
+    psi: 1.5708
+    height: 1.0
+  - obstacle_id: wall-26
+    x: 1.75
+    y: 0
+    length: 3.5
+    width: 0.05
+    psi: -3.1416
+    height: 1.0
+  - obstacle_id: wall-27
+    x: 0
+    y: 0.5
+    length: 1
+    width: 0.05
+    psi: 1.5708
+    height: 1.0
+
+agents:
+  - agent_id: frodo-1
+    agent_class_name: FRODOOfflineAgent
+    start_config: [ 0.15 , 0.15 , 0 ]
+
+tasks:
+  - task_id: task-1
+    x: 2.85
+    y: 0.75

@@ -17,14 +17,20 @@ The reward splits into two qualitatively different cases.
 
 **Terminated** (all agents reached their task within `max_steps`):
 ```
-R = 30 − 10·effective_makespan_frac − α·10·mean_indiv_frac + progress_term
+R = 30 − 10·makespan_frac − α·10·mean_indiv_frac
 ```
 
 **Truncated** (at least one agent did not finish):
 ```
-R = −β·total_dist + crossing_bonus·n_crossed + subgoal_bonus·n_reached
-    − skip_penalty·n_skipped − energy_penalty − diversity_bonus·repulsion − plan_overhead
+R = −β·total_dist + crossing_bonus·n_crossed
+    − skip_penalty·n_skipped − energy_penalty − diversity_bonus·repulsion
+    − failed_plan_penalty·n_failed_plans
 ```
+
+The progress term in the terminated branch and the `subgoal_bonus·n_reached` term in the
+truncated branch were dropped during early development — see *Design History* below.
+The wall-time-derived `plan_overhead` term was likewise dropped and replaced by the
+count-based `failed_plan_penalty` — see *Failed-plan penalty* below.
 
 **Why the split?**  The two outcomes are incommensurable.  A terminated episode where
 agents took twice as long as necessary is still far better than a truncated episode where
@@ -51,27 +57,25 @@ serialising them (which could reduce makespan by having fast agents race ahead w
 ones lag).  The weight α = 0.3 makes this a secondary signal — the policy should first
 learn to terminate at all, then learn to balance agent throughput.
 
-### effective_makespan_frac — folding in OMPL overhead
-The simulation is single-threaded.  When OMPL replans mid-episode (e.g. because a
-predicted subgoal was unreachable), the simulation **blocks** until the solver returns —
-`max_steps` step-counter advances are paused.  This means a policy that induces many
-replans can complete in fewer counted steps than one that induces none, even though the
-wall-clock runtime is much longer.  Without correction, the reward wrongly favours
-policies that trigger expensive replanning.
-
-The fix converts accumulated OMPL wall time into equivalent simulation steps:
+### effective_makespan_frac — REMOVED (history retained)
+An earlier design folded OMPL replanning wall time into the makespan term to prevent the
+policy from being rewarded for triggering expensive replanning that paused the step
+counter:
 
 ```
 equiv_plan_steps = total_ompl_wall_time × (2/N) / Ts
 effective_makespan_frac = min(1, (makespan + equiv_plan_steps) / max_steps)
 ```
 
-The **decentralised factor 2/N**: in a real multi-robot deployment the planners run in
-parallel on separate CPUs — only one agent blocks at a time, not all N.  A factor of
-`1/N` would therefore be the correct per-agent amortisation.  However, gap-passing
-scenarios exhibit cascade blocking: if agent A replans near the gap it holds the passage,
-which in turn forces agent B to wait idle.  `2/N` is a conservative middle ground between
-the serial case (factor 1.0) and the ideal parallel case (factor 1/N).
+The decentralised factor `2/N` was a conservative middle ground between the serial case
+(factor 1.0) and the ideal parallel case (factor `1/N`), accounting for cascade blocking
+near a gap.
+
+**This term has been removed.**  Wall-clock measurements were CPU and scheduler dependent,
+which produced different reward values for identical policies under different machine
+loads and added gradient noise unrelated to policy decisions.  The current terminated
+branch uses plain `makespan_frac = makespan / max_steps`.  The signal that expensive
+replanning is bad is now carried by `failed_plan_penalty` (count-based, deterministic).
 
 ---
 
@@ -105,7 +109,7 @@ the policy converged to predicting subgoals in the far top corners of the arena 
 to reach without any gap navigation — to cheaply collect the bonus.  Removing the term
 eliminated this mode-collapse.
 
-### Skip penalty — both branches
+### Skip penalty — both branches, unified
 Applied in **both terminated and truncated** branches.  The bypass exploit is:
 
 1. Policy predicts a gap-edge subgoal (approximately collinear with start→goal, so
@@ -115,13 +119,20 @@ Applied in **both terminated and truncated** branches.  The bypass exploit is:
 4. **Original design**: skip penalty only in truncated branch → terminated episodes paid
    nothing for skips.  Policy discovered this and locked into the bypass.
 
-Fix: skip penalty now applies in both branches with different coefficients:
+**First fix (asymmetric split)**: `skip_penalty_terminated = 1.5`, `skip_penalty = 0.5`
+in the truncated branch.  This was insufficient.  At 5 agents, two skips in a terminated
+episode cost only 3.0 against the 30-point termination bonus, leaving the
+bypass-and-terminate route nearly free (net ≈19 points), and the policy still
+preferentially skipped subgoals.
 
-- **Terminated branch**: `skip_penalty_terminated = 1.5` per skip.  Must be large
-  relative to the 30-point termination bonus (5 agents skipping → 7.5 penalty, reducing
-  best-case from ~27 to ~19.5).
-- **Truncated branch**: `skip_penalty = 0.5` per skip.  Calibrated relative to crossing
-  bonus (1.5) and distance penalty; same motivation as before.
+**Current fix (unified)**: `skip_penalty = 4.0` in both branches.  Two skips now cost 8.0,
+giving a meaningful gradient against the bypass:
+
+- **Terminated**: best-case reward becomes `30 − 7.7 − 8.0 = 14.3` (vs ~19.3 under the
+  asymmetric design), so the policy is no longer indifferent between skipping and
+  predicting useful subgoals.
+- **Truncated**: the penalty can push the truncated reward negative, which is fine — the
+  gradient sign is still correct.
 
 **Why gap-edge positions have near-zero energy penalty**: the gap is geometrically on the
 straight line between agent start (above wall) and task (below wall).  A subgoal near
@@ -220,19 +231,63 @@ quality without dominating task-completion incentives.
 
 ---
 
-## Planning Overhead Penalty (truncated branch)
+## Planning Overhead Penalty — REMOVED (history retained)
 
-Analogous to `effective_makespan_frac` in the terminated branch.  In truncated episodes
-there is no makespan to inflate, so the overhead is applied as a direct penalty:
+An earlier truncated-branch term mirrored `effective_makespan_frac`:
 
 ```
 plan_overhead = 10 × min(1, equiv_plan_steps / max_steps)
 ```
 
-Capped at 10 to match the scale of the terminated makespan penalty.  This ensures that a
-policy inducing constant replanning cannot earn a high truncated reward by, for example,
-accumulating many crossing bonuses while also triggering OMPL solves that take longer
-than the episode budget.
+capped at 10 to match the scale of the terminated makespan penalty.
+
+**This term has been removed for the same reason as `effective_makespan_frac`**: the
+underlying wall-clock measurement was CPU and scheduler dependent and added gradient
+noise unrelated to policy decisions.  Replanning cost is now penalised by the count-based
+`failed_plan_penalty` (next section).  `mean_plan_wall_time` remains a logged diagnostic
+metric, but no longer enters the reward.
+
+---
+
+## Failed-plan Penalty (truncated branch)
+
+`failed_plan_penalty = 0.5` per failed plan.  Replaces the wall-time-based
+`plan_overhead` and `equiv_plan_steps` terms with a deterministic, count-based
+quantity.
+
+```
+−failed_plan_penalty × n_failed_plans
+```
+
+**Why a count rather than wall time**: `n_failed_plans` is invariant under machine load,
+producing a clean gradient signal independent of CPU contention.  The policy is penalised
+for each execution-time replan that the planner could not solve, which is what the
+wall-time term was indirectly measuring.
+
+**Why separate from `skip_penalty`**: the skip penalty fires when a *predicted subgoal*
+is unreachable.  `failed_plan_penalty` fires when a *replan during execution* fails for
+any reason, including dynamic reasons not directly attributable to the subgoal choice.
+The two failure modes are disjoint and benefit from independent calibration.
+
+**Calibration**: at 0.5 per failure the term is intentionally small relative to the
+30-point termination bonus.  Its role is to break ties between policies with similar
+termination behaviour but different replanning costs, not to dominate the reward.
+
+---
+
+## Per-scenario Tuning — Exploratory
+
+The reward design above is the stable configuration that was used unchanged across all
+runs from the homogeneous-GNN curriculum through the bipartite-GNN scenarios (5n1g, 5n2g,
+and the early scaled runs on 8 and 10 agents).  Two recent trial runs on the larger
+scenarios (`bp_C2` and `bp_D3`) explored a higher `skip_penalty` to test whether the
+bypass exploit needs additional pressure at larger team sizes where one skip is more
+easily masked by other agents completing the task.
+
+This is not yet a locked design choice.  Only two trial runs have been conducted and the
+results are still being evaluated.  The stable reward described in this document remains
+the canonical configuration; per-scenario deviations will be documented here once they
+have been validated.
 
 ---
 
@@ -241,13 +296,16 @@ than the episode budget.
 | Term | Branch | Why |
 |---|---|---|
 | Termination bonus 30 | terminated | Must dominate all truncated rewards |
-| `effective_makespan_frac` | terminated | Penalises slow completion + OMPL replanning overhead |
+| `makespan_frac` | terminated | Penalises slow completion (`makespan / max_steps`) |
 | `mean_indiv_frac` (α=0.3) | terminated | Secondary: reward balanced throughput |
 | Gap-aware distance | truncated | Euclidean distance underestimates cost of misalignment |
 | Crossing bonus 1.5 | truncated | Strong intermediate signal for gap passage |
 | Diversity repulsion σ=0.35 | truncated | Prevent same-gap queueing |
-| `plan_overhead` | truncated | Penalise replanning not captured by step counter |
 | Energy penalty (w=2.0) | truncated | Penalise subgoal detours; zero cost for identity subgoal (sg=start) |
-| Skip penalty 0.5 | truncated | Penalise unreachable subgoals that OMPL fails to plan to |
+| Skip penalty 4.0 (unified) | both | Penalise unreachable subgoals; closes bypass exploit |
+| `failed_plan_penalty = 0.5` | truncated | Count-based replanning cost; replaces wall-time terms |
 | `subgoal_bonus = 0` | — | Dropped: created perverse incentive to aim at far corners |
-| `gamma × n_failed` | — | Dropped: replaced by time-calibrated effective_makespan / plan_overhead |
+| `gamma × n_failed` | — | Dropped: predecessor of current `failed_plan_penalty` |
+| `effective_makespan_frac` (`equiv_plan_steps`) | — | Dropped: CPU/scheduler-dependent wall-time noise |
+| `plan_overhead` | — | Dropped: same reason as `effective_makespan_frac` |
+| Progress term | — | Dropped (stage 2 → 3): caused gap-edge collapse, replaced by energy penalty |

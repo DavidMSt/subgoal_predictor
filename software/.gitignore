@@ -14,5 +14,8 @@ master_thesis/modules/subgoal_predictor/results
 master_thesis/exercises/
 *.zip
 
+# Large trajectory dumps — kept locally, not pushed
+master_thesis/document_figures/inference/positions_*.npz
+
 # Claude related
 CLAUDE_todo.md
