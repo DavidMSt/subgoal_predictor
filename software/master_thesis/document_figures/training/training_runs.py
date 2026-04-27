@@ -24,6 +24,10 @@ POLICIES_TO_RUN = None
 # False = dotted lines only; colours still distinguish runs.
 SHOW_RUN_NUMBERS = True
 
+# Draw a vertical dashed connector between the last value of run k and the first
+# value of run k+1 at each boundary — makes the jump (or continuity) explicit.
+SHOW_RUN_CONNECTORS = False
+
 # Run colour order: first run = red, second = blue, third = teal/green, then extras.
 # Extend if a policy has more runs than colours listed here.
 RUN_PALETTE = [
@@ -174,6 +178,28 @@ def _add_vlines(ax, boundaries: list):
         ax.axvline(x=b, color='black', linestyle=':', alpha=0.65, linewidth=1.4)
 
 
+def _draw_connectors(ax, df: pd.DataFrame, boundaries: list, run_order: list,
+                     label: str, palette: list):
+    """Draw a solid vertical segment at each boundary in the colour of the incoming run."""
+    if not SHOW_RUN_CONNECTORS or label not in df.columns:
+        return
+    for k, b in enumerate(boundaries):
+        run_a, run_b = run_order[k], run_order[k + 1]
+
+        mask_a = (df['Run'] == run_a) & df[label].notna()
+        mask_b = (df['Run'] == run_b) & df[label].notna()
+        if not mask_a.any() or not mask_b.any():
+            continue
+
+        last_bin  = df.loc[mask_a, 'Binned Step'].max()
+        first_bin = df.loc[mask_b, 'Binned Step'].min()
+        y_end   = df.loc[mask_a & (df['Binned Step'] == last_bin),  label].mean()
+        y_start = df.loc[mask_b & (df['Binned Step'] == first_bin), label].mean()
+
+        ax.plot([b, b], [y_end, y_start],
+                color=palette[k + 1], linestyle='-', linewidth=2.0, alpha=0.9, zorder=5)
+
+
 def _add_run_numbers(axes_row: list, run_midpoints: list):
     """Add circled run numbers above the top-row axes (called AFTER tight_layout).
 
@@ -212,7 +238,8 @@ def plot_policy(df: pd.DataFrame, boundaries: list, run_midpoints: list, title: 
                              gridspec_kw={'hspace': 0.35, 'wspace': 0.3})
     fig.suptitle(title, fontsize=13, fontweight='bold', y=1.005)
 
-    n_runs = df['Run'].nunique()
+    run_order = list(dict.fromkeys(df['Run']))  # ordered unique run names
+    n_runs = len(run_order)
     palette = RUN_PALETTE[:n_runs]
 
     for idx, (tag, label) in enumerate(METRICS):
@@ -238,6 +265,7 @@ def plot_policy(df: pd.DataFrame, boundaries: list, run_midpoints: list, title: 
             ax.set_ylim(0, 1.05)
 
         _add_vlines(ax, boundaries)
+        _draw_connectors(ax, df, boundaries, run_order, label, palette)
 
         if row == n_rows - 1:
             ax.set_xlabel('Cumulative PPO Updates', fontsize=10)
