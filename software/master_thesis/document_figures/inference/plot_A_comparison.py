@@ -4,10 +4,10 @@ All methods achieve near-100% termination on this simple scenario,
 so makespan variance is the primary discriminator.
 
 2×2 layout:
-  [0,0] Makespan distribution   — box + strip (all episodes)
-  [0,1] Failed OMPL plans       — box + strip
+  [0,0] Termination rate        — horizontal bar
+  [0,1] Makespan distribution   — box + strip (all episodes)
   [1,0] OMPL wall time          — box + strip
-  [1,1] Mean wait time          — box + strip (0sg always 0)
+  [1,1] Subgoals reached        — mixed: box+strip (GNN/MLP) + "always 0" (0sg)
 
 Run from repo root:
     python -m master_thesis.document_figures.inference.plot_A_comparison
@@ -30,6 +30,8 @@ _METHODS: dict[str, tuple[str, str]] = {
     "A_hom_gnn":("Homogeneous\nGNN",   "#457b9d"),
     "A_bi_gnn": ("Bipartite\nGNN",     "#e63946"),
 }
+
+ZERO_SUBGOAL_KEYS = {"A_0sg"}
 
 _PDF_PATH = _DIR / "eval_A_comparison.pdf"
 
@@ -65,7 +67,7 @@ def _load() -> tuple[list[str], list[str], dict[str, str], list[dict]]:
         candidates = sorted(_DIR.glob(f"eval_{key}_*.npz"))
         if not candidates:
             raise FileNotFoundError(f"No npz found for '{key}' in {_DIR}")
-        path = candidates[-1]   # most recent / most episodes
+        path = candidates[-1]
         d    = dict(np.load(path))
         label, color = _METHODS[key]
         d["_label"] = label
@@ -81,13 +83,30 @@ def _load() -> tuple[list[str], list[str], dict[str, str], list[dict]]:
     palette = dict(zip(labels, colors))
     return labels, colors, palette, methods
 
-# ── Panel helper ──────────────────────────────────────────────────────────────
+# ── Panel helpers ─────────────────────────────────────────────────────────────
+
+def _annotate_means(ax, df, y_col, labels, skip_labels=None):
+    """Print mean value above each group's highest data point."""
+    skip_labels = skip_labels or set()
+    lo, hi = ax.get_ylim()
+    span = hi - lo
+    ax.set_ylim(lo, hi + 0.15 * span)
+    for i, label in enumerate(labels):
+        if label in skip_labels:
+            continue
+        vals = df[df["Method"] == label][y_col].dropna()
+        if len(vals) == 0:
+            continue
+        ax.text(i, float(vals.max()) + 0.04 * span, f"{vals.mean():.1f}",
+                ha="center", va="bottom", fontsize=7.5,
+                color="#222222", fontweight="bold")
+
 
 def _box_strip(ax, df, y_col, labels, palette, title, ylabel):
     sns.boxplot(
         data=df, x="Method", y=y_col,
         order=labels, hue="Method", hue_order=labels, palette=palette,
-        legend=False, width=0.45, linewidth=1, fliersize=0,
+        legend=False, width=0.25, linewidth=1, fliersize=0,
         ax=ax,
     )
     sns.stripplot(
@@ -100,6 +119,42 @@ def _box_strip(ax, df, y_col, labels, palette, title, ylabel):
     ax.set_ylabel(ylabel)
     ax.set_title(title, fontweight="bold")
     sns.despine(ax=ax, left=True, bottom=True)
+    _annotate_means(ax, df, y_col, labels)
+
+
+def _mixed_box_strip(ax, df, y_col, labels, palette, title, ylabel, zero_labels: set[str]):
+    """Box+strip for subgoal methods; dashed 'always 0' annotation for 0sg baseline."""
+    policy_labels = [l for l in labels if l not in zero_labels]
+    policy_df = df[df["Method"].isin(policy_labels)]
+
+    sns.boxplot(
+        data=policy_df, x="Method", y=y_col,
+        order=labels, hue="Method", hue_order=labels, palette=palette, legend=False,
+        width=0.25, linewidth=1, fliersize=0,
+        ax=ax,
+    )
+    sns.stripplot(
+        data=policy_df, x="Method", y=y_col,
+        order=labels, hue="Method", hue_order=labels, palette=palette, legend=False,
+        size=3, alpha=0.35, jitter=True,
+        ax=ax,
+    )
+    lo, hi = ax.get_ylim()
+    for zero_label in zero_labels:
+        if zero_label not in labels:
+            continue
+        x_pos = labels.index(zero_label)
+        color = palette[zero_label]
+        ax.plot([x_pos - 0.2, x_pos + 0.2], [0, 0],
+                color=color, linewidth=2, linestyle="--", zorder=5)
+        ax.text(x_pos, (hi - lo) * 0.04, "always 0",
+                color=color, va="bottom", ha="center",
+                fontsize=8.5, style="italic", zorder=6)
+    ax.set_xlabel("")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title, fontweight="bold")
+    sns.despine(ax=ax, left=True, bottom=True)
+    _annotate_means(ax, df, y_col, labels, skip_labels=zero_labels)
 
 # ── Main figure ───────────────────────────────────────────────────────────────
 
@@ -115,50 +170,56 @@ def render(output_path: pathlib.Path = _PDF_PATH) -> None:
     print("Loading data...")
     labels, colors, palette, methods = _load()
 
+    zero_display = {_METHODS[k][0] for k in ZERO_SUBGOAL_KEYS}
+
     # Build long-form DataFrames
-    mk_rows, nf_rows, wt_rows, mw_rows, ss_rows, nr_rows = [], [], [], [], [], []
+    term_rows, mk_rows, wt_rows, nr_rows = [], [], [], []
     for m in methods:
         label = m["_label"]
+        term_rows.append({"Method": label, "Rate": float(m["terminated"].mean()), "Color": m["_color"]})
         for v in m["makespan"]:
             mk_rows.append({"Method": label, "Makespan (steps)": float(v)})
-        for v in m["n_failed"]:
-            nf_rows.append({"Method": label, "Failed Plans": int(v)})
         for v in m["wall_time"]:
             wt_rows.append({"Method": label, "OMPL Wall Time (s)": float(v)})
-        for v in m["mean_wait"]:
-            mw_rows.append({"Method": label, "Mean Wait Time (s)": float(v)})
-        for v in m["subgoal_spread"]:
-            ss_rows.append({"Method": label, "Subgoal Spread (m)": float(v)})
         for v in m["n_reached"]:
             nr_rows.append({"Method": label, "Subgoals Reached": int(v)})
 
     df_mk = pd.DataFrame(mk_rows)
-    df_nf = pd.DataFrame(nf_rows)
     df_wt = pd.DataFrame(wt_rows)
-    df_mw = pd.DataFrame(mw_rows)
-    df_ss = pd.DataFrame(ss_rows)
     df_nr = pd.DataFrame(nr_rows)
 
-    fig, axes = plt.subplots(2, 3, figsize=(16, 9))
+    GREY = "#444444"
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
     fig.subplots_adjust(hspace=0.38, wspace=0.28)
 
-    _box_strip(axes[0, 0], df_mk, "Makespan (steps)", labels, palette,
+    # ── [0,0] Termination rate ────────────────────────────────────────────────
+    ax = axes[0, 0]
+    for i, row in enumerate(term_rows):
+        r = row["Rate"]
+        ax.barh(i, r, color=row["Color"], height=0.5, zorder=3)
+        ax.text(r + 0.012, i, f"{r:.0%}", va="center", ha="left",
+                fontsize=9.5, color=GREY)
+    ax.set_yticks(range(len(labels)))
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_xlim(0, 1.18)
+    ax.set_xlabel("Termination rate")
+    ax.set_title("Success Rate", fontweight="bold")
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
+    ax.grid(axis="x", linestyle="--", alpha=0.35, zorder=0)
+    sns.despine(ax=ax, left=True, bottom=False)
+
+    # ── [0,1] Makespan — box + strip ─────────────────────────────────────────
+    _box_strip(axes[0, 1], df_mk, "Makespan (steps)", labels, palette,
                "Makespan Distribution", "Makespan (steps)")
 
-    _box_strip(axes[0, 1], df_nf, "Failed Plans", labels, palette,
-               "Failed OMPL Plans", "Failed plans / episode")
-
-    _box_strip(axes[0, 2], df_wt, "OMPL Wall Time (s)", labels, palette,
+    # ── [1,0] Wall time — box + strip ────────────────────────────────────────
+    _box_strip(axes[1, 0], df_wt, "OMPL Wall Time (s)", labels, palette,
                "OMPL Wall Time", "Wall time (s)")
 
-    _box_strip(axes[1, 0], df_mw, "Mean Wait Time (s)", labels, palette,
-               "Mean Prescribed Wait Time", "Mean wait (s)")
-
-    _box_strip(axes[1, 1], df_ss, "Subgoal Spread (m)", labels, palette,
-               "Subgoal Spatial Spread\n(mean pairwise distance)", "Spread (m)")
-
-    _box_strip(axes[1, 2], df_nr, "Subgoals Reached", labels, palette,
-               "Subgoals Reached", "Subgoals / episode")
+    # ── [1,1] Subgoals reached — mixed box+strip ──────────────────────────────
+    _mixed_box_strip(axes[1, 1], df_nr, "Subgoals Reached", labels, palette,
+                     "Subgoals Reached", "Subgoals / episode", zero_display)
 
     plt.tight_layout()
     fig.savefig(output_path, bbox_inches="tight")

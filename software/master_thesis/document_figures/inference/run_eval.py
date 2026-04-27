@@ -28,7 +28,7 @@ from simulation.core.environment import BASE_ENVIRONMENT_ACTIONS
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-N_EPISODES = 50
+N_EPISODES = 200
 
 _CKPT = pathlib.Path('master_thesis/modules/subgoal_predictor/checkpoints')
 _OUT  = pathlib.Path('master_thesis/document_figures/inference')
