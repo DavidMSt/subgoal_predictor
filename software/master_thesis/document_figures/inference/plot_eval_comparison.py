@@ -95,9 +95,8 @@ ax.set_title('Wait spread\n(temporal staggering)')
 ax.legend(fontsize=9)
 
 plt.tight_layout()
-plt.savefig('master_thesis/modules/subgoal_predictor/results/eval_comparison.pdf',
+plt.savefig('master_thesis/modules/subgoal_predictor/results/eval_comparison100.pdf',
             bbox_inches='tight')
-plt.savefig('master_thesis/modules/subgoal_predictor/results/eval_comparison.png',
-            dpi=150, bbox_inches='tight')
-print("Saved eval_comparison.pdf and .png")
+
+print("Saved eval_comparison.pdf")
 plt.show()

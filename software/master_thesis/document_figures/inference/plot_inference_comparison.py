@@ -41,7 +41,7 @@ _SCENARIOS: dict[str, dict] = {
             "D_bi_gnn": ("Bipartite GNN", "#e63946"),
         },
         "zero_subgoal_keys": {"D_0sg"},
-        "output": _DIR / "eval_D_comparison.pdf",
+        "output": _DIR / "eval_D_100comparison.pdf",
         "title": "Scenario D",
     },
 }

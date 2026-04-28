@@ -9,7 +9,7 @@ Single-cell usage (one terminal / tmux pane per cell):
     python -m master_thesis.document_figures.inference.run_eval --run C_0sg
     python -m master_thesis.document_figures.inference.run_eval --run C_bi_gnn
     python -m master_thesis.document_figures.inference.run_eval --run D_0sg
-    python -m master_thesis.document_figures.inference.run_eval --run D_bi_gnn
+    python -m master_thesis.document_figures.inference.run_eval --run D_bi_gnn 
 
 Or launch all four in parallel — see launch_eval.sh.
 
@@ -19,6 +19,7 @@ Outputs (per run):
 """
 
 import argparse
+import gc
 import pathlib
 import time
 import numpy as np
@@ -28,7 +29,7 @@ from simulation.core.environment import BASE_ENVIRONMENT_ACTIONS
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-N_EPISODES = 200
+N_EPISODES = 100
 
 _CKPT = pathlib.Path('master_thesis/modules/subgoal_predictor/checkpoints')
 _OUT  = pathlib.Path('master_thesis/document_figures/inference')
@@ -36,49 +37,49 @@ _OUT  = pathlib.Path('master_thesis/document_figures/inference')
 # All evaluation cells: run_key → (display_name, scenario, max_steps, checkpoint_or_None)
 ALL_RUNS: dict[str, tuple[str, str, int, pathlib.Path | None]] = {
     'A_0sg': (
-        'No Subgoal — Scenario A',
+        'No Subgoal — 5n1g',
         'rl_5n_fixed_1gap_2x2',
         1000,
         None,
     ),
     'A_mlp': (
-        'MLP — Scenario A',
+        'MLP — 5n1g',
         'rl_5n_fixed_1gap_2x2',
         1000,
-        _CKPT / 'homogeneous_gnn/stage2_20260327_114822.pt',
+        _CKPT / 'homogeneous_gnn/stage1b_20260324_103903.pt',
     ),
     'A_hom_gnn': (
-        'Homogeneous GNN — Scenario A',
+        'Homogeneous GNN — 5n1g',
         'rl_5n_fixed_1gap_2x2',
         1000,
         _CKPT / 'homogeneous_gnn/gnn_ppo_D2_cont_v3_phase2_20260412_224158.pt',
     ),
     'A_bi_gnn': (
-        'Bipartite GNN — Scenario A',
+        'Bipartite GNN — 5n1g',
         'rl_5n_fixed_1gap_2x2',
         1000,
         _CKPT / 'bp_A_ft2_20260416_094315.pt',
     ),
     'C_0sg': (
-        'No Subgoal — Scenario C',
+        'No Subgoal — 10n2g',
         'rl_10n_fixed_2gap_3x3',
         2000,
         None,
     ),
     'C_bi_gnn': (
-        'Bipartite GNN (bp_C) — Scenario C',
+        'Bipartite GNN — 10n2g',
         'rl_10n_fixed_2gap_3x3',
         2000,
         _CKPT / 'bp_C_20260420_235105.pt',
     ),
     'D_0sg': (
-        'No Subgoal — Scenario D',
+        'No Subgoal — 8n1g',
         'rl_8n_fixed_1gap_3x3',
         1000,
         None,
     ),
     'D_bi_gnn': (
-        'Bipartite GNN (bp_D2) — Scenario D',
+        'Bipartite GNN — 8n1g',
         'rl_8n_fixed_1gap_3x3',
         1000,
         _CKPT / 'bp_D2_20260421_144251.pt',
@@ -235,16 +236,19 @@ def evaluate(run_key: str, n_episodes: int, max_steps: int | None, out_dir: path
         policy, free_pos_override, wait_times, wait_mode = load_policy(ckpt_path)
         n_subgoals = 1
 
-    env = FrodoGymWrapper(
-        scenario=scenario,
-        n_subgoals=n_subgoals,
-        max_steps=max_steps,
-        wait_times=wait_times,
-        wait_mode=wait_mode,
-        agent_log_level='ERROR',
-        ompl_timelimit=10.0,
-    )
-    output_phase = env.sim.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT]
+    def _make_env():
+        e = FrodoGymWrapper(
+            scenario=scenario,
+            n_subgoals=n_subgoals,
+            max_steps=max_steps,
+            wait_times=wait_times,
+            wait_mode=wait_mode,
+            agent_log_level='ERROR',
+            ompl_timelimit=10.0,
+        )
+        return e, e.sim.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT]
+
+    env, output_phase = _make_env()
 
     terminated_l, makespan_l, n_failed_l = [], [], []
     n_reached_l, n_crossed_l, wall_time_l = [], [], []
@@ -295,8 +299,15 @@ def evaluate(run_key: str, n_episodes: int, max_steps: int | None, out_dir: path
         print(f'  saved → {metrics_path}')
         print(f'  saved → {pos_path}')
 
+    RECREATE_ENV_INTERVAL = 25
+
     try:
         for ep in bar:
+            if ep > 0 and ep % RECREATE_ENV_INTERVAL == 0:
+                del env
+                gc.collect()
+                env, output_phase = _make_env()
+
             obs, _ = env.reset()
 
             if free_pos_override is not None:

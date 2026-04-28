@@ -25,15 +25,16 @@ import seaborn as sns
 _DIR = pathlib.Path(__file__).parent
 
 _METHODS: dict[str, tuple[str, str]] = {
-    "A_0sg":    ("No\nSubgoal",        "#999999"),
-    "A_mlp":    ("MLP",                "#00b695"),
-    "A_hom_gnn":("Homogeneous\nGNN",   "#457b9d"),
-    "A_bi_gnn": ("Bipartite\nGNN",     "#e63946"),
+    "A_0sg":     ("No Subgoal",      "#999999"),
+    "A_mlp":     ("MLP",             "#00b695"),
+    "A_hom_gnn": ("Homogeneous GNN", "#457b9d"),
+    "A_bi_gnn":  ("Bipartite GNN",   "#e63946"),
 }
 
 ZERO_SUBGOAL_KEYS = {"A_0sg"}
 
 _PDF_PATH = _DIR / "eval_A_comparison.pdf"
+_BOX_WIDTH = 0.25
 
 # ── Font ──────────────────────────────────────────────────────────────────────
 
@@ -85,28 +86,48 @@ def _load() -> tuple[list[str], list[str], dict[str, str], list[dict]]:
 
 # ── Panel helpers ─────────────────────────────────────────────────────────────
 
-def _annotate_means(ax, df, y_col, labels, skip_labels=None):
-    """Print mean value above each group's highest data point."""
+def _annotate_means(ax, df, y_col, labels, skip_labels=None, box_half_width=None):
+    """Print mean value next to each box, at the height of the mean."""
+    if box_half_width is None:
+        box_half_width = _BOX_WIDTH / 2
     skip_labels = skip_labels or set()
-    lo, hi = ax.get_ylim()
-    span = hi - lo
-    ax.set_ylim(lo, hi + 0.15 * span)
     for i, label in enumerate(labels):
         if label in skip_labels:
             continue
         vals = df[df["Method"] == label][y_col].dropna()
         if len(vals) == 0:
             continue
-        ax.text(i, float(vals.max()) + 0.04 * span, f"{vals.mean():.1f}",
-                ha="center", va="bottom", fontsize=7.5,
-                color="#222222", fontweight="bold")
+        mean_val = float(vals.mean())
+        ax.text(
+            i + box_half_width + 0.06, mean_val, f"{mean_val:.1f}",
+            ha="left", va="center", fontsize=7.5,
+            color="#222222", fontweight="bold",
+        )
 
 
-def _box_strip(ax, df, y_col, labels, palette, title, ylabel):
+def _annotate_zero(ax, labels, zero_labels, palette):
+    """Dashed line at y=0 and 'always 0' italic text with consistent spacing."""
+    for zero_label in zero_labels:
+        if zero_label not in labels:
+            continue
+        x_pos = labels.index(zero_label)
+        color = palette[zero_label]
+        ax.plot([x_pos - 0.15, x_pos + 0.15], [0, 0],
+                color=color, linewidth=1.5, linestyle="--", zorder=5)
+        ax.annotate(
+            "always 0",
+            xy=(x_pos, 0), xytext=(0, 3),
+            xycoords="data", textcoords="offset points",
+            ha="center", va="bottom",
+            fontsize=8.5, style="italic", color=color, zorder=6,
+        )
+
+
+def _box_strip(ax, df, y_col, labels, palette, title, ylabel, box_width=_BOX_WIDTH):
     sns.boxplot(
         data=df, x="Method", y=y_col,
         order=labels, hue="Method", hue_order=labels, palette=palette,
-        legend=False, width=0.25, linewidth=1, fliersize=0,
+        legend=False, width=box_width, linewidth=1, fliersize=0,
         ax=ax,
     )
     sns.stripplot(
@@ -118,11 +139,13 @@ def _box_strip(ax, df, y_col, labels, palette, title, ylabel):
     ax.set_xlabel("")
     ax.set_ylabel(ylabel)
     ax.set_title(title, fontweight="bold")
+    ax.tick_params(axis='x', bottom=False, labelbottom=False)
     sns.despine(ax=ax, left=True, bottom=True)
-    _annotate_means(ax, df, y_col, labels)
+    _annotate_means(ax, df, y_col, labels, box_half_width=box_width / 2)
 
 
-def _mixed_box_strip(ax, df, y_col, labels, palette, title, ylabel, zero_labels: set[str]):
+def _mixed_box_strip(ax, df, y_col, labels, palette, title, ylabel, zero_labels: set[str],
+                     box_width=_BOX_WIDTH):
     """Box+strip for subgoal methods; dashed 'always 0' annotation for 0sg baseline."""
     policy_labels = [l for l in labels if l not in zero_labels]
     policy_df = df[df["Method"].isin(policy_labels)]
@@ -130,7 +153,7 @@ def _mixed_box_strip(ax, df, y_col, labels, palette, title, ylabel, zero_labels:
     sns.boxplot(
         data=policy_df, x="Method", y=y_col,
         order=labels, hue="Method", hue_order=labels, palette=palette, legend=False,
-        width=0.25, linewidth=1, fliersize=0,
+        width=box_width, linewidth=1, fliersize=0,
         ax=ax,
     )
     sns.stripplot(
@@ -139,22 +162,13 @@ def _mixed_box_strip(ax, df, y_col, labels, palette, title, ylabel, zero_labels:
         size=3, alpha=0.35, jitter=True,
         ax=ax,
     )
-    lo, hi = ax.get_ylim()
-    for zero_label in zero_labels:
-        if zero_label not in labels:
-            continue
-        x_pos = labels.index(zero_label)
-        color = palette[zero_label]
-        ax.plot([x_pos - 0.2, x_pos + 0.2], [0, 0],
-                color=color, linewidth=2, linestyle="--", zorder=5)
-        ax.text(x_pos, (hi - lo) * 0.04, "always 0",
-                color=color, va="bottom", ha="center",
-                fontsize=8.5, style="italic", zorder=6)
+    _annotate_zero(ax, labels, zero_labels, palette)
     ax.set_xlabel("")
     ax.set_ylabel(ylabel)
     ax.set_title(title, fontweight="bold")
+    ax.tick_params(axis='x', bottom=False, labelbottom=False)
     sns.despine(ax=ax, left=True, bottom=True)
-    _annotate_means(ax, df, y_col, labels, skip_labels=zero_labels)
+    _annotate_means(ax, df, y_col, labels, skip_labels=zero_labels, box_half_width=box_width / 2)
 
 # ── Main figure ───────────────────────────────────────────────────────────────
 
@@ -189,8 +203,9 @@ def render(output_path: pathlib.Path = _PDF_PATH) -> None:
     df_nr = pd.DataFrame(nr_rows)
 
     GREY = "#444444"
-    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
-    fig.subplots_adjust(hspace=0.38, wspace=0.28)
+    fig, axes = plt.subplots(2, 2, figsize=(10, 6),
+                             gridspec_kw={'hspace': 0.45, 'wspace': 0.35})
+    fig.suptitle("5n1g", fontsize=15, fontweight="bold", y=1.005)
 
     # ── [0,0] Termination rate ────────────────────────────────────────────────
     ax = axes[0, 0]
@@ -199,9 +214,7 @@ def render(output_path: pathlib.Path = _PDF_PATH) -> None:
         ax.barh(i, r, color=row["Color"], height=0.5, zorder=3)
         ax.text(r + 0.012, i, f"{r:.0%}", va="center", ha="left",
                 fontsize=9.5, color=GREY)
-    ax.set_yticks(range(len(labels)))
-    ax.set_yticklabels(labels)
-    ax.invert_yaxis()
+    ax.set_yticks([])
     ax.set_xlim(0, 1.18)
     ax.set_xlabel("Termination rate")
     ax.set_title("Success Rate", fontweight="bold")
@@ -221,8 +234,16 @@ def render(output_path: pathlib.Path = _PDF_PATH) -> None:
     _mixed_box_strip(axes[1, 1], df_nr, "Subgoals Reached", labels, palette,
                      "Subgoals Reached", "Subgoals / episode", zero_display)
 
-    plt.tight_layout()
-    fig.savefig(output_path, bbox_inches="tight")
+    # ── Global legend at bottom ───────────────────────────────────────────────
+    from matplotlib.patches import Patch
+    legend_handles = [Patch(facecolor=colors[i], edgecolor="#444444", linewidth=0.6)
+                      for i in range(len(labels))]
+    fig.legend(legend_handles, labels,
+               loc="lower center", bbox_to_anchor=(0.5, 0.0),
+               ncol=len(labels), frameon=False, fontsize=10)
+
+    plt.tight_layout(rect=[0, 0.06, 1, 1])
+    fig.savefig(output_path, bbox_inches="tight", dpi=200)
     print(f"Figure saved → {output_path.absolute()}")
     plt.show()
 
