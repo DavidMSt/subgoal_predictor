@@ -25,9 +25,9 @@ import seaborn as sns
 _DIR = pathlib.Path(__file__).parent
 
 _METHODS: dict[str, tuple[str, str]] = {
-    "A_0sg":     ("No Subgoal",      "#999999"),
-    "A_mlp":     ("MLP",             "#00b695"),
-    "A_hom_gnn": ("Homogeneous GNN", "#457b9d"),
+    "A_0sg":     ("No Subgoal",      "#a8dadc"),
+    "A_mlp":     ("MLP",             "#457b9d"),
+    "A_hom_gnn": ("Homogeneous GNN", "#00b695"),
     "A_bi_gnn":  ("Bipartite GNN",   "#e63946"),
 }
 
@@ -86,8 +86,8 @@ def _load() -> tuple[list[str], list[str], dict[str, str], list[dict]]:
 
 # ── Panel helpers ─────────────────────────────────────────────────────────────
 
-def _annotate_means(ax, df, y_col, labels, skip_labels=None, box_half_width=None):
-    """Print mean value next to each box, at the height of the mean."""
+def _annotate_medians(ax, df, y_col, labels, skip_labels=None, box_half_width=None):
+    """Annotate median value to the right of the median line for each group."""
     if box_half_width is None:
         box_half_width = _BOX_WIDTH / 2
     skip_labels = skip_labels or set()
@@ -97,9 +97,9 @@ def _annotate_means(ax, df, y_col, labels, skip_labels=None, box_half_width=None
         vals = df[df["Method"] == label][y_col].dropna()
         if len(vals) == 0:
             continue
-        mean_val = float(vals.mean())
+        median_val = float(vals.median())
         ax.text(
-            i + box_half_width + 0.06, mean_val, f"{mean_val:.1f}",
+            i + box_half_width + 0.06, median_val, f"{median_val:.1f}",
             ha="left", va="center", fontsize=7.5,
             color="#222222", fontweight="bold",
         )
@@ -119,7 +119,7 @@ def _annotate_zero(ax, labels, zero_labels, palette):
             xy=(x_pos, 0), xytext=(0, 3),
             xycoords="data", textcoords="offset points",
             ha="center", va="bottom",
-            fontsize=8.5, style="italic", color=color, zorder=6,
+            fontsize=8.5, color=color, zorder=6,
         )
 
 
@@ -138,10 +138,10 @@ def _box_strip(ax, df, y_col, labels, palette, title, ylabel, box_width=_BOX_WID
     )
     ax.set_xlabel("")
     ax.set_ylabel(ylabel)
-    ax.set_title(title, fontweight="bold")
+    ax.set_title(title)
     ax.tick_params(axis='x', bottom=False, labelbottom=False)
     sns.despine(ax=ax, left=True, bottom=True)
-    _annotate_means(ax, df, y_col, labels, box_half_width=box_width / 2)
+    _annotate_medians(ax, df, y_col, labels, box_half_width=box_width / 2)
 
 
 def _mixed_box_strip(ax, df, y_col, labels, palette, title, ylabel, zero_labels: set[str],
@@ -165,19 +165,21 @@ def _mixed_box_strip(ax, df, y_col, labels, palette, title, ylabel, zero_labels:
     _annotate_zero(ax, labels, zero_labels, palette)
     ax.set_xlabel("")
     ax.set_ylabel(ylabel)
-    ax.set_title(title, fontweight="bold")
+    ax.set_title(title)
     ax.tick_params(axis='x', bottom=False, labelbottom=False)
     sns.despine(ax=ax, left=True, bottom=True)
-    _annotate_means(ax, df, y_col, labels, skip_labels=zero_labels, box_half_width=box_width / 2)
+    _annotate_medians(ax, df, y_col, labels, skip_labels=zero_labels, box_half_width=box_width / 2)
 
 # ── Main figure ───────────────────────────────────────────────────────────────
 
 def render(output_path: pathlib.Path = _PDF_PATH) -> None:
     font_family = _register_lm_fonts()
     plt.rcParams.update({
-        "font.family": "serif",
-        "font.serif":  [font_family, "Palatino", "Times New Roman"],
-        "text.usetex": False,
+        "font.family":    "serif",
+        "font.serif":     [font_family, "Palatino", "Times New Roman"],
+        "text.usetex":    False,
+        "axes.titlesize": 13,
+        "axes.labelsize": 10,
     })
     sns.set_theme(style="whitegrid", font=font_family)
 
@@ -205,7 +207,7 @@ def render(output_path: pathlib.Path = _PDF_PATH) -> None:
     GREY = "#444444"
     fig, axes = plt.subplots(2, 2, figsize=(10, 6),
                              gridspec_kw={'hspace': 0.45, 'wspace': 0.35})
-    fig.suptitle("5n1g", fontsize=15, fontweight="bold", y=1.005)
+    # fig.suptitle("Policy Evaluation: 5n1g (2×2, 5 agents, 1 gap)", fontsize=15, fontweight="bold", y=0.98)
 
     # ── [0,0] Termination rate ────────────────────────────────────────────────
     ax = axes[0, 0]
@@ -217,7 +219,7 @@ def render(output_path: pathlib.Path = _PDF_PATH) -> None:
     ax.set_yticks([])
     ax.set_xlim(0, 1.18)
     ax.set_xlabel("Termination rate")
-    ax.set_title("Success Rate", fontweight="bold")
+    ax.set_title("Success Rate")
     ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
     ax.grid(axis="x", linestyle="--", alpha=0.35, zorder=0)
     sns.despine(ax=ax, left=True, bottom=False)
@@ -242,7 +244,8 @@ def render(output_path: pathlib.Path = _PDF_PATH) -> None:
                loc="lower center", bbox_to_anchor=(0.5, 0.0),
                ncol=len(labels), frameon=False, fontsize=10)
 
-    plt.tight_layout(rect=[0, 0.06, 1, 1])
+    plt.tight_layout(rect=[0, 0.08, 1, 1])
+    # fig.subplots_adjust(top=0.84)
     fig.savefig(output_path, bbox_inches="tight", dpi=200)
     print(f"Figure saved → {output_path.absolute()}")
     plt.show()

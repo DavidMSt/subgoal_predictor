@@ -28,21 +28,21 @@ _DIR = pathlib.Path(__file__).parent
 _SCENARIOS: dict[str, dict] = {
     "C": {
         "methods": {
-            "C_0sg":    ("No Subgoal",    "#999999"),
+            "C_0sg":    ("No Subgoal",    "#a8dadc"),
             "C_bi_gnn": ("Bipartite GNN", "#e63946"),
         },
         "zero_subgoal_keys": {"C_0sg"},
         "output": _DIR / "eval_C_comparison.pdf",
-        "title": "Scenario C",
+        "title": "Policy Evaluation: 10n2g (3×3, 10 agents, 2 gaps)",
     },
     "D": {
         "methods": {
-            "D_0sg":    ("No Subgoal",    "#999999"),
+            "D_0sg":    ("No Subgoal",    "#a8dadc"),
             "D_bi_gnn": ("Bipartite GNN", "#e63946"),
         },
         "zero_subgoal_keys": {"D_0sg"},
-        "output": _DIR / "eval_D_100comparison.pdf",
-        "title": "Scenario D",
+        "output": _DIR / "eval_D_comparison.pdf",
+        "title": "Policy Evaluation: 8n1g (3×3, 8 agents, 1 gap)",
     },
 }
 
@@ -89,20 +89,18 @@ def _load(key: str, label: str, color: str) -> dict:
 
 # ── Panel helpers ─────────────────────────────────────────────────────────────
 
-def _annotate_means(ax, df, y_col, labels, skip_labels=None):
-    """Print mean value above each group's highest data point."""
+def _annotate_medians(ax, df, y_col, labels, skip_labels=None):
+    """Annotate median value to the right of the median line for each group."""
     skip_labels = skip_labels or set()
-    lo, hi = ax.get_ylim()
-    span = hi - lo
-    ax.set_ylim(lo, hi + 0.15 * span)
     for i, label in enumerate(labels):
         if label in skip_labels:
             continue
         vals = df[df["Method"] == label][y_col].dropna()
         if len(vals) == 0:
             continue
-        ax.text(i, float(vals.max()) + 0.04 * span, f"{vals.mean():.1f}",
-                ha="center", va="bottom", fontsize=7.5,
+        median_val = float(vals.median())
+        ax.text(i + 0.17, median_val, f"{median_val:.1f}",
+                ha="left", va="center", fontsize=7.5,
                 color="#222222", fontweight="bold")
 
 
@@ -120,10 +118,11 @@ def _box_strip(ax, df, y_col, labels, palette, title, ylabel):
         ax=ax,
     )
     ax.set_xlabel("")
+    ax.set_xticklabels([])
     ax.set_ylabel(ylabel)
-    ax.set_title(title, fontweight="bold")
+    ax.set_title(title)
     sns.despine(ax=ax, left=True, bottom=True)
-    _annotate_means(ax, df, y_col, labels)
+    _annotate_medians(ax, df, y_col, labels)
 
 
 def _mixed_violin(ax, df, y_col, labels, palette, title, ylabel, zero_labels: set[str]):
@@ -147,12 +146,13 @@ def _mixed_violin(ax, df, y_col, labels, palette, title, ylabel, zero_labels: se
                 color=color, linewidth=2, linestyle="--", zorder=5)
         ax.text(x_pos, (hi - lo) * 0.04, "always 0",
                 color=color, va="bottom", ha="center",
-                fontsize=8.5, style="italic", zorder=6)
+                fontsize=8.5, zorder=6)
     ax.set_xlabel("")
+    ax.set_xticklabels([])
     ax.set_ylabel(ylabel)
-    ax.set_title(title, fontweight="bold")
+    ax.set_title(title)
     sns.despine(ax=ax, left=True, bottom=True)
-    _annotate_means(ax, df, y_col, labels, skip_labels=zero_labels)
+    _annotate_medians(ax, df, y_col, labels, skip_labels=zero_labels)
 
 
 def _mixed_box_strip(ax, df, y_col, labels, palette, title, ylabel, zero_labels: set[str]):
@@ -182,12 +182,13 @@ def _mixed_box_strip(ax, df, y_col, labels, palette, title, ylabel, zero_labels:
                 color=color, linewidth=2, linestyle="--", zorder=5)
         ax.text(x_pos, (hi - lo) * 0.04, "always 0",
                 color=color, va="bottom", ha="center",
-                fontsize=8.5, style="italic", zorder=6)
+                fontsize=8.5, zorder=6)
     ax.set_xlabel("")
+    ax.set_xticklabels([])
     ax.set_ylabel(ylabel)
-    ax.set_title(title, fontweight="bold")
+    ax.set_title(title)
     sns.despine(ax=ax, left=True, bottom=True)
-    _annotate_means(ax, df, y_col, labels, skip_labels=zero_labels)
+    _annotate_medians(ax, df, y_col, labels, skip_labels=zero_labels)
 
 # ── Per-scenario figure ───────────────────────────────────────────────────────
 
@@ -231,6 +232,7 @@ def _render_scenario(scenario_key: str, font_family: str) -> None:
 
     GREY = "#444444"
     fig, axes = plt.subplots(2, 3, figsize=(14, 8))
+    # fig.suptitle(cfg["title"], fontsize=15, fontweight="bold", y=0.98)
     fig.subplots_adjust(hspace=0.38, wspace=0.28)
 
     # ── [0,0] Termination rate ────────────────────────────────────────────────
@@ -241,11 +243,11 @@ def _render_scenario(scenario_key: str, font_family: str) -> None:
         ax.text(r + 0.012, i, f"{r:.0%}", va="center", ha="left",
                 fontsize=9.5, color=GREY)
     ax.set_yticks(range(len(labels)))
-    ax.set_yticklabels(labels)
+    ax.set_yticklabels([""] * len(labels))
     ax.invert_yaxis()
     ax.set_xlim(0, 1.18)
     ax.set_xlabel("Termination rate")
-    ax.set_title("Success Rate", fontweight="bold")
+    ax.set_title("Success Rate")
     ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:.0%}"))
     ax.grid(axis="x", linestyle="--", alpha=0.35, zorder=0)
     sns.despine(ax=ax, left=True, bottom=False)
@@ -271,7 +273,14 @@ def _render_scenario(scenario_key: str, font_family: str) -> None:
     _mixed_box_strip(axes[1, 2], df_nr, "Subgoals Reached", labels, palette,
                      "Subgoals Reached", "Subgoals / episode", zero_display)
 
-    plt.tight_layout()
+    from matplotlib.patches import Patch
+    legend_handles = [Patch(facecolor=color, label=label)
+                      for label, color in zip(labels, colors)]
+    fig.legend(handles=legend_handles, loc="lower center", bbox_to_anchor=(0.5, 0.0),
+               ncol=len(labels), frameon=False, fontsize=10)
+
+    plt.tight_layout(rect=[0, 0.06, 1, 1])
+    # fig.subplots_adjust(top=0.90)
     fig.savefig(output_path, bbox_inches="tight")
     print(f"Figure saved → {output_path.absolute()}")
     plt.show()
@@ -281,9 +290,11 @@ def _render_scenario(scenario_key: str, font_family: str) -> None:
 def render() -> None:
     font_family = _register_lm_fonts()
     plt.rcParams.update({
-        "font.family": "serif",
-        "font.serif":  [font_family, "Palatino", "Times New Roman"],
-        "text.usetex": False,
+        "font.family":    "serif",
+        "font.serif":     [font_family, "Palatino", "Times New Roman"],
+        "text.usetex":    False,
+        "axes.titlesize": 13,
+        "axes.labelsize": 10,
     })
     sns.set_theme(style="whitegrid", font=font_family)
 

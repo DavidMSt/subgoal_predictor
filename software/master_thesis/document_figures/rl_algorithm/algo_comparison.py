@@ -36,11 +36,15 @@ def smooth(series: pd.Series, window: int) -> pd.Series:
 def main():
     sns.set_theme(style="darkgrid")
     plt.rcParams.update({
-        "font.family": "serif",
-        "font.serif": ["Times New Roman", "Palatino", "serif"],
+        "font.family":    "serif",
+        "font.serif":     ["Times New Roman", "Palatino", "serif"],
+        "axes.titlesize": 13,
+        "axes.labelsize": 10,
     })
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 4), sharey=False)
+    # fig.suptitle("RL Algorithm Comparison — PPO vs. REINFORCE (5n1g, Homogeneous GNN)",
+    #              fontsize=15, fontweight="bold", y=0.98)
 
     for ax, (tag, (title, ylabel, ylim)) in zip(axes, METRICS.items()):
         for label, (run_dir, color) in RUNS.items():
@@ -49,15 +53,21 @@ def main():
             ax.plot(df["step"], smooth(df["value"], SMOOTH_WINDOW),
                     color=color, linewidth=2.2, label=label)
 
-        ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
-        ax.set_xlabel("Training Update", fontsize=11)
-        ax.set_ylabel(ylabel, fontsize=11)
+        ax.set_title(title, pad=10)
+        ax.set_xlabel("Training Update")
+        ax.set_ylabel(ylabel)
         if ylim:
             ax.set_ylim(*ylim)
 
-    axes[0].legend(fontsize=11, framealpha=0.85)
+    from matplotlib.lines import Line2D
+    legend_handles = [Line2D([0], [0], color=color, linewidth=2.0)
+                      for _, (_, color) in RUNS.items()]
+    fig.legend(legend_handles, list(RUNS.keys()),
+               loc="lower center", bbox_to_anchor=(0.5, 0.0),
+               ncol=len(RUNS), frameon=False, fontsize=10)
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0.10, 1, 1])
+    # fig.subplots_adjust(top=0.82)
 
     output_path = pathlib.Path(__file__).parent / OUTPUT_FILE
     fig.savefig(output_path, bbox_inches="tight")

@@ -234,9 +234,11 @@ def plot_motion_planning_comparison(npz_path: pathlib.Path = _NPZ_PATH):
 def _render_figure(df_time, df_length, success_rates=None, output_path: pathlib.Path = _PDF_PATH):
     font_family = _register_lm_fonts()
     plt.rcParams.update({
-        "font.family": "serif",
-        "font.serif":  [font_family, "Palatino", "Times New Roman"],
-        "text.usetex": False,
+        "font.family":    "serif",
+        "font.serif":     [font_family, "Palatino", "Times New Roman"],
+        "text.usetex":    False,
+        "axes.titlesize": 13,
+        "axes.labelsize": 10,
     })
     sns.set_theme(style="whitegrid", font=font_family)
 
@@ -248,6 +250,7 @@ def _render_figure(df_time, df_length, success_rates=None, output_path: pathlib.
     ALPHA_STEP3 = 0.5
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+    # fig.suptitle("Motion Planning — RRT vs. PRM* + CVXPY", fontsize=15, fontweight="bold", y=0.98)
 
     # ── Left: stacked bar chart (cumulative timing) ───────────────────────────
     methods     = df_time["Method"].tolist()
@@ -320,7 +323,7 @@ def _render_figure(df_time, df_length, success_rates=None, output_path: pathlib.
                ncol=1, loc="lower right", frameon=True)
     ax1.set_xlabel("Mean computation time [s]")
     ax1.set_ylabel("")
-    ax1.set_title("Motion Planning Pipeline Timing", fontsize=16, fontweight="bold", pad=14)
+    ax1.set_title("Motion Planning Pipeline Timing", pad=14)
     sns.despine(left=True, bottom=True, ax=ax1)
 
     # ── Right: path length distribution ──────────────────────────────────────
@@ -331,13 +334,14 @@ def _render_figure(df_time, df_length, success_rates=None, output_path: pathlib.
     )
     ax2.set_xlabel("")
     ax2.set_ylabel("Path length [m]")
-    ax2.set_title("Path Length Distribution", fontsize=16, fontweight="bold", pad=14)
+    ax2.set_title("Path Length Distribution", pad=14)
     lo, hi = ax2.get_ylim()
     ax2.set_ylim(lo, hi + (hi - lo) * 0.15)
     sns.despine(left=True, bottom=True, ax=ax2)
 
     plt.tight_layout()
-    fig.savefig(output_path)
+    # fig.subplots_adjust(top=0.84)
+    fig.savefig(output_path, bbox_inches="tight")
     print(f"Figure saved → {output_path.absolute()}")
     plt.show()
 
