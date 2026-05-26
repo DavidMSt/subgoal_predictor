@@ -6,20 +6,20 @@ from tqdm import tqdm
 from gymnasium import spaces
 import torch
 import torch.nn as nn
+from pathlib import Path
 
 from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
 from master_thesis.containers.general_containers.frodo_agent_container import FRODOAgentContainer, FRODO_Agent_Config
-from pathlib import Path
 
 from master_thesis.scenarios.base import ScenarioConfig, AgentSpec, TaskSpec
 from master_thesis.scenarios.testbed_importer import load_scenario_yaml
 
+# Path where all scenarios are
 _SCENARIOS_DIR = Path(__file__).parent.parent.parent / 'scenarios'
 
 WAIT_TIMES  = [0, 1, 2, 3, 4, 5]  # 1s spacing, covers staggered queuing for up to 6 agents
 
-
-class subgoal_nn_base(nn.Module):
+class subgoal_nn_mlp(nn.Module):
     """Subgoal-position and wait-time predictor.
 
     Observation design: see obs_design_notes.md for full rationale.
@@ -45,12 +45,12 @@ class subgoal_nn_base(nn.Module):
             nn.ReLU(),
         )
 
-        self.wait_mode = wait_mode
+        # output a discrete position prediction (x,y)
         self.pos_head  = nn.Linear(out_dim, n_positions)
-        # Continuous: outputs (mu_raw, log_sigma) per agent; decoded as
-        #   mu = sigmoid(mu_raw) * wait_max,  sigma = exp(log_sigma).clamp(0.1, wait_max/2)
-        # Discrete: outputs n_wait_bins logits, sampled via Categorical.
-        self.wait_head = nn.Linear(out_dim, 2 if wait_mode == 'continuous' else n_wait_bins)
+
+        # output a discrete wait head
+        self.wait_mode = wait_mode
+        self.wait_head = nn.Linear(out_dim, n_wait_bins)
 
     def forward(self,
                 agent_psi,         # (B, 1)          — own heading
@@ -59,6 +59,8 @@ class subgoal_nn_base(nn.Module):
                 gap_vectors,       # (B, n_gaps*2)   — (Δx, Δy) to each gap center
                 neighbor_goals=None,  # unused — accepted for call-site compatibility
                 ):
+        
+        # concatenate all inputs, then encdoe
         enc = torch.cat([
             torch.relu(self.enc_agent(agent_psi)),
             torch.relu(self.enc_neighbors(neighbor_rel)),
@@ -68,8 +70,6 @@ class subgoal_nn_base(nn.Module):
 
         h = self.trunk(enc)
         return self.pos_head(h), self.wait_head(h)
-
-
 
 
 class subgoal_gnn_base(nn.Module):

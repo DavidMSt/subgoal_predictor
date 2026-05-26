@@ -630,7 +630,7 @@ class ThesisGUI:
         """Load checkpoint, return (policy, free_positions, n_gaps) or None on failure."""
         import torch
         from master_thesis.modules.subgoal_predictor.train_subgoal import (
-            subgoal_nn_base, subgoal_gnn_base, subgoal_bipartite_gnn, WAIT_TIMES,
+            subgoal_nn_mlp, subgoal_gnn_base, subgoal_bipartite_gnn, WAIT_TIMES,
             latest_subgoal_checkpoint,
         )
 
@@ -685,7 +685,7 @@ class ThesisGUI:
         elif 'enc_psi.weight' in _keys:
             _PolicyCls = subgoal_bipartite_gnn
         else:
-            _PolicyCls = subgoal_nn_base
+            _PolicyCls = subgoal_nn_mlp
         policy = _PolicyCls(
             n=n_ckpt, n_gaps=n_gaps,
             n_positions=n_positions, n_wait_bins=n_wait_bins,

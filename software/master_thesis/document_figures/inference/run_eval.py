@@ -90,7 +90,7 @@ ALL_RUNS: dict[str, tuple[str, str, int, pathlib.Path | None]] = {
 
 from master_thesis.modules.subgoal_predictor.train_subgoal import (
     FrodoGymWrapper, WAIT_TIMES,
-    subgoal_nn_base, subgoal_gnn_base, subgoal_bipartite_gnn,
+    subgoal_nn_mlp, subgoal_gnn_base, subgoal_bipartite_gnn,
 )
 
 # ── Architecture detection ────────────────────────────────────────────────────
@@ -129,7 +129,7 @@ def _detect_arch(policy_state: dict):
         return subgoal_gnn_base, 'Hom. GNN'
     if 'trunk.0.weight' not in keys:
         return _LegacyMLP, 'MLP (legacy)'
-    return subgoal_nn_base, 'MLP'
+    return subgoal_nn_mlp, 'MLP'
 
 # ── Policy loading ────────────────────────────────────────────────────────────
 
