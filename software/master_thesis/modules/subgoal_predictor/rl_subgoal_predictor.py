@@ -13,7 +13,7 @@ from master_thesis.containers.general_containers.task_container import TaskConta
 
 class RLSubgoalPredictor(PathPlannerBase):
     """
-    Loads a trained SB3 model and uses it to predict subgoals.
+    Loads a trained model and uses it to predict subgoals.
 
     Observation construction mirrors SubgoalRLEnv._get_obs() so that
     the model receives the same feature vector it was trained on.

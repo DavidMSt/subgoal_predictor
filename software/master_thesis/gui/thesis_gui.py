@@ -90,6 +90,12 @@ class ThesisGUI:
         self._recording_task_frames: list | None = None
         self._last_trajectory: dict | None = None    # most recently completed recording
 
+        # When True, show_trajectory_for_robot() also draws pre-planned segments
+        # (subgoal → goal, etc.) in addition to the active segment.  Useful for
+        # pre-execution screenshots.  Set automatically by start_mp_and_show();
+        # reset to False when execution begins.
+        self._show_full_trajectory: bool = False
+
         self.joystick_manager = JoystickManager()
         self.joystick_manager.callbacks.new_joystick.register(self._newJoystick_callback)
         self.joystick_manager.callbacks.joystick_disconnected.register(self._joystickDisconnected_callback)
@@ -624,11 +630,24 @@ class ThesisGUI:
         """Load checkpoint, return (policy, free_positions, n_gaps) or None on failure."""
         import torch
         from master_thesis.modules.subgoal_predictor.train_subgoal import (
-            subgoal_nn_base, subgoal_gnn_base, WAIT_TIMES, latest_subgoal_checkpoint,
+            subgoal_nn_base, subgoal_gnn_base, subgoal_bipartite_gnn, WAIT_TIMES,
+            latest_subgoal_checkpoint,
+        )
+
+        # Demo default: the published bipartite-GNN checkpoint (8n, 1-gap).
+        # Override with --subgoal_weights or by passing checkpoint_path explicitly.
+        _DEMO_CHECKPOINT = os.path.join(
+            os.path.dirname(__file__), '..', 'modules', 'subgoal_predictor',
+            'checkpoints_pub', 'D_bi_gnn_v3.pt',
         )
 
         if checkpoint_path is None:
-            checkpoint_path = self._subgoal_weights or latest_subgoal_checkpoint()
+            checkpoint_path = (
+                self._subgoal_weights
+                or (os.path.normpath(_DEMO_CHECKPOINT)
+                    if os.path.exists(_DEMO_CHECKPOINT) else None)
+                or latest_subgoal_checkpoint()
+            )
         if checkpoint_path is None:
             self.logger.warning("No subgoal checkpoint found — train a model first.")
             return None
@@ -647,26 +666,38 @@ class ThesisGUI:
 
         n_gaps      = ckpt.get('n_gaps', 2)
         n_positions = len(free_positions)
+        # Read wait_mode from the checkpoint (continuous vs discrete).
+        # MUST be passed to the constructor so policy.wait_mode is set correctly
+        # and predict_subgoals() uses the right inference branch.
+        ckpt_wait_mode = ckpt.get('wait_mode', 'discrete')
         # Infer n_wait_bins from the saved weight shape so old checkpoints
         # (trained with a different WAIT_TIMES list) still load correctly.
+        # For continuous mode the wait_head always has 2 outputs (mu, raw);
+        # for discrete it equals the number of discrete time bins.
         n_wait_bins = ckpt['policy']['wait_head.bias'].shape[0]
         # Reconstruct the wait_times list: stored explicitly or fall back to
         # the first n_wait_bins entries of the current WAIT_TIMES constant.
         wait_times = list(ckpt.get('wait_times', WAIT_TIMES[:n_wait_bins]))
-        # Select architecture from checkpoint; default to GNN (current).
-        # Old checkpoints (MLP) are detected by absence of GNN-specific keys.
-        _is_gnn = 'node_enc.weight' in ckpt['policy']
-        _PolicyCls = subgoal_gnn_base if _is_gnn else subgoal_nn_base
+        # Detect architecture from checkpoint key signatures.
+        _keys = ckpt['policy']
+        if 'node_enc.weight' in _keys:
+            _PolicyCls = subgoal_gnn_base
+        elif 'enc_psi.weight' in _keys:
+            _PolicyCls = subgoal_bipartite_gnn
+        else:
+            _PolicyCls = subgoal_nn_base
         policy = _PolicyCls(
             n=n_ckpt, n_gaps=n_gaps,
             n_positions=n_positions, n_wait_bins=n_wait_bins,
+            wait_mode=ckpt_wait_mode,
         )
         policy.load_state_dict(ckpt['policy'])
         policy.eval()
         self.logger.info(
             f"Loaded subgoal policy from '{checkpoint_path}' "
             f"(update {ckpt.get('update', '?')}, n={n_ckpt}, "
-            f"n_gaps={n_gaps}, wait_bins={n_wait_bins})"
+            f"n_gaps={n_gaps}, wait_mode={ckpt_wait_mode}, "
+            f"positions={n_positions})"
         )
         return policy, free_positions, n_ckpt, wait_times, n_gaps
 
@@ -756,9 +787,12 @@ class ThesisGUI:
                 agent.sgm.reset()
             self.sim.start_ta()
 
-            # 2+3+4. obs → policy → subgoals → start_mp → start_exe
+            # 2+3+4. obs → policy → subgoals → start_mp → screenshot → start_exe
             obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
-            predicted = run_policy_step(self.sim, policy, free_positions, obs, wait_times=wait_times)
+            predicted = run_policy_step(
+                self.sim, policy, free_positions, obs, wait_times=wait_times,
+                pre_exe_hook=self.take_screenshot,
+            )
 
             for i, ((sx, sy), agent) in enumerate(zip(predicted, self.sim.agents.values())):
                 wait_s = (agent.sgm._wait_ticks_per_subgoal[0] * self.sim.Ts
@@ -773,7 +807,7 @@ class ThesisGUI:
         where TA was already run and MP/EXE are started separately."""
         def _impl():
             from master_thesis.modules.subgoal_predictor.train_subgoal import (
-                build_subgoal_obs, run_policy_step,
+                build_subgoal_obs, predict_subgoals,
             )
 
             result = self._load_subgoal_policy(checkpoint_path)
@@ -800,12 +834,136 @@ class ThesisGUI:
                 return
 
             obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
-            predicted = run_policy_step(self.sim, policy, free_positions, obs, wait_times=wait_times)
+            predicted = predict_subgoals(self.sim, policy, free_positions, obs,
+                                         wait_times=wait_times)
+            visualization.show_subgoal_markers(self)
 
             for i, (sx, sy) in enumerate(predicted):
                 self.logger.info(f"Agent {i}: subgoal ({sx:.2f}, {sy:.2f})")
 
         self._with_roadmap_ready("subgoal policy", _impl)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def predict_and_show_subgoals(self, checkpoint_path: str | None = None) -> None:
+        """Staged step 2 of 3: predict 1 subgoal per agent and show markers in GUI.
+
+        Does NOT start motion planning or execution — use 'Start MP' and
+        'Start Execution' as separate steps afterward.
+
+        Assumes tasks are already assigned (press 'Central TA' first).
+        """
+        def _impl():
+            from master_thesis.modules.subgoal_predictor.train_subgoal import (
+                build_subgoal_obs, predict_subgoals,
+            )
+
+            result = self._load_subgoal_policy(checkpoint_path)
+            if result is None:
+                return
+            policy, free_positions, n_ckpt, wait_times, n_gaps_ckpt = result
+
+            if len(self.sim.agents) == 0:
+                self.logger.warning("No agents present — load a scenario first")
+                return
+            if len(self.sim.agents) != n_ckpt:
+                self.logger.warning(
+                    f"GUI has {len(self.sim.agents)} agents but policy trained with {n_ckpt}."
+                )
+
+            scenario = self._last_scenario
+            if scenario is None or scenario.gap_geometry is None:
+                self.logger.warning("No scenario with gap_geometry loaded.")
+                return
+
+            sim_n_gaps = len(scenario.gap_geometry['gaps'])
+            if sim_n_gaps != n_gaps_ckpt:
+                self.logger.warning(
+                    f"Gap count mismatch: policy trained with n_gaps={n_gaps_ckpt} "
+                    f"but current scenario has n_gaps={sim_n_gaps}. "
+                    f"Load a scenario with {n_gaps_ckpt} gap(s)."
+                )
+                return
+
+            # Warn if no tasks assigned (user should press Central TA first)
+            unassigned = [a for a in self.sim.agents.values() if a.assigned_task is None]
+            if unassigned:
+                self.logger.warning(
+                    f"{len(unassigned)} agent(s) have no task assigned — "
+                    "press 'Central TA' before '1 SG'."
+                )
+
+            # Reset SGM state from any previous run, then predict subgoals
+            for agent in self.sim.agents.values():
+                agent.sgm.reset()
+
+            obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
+            predicted = predict_subgoals(self.sim, policy, free_positions, obs,
+                                         wait_times=wait_times)
+
+            # Show subgoal markers immediately in the GUI
+            visualization.show_subgoal_markers(self)
+
+            for i, ((sx, sy), agent) in enumerate(
+                    zip(predicted, self.sim.agents.values())):
+                wait_s = (agent.sgm._wait_ticks_per_subgoal[0] * self.sim.Ts
+                          if agent.sgm._wait_ticks_per_subgoal else 0.0)
+                self.logger.info(f"Agent {i}: subgoal ({sx:.2f}, {sy:.2f}), wait {wait_s:.1f}s")
+
+        self._with_roadmap_ready("predict subgoals", _impl)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def start_ta_and_show(self, strategy=None) -> None:
+        """Run task assignment and immediately show assignment circles in GUI."""
+        from master_thesis.modules.task_assignment.strategies.strategy_registry import StrategyType
+        _strategy = strategy if strategy is not None else StrategyType.HUNGARIAN
+        self.sim.start_ta(strategy=_strategy)
+        visualization.refresh_assignment_circles(self)
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def start_mp_and_show(self) -> None:
+        """Run motion planning for all agents, then show trajectory lines once plans are ready.
+
+        OMPL planning is synchronous inside the sim's LOGIC thread and can take
+        10–40 s for 8 agents.  A background polling thread waits for every
+        assigned agent's ``last_plan_result`` to be populated before calling
+        ``showTrajectories()``, so lines appear as soon as planning completes
+        rather than requiring a manual "Show Trajectories" press.
+        """
+        self.sim.start_mp()
+        self.logger.info("Motion planning started — waiting for OMPL plans…")
+
+        def _wait_and_show():
+            import time
+            agents_with_tasks = [
+                agent for agent in self.sim.agents.values()
+                if agent.assigned_task is not None
+            ]
+            if not agents_with_tasks:
+                self.logger.warning("No agents with assigned tasks — cannot show trajectories")
+                return
+
+            deadline = time.time() + 120.0          # 2-minute safety timeout
+            while time.time() < deadline:
+                time.sleep(0.25)
+                if all(
+                    agent.sgm.start_planning_flag is None       # flag cleared = planning done
+                    and agent.sgm.last_plan_result is not None  # plan exists
+                    for agent in agents_with_tasks
+                ):
+                    break
+
+            self._show_full_trajectory = True
+            self.showTrajectories()
+
+        threading.Thread(target=_wait_and_show, daemon=True).start()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def start_exe_with_recording(self) -> None:
+        """Start execution with episode timer and trajectory recording."""
+        self._show_full_trajectory = False   # revert to per-segment display during execution
+        self._start_episode_timer()
+        self._start_recording()
+        self.sim.start_exe()
 
     # ------------------------------------------------------------------------------------------------------------------
     def run_no_subgoal_episode(self):
@@ -818,6 +976,7 @@ class ThesisGUI:
                 agent.sgm.reset()
             self.sim.start_ta()
             self.sim.start_mp()
+            self.take_screenshot()
             self.sim.start_exe()
             self.logger.info("Baseline episode started: TA → MP → EXE (0 subgoals)")
 
@@ -1067,6 +1226,100 @@ class ThesisGUI:
         with open(save_path, 'wb') as f:
             pickle.dump(traj, f)
         self.logger.info(f"Trajectory saved ({len(frames)} frames) → {save_path}")
+
+    # ------------------------------------------------------------------------------------------------------------------
+    def take_screenshot(self, save_path: str | None = None) -> str | None:
+        """Save a 2D top-down matplotlib snapshot of the current sim state.
+
+        Captures: obstacles, tasks (colour-coded), agents, and any subgoals set
+        via SGM.  Call this after TA + inference but before start_exe().
+
+        Args:
+            save_path: PNG output path.  None → auto-name alongside the active
+                       checkpoint in the runs directory.
+        Returns:
+            Absolute path to the saved file, or None on failure.
+        """
+        try:
+            import matplotlib
+            matplotlib.use('Agg')  # non-interactive backend; must precede pyplot import
+            import matplotlib.pyplot as plt
+        except ImportError:
+            self.logger.warning("matplotlib not available — cannot take screenshot")
+            return None
+
+        fig, ax = plt.subplots(figsize=(8, 8))
+        ax.set_aspect('equal')
+        ax.set_facecolor('#1a1a2e')
+        fig.patch.set_facecolor('#1a1a2e')
+
+        from matplotlib.patches import Polygon as MplPolygon
+        env = self.sim.environment.environment_container
+        lim = env.config.limits if hasattr(env.config, 'limits') else ((-5, 5), (-5, 5))
+        ax.set_xlim(lim[0])
+        ax.set_ylim(lim[1])
+        ax.tick_params(colors='white')
+        for spine in ax.spines.values():
+            spine.set_edgecolor('white')
+
+        # obstacles (rectangular walls — length×width, rotated by psi)
+        for obs in self.sim.environment.environment_container.state.obstacle_conts.values():
+            l, w = obs.length, obs.width
+            corners_local = np.array([[-l/2, -w/2], [l/2, -w/2], [l/2, w/2], [-l/2, w/2]])
+            c_a, s_a = np.cos(obs.psi), np.sin(obs.psi)
+            rot = np.array([[c_a, -s_a], [s_a, c_a]])
+            corners_world = (rot @ corners_local.T).T + [obs.x, obs.y]
+            ax.add_patch(MplPolygon(corners_world, closed=True, color='#555577', zorder=2))
+
+        # tasks
+        for t in self.sim.environment.environment_container.state.task_conts.values():
+            color = getattr(t, 'color', None)
+            if color is None or not hasattr(color, '__len__'):
+                color = (0.8, 0.8, 0.2)
+            ax.plot(t.x, t.y, marker='*', markersize=14,
+                    color=color, zorder=4, markeredgecolor='white', markeredgewidth=0.5)
+            ax.text(t.x + 0.12, t.y + 0.12, t.object_id.replace('task_', 'T'),
+                    color='white', fontsize=7, zorder=5)
+
+        # agents + subgoals
+        agent_colors = plt.cm.tab10.colors
+        for i, (aid, agent) in enumerate(self.sim.agents.items()):
+            ac = agent_colors[i % len(agent_colors)]
+            ax_x, ax_y, ax_psi = agent.state.x, agent.state.y, agent.state.psi
+            ax.plot(ax_x, ax_y, 'o', markersize=10, color=ac, zorder=5,
+                    markeredgecolor='white', markeredgewidth=0.8)
+            # heading arrow
+            dx, dy = 0.25 * np.cos(ax_psi), 0.25 * np.sin(ax_psi)
+            ax.annotate('', xy=(ax_x + dx, ax_y + dy),
+                        xytext=(ax_x, ax_y),
+                        arrowprops=dict(arrowstyle='->', color=ac, lw=1.5), zorder=6)
+            ax.text(ax_x + 0.12, ax_y - 0.22, str(i), color='white', fontsize=7, zorder=7)
+            # subgoal marker
+            if hasattr(agent, 'sgm') and agent.sgm._subgoal_queue:
+                sg = agent.sgm._subgoal_queue[0]
+                sx, sy = float(sg[0]), float(sg[1])
+                ax.plot(sx, sy, 'D', markersize=7, color=ac, zorder=4,
+                        markeredgecolor='white', markeredgewidth=0.6, alpha=0.85)
+                ax.plot([ax_x, sx], [ax_y, sy], '--', color=ac, lw=0.8,
+                        alpha=0.5, zorder=3)
+
+        scenario_name = self._last_scenario.name if self._last_scenario else 'unknown'
+        ax.set_title(f"{scenario_name} — initial state", color='white', fontsize=10)
+
+        if save_path is None:
+            base_dir = (
+                os.path.dirname(self._subgoal_weights) if self._subgoal_weights
+                else os.path.join(os.path.dirname(__file__), '..', 'modules',
+                                  'subgoal_predictor', 'runs')
+            )
+            os.makedirs(base_dir, exist_ok=True)
+            save_path = os.path.join(base_dir, f'screenshot_{scenario_name}.png')
+
+        fig.savefig(save_path, dpi=150, bbox_inches='tight',
+                    facecolor=fig.get_facecolor())
+        plt.close(fig)
+        self.logger.info(f"Screenshot saved → {save_path}")
+        return save_path
 
     # ------------------------------------------------------------------------------------------------------------------
     def replay_trajectory(self, path: str | None = None, speed: float = 1.0) -> None:

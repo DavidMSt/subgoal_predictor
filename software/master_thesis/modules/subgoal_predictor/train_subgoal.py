@@ -31,17 +31,13 @@ class subgoal_nn_base(nn.Module):
                  wait_mode: str = 'discrete') -> None:
         super().__init__()
 
-        self.enc_agent     = nn.Linear(1,            out_dim)  # own ψ only
+        # encode each type of information that is being received
+        self.enc_agent     = nn.Linear(1,            out_dim)  # own ψ only #TODO: where do we put in x and y?!
         self.enc_neighbors = nn.Linear((n - 1) * 2, out_dim)  # relative (Δx, Δy) per neighbor
         self.enc_goal      = nn.Linear(2,            out_dim)  # relative (Δx, Δy) to own task
         self.enc_gap       = nn.Linear(n_gaps * 2,  out_dim)  # (Δx, Δy) per gap, flattened
 
-        # Shared trunk: learns nonlinear cross-encoder interactions (e.g. "neighbor near
-        # gap → wait") before the position and wait-time heads.  A single linear layer
-        # after concat cannot represent these conditional relationships.  The trunk is
-        # shared rather than duplicated per head because position and wait-time are coupled
-        # decisions (hold-back agent → nearby subgoal + long wait); sharing gives both
-        # heads richer gradient signal from a single learned priority representation.
+        # Shared trunk: learns nonlinear cross-encoder interactions, shared by both prediction heads
         self.trunk = nn.Sequential(
             nn.Linear(4 * out_dim, out_dim),
             nn.ReLU(),
@@ -928,19 +924,26 @@ def build_subgoal_obs(sim, gap_geometry: dict) -> dict:
     }
 
 
-def run_policy_step(sim, policy, free_positions: np.ndarray, obs: dict,
-                    wait_times: list | None = None,
-                    wait_mode: str | None = None) -> list:
-    """Apply policy greedily, inject subgoals, then start MP and EXE.
+def predict_subgoals(sim, policy, free_positions: np.ndarray, obs: dict,
+                     wait_times: list | None = None,
+                     wait_mode: str | None = None) -> list:
+    """Apply policy greedily and inject subgoals into each agent's SGM.
 
-    Replicates exactly FrodoGymWrapper.step() up to (but not including) the
-    simulation loop — the setup phase that is identical between training and
-    GUI evaluation.  Use this whenever the sim is already running in real-time
-    (GUI) and you just need the one-shot subgoal assignment.
+    This is the pure prediction step — it does **not** start motion planning or
+    execution.  Call ``sim.start_mp()`` and ``sim.start_exe()`` separately when
+    ready to plan and run.
 
-    wait_times: list of wait durations in seconds, one per bin (discrete) or
-                used only for wait_max (continuous).  Defaults to WAIT_TIMES.
-    wait_mode:  'discrete' or 'continuous'; inferred from policy.wait_mode if None.
+    Args:
+        sim:             Running FRODO_Universal_Simulation instance.
+        policy:          Loaded GNN policy (callable, torch.no_grad-safe).
+        free_positions:  (M, 2) array of valid subgoal grid positions.
+        obs:             Observation dict from ``build_subgoal_obs()``.
+        wait_times:      List of wait durations in seconds per discrete bin, or
+                         [max_wait] for continuous mode.  Defaults to WAIT_TIMES.
+        wait_mode:       'discrete' or 'continuous'; inferred from policy if None.
+
+    Returns:
+        List of (sx, sy) predicted subgoal world coordinates, one per agent.
     """
     import torch
 
@@ -955,15 +958,27 @@ def run_policy_step(sim, policy, free_positions: np.ndarray, obs: dict,
             torch.as_tensor(obs["gap_vectors"],    dtype=torch.float32),
             torch.as_tensor(obs["neighbor_goals"], dtype=torch.float32).flatten(-2),
         )
-        a_pos = torch.argmax(pos_logits, dim=-1).numpy()  # (n_agents,) greedy
+        # Sample position from the learned categorical distribution — mirrors the
+        # stochastic training rollouts exactly.  The policy was trained under
+        # this sampling scheme (PPO with entropy bonus), so greedy argmax is
+        # out-of-distribution.  The TensorBoard spread metric (0.86-0.9) is
+        # the spread of these samples, which is what the policy was optimised for.
+        a_pos = torch.distributions.Categorical(logits=pos_logits).sample().numpy()  # (n_agents,)
 
         if _wait_mode == 'continuous':
+            # Continuous wait: sample from Normal — identical to training's rsample().
+            # Parameterisation from the model docstring and training loop (line ~1100):
+            #   mu    = sigmoid(mu_raw) * wait_max
+            #   sigma = exp(log_sigma).clamp(0.1, wait_max / 2)
             _wait_max  = float(max(_wait_times))
-            _mu_raw    = wait_out[..., 0]                           # (n_agents,)
-            a_wait_s   = (torch.sigmoid(_mu_raw) * _wait_max).numpy()  # greedy = mean
+            _mu_raw, _log_sigma = wait_out.unbind(-1)                   # each (n_agents,)
+            _mu        = torch.sigmoid(_mu_raw) * _wait_max
+            _sigma     = torch.exp(_log_sigma).clamp(0.1, _wait_max / 2)
+            _dist_w    = torch.distributions.Normal(_mu, _sigma)
+            a_wait_s   = _dist_w.rsample().clamp(0.0, _wait_max).numpy()  # (n_agents,)
         else:
             a_wait_s = None
-            a_wait   = torch.argmax(wait_out, dim=-1).numpy()      # (n_agents,) bin idx
+            a_wait   = torch.distributions.Categorical(logits=wait_out).sample().numpy()  # (n_agents,)
 
     predicted_positions = []
     for i, (agent, pos_idx) in enumerate(zip(sim.agents.values(), a_pos)):
@@ -978,7 +993,34 @@ def run_policy_step(sim, policy, free_positions: np.ndarray, obs: dict,
         )
         predicted_positions.append((float(sx), float(sy)))
 
+    return predicted_positions
+
+
+def run_policy_step(sim, policy, free_positions: np.ndarray, obs: dict,
+                    wait_times: list | None = None,
+                    wait_mode: str | None = None,
+                    pre_exe_hook=None) -> list:
+    """Apply policy greedily, inject subgoals, then start MP and EXE.
+
+    Replicates exactly FrodoGymWrapper.step() up to (but not including) the
+    simulation loop — the setup phase that is identical between training and
+    GUI evaluation.  Use this whenever the sim is already running in real-time
+    (GUI) and you just need the one-shot subgoal assignment.
+
+    For step-by-step GUI workflows use ``predict_subgoals()`` instead and call
+    ``sim.start_mp()`` / ``sim.start_exe()`` manually.
+
+    wait_times:    list of wait durations in seconds, one per bin (discrete) or
+                   used only for wait_max (continuous).  Defaults to WAIT_TIMES.
+    wait_mode:     'discrete' or 'continuous'; inferred from policy.wait_mode if None.
+    pre_exe_hook:  optional callable() invoked after start_mp() but before
+                   start_exe() — use to take a screenshot of the initial state.
+    """
+    predicted_positions = predict_subgoals(sim, policy, free_positions, obs,
+                                           wait_times=wait_times, wait_mode=wait_mode)
     sim.start_mp()
+    if pre_exe_hook is not None:
+        pre_exe_hook()
     sim.start_exe()
 
     return predicted_positions

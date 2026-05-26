@@ -84,13 +84,13 @@ def build_gui(gui: ThesisGUI) -> None:
     # ── Task Assignment ────────────────────────────────────────────
 
     page2.addWidget(Button(text="Central TA", callback=Callback(
-        function=gui.sim.start_ta,
+        function=gui.start_ta_and_show,
         inputs={'strategy': StrategyType.HUNGARIAN},
         discard_inputs=True,
     )), height=widget_height, width=widget_width)
 
     page2.addWidget(Button(text="Local TA", callback=Callback(
-        function=gui.sim.start_ta,
+        function=gui.start_ta_and_show,
         inputs={'strategy': StrategyType.GREEDY_NEAREST},
         discard_inputs=True,
     )), height=widget_height, width=widget_width)
@@ -103,8 +103,10 @@ def build_gui(gui: ThesisGUI) -> None:
         discard_inputs=True,
     )), height=widget_height, width=widget_width)
 
+    # "1 SG" — staged step: predict subgoals + show markers (no MP, no EXE).
+    # Use 'Start MP' then 'Start Execution' as separate follow-up steps.
     page2.addWidget(Button(text="1 Subgoal", callback=Callback(
-        function=gui.run_rl_episode,
+        function=gui.predict_and_show_subgoals,
         inputs={},
         discard_inputs=True,
     )), height=widget_height, width=widget_width)
@@ -112,13 +114,13 @@ def build_gui(gui: ThesisGUI) -> None:
     # ── Motion Planning & Execution ────────────────────────────────
 
     page2.addWidget(Button(text="Start MP", callback=Callback(
-        function=gui.sim.start_mp,
+        function=gui.start_mp_and_show,
         inputs={},
         discard_inputs=True,
     )), height=widget_height, width=widget_width)
 
     page2.addWidget(Button(text="Start Execution", callback=Callback(
-        function=gui.sim.start_exe,
+        function=gui.start_exe_with_recording,
         inputs={},
         discard_inputs=True,
     )), height=widget_height, width=widget_width)

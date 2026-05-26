@@ -39,7 +39,7 @@ class OMPLPlannerConfig:
     # errors and minor disturbances don't push the agent past the limits.
     bezier_safety_factor: float = 0.66
     timelimit: float = 10.0
-    query_timelimit: float = 0.0   # 0 = pure query (no roadmap growth); increase if solve fails due to sparse roadmap
+    query_timelimit: float = 1.0   # seconds OMPL may spend connecting start/goal to roadmap; 0 terminates immediately
     roadmap_time: float = 300.0    # invest here: denser roadmap = better paths for all queries
     planner: str = 'rrt_connect'
     goal_bias: float = 0.1
@@ -358,10 +358,11 @@ class OMPLSmoothPathPlanner:
         prm.setProblemDefinition(pdef)
         solved = prm.solve(ob.timedPlannerTerminationCondition(self.config.query_timelimit))  # type: ignore[attr-defined]
         result = bool(solved and pdef.hasExactSolution())
-        if not result and self.config.query_timelimit == 0.0:
+        if not result:
             warnings.warn(
-                'PRM* query failed with query_timelimit=0 — roadmap may be too sparse near '
-                'this start/goal. Consider increasing roadmap_time or query_timelimit.',
+                f'PRM* query failed with query_timelimit={self.config.query_timelimit} — '
+                'roadmap may be too sparse near this start/goal. '
+                'Consider increasing roadmap_time or query_timelimit.',
                 stacklevel=3,
             )
         return result
