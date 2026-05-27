@@ -90,7 +90,7 @@ ALL_RUNS: dict[str, tuple[str, str, int, pathlib.Path | None]] = {
 
 from master_thesis.modules.subgoal_predictor.train_subgoal import (
     FrodoGymWrapper, WAIT_TIMES,
-    subgoal_nn_mlp, subgoal_gnn_base, subgoal_bipartite_gnn,
+    subgoal_nn_mlp, subgoal_gnn_global, subgoal_gnn_local,
 )
 
 # ── Architecture detection ────────────────────────────────────────────────────
@@ -124,9 +124,9 @@ class _LegacyMLP(torch.nn.Module):
 def _detect_arch(policy_state: dict):
     keys = set(policy_state)
     if 'enc_psi.weight' in keys:
-        return subgoal_bipartite_gnn, 'Bipartite GNN'
+        return subgoal_gnn_local, 'Bipartite GNN'
     if 'node_enc.weight' in keys:
-        return subgoal_gnn_base, 'Hom. GNN'
+        return subgoal_gnn_global, 'Hom. GNN'
     if 'trunk.0.weight' not in keys:
         return _LegacyMLP, 'MLP (legacy)'
     return subgoal_nn_mlp, 'MLP'

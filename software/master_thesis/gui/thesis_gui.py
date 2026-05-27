@@ -630,7 +630,7 @@ class ThesisGUI:
         """Load checkpoint, return (policy, free_positions, n_gaps) or None on failure."""
         import torch
         from master_thesis.modules.subgoal_predictor.train_subgoal import (
-            subgoal_nn_mlp, subgoal_gnn_base, subgoal_bipartite_gnn, WAIT_TIMES,
+            subgoal_nn_mlp, subgoal_gnn_global, subgoal_gnn_local, WAIT_TIMES,
             latest_subgoal_checkpoint,
         )
 
@@ -681,9 +681,9 @@ class ThesisGUI:
         # Detect architecture from checkpoint key signatures.
         _keys = ckpt['policy']
         if 'node_enc.weight' in _keys:
-            _PolicyCls = subgoal_gnn_base
+            _PolicyCls = subgoal_gnn_global
         elif 'enc_psi.weight' in _keys:
-            _PolicyCls = subgoal_bipartite_gnn
+            _PolicyCls = subgoal_gnn_local
         else:
             _PolicyCls = subgoal_nn_mlp
         policy = _PolicyCls(
