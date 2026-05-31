@@ -1,0 +1,14 @@
+run_type: resume
+
+# ── Required ─────────────────────────────────────────────────
+n_updates: 500              # how many MORE gradient updates to run
+initial_weights: master_thesis/modules/subgoal_predictor/checkpoints/my_run_latest.pt
+
+# ── Optional I/O overrides ───────────────────────────────────
+# All training hparams (lr, algo, arch, …) are restored from the checkpoint.
+# Only I/O and bookkeeping can be meaningfully overridden here.
+save_dir: master_thesis/modules/subgoal_predictor/checkpoints
+log_dir: master_thesis/modules/subgoal_predictor/runs
+record: false
+stage: null
+run_name_override: null

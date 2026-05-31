@@ -1,0 +1,15 @@
+run_type: evaluate
+
+# ── Required ─────────────────────────────────────────────────
+n_episodes: 200             # total rollout episodes to collect
+initial_weights: master_thesis/modules/subgoal_predictor/checkpoints/my_run_best.pt
+
+# ── Output ───────────────────────────────────────────────────
+eval_out: master_thesis/modules/subgoal_predictor/eval_results/my_run.npz
+
+# ── Environment (must match the training scenario) ───────────
+scenario: rl_5n_random_2x2
+arch: gnn
+wait_mode: discrete
+ompl_timelimit: 10.0
+batch_size: 1

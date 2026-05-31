@@ -1,116 +1,89 @@
-"""
-config_loader.py
-----------------
-Loads a training config YAML and returns a flat dict of hyperparameters
-whose keys match the parameter names of train() in train_subgoal.py.
-
-Usage
------
-    from master_thesis.modules.subgoal_predictor.training_configs.config_loader import load_training_config
-
-    hparams = load_training_config("training_configs/my_run.yaml")
-    train(**hparams)
-
-YAML key names follow the train() signature exactly.  The only exception is
-`wait_times`, which maps to the module-level WAIT_TIMES list in train_subgoal.py
-and must be handled by the caller.
-
-Precedence when used alongside argparse:
-    CLI explicit flags  >  YAML values  >  argparse defaults
-"""
-
 import yaml
 from pathlib import Path
 
-# Keys that train() requires (no default value) — config must supply them.
-_REQUIRED = ('n_updates', 'batch_size')
+_N = type(None)
 
-# All keys that load_training_config accepts and their expected Python types.
-# Used for type-checking and early error messages.
-_FIELD_TYPES: dict[str, type | tuple] = {
-    'n_updates':            int,
-    'batch_size':           int,
-    'max_steps':            int,
-    'log_dir':              str,
-    'save_dir':             str,
-    'initial_weights':      (str, type(None)),
-    'save_every':           int,
-    'run_name_override':    (str, type(None)),
-    'resume':               bool,
-    'record':               bool,
-    'eval_out':             (str, type(None)),
-    'scenario':             str,
-    'n_subgoals':           int,
-    'ompl_timelimit':       (int, float),
-    'wait_mode':            str,
-    'skip_penalty':         (int, float),
-    'failed_plan_penalty':  (int, float),
-    'arch':                 str,
-    'algo':                 str,
-    'lr':                   (int, float),
-    'lr_end':               (int, float, type(None)),
-    'lr_schedule':          str,
-    'entropy_coeff_pos':    (int, float),
-    'entropy_coeff_wait':   (int, float),
-    'diversity_sigma':      (int, float),
-    'n_workers':            int,
-    'stage':                (str, type(None)),
-    'evaluate':             bool,
-    'wait_times':           (list, type(None)),   # handled separately by caller
+_SHARED = {
+    'scenario':       str,
+    'arch':           str,
+    'wait_mode':      str,
+    'ompl_timelimit': (int, float),
+    'n_workers':      int,
+    'wait_times':     (list, _N),
+}
+
+_TRAIN = _SHARED | {
+    'n_updates':          int,
+    'batch_size':         int,
+    'max_steps':          int,
+    'log_dir':            str,
+    'save_dir':           str,
+    'initial_weights':    (str, _N),
+    'run_name_override':  (str, _N),
+    'record':             bool,
+    'algo':               str,
+    'lr':                 (int, float),
+    'lr_end':             (int, float, _N),
+    'lr_schedule':        str,
+    'entropy_coeff_pos':  (int, float),
+    'entropy_coeff_wait': (int, float),
+    'diversity_sigma':    (int, float),
+    'stage':              (str, _N),
+    'skip_penalty':       (int, float),
+    'failed_plan_penalty':(int, float),
+}
+
+_RESUME = _SHARED | {
+    'n_updates':         int,
+    'initial_weights':   str,
+    'save_dir':          str,
+    'log_dir':           str,
+    'save_every':        int,
+    'record':            bool,
+    'stage':             (str, _N),
+    'run_name_override': (str, _N),
+}
+
+_EVALUATE = _SHARED | {
+    'n_episodes':         int,
+    'initial_weights':    str,
+    'eval_out':           (str, _N),
+    'batch_size':         int,
+    'max_steps':          int,
+    'diversity_sigma':    (int, float),
+    'skip_penalty':       (int, float),
+    'failed_plan_penalty':(int, float),
+}
+
+_SCHEMA   = {'train': _TRAIN, 'resume': _RESUME, 'evaluate': _EVALUATE}
+_REQUIRED = {
+    'train':    ('n_updates', 'batch_size'),
+    'resume':   ('n_updates', 'initial_weights'),
+    'evaluate': ('n_episodes', 'initial_weights'),
 }
 
 
 def load_training_config(path: str | Path) -> dict:
-    """Load a training config YAML and return a validated hparam dict.
+    """Load and validate a run config YAML. Returns a flat dict including run_type."""
+    raw = yaml.safe_load(Path(path).open())
 
-    Parameters
-    ----------
-    path:
-        Path to the YAML file.
+    run_type = raw.get('run_type')
+    if run_type not in _SCHEMA:
+        raise ValueError(f"'run_type' must be one of {list(_SCHEMA)}, got {run_type!r}")
 
-    Returns
-    -------
-    dict
-        Flat dict whose keys match train() parameter names.
-        Only keys present in the file are returned — callers apply their
-        own defaults for missing keys.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the YAML file does not exist.
-    KeyError
-        If a required field (n_updates, batch_size) is missing.
-    TypeError
-        If a field value has an unexpected type.
-    """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Config file not found: '{path}'")
-
-    with path.open() as f:
-        raw = yaml.safe_load(f)
-
-    if not isinstance(raw, dict):
-        raise ValueError(f"Expected a YAML mapping at the top level, got {type(raw).__name__}")
-
-    # Validate required fields
-    for key in _REQUIRED:
+    for key in _REQUIRED[run_type]:
         if key not in raw:
-            raise KeyError(f"Config '{path}' is missing required field: '{key}'")
+            raise KeyError(f"[{run_type}] missing required field: '{key}'")
 
-    # Type-check known fields; warn on unknown keys
-    hparams: dict = {}
+    schema = _SCHEMA[run_type]
+    out = {'run_type': run_type}
     for key, value in raw.items():
-        if key not in _FIELD_TYPES:
-            import warnings
-            warnings.warn(f"Unknown config key '{key}' will be ignored.", stacklevel=2)
+        if key == 'run_type':
             continue
-        expected = _FIELD_TYPES[key]
-        if not isinstance(value, expected):
-            raise TypeError(
-                f"Config field '{key}': expected {expected}, got {type(value).__name__} ({value!r})"
-            )
-        hparams[key] = value
+        if key not in schema:
+            raise KeyError(f"[{run_type}] unknown field: '{key}'")
+        if not isinstance(value, schema[key]):
+            raise TypeError(f"[{run_type}] '{key}': got {type(value).__name__} ({value!r})")
+        out[key] = value
 
-    return hparams
+    return out
