@@ -89,7 +89,7 @@ ALL_RUNS: dict[str, tuple[str, str, int, pathlib.Path | None]] = {
 # ── Imports ───────────────────────────────────────────────────────────────────
 
 from master_thesis.modules.subgoal_predictor.train_subgoal import (
-    FrodoGymWrapper, WAIT_TIMES,
+    BilbolabGymWrapper, WAIT_TIMES,
     subgoal_nn_mlp, subgoal_gnn_global, subgoal_gnn_local,
 )
 
@@ -237,7 +237,7 @@ def evaluate(run_key: str, n_episodes: int, max_steps: int | None, out_dir: path
         n_subgoals = 1
 
     def _make_env():
-        e = FrodoGymWrapper(
+        e = BilbolabGymWrapper(
             scenario=scenario,
             n_subgoals=n_subgoals,
             max_steps=max_steps,
