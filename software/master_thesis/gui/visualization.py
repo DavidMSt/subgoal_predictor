@@ -43,47 +43,8 @@ def _add_babylon_object(gui: ThesisGUI, obj) -> None:
 
 
 def toggle_action_grid(gui: ThesisGUI) -> None:
-    """Toggle display of the discretized subgoal action-space grid as dots."""
-    if gui._action_grid_dots:
-        for dot in gui._action_grid_dots:
-            try:
-                gui.babylon_visualization.removeObject(dot)
-            except Exception:
-                pass
-        gui._action_grid_dots.clear()
-        gui.logger.info("Action grid hidden")
-        return
-
-    scenario = gui._last_scenario
-    if scenario is None:
-        gui.logger.warning("Load a scenario first")
-        return
-
-    gap_geo = getattr(scenario, 'gap_geometry', None)
-    if gap_geo is None:
-        gui.logger.warning("Scenario has no gap_geometry — cannot build action grid")
-        return
-
-    from master_thesis.modules.subgoal_predictor.train_subgoal import build_free_positions
-    positions = build_free_positions(gui.sim, gap_geo, grid_stride=0.15,
-                                     subgoal_limits=getattr(scenario, 'subgoal_limits', None))
-
-    for x, y in positions:
-        dot = CircleDrawing(
-            f"agrid_{len(gui._action_grid_dots)}",
-            x=float(x), y=float(y),
-            radius=0.025,
-            fill_color=[0.95, 0.75, 0.1, 0.85],
-            border_color=[1.0, 0.9, 0.2, 1.0],
-            border_width=0.005,
-        )
-        try:
-            gui.babylon_visualization.addObject(dot)
-        except ValueError:
-            pass
-        gui._action_grid_dots.append(dot)
-
-    gui.logger.info(f"Action grid shown: {len(gui._action_grid_dots)} positions")
+    """Removed: the subgoal action space is now fully continuous — no discrete grid exists."""
+    gui.logger.info("Action grid display is no longer available (continuous action space)")
 
 
 def show_trajectories(gui: ThesisGUI) -> None:

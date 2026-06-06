@@ -6,21 +6,24 @@ import os
 import glob
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 from master_thesis.modules.subgoal_predictor.subgoal_architectures import (
-    subgoal_gnn_global, subgoal_gnn_local, WAIT_TIMES as DEFAULT_WAIT_TIMES,
+    subgoal_gnn_global, subgoal_gnn_local,
 )
 
 _SUBGOAL_DIR = 'master_thesis/modules/subgoal_predictor'
 
+# Sigma clamp bounds used consistently across training, inference, and evaluation.
+_POS_SIGMA_MIN,  _POS_SIGMA_MAX  = 0.05, 5.0
+_WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX = 0.10, 5.0
 
-def _make_policy(arch: str, n: int, n_gaps: int, n_positions: int,
-                 n_wait_bins: int, wait_mode: str):
+
+def _make_policy(arch: str, n: int, n_gaps: int):
+    """Instantiate a policy network by architecture name."""
     if arch == 'bipartite':
-        return subgoal_gnn_local(n=n, n_gaps=n_gaps, n_positions=n_positions,
-                                 n_wait_bins=n_wait_bins)
-    return subgoal_gnn_global(n=n, n_gaps=n_gaps, n_positions=n_positions,
-                              n_wait_bins=n_wait_bins)
+        return subgoal_gnn_local(n=n, n_gaps=n_gaps)
+    return subgoal_gnn_global(n=n, n_gaps=n_gaps)
 
 
 def latest_subgoal_checkpoint(checkpoints_dir: str | None = None) -> str | None:
@@ -28,49 +31,6 @@ def latest_subgoal_checkpoint(checkpoints_dir: str | None = None) -> str | None:
     directory = checkpoints_dir or f'{_SUBGOAL_DIR}/checkpoints'
     files = glob.glob(f'{directory}/*.pt')
     return max(files, key=os.path.getmtime) if files else None
-
-
-def build_free_positions(sim, gap_geometry: dict, grid_stride: float,
-                         subgoal_limits=None) -> np.ndarray:
-    """Collision-free grid positions on the agents' side of the wall.
-
-    Covers the full arena height above y_wall.  Each candidate is rejected if
-    any cell within the robot's bounding-circle radius is occupied — matching
-    OMPL's geometric collision checker.
-    """
-    from master_thesis.containers.general_containers.frodo_agent_container import FRODO_Agent_Config
-    env      = sim.environment
-    env_cont = env.environment_container
-    grid     = env_cont.occupancy_grid_static
-    n_y, n_x = grid.shape
-    res      = env_cont.grid_resolution
-
-    if subgoal_limits is not None:
-        x_min, x_max = float(subgoal_limits[0][0]), float(subgoal_limits[0][1])
-        y_min, y_max = float(subgoal_limits[1][0]), float(subgoal_limits[1][1])
-    else:
-        x_min, x_max = env_cont.limits[0]
-        y_min, y_max = env_cont.limits[1]
-
-    y_wall       = float(gap_geometry['y_wall'])
-    robot_radius = float(np.hypot(FRODO_Agent_Config().length / 2, FRODO_Agent_Config().width / 2))
-    pad          = int(np.ceil(robot_radius / res))
-
-    free = []
-    x = x_min + grid_stride / 2
-    while x < x_max:
-        y = y_min + grid_stride / 2
-        while y < y_max:
-            if y > y_wall:
-                gy, gx = env.world_to_grid(x, y)
-                if 0 <= gy < n_y and 0 <= gx < n_x and not grid[gy, gx]:
-                    gy_lo, gy_hi = max(0, gy - pad), min(n_y, gy + pad + 1)
-                    gx_lo, gx_hi = max(0, gx - pad), min(n_x, gx + pad + 1)
-                    if not grid[gy_lo:gy_hi, gx_lo:gx_hi].any():
-                        free.append([x, y])
-            y += grid_stride
-        x += grid_stride
-    return np.array(free, dtype=np.float32)
 
 
 def build_subgoal_obs(sim, gap_geometry: dict) -> dict:
@@ -96,8 +56,8 @@ def build_subgoal_obs(sim, gap_geometry: dict) -> dict:
     goal_rel       = goal_abs - agent_xy
     neighbor_goals = np.stack([np.delete(goal_abs, i, axis=0) - agent_xy[i] for i in range(n)])
 
-    y_wall     = float(gap_geometry['y_wall'])
-    gaps_list  = gap_geometry['gaps']
+    y_wall      = float(gap_geometry['y_wall'])
+    gaps_list   = gap_geometry['gaps']
     gap_vectors = np.array([
         [v for g in gaps_list for v in (float(g['x_center']) - c.x, y_wall - c.y)]
         for c in agent_conts
@@ -112,46 +72,61 @@ def build_subgoal_obs(sim, gap_geometry: dict) -> dict:
     }
 
 
-def predict_subgoals(sim, policy, free_positions: np.ndarray, obs: dict,
-                     wait_times: list | None = None,
-                     wait_mode:  str  | None = None) -> list:
-    """Apply policy and inject subgoals into each agent's SGM. Does not start MP/EXE."""
-    _wt   = wait_times if wait_times is not None else DEFAULT_WAIT_TIMES
-    _wm   = wait_mode  if wait_mode  is not None else getattr(policy, 'wait_mode', 'discrete')
+def _decode_policy_output(pos_raw, wait_raw, *, sample: bool = True):
+    """Sample (or take the mean of) the continuous policy output distributions.
+
+    Args:
+        pos_raw:  (..., N, 4) tensor — (mu_x, mu_y, log_sx, log_sy)
+        wait_raw: (..., N, 2) tensor — (mu_wait, log_sw)
+        sample:   If True, draw a sample; if False, return the distribution mean.
+
+    Returns:
+        xy:     (..., N, 2) numpy array — (x, y) subgoal positions
+        wait_s: (..., N)   numpy array — wait time in seconds (≥ 0)
+    """
+    mu_xy    = pos_raw[..., :2]
+    sigma_xy = torch.exp(pos_raw[..., 2:]).clamp(_POS_SIGMA_MIN, _POS_SIGMA_MAX)
+    mu_w     = F.softplus(wait_raw[..., 0])
+    sigma_w  = torch.exp(wait_raw[..., 1]).clamp(_WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX)
+
+    if sample:
+        xy     = torch.distributions.Normal(mu_xy, sigma_xy).sample().numpy()
+        wait_s = torch.distributions.Normal(mu_w, sigma_w).sample().clamp(min=0.0).numpy()
+    else:
+        xy     = mu_xy.numpy()
+        wait_s = mu_w.numpy()
+
+    return xy, wait_s
+
+
+def predict_subgoals(sim, policy, obs: dict, *, sample: bool = True) -> list:
+    """Apply policy and inject subgoals into each agent's SGM.  Does not start MP/EXE."""
+    lim = sim.environment.environment_container.limits
 
     with torch.no_grad():
-        pos_logits, wait_out = policy(
+        pos_raw, wait_raw = policy(
             torch.as_tensor(obs['agent_psi'],      dtype=torch.float32),
             torch.as_tensor(obs['neighbor_rel'],   dtype=torch.float32).flatten(-2),
             torch.as_tensor(obs['goal_rel'],       dtype=torch.float32),
             torch.as_tensor(obs['gap_vectors'],    dtype=torch.float32),
             torch.as_tensor(obs['neighbor_goals'], dtype=torch.float32).flatten(-2),
         )
-        a_pos = torch.distributions.Categorical(logits=pos_logits).sample().numpy()
-
-        if _wm == 'continuous':
-            _wait_max            = float(max(_wt))
-            _mu_raw, _log_sigma  = wait_out.unbind(-1)
-            _mu                  = torch.sigmoid(_mu_raw) * _wait_max
-            _sigma               = torch.exp(_log_sigma).clamp(0.1, _wait_max / 2)
-            a_wait_s             = torch.distributions.Normal(_mu, _sigma).rsample().clamp(0.0, _wait_max).numpy()
-        else:
-            a_wait               = torch.distributions.Categorical(logits=wait_out).sample().numpy()
+        a_xy, a_wait_s = _decode_policy_output(pos_raw, wait_raw, sample=sample)
 
     predicted = []
-    for i, (agent, pos_idx) in enumerate(zip(sim.agents.values(), a_pos)):
-        sx, sy     = free_positions[int(pos_idx)]
-        wait_ticks = int(float(a_wait_s[i]) / sim.Ts) if _wm == 'continuous' else int(_wt[int(a_wait[i])] / sim.Ts)
-        agent.sgm.set_subgoals([np.array([float(sx), float(sy), 0.0])], wait_ticks=[wait_ticks])
-        predicted.append((float(sx), float(sy)))
+    for i, agent in enumerate(sim.agents.values()):
+        sx         = float(np.clip(a_xy[i, 0], lim[0][0], lim[0][1]))
+        sy         = float(np.clip(a_xy[i, 1], lim[1][0], lim[1][1]))
+        wait_ticks = max(0, int(float(a_wait_s[i]) / sim.Ts))
+        agent.sgm.set_subgoals([np.array([sx, sy, 0.0])], wait_ticks=[wait_ticks])
+        predicted.append((sx, sy))
     return predicted
 
 
-def run_policy_step(sim, policy, free_positions: np.ndarray, obs: dict,
-                    wait_times=None, wait_mode=None, pre_exe_hook=None) -> list:
+def run_policy_step(sim, policy, obs: dict, *, sample: bool = True,
+                    pre_exe_hook=None) -> list:
     """predict_subgoals → start_mp → (optional hook) → start_exe."""
-    predicted = predict_subgoals(sim, policy, free_positions, obs,
-                                 wait_times=wait_times, wait_mode=wait_mode)
+    predicted = predict_subgoals(sim, policy, obs, sample=sample)
     sim.start_mp()
     if pre_exe_hook is not None:
         pre_exe_hook()

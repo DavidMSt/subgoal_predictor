@@ -9,7 +9,7 @@ Single-cell usage (one terminal / tmux pane per cell):
     python -m master_thesis.document_figures.inference.run_eval --run C_0sg
     python -m master_thesis.document_figures.inference.run_eval --run C_bi_gnn
     python -m master_thesis.document_figures.inference.run_eval --run D_0sg
-    python -m master_thesis.document_figures.inference.run_eval --run D_bi_gnn 
+    python -m master_thesis.document_figures.inference.run_eval --run D_bi_gnn
 
 Or launch all four in parallel — see launch_eval.sh.
 
@@ -24,6 +24,7 @@ import pathlib
 import time
 import numpy as np
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 from simulation.core.environment import BASE_ENVIRONMENT_ACTIONS
 
@@ -88,91 +89,48 @@ ALL_RUNS: dict[str, tuple[str, str, int, pathlib.Path | None]] = {
 
 # ── Imports ───────────────────────────────────────────────────────────────────
 
-from master_thesis.modules.subgoal_predictor.train_subgoal import (
-    BilbolabGymWrapper, WAIT_TIMES,
-    subgoal_nn_mlp, subgoal_gnn_global, subgoal_gnn_local,
+from master_thesis.modules.subgoal_predictor.rl_environment import BilbolabGymWrapper
+from master_thesis.modules.subgoal_predictor.inference import (
+    _make_policy, _POS_SIGMA_MIN, _POS_SIGMA_MAX, _WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX,
 )
-
-# ── Architecture detection ────────────────────────────────────────────────────
-
-class _LegacyMLP(torch.nn.Module):
-    """MLP architecture used before the trunk was added (stage1/stage2 checkpoints).
-
-    Old design: four encoders (each out_dim), concatenated → 4*out_dim → heads directly.
-    No shared trunk. out_dim inferred from encoder weight shapes in checkpoint.
-    """
-    def __init__(self, n, n_gaps, out_dim, n_positions, n_wait_bins, wait_mode):
-        super().__init__()
-        self.enc_agent     = torch.nn.Linear(1,            out_dim)
-        self.enc_neighbors = torch.nn.Linear((n - 1) * 2, out_dim)
-        self.enc_goal      = torch.nn.Linear(2,            out_dim)
-        self.enc_gap       = torch.nn.Linear(n_gaps * 2,  out_dim)
-        self.wait_mode = wait_mode
-        self.pos_head  = torch.nn.Linear(4 * out_dim, n_positions)
-        self.wait_head = torch.nn.Linear(4 * out_dim, 2 if wait_mode == 'continuous' else n_wait_bins)
-
-    def forward(self, agent_psi, neighbor_rel, goal_rel, gap_vectors, neighbor_goals=None):
-        h = torch.cat([
-            torch.relu(self.enc_agent(agent_psi)),
-            torch.relu(self.enc_neighbors(neighbor_rel)),
-            torch.relu(self.enc_goal(goal_rel)),
-            torch.relu(self.enc_gap(gap_vectors)),
-        ], dim=-1)
-        return self.pos_head(h), self.wait_head(h)
-
-
-def _detect_arch(policy_state: dict):
-    keys = set(policy_state)
-    if 'enc_psi.weight' in keys:
-        return subgoal_gnn_local, 'Bipartite GNN'
-    if 'node_enc.weight' in keys:
-        return subgoal_gnn_global, 'Hom. GNN'
-    if 'trunk.0.weight' not in keys:
-        return _LegacyMLP, 'MLP (legacy)'
-    return subgoal_nn_mlp, 'MLP'
 
 # ── Policy loading ────────────────────────────────────────────────────────────
 
 def load_policy(path: pathlib.Path):
-    """Return (policy, free_positions, wait_times, wait_mode)."""
-    ckpt = torch.load(path, map_location='cpu', weights_only=False)
-    PolicyCls, arch_name = _detect_arch(ckpt['policy'])
-    hp         = ckpt.get('hparams', {})
-    n_agents   = ckpt['n_agents']
-    n_gaps     = ckpt.get('n_gaps', 1)
-    free_pos   = ckpt['free_positions']
-    wait_times = ckpt.get('wait_times', WAIT_TIMES)
-    wait_mode  = hp.get('wait_mode', 'discrete')
-    n_pos      = len(free_pos)
-    n_wait_bins = ckpt['policy']['wait_head.bias'].shape[0]
-    extra = {}
-    if PolicyCls is _LegacyMLP:
-        # infer out_dim from encoder weight (pos_head input = 4*out_dim)
-        extra['out_dim'] = ckpt['policy']['enc_agent.weight'].shape[0]
+    """Load a continuous-head checkpoint. Returns policy object (ready for greedy_action)."""
+    ckpt   = torch.load(path, map_location='cpu', weights_only=False)
+    hp     = ckpt.get('hparams', {})
+    n_agents = ckpt['n_agents']
+    n_gaps   = ckpt.get('n_gaps', 1)
+    _keys    = ckpt['policy']
 
-    policy = PolicyCls(
-        n=n_agents, n_gaps=n_gaps,
-        n_positions=n_pos, n_wait_bins=n_wait_bins,
-        wait_mode=wait_mode,
-        **extra,
-    )
+    if 'enc_psi.weight' in _keys:
+        arch_name, arch = 'Bipartite GNN', 'bipartite'
+    elif 'node_enc.weight' in _keys:
+        arch_name, arch = 'Hom. GNN', 'gnn'
+    else:
+        arch_name, arch = 'MLP', 'mlp'
+
+    policy = _make_policy(arch, n=n_agents, n_gaps=n_gaps)
     policy.load_state_dict(ckpt['policy'])
     policy.eval()
 
     print(f'    arch={arch_name}  n_agents={n_agents}  n_gaps={n_gaps}'
-          f'  n_pos={n_pos}  wait_mode={wait_mode!r}'
-          f'  trained_on={hp.get("scenario", "?")!r}')
-    return policy, free_pos, wait_times, wait_mode
+          f'  [continuous]  trained_on={hp.get("scenario", "?")!r}')
+
+    return policy
+
 
 # ── Greedy action ─────────────────────────────────────────────────────────────
 
-def greedy_action(policy, obs, wait_times, wait_mode, free_positions=None):
+def greedy_action(policy, obs):
+    """Decode policy output greedily (distribution mean, no sampling)."""
     def _t(key, flatten_last=False):
         x = torch.as_tensor(obs[key], dtype=torch.float32).unsqueeze(0)
         return x.flatten(-2) if flatten_last else x
 
     with torch.no_grad():
-        pos_logits, wait_out = policy(
+        pos_out, wait_out = policy(
             _t('agent_psi'),
             _t('neighbor_rel',   flatten_last=True),
             _t('goal_rel'),
@@ -180,40 +138,33 @@ def greedy_action(policy, obs, wait_times, wait_mode, free_positions=None):
             _t('neighbor_goals', flatten_last=True),
         )
 
-    pos_logits_sq = pos_logits.squeeze(0)   # (N, n_pos)
-    a_pos = pos_logits_sq.argmax(-1).numpy()
+    pos_sq  = pos_out.squeeze(0)   # (N, 4)
+    wait_sq = wait_out.squeeze(0)  # (N, 2)
 
-    if wait_mode == 'continuous':
-        mu_raw = wait_out.squeeze(0)[..., 0]
-        a_wait = (torch.sigmoid(mu_raw) * float(max(wait_times))).numpy()
-        entropy_wait = float(torch.distributions.Normal(
-            torch.sigmoid(mu_raw) * float(max(wait_times)),
-            torch.ones_like(mu_raw),
-        ).entropy().mean())
-    else:
-        wait_logits = wait_out.squeeze(0)    # (N, n_bins)
-        a_wait = np.array(wait_times, dtype=float)[wait_logits.argmax(-1).numpy()]
-        entropy_wait = float(torch.distributions.Categorical(logits=wait_logits).entropy().mean())
+    mu_xy    = pos_sq[:, :2]
+    sigma_xy = torch.exp(pos_sq[:, 2:]).clamp(_POS_SIGMA_MIN, _POS_SIGMA_MAX)
+    mu_w     = F.softplus(wait_sq[:, 0])
+    sigma_w  = torch.exp(wait_sq[:, 1]).clamp(_WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX)
 
-    entropy_pos = float(torch.distributions.Categorical(logits=pos_logits_sq).entropy().mean())
+    sg_xy  = mu_xy.numpy()
+    a_wait = mu_w.numpy()
+
+    entropy_pos  = float(torch.distributions.Normal(mu_xy, sigma_xy).entropy().sum(-1).mean())
+    entropy_wait = float(torch.distributions.Normal(mu_w, sigma_w).entropy().mean())
+
+    action = np.concatenate([sg_xy, a_wait[:, None]], axis=-1).reshape(-1)  # (N*3,)
+
+    n         = len(sg_xy)
+    subgoal_spread = float(np.mean([
+        np.hypot(sg_xy[i, 0] - sg_xy[j, 0], sg_xy[i, 1] - sg_xy[j, 1])
+        for i in range(n) for j in range(i + 1, n)
+    ])) if n > 1 else 0.0
 
     wait_spread = float(a_wait.std())
     mean_wait   = float(a_wait.mean())
 
-    # mean pairwise distance between assigned subgoal positions (spatial spread)
-    if free_positions is not None:
-        sg_xy = free_positions[a_pos]        # (N, 2)
-        n = len(sg_xy)
-        subgoal_spread = float(np.mean([
-            np.hypot(sg_xy[i, 0] - sg_xy[j, 0], sg_xy[i, 1] - sg_xy[j, 1])
-            for i in range(n) for j in range(i + 1, n)
-        ])) if n > 1 else 0.0
-    else:
-        subgoal_spread = 0.0
-
-    action = np.stack([a_pos.astype(np.float32),
-                       a_wait.astype(np.float32)], axis=-1).reshape(-1)
     return action, wait_spread, mean_wait, subgoal_spread, entropy_pos, entropy_wait
+
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
@@ -228,27 +179,23 @@ def evaluate(run_key: str, n_episodes: int, max_steps: int | None, out_dir: path
     print(f'{"="*60}')
 
     if ckpt_path is None:
-        policy, free_pos_override, wait_times, wait_mode = None, None, WAIT_TIMES, 'discrete'
-        n_subgoals = 0
+        policy = None
         print('  Policy   : no-subgoal baseline')
     else:
         print(f'  Policy   : {ckpt_path.name}')
-        policy, free_pos_override, wait_times, wait_mode = load_policy(ckpt_path)
-        n_subgoals = 1
+        policy = load_policy(ckpt_path)
 
     def _make_env():
         e = BilbolabGymWrapper(
             scenario=scenario,
-            n_subgoals=n_subgoals,
             max_steps=max_steps,
-            wait_times=wait_times,
-            wait_mode=wait_mode,
             agent_log_level='ERROR',
             ompl_timelimit=10.0,
         )
         return e, e.sim.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT]
 
     env, output_phase = _make_env()
+    n_agents = env.n_agents
 
     terminated_l, makespan_l, n_failed_l = [], [], []
     n_reached_l, n_crossed_l, wall_time_l = [], [], []
@@ -310,16 +257,15 @@ def evaluate(run_key: str, n_episodes: int, max_steps: int | None, out_dir: path
 
             obs, _ = env.reset()
 
-            if free_pos_override is not None:
-                env._free_positions = free_pos_override
-
             if policy is not None:
                 action, spread, mean_wait, subgoal_spread, ent_pos, ent_wait = greedy_action(
-                    policy, obs, wait_times, wait_mode,
-                    free_positions=free_pos_override if free_pos_override is not None else env._free_positions,
+                    policy, obs,
                 )
             else:
-                action = np.array([0], dtype=np.int64)
+                # No-subgoal baseline: send zero action → subgoals at (0,0) with 0 wait,
+                # which OMPL either skips (planning failure → skip_subgoal) or routes through.
+                # Agents then proceed directly to their assigned tasks.
+                action = np.zeros(n_agents * 3, dtype=np.float32)
                 spread = mean_wait = subgoal_spread = ent_pos = ent_wait = 0.0
 
             ep_xy: list[tuple[float, float]] = []

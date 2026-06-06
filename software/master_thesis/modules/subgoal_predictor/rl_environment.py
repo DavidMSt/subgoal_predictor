@@ -4,24 +4,22 @@ from gymnasium import spaces
 from pathlib import Path
 
 from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
-from master_thesis.containers.general_containers.frodo_agent_container import FRODO_Agent_Config
 from master_thesis.scenarios.testbed_importer import load_scenario_yaml
 
 _SCENARIOS_DIR = Path(__file__).parent.parent.parent / 'scenarios'
-
-# Reward shaping constants — fixed by design, not tuned per run.
-_ALPHA          = 0.3   # individual-time weight relative to makespan (terminated)
-_BETA           = 1.0   # distance penalty scale (truncated)
-_CROSSING_BONUS = 1.5   # per-agent reward for crossing the wall (truncated)
-_ENERGY_WEIGHT  = 2.0   # extra path-length penalty scale (truncated)
 
 
 class BilbolabGymWrapper(gym.Env):
     """Bandit-style subgoal-prediction gym wrapper.
 
-    At every reset the RL policy proposes one (x, y) subgoal per agent.
-    The simulation then runs for up to *max_steps* steps while agents
-    attempt to reach their subgoals, and a reward is computed.
+    At every reset the RL policy proposes one (x, y, wait_s) subgoal per agent.
+    The simulation then runs for up to *max_steps* steps while agents attempt to
+    reach their subgoals, and a reward is computed.
+
+    Action space: Box(-inf, inf, shape=(n_agents * 3,))
+        Flat vector of [x₀, y₀, w₀, x₁, y₁, w₁, ...] — continuous subgoal positions
+        (x, y) in world coordinates and wait time w in seconds per agent.
+        Positions are clipped to the scenario limits on decode; wait is clamped to ≥ 0.
     """
 
     def __init__(
@@ -29,13 +27,14 @@ class BilbolabGymWrapper(gym.Env):
         scenario: str,
         max_steps: int = 200,
         grid_resolution: float = 0.05,
-        grid_stride: float = 0.5,
         agent_log_level: str = 'WARNING',
+        alpha: float = 0.3,
+        beta: float = 1.0,
+        crossing_bonus: float = 1.5,
+        energy_weight: float = 2.0,
         diversity_sigma: float = 0.35,
         diversity_bonus: float = 1.5,
         ompl_timelimit: float = 10.0,
-        wait_times: list | None = None,
-        wait_mode: str = 'discrete',
         skip_penalty: float = 4.0,
         failed_plan_penalty: float = 0.0,
     ) -> None:
@@ -44,13 +43,14 @@ class BilbolabGymWrapper(gym.Env):
         self.scenario            = load_scenario_yaml((_SCENARIOS_DIR / f'{scenario}.yaml').read_text())
         self.n_agents            = self.scenario.n_agents_random or len(self.scenario.agents)
         self.max_steps           = max_steps
-        self.grid_stride         = grid_stride
         self.agent_log_level     = agent_log_level
+        self.alpha               = alpha
+        self.beta                = beta
+        self.crossing_bonus      = crossing_bonus
+        self.energy_weight       = energy_weight
         self.diversity_sigma     = diversity_sigma
         self.diversity_bonus     = diversity_bonus
         self.ompl_timelimit      = ompl_timelimit
-        self.wait_times          = wait_times
-        self.wait_mode           = wait_mode
         self.skip_penalty        = skip_penalty
         self.failed_plan_penalty = failed_plan_penalty
         self.n_gaps              = len(self.scenario.gap_geometry['gaps'])
@@ -59,8 +59,6 @@ class BilbolabGymWrapper(gym.Env):
         self.sim.logger.setLevel(agent_log_level)
         self.sim.environment.logger.setLevel(agent_log_level)
 
-        self._free_positions = None
-
         self.observation_space = spaces.Dict({
             'agent_psi':      spaces.Box(low=-np.pi, high=np.pi,   shape=(self.n_agents, 1),                        dtype=np.float32),
             'neighbor_rel':   spaces.Box(low=-np.inf, high=np.inf, shape=(self.n_agents, self.n_agents - 1, 2),     dtype=np.float32),
@@ -68,8 +66,9 @@ class BilbolabGymWrapper(gym.Env):
             'neighbor_goals': spaces.Box(low=-np.inf, high=np.inf, shape=(self.n_agents, self.n_agents - 1, 2),     dtype=np.float32),
             'gap_vectors':    spaces.Box(low=-np.inf, high=np.inf, shape=(self.n_agents, self.n_gaps * 2),          dtype=np.float32),
         })
-        self.action_space = spaces.MultiDiscrete(
-            np.array([[1, len(self.wait_times)]] * self.n_agents).flatten()
+        # Continuous: (x, y, wait_s) per agent, flat
+        self.action_space = spaces.Box(
+            low=-np.inf, high=np.inf, shape=(self.n_agents * 3,), dtype=np.float32,
         )
 
     # ------------------------------------------------------------------
@@ -96,7 +95,6 @@ class BilbolabGymWrapper(gym.Env):
         if not load_and_share_roadmap(self.sim, self.scenario.name):
             self.sim.logger.warning(f"No PRM* roadmap for '{self.scenario.name}' — build one first.")
 
-        self._build_free_positions()
         return self._get_obs(), {}
 
     # ------------------------------------------------------------------
@@ -153,25 +151,17 @@ class BilbolabGymWrapper(gym.Env):
         return obs, reward, terminated, truncated, info
 
     # ------------------------------------------------------------------
-    def _build_free_positions(self):
-        self._free_positions = build_free_positions(
-            self.sim, self.scenario.gap_geometry, self.grid_stride,
-            subgoal_limits=self.scenario.subgoal_limits,
-        )
-        self.action_space = spaces.MultiDiscrete(
-            np.array([[len(self._free_positions), len(self.wait_times)]] * self.n_agents).flatten()
-        )
-
     def _assign_subgoals(self, action: np.ndarray) -> list[tuple[float, float]]:
-        """Decode flat (pos_idx, wait) action per agent, inject subgoals, return positions."""
-        decoded = action.reshape(self.n_agents, 2)
+        """Decode flat (x, y, wait_s) action per agent, inject subgoals, return positions."""
+        decoded = action.reshape(self.n_agents, 3)
+        lim = self.scenario.limits
         positions = []
-        for agent, (a_pos, a_wait) in zip(self.sim.agents.values(), decoded):
-            sx, sy    = self._free_positions[int(a_pos)]
-            wait_tick = (int(float(a_wait) / self.sim.Ts) if self.wait_mode == 'continuous'
-                         else int(self.wait_times[int(a_wait)] / self.sim.Ts))
-            agent.sgm.set_subgoals([np.array([float(sx), float(sy), 0.0])], wait_ticks=[wait_tick])
-            positions.append((float(sx), float(sy)))
+        for agent, (sx, sy, wait_s) in zip(self.sim.agents.values(), decoded):
+            sx         = float(np.clip(sx, lim[0][0], lim[0][1]))
+            sy         = float(np.clip(sy, lim[1][0], lim[1][1]))
+            wait_ticks = max(0, int(float(wait_s) / self.sim.Ts))
+            agent.sgm.set_subgoals([np.array([sx, sy, 0.0])], wait_ticks=[wait_ticks])
+            positions.append((sx, sy))
         return positions
 
     def _get_obs(self) -> dict:
@@ -186,11 +176,7 @@ class BilbolabGymWrapper(gym.Env):
         predicted_positions: list[tuple[float, float]],
         agent_starts: list[tuple[float, float]],
         task_goals: list,
-        skip_penalty: float = 4.0,
-        failed_plan_penalty: float = 0.0,
-        n_failed_plans: int = 0,
-        diversity_bonus: float = 1.5,
-        diversity_sigma: float = 0.35,
+        n_failed_plans: int,
     ) -> float:
         """Reward signal.
 
@@ -208,9 +194,9 @@ class BilbolabGymWrapper(gym.Env):
             mean_indiv_frac = float(np.mean([t / self.max_steps for t in individual_times]))
             return (30.0
                     - 10.0 * makespan_frac
-                    - _ALPHA * 10.0 * mean_indiv_frac
-                    - skip_penalty * n_skipped
-                    - failed_plan_penalty * n_failed_plans)
+                    - self.alpha * 10.0 * mean_indiv_frac
+                    - self.skip_penalty * n_skipped
+                    - self.failed_plan_penalty * n_failed_plans)
 
         # --- truncated ----------------------------------------------------
         gap_geometry = self.scenario.gap_geometry
@@ -235,7 +221,7 @@ class BilbolabGymWrapper(gym.Env):
         repulsion = sum(
             float(np.exp(-np.hypot(predicted_positions[i][0] - predicted_positions[j][0],
                                    predicted_positions[i][1] - predicted_positions[j][1]) ** 2
-                         / (2 * diversity_sigma ** 2)))
+                         / (2 * self.diversity_sigma ** 2)))
             for i in range(len(predicted_positions))
             for j in range(i + 1, len(predicted_positions))
         )
@@ -251,16 +237,16 @@ class BilbolabGymWrapper(gym.Env):
             raw_extra += (float(np.hypot(sx_start - sx_sg, sy_start - sy_sg))
                           + float(np.hypot(sx_sg - tc.x,   sy_sg   - tc.y))
                           - float(np.hypot(sx_start - tc.x, sy_start - tc.y)))
-        energy_penalty = _ENERGY_WEIGHT * raw_extra / (self.n_agents * arena_diag)
+        energy_penalty = self.energy_weight * raw_extra / (self.n_agents * arena_diag)
 
         return (
-            - _BETA          * total_dist
-            + _CROSSING_BONUS * n_crossed
-            - skip_penalty          * n_skipped
-            - failed_plan_penalty   * n_failed_plans
+            - self.beta           * total_dist
+            + self.crossing_bonus * n_crossed
+            - self.skip_penalty          * n_skipped
+            - self.failed_plan_penalty   * n_failed_plans
             - energy_penalty
-            - diversity_bonus * repulsion
+            - self.diversity_bonus * repulsion
         )
 
 
-from master_thesis.modules.subgoal_predictor.inference import build_free_positions, build_subgoal_obs
+from master_thesis.modules.subgoal_predictor.inference import build_subgoal_obs

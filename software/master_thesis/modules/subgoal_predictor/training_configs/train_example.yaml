@@ -1,38 +1,44 @@
 run_type: train
 
-# ── Training loop ────────────────────────────────────────────
+# ── Training loop ────────────────────────────────────────
 n_updates: 1000
 batch_size: 32
 max_steps: 400
 
-# ── I/O ─────────────────────────────────────────────────────
+# ── I/O ─────────────────────────────────────────────────
 log_dir: master_thesis/modules/subgoal_predictor/runs
 save_dir: master_thesis/modules/subgoal_predictor/checkpoints
 record: false
 run_name_override: null     # set to write into an existing TensorBoard run
 initial_weights: null       # set to warm-start from a checkpoint (weights only)
 
-# ── Environment ──────────────────────────────────────────────
+# ── Environment ──────────────────────────────────────────
 scenario: rl_5n_random_2x2
 ompl_timelimit: 10.0
-wait_mode: discrete         # 'discrete' | 'continuous'
 skip_penalty: 4.0
 failed_plan_penalty: 0.0
 n_workers: 0
 
-# ── Policy ───────────────────────────────────────────────────
-arch: gnn                   # 'gnn' | 'bipartite'
+# ── Policy ───────────────────────────────────────────────
+arch: bipartite             # 'gnn' | 'bipartite'
 algo: ppo                   # 'ppo' | 'reinforce'
 
-# ── Optimiser ────────────────────────────────────────────────
+# ── Optimiser ────────────────────────────────────────────
 lr: 3e-4
 lr_end: null                # null → fixed LR; set to enable decay
 lr_schedule: linear         # 'linear' | 'cosine'
 
-# ── Loss ─────────────────────────────────────────────────────
+# ── Loss ─────────────────────────────────────────────────
 entropy_coeff_pos: 0.003
 entropy_coeff_wait: 0.01
-diversity_sigma: 0.35
 
-# ── Curriculum ───────────────────────────────────────────────
+# ── Reward shaping ────────────────────────────────────────
+alpha: 0.3              # individual-time weight (terminated branch)
+beta: 1.0               # distance-to-goal scale (truncated branch)
+crossing_bonus: 1.5     # per-agent bonus for crossing the wall (truncated)
+energy_weight: 2.0      # detour-path-length penalty scale (truncated)
+diversity_sigma: 0.35   # Gaussian width for subgoal repulsion
+diversity_bonus: 1.5    # repulsion penalty scale
+
+# ── Curriculum ───────────────────────────────────────────
 stage: null

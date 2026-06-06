@@ -8,17 +8,15 @@ import pickle
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from tqdm import tqdm
 
-from master_thesis.modules.subgoal_predictor.subgoal_architectures import (
-    WAIT_TIMES as DEFAULT_WAIT_TIMES, subgoal_critic_base,
-)
+from master_thesis.modules.subgoal_predictor.subgoal_architectures import subgoal_critic_base
 from master_thesis.modules.subgoal_predictor.rl_environment import BilbolabGymWrapper
-from master_thesis.modules.subgoal_predictor.inference import _make_policy
+from master_thesis.modules.subgoal_predictor.inference import (
+    _make_policy, _POS_SIGMA_MIN, _POS_SIGMA_MAX, _WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX,
+)
 from master_thesis.modules.subgoal_predictor._worker import _worker_init, _worker_run_episode
-
-# Module-level global — overridden by __main__ if config supplies wait_times.
-WAIT_TIMES = list(DEFAULT_WAIT_TIMES)
 
 _SUBGOAL_DIR = 'master_thesis/modules/subgoal_predictor'
 
@@ -29,7 +27,7 @@ def _model_score(frac_terminated: float, mean_n_crossed: float) -> float:
 
 def record_best_episode(env: BilbolabGymWrapper, policy, save_path: str,
                         metadata: dict | None = None) -> None:
-    """Run one greedy episode and save a trajectory .pkl for visualisation."""
+    """Run one greedy episode (mean of distribution, no sampling) and save trajectory .pkl."""
     from simulation.core.environment import BASE_ENVIRONMENT_ACTIONS
 
     agent_ids = list(env.sim.agents.keys())
@@ -50,23 +48,20 @@ def record_best_episode(env: BilbolabGymWrapper, policy, save_path: str,
     try:
         obs, _ = env.reset()
         if policy is not None:
-            agent_psi      = torch.as_tensor(obs['agent_psi'],      dtype=torch.float32).unsqueeze(0)
-            neighbor_rel   = torch.as_tensor(obs['neighbor_rel'],   dtype=torch.float32).flatten(-2).unsqueeze(0)
-            goal_rel       = torch.as_tensor(obs['goal_rel'],       dtype=torch.float32).unsqueeze(0)
-            gap_vectors    = torch.as_tensor(obs['gap_vectors'],    dtype=torch.float32).unsqueeze(0)
-            neighbor_goals = torch.as_tensor(obs['neighbor_goals'], dtype=torch.float32).flatten(-2).unsqueeze(0)
             with torch.no_grad():
-                pos_logits, wait_out = policy(agent_psi, neighbor_rel, goal_rel, gap_vectors, neighbor_goals)
-            action_pos  = pos_logits.squeeze(0).argmax(-1).numpy()
-            _wm = getattr(policy, 'wait_mode', 'discrete')
-            if _wm == 'continuous':
-                _wait_max   = float(max(env.wait_times))
-                action_wait = (torch.sigmoid(wait_out.squeeze(0)[..., 0]) * _wait_max).numpy()
-            else:
-                action_wait = wait_out.squeeze(0).argmax(-1).numpy()
-            action = np.stack([action_pos, action_wait], axis=-1).reshape(-1)
+                pos_raw, wait_raw = policy(
+                    torch.as_tensor(obs['agent_psi'],      dtype=torch.float32),
+                    torch.as_tensor(obs['neighbor_rel'],   dtype=torch.float32).flatten(-2),
+                    torch.as_tensor(obs['goal_rel'],       dtype=torch.float32),
+                    torch.as_tensor(obs['gap_vectors'],    dtype=torch.float32),
+                    torch.as_tensor(obs['neighbor_goals'], dtype=torch.float32).flatten(-2),
+                )
+            # Greedy: use distribution means
+            a_xy   = pos_raw[:, :2].numpy()                              # (N, 2) — mu_x, mu_y
+            a_wait = F.softplus(wait_raw[:, 0]).numpy()                  # (N,)   — positive wait
+            action = np.concatenate([a_xy, a_wait[:, None]], axis=-1).reshape(-1)
         else:
-            action = np.array([0])
+            action = np.zeros(env.n_agents * 3, dtype=np.float32)
         env.step(action)
     finally:
         output_action.removeAction(_capture)
@@ -93,7 +88,12 @@ def train(n_updates, batch_size, max_steps: int = 400,
           entropy_coeff_wait:   float      = 0.01,
           scenario:             str        = 'rl_5n_random_2x2',
           algo:                 str        = 'ppo',
+          alpha:                float      = 0.3,
+          beta:                 float      = 1.0,
+          crossing_bonus:       float      = 1.5,
+          energy_weight:        float      = 2.0,
           diversity_sigma:      float      = 0.35,
+          diversity_bonus:      float      = 1.5,
           n_workers:            int        = 0,
           ompl_timelimit:       float      = 10.0,
           stage:                str | None = None,
@@ -102,7 +102,6 @@ def train(n_updates, batch_size, max_steps: int = 400,
           run_name_override:    str | None = None,
           resume:               bool       = False,
           record:               bool       = False,
-          wait_mode:            str        = 'discrete',
           skip_penalty:         float      = 4.0,
           failed_plan_penalty:  float      = 0.0,
           evaluate:             bool       = False,
@@ -113,19 +112,15 @@ def train(n_updates, batch_size, max_steps: int = 400,
     from torch.utils.tensorboard import SummaryWriter
 
     env = BilbolabGymWrapper(scenario, max_steps=max_steps,
-                             grid_stride=0.15, agent_log_level='ERROR',
-                             diversity_sigma=diversity_sigma,
+                             agent_log_level='ERROR',
+                             alpha=alpha, beta=beta, crossing_bonus=crossing_bonus,
+                             energy_weight=energy_weight,
+                             diversity_sigma=diversity_sigma, diversity_bonus=diversity_bonus,
                              ompl_timelimit=ompl_timelimit,
-                             wait_times=WAIT_TIMES,
-                             wait_mode=wait_mode,
-                             skip_penalty=skip_penalty,
-                             failed_plan_penalty=failed_plan_penalty)
+                             skip_penalty=skip_penalty, failed_plan_penalty=failed_plan_penalty)
     env.reset()
 
-    n_positions = int(env.action_space.nvec[0])
-    policy      = _make_policy(arch, n=env.n_agents, n_gaps=env.n_gaps,
-                               n_positions=n_positions,
-                               n_wait_bins=len(env.wait_times), wait_mode=wait_mode)
+    policy      = _make_policy(arch, n=env.n_agents, n_gaps=env.n_gaps)
     optimizer   = torch.optim.Adam(policy.parameters(), lr=lr)
     if lr_end and lr_schedule == 'cosine':
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_updates, eta_min=lr_end)
@@ -179,12 +174,13 @@ def train(n_updates, batch_size, max_steps: int = 400,
                        lr_end=lr_end, lr_schedule=lr_schedule,
                        batch_size=batch_size, n_updates=n_updates, max_steps=max_steps,
                        entropy_coeff_pos=entropy_coeff_pos, entropy_coeff_wait=entropy_coeff_wait,
-                       diversity_sigma=diversity_sigma, ompl_timelimit=ompl_timelimit,
-                       wait_times=WAIT_TIMES, wait_mode=wait_mode,
+                       alpha=alpha, beta=beta, crossing_bonus=crossing_bonus,
+                       energy_weight=energy_weight, diversity_sigma=diversity_sigma,
+                       diversity_bonus=diversity_bonus,
+                       ompl_timelimit=ompl_timelimit,
                        skip_penalty=skip_penalty, failed_plan_penalty=failed_plan_penalty, arch=arch)
     hparam_display = {**raw_hparams,
-                      'lr':         f'{lr} → {lr_end} ({lr_schedule}, {n_updates} steps)' if lr_end else f'{lr} (fixed)',
-                      'wait_times': str(WAIT_TIMES),
+                      'lr': f'{lr} → {lr_end} ({lr_schedule}, {n_updates} steps)' if lr_end else f'{lr} (fixed)',
                       'warm_start': str(initial_weights) if initial_weights else 'none'}
 
     _reward_doc = (
@@ -195,8 +191,9 @@ def train(n_updates, batch_size, max_steps: int = 400,
         "    R = − beta * total_dist  +  crossing_bonus * n_crossed  +  subgoal_bonus * n_reached\n"
         "        − skip_penalty * n_skipped  −  failed_plan_penalty * n_failed\n"
         "        − energy_penalty  −  diversity_bonus * repulsion\n\n"
-        f"**Active coefficients**: alpha=0.3, beta=1.0, crossing_bonus=1.5, subgoal_bonus=0.0, "
-        f"skip_penalty={skip_penalty}, diversity_bonus=1.5, diversity_sigma={diversity_sigma}, energy_weight=2.0"
+        f"**Active coefficients**: alpha={alpha}, beta={beta}, crossing_bonus={crossing_bonus}, "
+        f"energy_weight={energy_weight}, skip_penalty={skip_penalty}, "
+        f"diversity_bonus={diversity_bonus}, diversity_sigma={diversity_sigma}"
     )
     writer.add_text('run/config', '\n'.join(f'    {k}: {v}' for k, v in hparam_display.items()), 0)
     writer.add_text('run/reward_structure', _reward_doc, 0)
@@ -207,13 +204,14 @@ def train(n_updates, batch_size, max_steps: int = 400,
     pool = mp.Pool(
         processes=_n_workers,
         initializer=_worker_init,
-        initargs=(scenario, max_steps, 0.15, diversity_sigma, 1.5, 'ERROR',
-                  ompl_timelimit, WAIT_TIMES, wait_mode, skip_penalty, failed_plan_penalty),
+        initargs=(scenario, max_steps, 'ERROR',
+                  alpha, beta, crossing_bonus, energy_weight,
+                  diversity_sigma, diversity_bonus,
+                  ompl_timelimit, skip_penalty, failed_plan_penalty),
     )
 
     print(f"Training [{algo.upper()}]: {n_updates} updates × {batch_size} episodes"
-          f" | n_agents={env.n_agents} | n_positions={n_positions}"
-          f" | workers={_n_workers} | logdir={log_dir}")
+          f" | n_agents={env.n_agents} | arch={arch} | workers={_n_workers} | logdir={log_dir}")
 
     best_score     = float('-inf')
     recent_crossed = collections.deque(maxlen=5)
@@ -228,16 +226,13 @@ def train(n_updates, batch_size, max_steps: int = 400,
         torch.save({
             'update':           update,
             'algo':             algo,
-            'wait_mode':        wait_mode,
             'policy':           policy.state_dict(),
             'optimizer':        optimizer.state_dict(),
             'scheduler':        scheduler.state_dict() if scheduler is not None else None,
             'critic':           critic.state_dict() if critic is not None else None,
             'critic_optimizer': critic_optimizer.state_dict() if critic_optimizer is not None else None,
-            'free_positions':   env._free_positions,
             'n_agents':         env.n_agents,
             'n_gaps':           env.n_gaps,
-            'wait_times':       WAIT_TIMES,
             'log_dir':          log_dir,
             'hparams':          raw_hparams,
         }, path)
@@ -246,14 +241,13 @@ def train(n_updates, batch_size, max_steps: int = 400,
         for update in update_pbar:
 
             raw_rewards = []
-            obs_batch, sample_pos_batch, sample_wait_batch = [], [], []
+            obs_batch, sample_xy_batch, sample_wait_batch = [], [], []
             ep_terminated, ep_makespans, ep_failed, ep_skipped = [], [], [], []
             ep_crossed, ep_reached_sg, ep_subgoal_spread      = [], [], []
             ep_mean_wait, ep_wait_spread, ep_plan_wall_time    = [], [], []
 
             _pw   = {k: v.detach().numpy() for k, v in policy.state_dict().items()}
-            _args = [(_pw, n_positions, env.n_agents, env.n_gaps,
-                      len(WAIT_TIMES), WAIT_TIMES, wait_mode, arch)] * batch_size
+            _args = [(_pw, env.n_agents, env.n_gaps, arch)] * batch_size
             for r in pool.map(_worker_run_episode, _args):
                 raw_rewards.append(r['reward'])
                 ep_terminated.append(r['info']['terminated'])
@@ -264,8 +258,8 @@ def train(n_updates, batch_size, max_steps: int = 400,
                 ep_reached_sg.append(r['info']['n_reached_subgoals'])
                 ep_plan_wall_time.append(r['info'].get('plan_wall_time', 0.0))
                 obs_batch.append(r['obs'])
-                sample_pos_batch.append(torch.from_numpy(r['sample_pos']))
-                sample_wait_batch.append(torch.from_numpy(r['sample_wait']))
+                sample_xy_batch.append(torch.from_numpy(r['sample_xy']))    # (1, N, 2)
+                sample_wait_batch.append(torch.from_numpy(r['sample_wait']))  # (1, N)
                 ep_subgoal_spread.append(r['spread'])
                 ep_mean_wait.append(r['mean_wait'])
                 ep_wait_spread.append(r['wait_spread'])
@@ -293,23 +287,28 @@ def train(n_updates, batch_size, max_steps: int = 400,
                     torch.stack([torch.as_tensor(o['neighbor_goals'], dtype=torch.float32).flatten(-2) for o in obs_list]),
                 )
 
-            def _policy_fwd_batch(ap, nr, gr, gv, ng, sp_t, sw_t):
-                pl, wl  = policy(ap, nr, gr, gv, ng)
-                dp      = torch.distributions.Categorical(logits=pl)
-                lp_pos  = dp.log_prob(sp_t[:, 0, :]).sum(-1)
-                pos_ent = dp.entropy().sum(-1)
-                if wait_mode == 'continuous':
-                    _wmax          = float(max(env.wait_times))
-                    _mu_raw, _logs = wl.unbind(-1)
-                    _mu            = torch.sigmoid(_mu_raw) * _wmax
-                    _sigma         = torch.exp(_logs).clamp(0.1, _wmax / 2)
-                    dw             = torch.distributions.Normal(_mu, _sigma)
-                    lp_wait        = dw.log_prob(sw_t[:, 0, :].float()).sum(-1)
-                    wait_ent       = dw.entropy().sum(-1)
-                else:
-                    dw       = torch.distributions.Categorical(logits=wl)
-                    lp_wait  = dw.log_prob(sw_t[:, 0, :]).sum(-1)
-                    wait_ent = dw.entropy().sum(-1)
+            def _policy_fwd_batch(ap, nr, gr, gv, ng, sp_xy_t, sw_t):
+                """Returns (log_prob, mean_pos_entropy, mean_wait_entropy).
+
+                sp_xy_t: (B, 1, N, 2) — sampled (x, y) positions
+                sw_t:    (B, 1, N)    — sampled wait times in seconds
+                """
+                pos_raw, wait_raw = policy(ap, nr, gr, gv, ng)  # (B, N, 4), (B, N, 2)
+
+                # Position: Normal(mu_xy, exp(log_s))
+                mu_xy    = pos_raw[..., :2]                                     # (B, N, 2)
+                sigma_xy = torch.exp(pos_raw[..., 2:]).clamp(_POS_SIGMA_MIN, _POS_SIGMA_MAX)
+                dist_pos = torch.distributions.Normal(mu_xy, sigma_xy)
+                lp_pos   = dist_pos.log_prob(sp_xy_t[:, 0]).sum(-1).sum(-1)    # (B,)
+                pos_ent  = dist_pos.entropy().sum(-1).sum(-1).mean()            # scalar
+
+                # Wait: Normal(softplus(mu_w), exp(log_sw))
+                mu_w    = F.softplus(wait_raw[..., 0])                          # (B, N)
+                sigma_w = torch.exp(wait_raw[..., 1]).clamp(_WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX)
+                dist_wait = torch.distributions.Normal(mu_w, sigma_w)
+                lp_wait  = dist_wait.log_prob(sw_t[:, 0]).sum(-1)              # (B,)
+                wait_ent = dist_wait.entropy().sum(-1).mean()                   # scalar
+
                 return lp_pos + lp_wait, pos_ent, wait_ent
 
             def _critic_fwd_batch(ap, nr, gr, gv):
@@ -323,11 +322,11 @@ def train(n_updates, batch_size, max_steps: int = 400,
             elif algo == 'ppo':
                 PPO_EPOCHS, CLIP_EPS, VALUE_COEFF = 4, 0.2, 0.5
                 ap, nr, gr, gv, ng = _stack_obs(obs_batch)
-                sp_t = torch.stack(sample_pos_batch)
-                sw_t = torch.stack(sample_wait_batch)
+                sp_xy_t = torch.stack(sample_xy_batch)   # (B, 1, N, 2)
+                sw_t    = torch.stack(sample_wait_batch)  # (B, 1, N)
 
                 with torch.no_grad():
-                    log_probs_old = _policy_fwd_batch(ap, nr, gr, gv, ng, sp_t, sw_t)[0]
+                    log_probs_old = _policy_fwd_batch(ap, nr, gr, gv, ng, sp_xy_t, sw_t)[0]
                     values_old    = _critic_fwd_batch(ap, nr, gr, gv)
 
                 advantages = rewards_t - values_old
@@ -335,7 +334,7 @@ def train(n_updates, batch_size, max_steps: int = 400,
 
                 for _ in range(PPO_EPOCHS):
                     new_log_probs_t, mean_pos_entropy, mean_wait_entropy = \
-                        _policy_fwd_batch(ap, nr, gr, gv, ng, sp_t, sw_t)
+                        _policy_fwd_batch(ap, nr, gr, gv, ng, sp_xy_t, sw_t)
                     ratio      = torch.exp(new_log_probs_t - log_probs_old)
                     policy_loss = -torch.min(ratio * advantages,
                                              torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * advantages).mean()
@@ -355,10 +354,10 @@ def train(n_updates, batch_size, max_steps: int = 400,
 
             else:  # REINFORCE
                 ap, nr, gr, gv, ng = _stack_obs(obs_batch)
-                sp_t = torch.stack(sample_pos_batch)
-                sw_t = torch.stack(sample_wait_batch)
+                sp_xy_t = torch.stack(sample_xy_batch)
+                sw_t    = torch.stack(sample_wait_batch)
                 log_probs_t, mean_pos_entropy, mean_wait_entropy = \
-                    _policy_fwd_batch(ap, nr, gr, gv, ng, sp_t, sw_t)
+                    _policy_fwd_batch(ap, nr, gr, gv, ng, sp_xy_t, sw_t)
                 normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
                 loss = (-(log_probs_t * normalized).mean()
                         - entropy_coeff_pos  * mean_pos_entropy
@@ -466,9 +465,6 @@ if __name__ == "__main__":
     hparams  = load_training_config(sys.argv[1])
     run_type = hparams.pop('run_type')
 
-    if 'wait_times' in hparams:
-        WAIT_TIMES = hparams.pop('wait_times')
-
     if run_type == 'train':
         train(**hparams)
 
@@ -478,14 +474,13 @@ if __name__ == "__main__":
         hp = torch.load(latest, weights_only=False).get('hparams', {})
 
         for key in ('scenario', 'algo', 'lr', 'lr_end', 'lr_schedule', 'batch_size',
-                    'max_steps', 'diversity_sigma', 'ompl_timelimit',
-                    'stage', 'wait_mode', 'skip_penalty', 'failed_plan_penalty', 'arch', 'n_workers'):
+                    'max_steps', 'alpha', 'beta', 'crossing_bonus', 'energy_weight',
+                    'diversity_sigma', 'diversity_bonus', 'ompl_timelimit',
+                    'stage', 'skip_penalty', 'failed_plan_penalty', 'arch', 'n_workers'):
             if key in hp:
                 hparams[key] = hp[key]
         for k in ('entropy_coeff_pos', 'entropy_coeff_wait'):
             hparams[k] = hp.get(k, hp.get('entropy_coeff', hparams.get(k)))
-        if hp.get('wait_times'):
-            WAIT_TIMES = hp['wait_times']
 
         hparams['resume'] = True
         print(f"Resume: loaded hparams from '{latest}'")

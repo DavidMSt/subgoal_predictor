@@ -6,10 +6,8 @@ _N = type(None)
 _SHARED = {
     'scenario':       str,
     'arch':           str,
-    'wait_mode':      str,
     'ompl_timelimit': (int, float),
     'n_workers':      int,
-    'wait_times':     (list, _N),
 }
 
 _TRAIN = _SHARED | {
@@ -27,7 +25,12 @@ _TRAIN = _SHARED | {
     'lr_schedule':        str,
     'entropy_coeff_pos':  (int, float),
     'entropy_coeff_wait': (int, float),
+    'alpha':              (int, float),
+    'beta':               (int, float),
+    'crossing_bonus':     (int, float),
+    'energy_weight':      (int, float),
     'diversity_sigma':    (int, float),
+    'diversity_bonus':    (int, float),
     'stage':              (str, _N),
     'skip_penalty':       (int, float),
     'failed_plan_penalty':(int, float),
@@ -50,7 +53,12 @@ _EVALUATE = _SHARED | {
     'eval_out':           (str, _N),
     'batch_size':         int,
     'max_steps':          int,
+    'alpha':              (int, float),
+    'beta':               (int, float),
+    'crossing_bonus':     (int, float),
+    'energy_weight':      (int, float),
     'diversity_sigma':    (int, float),
+    'diversity_bonus':    (int, float),
     'skip_penalty':       (int, float),
     'failed_plan_penalty':(int, float),
 }

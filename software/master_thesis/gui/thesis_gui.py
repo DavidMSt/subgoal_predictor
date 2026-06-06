@@ -627,11 +627,10 @@ class ThesisGUI:
 
     # ------------------------------------------------------------------------------------------------------------------
     def _load_subgoal_policy(self, checkpoint_path: str | None = None):
-        """Load checkpoint, return (policy, free_positions, n_gaps) or None on failure."""
+        """Load checkpoint, return (policy, n_agents, n_gaps) or None on failure."""
         import torch
-        from master_thesis.modules.subgoal_predictor.train_subgoal import (
-            subgoal_nn_mlp, subgoal_gnn_global, subgoal_gnn_local, WAIT_TIMES,
-            latest_subgoal_checkpoint,
+        from master_thesis.modules.subgoal_predictor.inference import (
+            _make_policy, latest_subgoal_checkpoint,
         )
 
         # Demo default: the published bipartite-GNN checkpoint (8n, 1-gap).
@@ -655,51 +654,29 @@ class ThesisGUI:
             self.logger.warning(f"Subgoal checkpoint not found: {checkpoint_path}")
             return None
 
-        ckpt = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
-        free_positions = ckpt.get('free_positions')
-        n_ckpt         = ckpt.get('n_agents')
-        if free_positions is None or n_ckpt is None:
-            self.logger.warning(
-                "Checkpoint predates free_positions/n_agents fields — re-train."
-            )
+        ckpt   = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        n_ckpt = ckpt.get('n_agents')
+        if n_ckpt is None:
+            self.logger.warning("Checkpoint missing 'n_agents' field — re-train.")
             return None
 
-        n_gaps      = ckpt.get('n_gaps', 2)
-        n_positions = len(free_positions)
-        # Read wait_mode from the checkpoint (continuous vs discrete).
-        # MUST be passed to the constructor so policy.wait_mode is set correctly
-        # and predict_subgoals() uses the right inference branch.
-        ckpt_wait_mode = ckpt.get('wait_mode', 'discrete')
-        # Infer n_wait_bins from the saved weight shape so old checkpoints
-        # (trained with a different WAIT_TIMES list) still load correctly.
-        # For continuous mode the wait_head always has 2 outputs (mu, raw);
-        # for discrete it equals the number of discrete time bins.
-        n_wait_bins = ckpt['policy']['wait_head.bias'].shape[0]
-        # Reconstruct the wait_times list: stored explicitly or fall back to
-        # the first n_wait_bins entries of the current WAIT_TIMES constant.
-        wait_times = list(ckpt.get('wait_times', WAIT_TIMES[:n_wait_bins]))
+        n_gaps = ckpt.get('n_gaps', 2)
         # Detect architecture from checkpoint key signatures.
         _keys = ckpt['policy']
-        if 'node_enc.weight' in _keys:
-            _PolicyCls = subgoal_gnn_global
-        elif 'enc_psi.weight' in _keys:
-            _PolicyCls = subgoal_gnn_local
+        if 'enc_psi.weight' in _keys:
+            arch = 'bipartite'
+        elif 'node_enc.weight' in _keys:
+            arch = 'gnn'
         else:
-            _PolicyCls = subgoal_nn_mlp
-        policy = _PolicyCls(
-            n=n_ckpt, n_gaps=n_gaps,
-            n_positions=n_positions, n_wait_bins=n_wait_bins,
-            wait_mode=ckpt_wait_mode,
-        )
+            arch = 'mlp'
+        policy = _make_policy(arch, n=n_ckpt, n_gaps=n_gaps)
         policy.load_state_dict(ckpt['policy'])
         policy.eval()
         self.logger.info(
             f"Loaded subgoal policy from '{checkpoint_path}' "
-            f"(update {ckpt.get('update', '?')}, n={n_ckpt}, "
-            f"n_gaps={n_gaps}, wait_mode={ckpt_wait_mode}, "
-            f"positions={n_positions})"
+            f"(update {ckpt.get('update', '?')}, arch={arch}, n={n_ckpt}, n_gaps={n_gaps})"
         )
-        return policy, free_positions, n_ckpt, wait_times, n_gaps
+        return policy, n_ckpt, n_gaps
 
     # ------------------------------------------------------------------------------------------------------------------
     def _start_episode_timer(self):
@@ -748,14 +725,14 @@ class ThesisGUI:
         training's inner step-loop would, but in wall-clock time.
         """
         def _impl():
-            from master_thesis.modules.subgoal_predictor.train_subgoal import (
+            from master_thesis.modules.subgoal_predictor.inference import (
                 build_subgoal_obs, run_policy_step,
             )
 
             result = self._load_subgoal_policy(checkpoint_path)
             if result is None:
                 return
-            policy, free_positions, n_ckpt, wait_times, n_gaps_ckpt = result
+            policy, n_ckpt, n_gaps_ckpt = result
 
             if len(self.sim.agents) == 0:
                 self.logger.warning("No agents present — load a scenario first")
@@ -790,7 +767,7 @@ class ThesisGUI:
             # 2+3+4. obs → policy → subgoals → start_mp → screenshot → start_exe
             obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
             predicted = run_policy_step(
-                self.sim, policy, free_positions, obs, wait_times=wait_times,
+                self.sim, policy, obs,
                 pre_exe_hook=self.take_screenshot,
             )
 
@@ -806,14 +783,14 @@ class ThesisGUI:
         """Set subgoals only (no TA, no MP/EXE start).  Kept for manual workflows
         where TA was already run and MP/EXE are started separately."""
         def _impl():
-            from master_thesis.modules.subgoal_predictor.train_subgoal import (
+            from master_thesis.modules.subgoal_predictor.inference import (
                 build_subgoal_obs, predict_subgoals,
             )
 
             result = self._load_subgoal_policy(checkpoint_path)
             if result is None:
                 return
-            policy, free_positions, n_ckpt, wait_times, n_gaps_ckpt = result
+            policy, n_ckpt, n_gaps_ckpt = result
 
             if len(self.sim.agents) == 0:
                 self.logger.warning("No agents present — load a scenario first")
@@ -834,8 +811,7 @@ class ThesisGUI:
                 return
 
             obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
-            predicted = predict_subgoals(self.sim, policy, free_positions, obs,
-                                         wait_times=wait_times)
+            predicted = predict_subgoals(self.sim, policy, obs)
             visualization.show_subgoal_markers(self)
 
             for i, (sx, sy) in enumerate(predicted):
@@ -853,14 +829,14 @@ class ThesisGUI:
         Assumes tasks are already assigned (press 'Central TA' first).
         """
         def _impl():
-            from master_thesis.modules.subgoal_predictor.train_subgoal import (
+            from master_thesis.modules.subgoal_predictor.inference import (
                 build_subgoal_obs, predict_subgoals,
             )
 
             result = self._load_subgoal_policy(checkpoint_path)
             if result is None:
                 return
-            policy, free_positions, n_ckpt, wait_times, n_gaps_ckpt = result
+            policy, n_ckpt, n_gaps_ckpt = result
 
             if len(self.sim.agents) == 0:
                 self.logger.warning("No agents present — load a scenario first")
@@ -897,8 +873,7 @@ class ThesisGUI:
                 agent.sgm.reset()
 
             obs = build_subgoal_obs(self.sim, scenario.gap_geometry)
-            predicted = predict_subgoals(self.sim, policy, free_positions, obs,
-                                         wait_times=wait_times)
+            predicted = predict_subgoals(self.sim, policy, obs)
 
             # Show subgoal markers immediately in the GUI
             visualization.show_subgoal_markers(self)
