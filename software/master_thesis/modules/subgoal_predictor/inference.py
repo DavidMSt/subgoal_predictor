@@ -72,34 +72,23 @@ def build_subgoal_obs(sim, gap_geometry: dict) -> dict:
     }
 
 
-def _decode_policy_output(pos_raw, wait_raw, *, sample: bool = True):
-    """Sample (or take the mean of) the continuous policy output distributions.
+def _decode_policy_output(pos_raw, wait_raw):
+    """Return the distribution means of the continuous policy output.
 
     Args:
         pos_raw:  (..., N, 4) tensor — (mu_x, mu_y, log_sx, log_sy)
         wait_raw: (..., N, 2) tensor — (mu_wait, log_sw)
-        sample:   If True, draw a sample; if False, return the distribution mean.
 
     Returns:
         xy:     (..., N, 2) numpy array — (x, y) subgoal positions
         wait_s: (..., N)   numpy array — wait time in seconds (≥ 0)
     """
-    mu_xy    = pos_raw[..., :2]
-    sigma_xy = torch.exp(pos_raw[..., 2:]).clamp(_POS_SIGMA_MIN, _POS_SIGMA_MAX)
-    mu_w     = F.softplus(wait_raw[..., 0])
-    sigma_w  = torch.exp(wait_raw[..., 1]).clamp(_WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX)
-
-    if sample:
-        xy     = torch.distributions.Normal(mu_xy, sigma_xy).sample().numpy()
-        wait_s = torch.distributions.Normal(mu_w, sigma_w).sample().clamp(min=0.0).numpy()
-    else:
-        xy     = mu_xy.numpy()
-        wait_s = mu_w.numpy()
-
+    xy     = pos_raw[..., :2].numpy()
+    wait_s = F.softplus(wait_raw[..., 0]).numpy()
     return xy, wait_s
 
 
-def predict_subgoals(sim, policy, obs: dict, *, sample: bool = True) -> list:
+def predict_subgoals(sim, policy, obs: dict) -> list:
     """Apply policy and inject subgoals into each agent's SGM.  Does not start MP/EXE."""
     lim = sim.environment.environment_container.limits
 
@@ -111,7 +100,7 @@ def predict_subgoals(sim, policy, obs: dict, *, sample: bool = True) -> list:
             torch.as_tensor(obs['gap_vectors'],    dtype=torch.float32),
             torch.as_tensor(obs['neighbor_goals'], dtype=torch.float32).flatten(-2),
         )
-        a_xy, a_wait_s = _decode_policy_output(pos_raw, wait_raw, sample=sample)
+        a_xy, a_wait_s = _decode_policy_output(pos_raw, wait_raw)
 
     predicted = []
     for i, agent in enumerate(sim.agents.values()):
@@ -123,10 +112,9 @@ def predict_subgoals(sim, policy, obs: dict, *, sample: bool = True) -> list:
     return predicted
 
 
-def run_policy_step(sim, policy, obs: dict, *, sample: bool = True,
-                    pre_exe_hook=None) -> list:
+def run_policy_step(sim, policy, obs: dict, *, pre_exe_hook=None) -> list:
     """predict_subgoals → start_mp → (optional hook) → start_exe."""
-    predicted = predict_subgoals(sim, policy, obs, sample=sample)
+    predicted = predict_subgoals(sim, policy, obs)
     sim.start_mp()
     if pre_exe_hook is not None:
         pre_exe_hook()

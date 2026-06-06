@@ -18,7 +18,6 @@ _TRAIN = _SHARED | {
     'save_dir':           str,
     'initial_weights':    (str, _N),
     'run_name_override':  (str, _N),
-    'record':             bool,
     'algo':               str,
     'lr':                 (int, float),
     'lr_end':             (int, float, _N),
@@ -42,7 +41,6 @@ _RESUME = _SHARED | {
     'save_dir':          str,
     'log_dir':           str,
     'save_every':        int,
-    'record':            bool,
     'stage':             (str, _N),
     'run_name_override': (str, _N),
 }

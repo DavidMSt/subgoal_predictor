@@ -8,7 +8,6 @@ max_steps: 400
 # ── I/O ─────────────────────────────────────────────────
 log_dir: master_thesis/modules/subgoal_predictor/runs
 save_dir: master_thesis/modules/subgoal_predictor/checkpoints
-record: false
 run_name_override: null     # set to write into an existing TensorBoard run
 initial_weights: null       # set to warm-start from a checkpoint (weights only)
 

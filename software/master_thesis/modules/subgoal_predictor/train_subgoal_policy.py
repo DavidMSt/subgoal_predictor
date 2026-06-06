@@ -4,7 +4,6 @@
 
 import collections
 import os
-import pickle
 import numpy as np
 import torch
 import torch.nn as nn
@@ -25,91 +24,42 @@ def _model_score(frac_terminated: float, mean_n_crossed: float) -> float:
     return frac_terminated * 10.0 + mean_n_crossed
 
 
-def record_best_episode(env: BilbolabGymWrapper, policy, save_path: str,
-                        metadata: dict | None = None) -> None:
-    """Run one greedy episode (mean of distribution, no sampling) and save trajectory .pkl."""
-    from simulation.core.environment import BASE_ENVIRONMENT_ACTIONS
 
-    agent_ids = list(env.sim.agents.keys())
-    frames, task_frames = [], []
-
-    def _capture():
-        row = []
-        for aid in agent_ids:
-            cont = env.sim.environment.environment_container.agent_conts.get(aid)
-            if cont is not None:
-                row.append([float(cont.x), float(cont.y), float(cont.psi)])
-        frames.append(row)
-        task_frames.append(list(env.sim.environment.environment_container.task_conts.keys()))
-
-    output_action = env.sim.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT]
-    output_action.addAction(_capture)
-
-    try:
-        obs, _ = env.reset()
-        if policy is not None:
-            with torch.no_grad():
-                pos_raw, wait_raw = policy(
-                    torch.as_tensor(obs['agent_psi'],      dtype=torch.float32),
-                    torch.as_tensor(obs['neighbor_rel'],   dtype=torch.float32).flatten(-2),
-                    torch.as_tensor(obs['goal_rel'],       dtype=torch.float32),
-                    torch.as_tensor(obs['gap_vectors'],    dtype=torch.float32),
-                    torch.as_tensor(obs['neighbor_goals'], dtype=torch.float32).flatten(-2),
-                )
-            # Greedy: use distribution means
-            a_xy   = pos_raw[:, :2].numpy()                              # (N, 2) — mu_x, mu_y
-            a_wait = F.softplus(wait_raw[:, 0]).numpy()                  # (N,)   — positive wait
-            action = np.concatenate([a_xy, a_wait[:, None]], axis=-1).reshape(-1)
-        else:
-            action = np.zeros(env.n_agents * 3, dtype=np.float32)
-        env.step(action)
-    finally:
-        output_action.removeAction(_capture)
-
-    os.makedirs(os.path.dirname(save_path) or '.', exist_ok=True)
-    with open(save_path, 'wb') as f:
-        pickle.dump({
-            'scenario':    env.scenario.name,
-            'Ts':          env.sim.Ts,
-            'agent_ids':   agent_ids,
-            'positions':   np.array(frames, dtype=np.float32),
-            'task_frames': task_frames,
-            'metadata':    metadata or {},
-        }, f)
-    tqdm.write(f"  🎬 trajectory saved → {os.path.basename(save_path)}")
-
-
-def train(n_updates, batch_size, max_steps: int = 400,
-          log_dir:              str        = f'{_SUBGOAL_DIR}/runs',
-          save_dir:             str        = f'{_SUBGOAL_DIR}/checkpoints',
-          initial_weights:      str | None = None,
-          lr:                   float      = 3e-4,
-          entropy_coeff_pos:    float      = 0.003,
-          entropy_coeff_wait:   float      = 0.01,
-          scenario:             str        = 'rl_5n_random_2x2',
-          algo:                 str        = 'ppo',
-          alpha:                float      = 0.3,
-          beta:                 float      = 1.0,
-          crossing_bonus:       float      = 1.5,
-          energy_weight:        float      = 2.0,
-          diversity_sigma:      float      = 0.35,
-          diversity_bonus:      float      = 1.5,
-          n_workers:            int        = 0,
-          ompl_timelimit:       float      = 10.0,
-          stage:                str | None = None,
-          lr_end:               float | None = None,
-          lr_schedule:          str        = 'linear',
-          run_name_override:    str | None = None,
-          resume:               bool       = False,
-          record:               bool       = False,
-          skip_penalty:         float      = 4.0,
-          failed_plan_penalty:  float      = 0.0,
-          evaluate:             bool       = False,
-          eval_out:             str | None = None,
-          arch:                 str        = 'gnn'):
+def train(cfg: dict) -> None:
 
     from datetime import datetime
     from torch.utils.tensorboard import SummaryWriter
+
+    # ── Unpack config ──────────────────────────────────────────────────────────
+    n_updates           = cfg['n_updates']
+    batch_size          = cfg['batch_size']
+    scenario            = cfg.get('scenario',            'rl_5n_random_2x2')
+    arch                = cfg.get('arch',                'gnn')
+    algo                = cfg.get('algo',                'ppo')
+    max_steps           = cfg.get('max_steps',           400)
+    lr                  = cfg.get('lr',                  3e-4)
+    lr_end              = cfg.get('lr_end',              None)
+    lr_schedule         = cfg.get('lr_schedule',         'linear')
+    entropy_coeff_pos   = cfg.get('entropy_coeff_pos',   0.003)
+    entropy_coeff_wait  = cfg.get('entropy_coeff_wait',  0.01)
+    alpha               = cfg.get('alpha',               0.3)
+    beta                = cfg.get('beta',                1.0)
+    crossing_bonus      = cfg.get('crossing_bonus',      1.5)
+    energy_weight       = cfg.get('energy_weight',       2.0)
+    diversity_sigma     = cfg.get('diversity_sigma',     0.35)
+    diversity_bonus     = cfg.get('diversity_bonus',     1.5)
+    n_workers           = cfg.get('n_workers',           0)
+    ompl_timelimit      = cfg.get('ompl_timelimit',      10.0)
+    skip_penalty        = cfg.get('skip_penalty',        4.0)
+    failed_plan_penalty = cfg.get('failed_plan_penalty', 0.0)
+    stage               = cfg.get('stage',               None)
+    initial_weights     = cfg.get('initial_weights',     None)
+    run_name_override   = cfg.get('run_name_override',   None)
+    log_dir             = cfg.get('log_dir',             f'{_SUBGOAL_DIR}/runs')
+    save_dir            = cfg.get('save_dir',            f'{_SUBGOAL_DIR}/checkpoints')
+    resume              = cfg.get('resume',              False)
+    evaluate            = cfg.get('evaluate',            False)
+    eval_out            = cfg.get('eval_out',            None)
 
     env = BilbolabGymWrapper(scenario, max_steps=max_steps,
                              agent_log_level='ERROR',
@@ -416,15 +366,6 @@ def train(n_updates, batch_size, max_steps: int = 400,
                 _ckpt(saving_path)
                 tqdm.write(f"  ✓ saved (update {update}, score {smooth_score:+.2f}, "
                            f"crossed {float(np.mean(recent_crossed)):.2f})")
-                if record:
-                    try:
-                        record_best_episode(env, policy, saving_path.replace('.pt', '_best_trajectory.pkl'),
-                                            metadata={'update': update, 'score': smooth_score,
-                                                      'mean_crossed':    float(np.mean(recent_crossed)),
-                                                      'frac_terminated': float(np.mean(recent_frac))})
-                    except Exception as exc:
-                        tqdm.write(f"  ⚠ trajectory recording failed: {exc}")
-
             if not evaluate:
                 _ckpt(latest_path)
 
@@ -466,7 +407,7 @@ if __name__ == "__main__":
     run_type = hparams.pop('run_type')
 
     if run_type == 'train':
-        train(**hparams)
+        train(hparams)
 
     elif run_type == 'resume':
         latest = hparams['initial_weights']
@@ -484,9 +425,9 @@ if __name__ == "__main__":
 
         hparams['resume'] = True
         print(f"Resume: loaded hparams from '{latest}'")
-        train(**hparams)
+        train(hparams)
 
     elif run_type == 'evaluate':
         hparams['n_updates'] = hparams.pop('n_episodes')
         hparams['evaluate']  = True
-        train(**hparams)
+        train(hparams)
