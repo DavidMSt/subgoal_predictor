@@ -1,15 +1,15 @@
 """Subgoal predictor evaluation script.
 
-Runs N episodes for one cell (scenario × method) and saves metrics + position
+Runs N episodes for one cell (method) and saves metrics + position
 trajectories as .npz files compatible with plot_inference_comparison.py and
 congestion_heatmap.py.
 
 Single-cell usage (one terminal / tmux pane per cell):
 
-    python -m master_thesis.document_figures.inference.run_eval --run C_0sg
-    python -m master_thesis.document_figures.inference.run_eval --run C_bi_gnn
-    python -m master_thesis.document_figures.inference.run_eval --run D_0sg
-    python -m master_thesis.document_figures.inference.run_eval --run D_bi_gnn
+    python -m master_thesis.document_figures.inference.run_eval --run C_0sg    --env-cfg eval_configs/env_10n2g.yaml
+    python -m master_thesis.document_figures.inference.run_eval --run C_bi_gnn --env-cfg eval_configs/env_10n2g.yaml
+    python -m master_thesis.document_figures.inference.run_eval --run D_0sg    --env-cfg eval_configs/env_8n1g.yaml
+    python -m master_thesis.document_figures.inference.run_eval --run D_bi_gnn --env-cfg eval_configs/env_8n1g.yaml
 
 Or launch all four in parallel — see launch_eval.sh.
 
@@ -35,61 +35,22 @@ N_EPISODES = 100
 _CKPT = pathlib.Path('master_thesis/modules/subgoal_predictor/checkpoints')
 _OUT  = pathlib.Path('master_thesis/document_figures/inference')
 
-# All evaluation cells: run_key → (display_name, scenario, max_steps, checkpoint_or_None)
-ALL_RUNS: dict[str, tuple[str, str, int, pathlib.Path | None]] = {
-    'A_0sg': (
-        'No Subgoal — 5n1g',
-        'rl_5n_fixed_1gap_2x2',
-        1000,
-        None,
-    ),
-    'A_mlp': (
-        'MLP — 5n1g',
-        'rl_5n_fixed_1gap_2x2',
-        1000,
-        _CKPT / 'homogeneous_gnn/stage1b_20260324_103903.pt',
-    ),
-    'A_hom_gnn': (
-        'Homogeneous GNN — 5n1g',
-        'rl_5n_fixed_1gap_2x2',
-        1000,
-        _CKPT / 'homogeneous_gnn/gnn_ppo_D2_cont_v3_phase2_20260412_224158.pt',
-    ),
-    'A_bi_gnn': (
-        'Bipartite GNN — 5n1g',
-        'rl_5n_fixed_1gap_2x2',
-        1000,
-        _CKPT / 'bp_A_ft2_20260416_094315.pt',
-    ),
-    'C_0sg': (
-        'No Subgoal — 10n2g',
-        'rl_10n_fixed_2gap_3x3',
-        2000,
-        None,
-    ),
-    'C_bi_gnn': (
-        'Bipartite GNN — 10n2g',
-        'rl_10n_fixed_2gap_3x3',
-        2000,
-        _CKPT / 'bp_C_20260420_235105.pt',
-    ),
-    'D_0sg': (
-        'No Subgoal — 8n1g',
-        'rl_8n_fixed_1gap_3x3',
-        1000,
-        None,
-    ),
-    'D_bi_gnn': (
-        'Bipartite GNN — 8n1g',
-        'rl_8n_fixed_1gap_3x3',
-        1000,
-        _CKPT / 'bp_D2_20260421_144251.pt',
-    ),
+# All evaluation cells: run_key → (display_name, checkpoint_or_None)
+ALL_RUNS: dict[str, tuple[str, pathlib.Path | None]] = {
+    'A_0sg':    ('No Subgoal — 5n1g',        None),
+    'A_mlp':    ('MLP — 5n1g',               _CKPT / 'homogeneous_gnn/stage1b_20260324_103903.pt'),
+    'A_hom_gnn':('Homogeneous GNN — 5n1g',   _CKPT / 'homogeneous_gnn/gnn_ppo_D2_cont_v3_phase2_20260412_224158.pt'),
+    'A_bi_gnn': ('Bipartite GNN — 5n1g',     _CKPT / 'bp_A_ft2_20260416_094315.pt'),
+    'C_0sg':    ('No Subgoal — 10n2g',       None),
+    'C_bi_gnn': ('Bipartite GNN — 10n2g',    _CKPT / 'bp_C_20260420_235105.pt'),
+    'D_0sg':    ('No Subgoal — 8n1g',        None),
+    'D_bi_gnn': ('Bipartite GNN — 8n1g',     _CKPT / 'bp_D2_20260421_144251.pt'),
 }
 
 # ── Imports ───────────────────────────────────────────────────────────────────
 
 from master_thesis.modules.subgoal_predictor.rl_environment import BilbolabGymWrapper
+from master_thesis.modules.subgoal_predictor.training_configs.config_loader import BilbolabEnvConfig
 from master_thesis.modules.subgoal_predictor.inference import (
     _make_policy, _POS_SIGMA_MIN, _POS_SIGMA_MAX, _WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX,
 )
@@ -168,14 +129,13 @@ def greedy_action(policy, obs):
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
-def evaluate(run_key: str, n_episodes: int, max_steps: int | None, out_dir: pathlib.Path):
-    display_name, scenario, default_max_steps, ckpt_path = ALL_RUNS[run_key]
-    max_steps = max_steps if max_steps is not None else default_max_steps
+def evaluate(run_key: str, env_cfg_path: pathlib.Path, n_episodes: int, out_dir: pathlib.Path):
+    display_name, ckpt_path = ALL_RUNS[run_key]
 
     print(f'\n{"="*60}')
-    print(f'  Run      : {run_key}')
-    print(f'  Scenario : {scenario}')
-    print(f'  Episodes : {n_episodes}  max_steps={max_steps}')
+    print(f'  Run      : {run_key}  ({display_name})')
+    print(f'  Env cfg  : {env_cfg_path}')
+    print(f'  Episodes : {n_episodes}')
     print(f'{"="*60}')
 
     if ckpt_path is None:
@@ -186,12 +146,7 @@ def evaluate(run_key: str, n_episodes: int, max_steps: int | None, out_dir: path
         policy = load_policy(ckpt_path)
 
     def _make_env():
-        e = BilbolabGymWrapper(
-            scenario=scenario,
-            max_steps=max_steps,
-            agent_log_level='ERROR',
-            ompl_timelimit=10.0,
-        )
+        e = BilbolabGymWrapper(BilbolabEnvConfig(env_cfg_path))
         return e, e.sim.environment.scheduling.actions[BASE_ENVIRONMENT_ACTIONS.OUTPUT]
 
     env, output_phase = _make_env()
@@ -318,13 +273,10 @@ def evaluate(run_key: str, n_episodes: int, max_steps: int | None, out_dir: path
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Evaluate one run cell.')
-    parser.add_argument(
-        '--run', required=True, choices=list(ALL_RUNS.keys()),
-        help='Which cell to evaluate.',
-    )
-    parser.add_argument('--n',         type=int, default=N_EPISODES)
-    parser.add_argument('--max-steps', type=int, default=None,
-                        help='Override per-scenario max_steps from ALL_RUNS.')
+    parser.add_argument('--run',     required=True, choices=list(ALL_RUNS.keys()))
+    parser.add_argument('--env-cfg', required=True, type=pathlib.Path,
+                        help='Path to a BilbolabEnvConfig YAML (scenario, max_steps, etc.).')
+    parser.add_argument('--n',       type=int, default=N_EPISODES)
     args = parser.parse_args()
 
-    evaluate(args.run, args.n, args.max_steps, _OUT)
+    evaluate(args.run, args.env_cfg, args.n, _OUT)

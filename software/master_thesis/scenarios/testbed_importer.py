@@ -150,7 +150,7 @@ def _build_config(
             tasks.append(task)
 
     assignments: dict[str, str] = parsed.get('assignments') or {}
-    gap_geometry: dict | None = parsed.get('gap_geometry')
+    gap_geometry: dict = parsed['gap_geometry']
 
     raw_sg = parsed.get('subgoal_limits')
     subgoal_limits = (

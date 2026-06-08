@@ -4,6 +4,7 @@
 
 import collections
 import os
+from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
@@ -12,6 +13,7 @@ from tqdm import tqdm
 
 from master_thesis.modules.subgoal_predictor.subgoal_architectures import subgoal_critic_base
 from master_thesis.modules.subgoal_predictor.rl_environment import BilbolabGymWrapper
+from master_thesis.modules.subgoal_predictor.training_configs.config_loader import BilbolabEnvConfig, load_training_config
 from master_thesis.modules.subgoal_predictor.inference import (
     _make_policy, _POS_SIGMA_MIN, _POS_SIGMA_MAX, _WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX,
 )
@@ -25,71 +27,57 @@ def _model_score(frac_terminated: float, mean_n_crossed: float) -> float:
 
 
 
-def train(cfg: dict) -> None:
+def train(config_path: Path) -> None:
 
     from datetime import datetime
     from torch.utils.tensorboard import SummaryWriter
 
-    # ── Unpack config ──────────────────────────────────────────────────────────
-    n_updates           = cfg['n_updates']
-    batch_size          = cfg['batch_size']
-    scenario            = cfg.get('scenario',            'rl_5n_random_2x2')
-    arch                = cfg.get('arch',                'gnn')
-    algo                = cfg.get('algo',                'ppo')
-    max_steps           = cfg.get('max_steps',           400)
-    lr                  = cfg.get('lr',                  3e-4)
-    lr_end              = cfg.get('lr_end',              None)
-    lr_schedule         = cfg.get('lr_schedule',         'linear')
-    entropy_coeff_pos   = cfg.get('entropy_coeff_pos',   0.003)
-    entropy_coeff_wait  = cfg.get('entropy_coeff_wait',  0.01)
-    alpha               = cfg.get('alpha',               0.3)
-    beta                = cfg.get('beta',                1.0)
-    crossing_bonus      = cfg.get('crossing_bonus',      1.5)
-    energy_weight       = cfg.get('energy_weight',       2.0)
-    diversity_sigma     = cfg.get('diversity_sigma',     0.35)
-    diversity_bonus     = cfg.get('diversity_bonus',     1.5)
-    n_workers           = cfg.get('n_workers',           0)
-    ompl_timelimit      = cfg.get('ompl_timelimit',      10.0)
-    skip_penalty        = cfg.get('skip_penalty',        4.0)
-    failed_plan_penalty = cfg.get('failed_plan_penalty', 0.0)
-    stage               = cfg.get('stage',               None)
-    initial_weights     = cfg.get('initial_weights',     None)
-    run_name_override   = cfg.get('run_name_override',   None)
-    log_dir             = cfg.get('log_dir',             f'{_SUBGOAL_DIR}/runs')
-    save_dir            = cfg.get('save_dir',            f'{_SUBGOAL_DIR}/checkpoints')
-    resume              = cfg.get('resume',              False)
-    evaluate            = cfg.get('evaluate',            False)
-    eval_out            = cfg.get('eval_out',            None)
+    config_path = Path(config_path)
+    cfg = load_training_config(config_path)
+    run_type = cfg.pop('run_type')
 
-    env = BilbolabGymWrapper(scenario, max_steps=max_steps,
-                             agent_log_level='ERROR',
-                             alpha=alpha, beta=beta, crossing_bonus=crossing_bonus,
-                             energy_weight=energy_weight,
-                             diversity_sigma=diversity_sigma, diversity_bonus=diversity_bonus,
-                             ompl_timelimit=ompl_timelimit,
-                             skip_penalty=skip_penalty, failed_plan_penalty=failed_plan_penalty)
+    if run_type == 'resume':
+        latest = cfg['initial_weights']
+        assert os.path.exists(latest), f"Checkpoint not found: '{latest}'"
+        hp = torch.load(latest, weights_only=False).get('hparams', {})
+        for key in ('scenario', 'algo', 'lr', 'lr_end', 'lr_schedule', 'batch_size',
+                    'max_steps', 'alpha', 'beta', 'crossing_bonus', 'energy_weight',
+                    'diversity_sigma', 'diversity_bonus', 'ompl_timelimit',
+                    'stage', 'skip_penalty', 'failed_plan_penalty', 'arch', 'n_workers'):
+            if key in hp:
+                cfg[key] = hp[key]
+        for k in ('entropy_coeff_pos', 'entropy_coeff_wait'):
+            cfg[k] = hp.get(k, hp.get('entropy_coeff', cfg.get(k)))
+        cfg['resume'] = True
+        print(f"Resume: loaded hparams from '{latest}'")
+    elif run_type == 'evaluate':
+        cfg['n_updates'] = cfg.pop('n_episodes')
+        cfg['evaluate']  = True
+
+    cfg['agent_log_level'] = 'ERROR'
+    env = BilbolabGymWrapper(BilbolabEnvConfig(config_path))
     env.reset()
 
-    policy      = _make_policy(arch, n=env.n_agents, n_gaps=env.n_gaps)
-    optimizer   = torch.optim.Adam(policy.parameters(), lr=lr)
-    if lr_end and lr_schedule == 'cosine':
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=n_updates, eta_min=lr_end)
-    elif lr_end and lr_schedule == 'linear':
+    policy      = _make_policy(cfg['arch'], n=env.n_agents, n_gaps=env.n_gaps)
+    optimizer   = torch.optim.Adam(policy.parameters(), lr=cfg['lr'])
+    if cfg.get('lr_end') and cfg.get('lr_schedule') == 'cosine':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg['n_updates'], eta_min=cfg['lr_end'])
+    elif cfg.get('lr_end') and cfg.get('lr_schedule') == 'linear':
         scheduler = torch.optim.lr_scheduler.LinearLR(
-            optimizer, start_factor=1.0, end_factor=lr_end / lr, total_iters=n_updates)
+            optimizer, start_factor=1.0, end_factor=cfg['lr_end'] / cfg['lr'], total_iters=cfg['n_updates'])
     else:
         scheduler = None
 
-    if algo == 'ppo':
+    if cfg['algo'] == 'ppo':
         critic           = subgoal_critic_base(n=env.n_agents, n_gaps=env.n_gaps)
-        critic_optimizer = torch.optim.Adam(critic.parameters(), lr=lr)
+        critic_optimizer = torch.optim.Adam(critic.parameters(), lr=cfg['lr'])
     else:
         critic, critic_optimizer = None, None
 
     resume_from_update = 0
-    if initial_weights and os.path.exists(initial_weights):
-        ckpt = torch.load(initial_weights, weights_only=False)
-        if resume:
+    if cfg.get('initial_weights') and os.path.exists(cfg['initial_weights']):
+        ckpt = torch.load(cfg['initial_weights'], weights_only=False)
+        if cfg.get('resume'):
             policy.load_state_dict(ckpt['policy'])
             optimizer.load_state_dict(ckpt['optimizer'])
             if scheduler is not None and ckpt.get('scheduler') is not None:
@@ -99,7 +87,7 @@ def train(cfg: dict) -> None:
             if critic_optimizer is not None and ckpt.get('critic_optimizer') is not None:
                 critic_optimizer.load_state_dict(ckpt['critic_optimizer'])
             resume_from_update = ckpt.get('update', 0) + 1
-            print(f"Resumed from '{initial_weights}' at update {resume_from_update}")
+            print(f"Resumed from '{cfg['initial_weights']}' at update {resume_from_update}")
         else:
             current_shapes = {k: v.shape for k, v in policy.state_dict().items()}
             ckpt_policy    = {k: v for k, v in ckpt['policy'].items()
@@ -110,28 +98,29 @@ def train(cfg: dict) -> None:
             if missing: print(f"  warm-start: randomly initialised — {missing}")
             if critic is not None and ckpt.get('critic') is not None:
                 critic.load_state_dict(ckpt['critic'])
-            print(f"Loaded initial weights from '{initial_weights}'")
+            print(f"Loaded initial weights from '{cfg['initial_weights']}'")
 
     run_ts      = datetime.now().strftime('%Y%m%d_%H%M%S')
-    run_name    = run_name_override or (f'{stage}_{run_ts}' if stage else run_ts)
-    log_dir     = os.path.join(log_dir, run_name)
-    saving_path = os.path.join(save_dir, f'{run_name}.pt')
-    latest_path = os.path.join(save_dir, f'{run_name}_latest.pt')
+    run_name    = cfg.get('run_name_override') or (f'{cfg["stage"]}_{run_ts}' if cfg.get('stage') else run_ts)
+    log_dir     = os.path.join(cfg['log_dir'], run_name)
+    saving_path = os.path.join(cfg['save_dir'], f'{run_name}.pt')
+    latest_path = os.path.join(cfg['save_dir'], f'{run_name}_latest.pt')
     os.makedirs(log_dir, exist_ok=True)
     writer = SummaryWriter(log_dir)
 
-    raw_hparams = dict(stage=stage, scenario=scenario, algo=algo, lr=lr,
-                       lr_end=lr_end, lr_schedule=lr_schedule,
-                       batch_size=batch_size, n_updates=n_updates, max_steps=max_steps,
-                       entropy_coeff_pos=entropy_coeff_pos, entropy_coeff_wait=entropy_coeff_wait,
-                       alpha=alpha, beta=beta, crossing_bonus=crossing_bonus,
-                       energy_weight=energy_weight, diversity_sigma=diversity_sigma,
-                       diversity_bonus=diversity_bonus,
-                       ompl_timelimit=ompl_timelimit,
-                       skip_penalty=skip_penalty, failed_plan_penalty=failed_plan_penalty, arch=arch)
+    raw_hparams = {k: cfg.get(k) for k in (
+        'stage', 'scenario', 'algo', 'lr', 'lr_end', 'lr_schedule',
+        'batch_size', 'n_updates', 'max_steps',
+        'entropy_coeff_pos', 'entropy_coeff_wait',
+        'alpha', 'beta', 'crossing_bonus', 'energy_weight',
+        'diversity_sigma', 'diversity_bonus', 'ompl_timelimit',
+        'skip_penalty', 'failed_plan_penalty', 'arch',
+    )}
+    lr_end = cfg.get('lr_end')
     hparam_display = {**raw_hparams,
-                      'lr': f'{lr} → {lr_end} ({lr_schedule}, {n_updates} steps)' if lr_end else f'{lr} (fixed)',
-                      'warm_start': str(initial_weights) if initial_weights else 'none'}
+                      'lr': (f'{cfg["lr"]} → {lr_end} ({cfg.get("lr_schedule")}, {cfg["n_updates"]} steps)'
+                             if lr_end else f'{cfg["lr"]} (fixed)'),
+                      'warm_start': cfg.get('initial_weights') or 'none'}
 
     _reward_doc = (
         "**Terminated** (all tasks done):\n\n"
@@ -141,32 +130,30 @@ def train(cfg: dict) -> None:
         "    R = − beta * total_dist  +  crossing_bonus * n_crossed  +  subgoal_bonus * n_reached\n"
         "        − skip_penalty * n_skipped  −  failed_plan_penalty * n_failed\n"
         "        − energy_penalty  −  diversity_bonus * repulsion\n\n"
-        f"**Active coefficients**: alpha={alpha}, beta={beta}, crossing_bonus={crossing_bonus}, "
-        f"energy_weight={energy_weight}, skip_penalty={skip_penalty}, "
-        f"diversity_bonus={diversity_bonus}, diversity_sigma={diversity_sigma}"
+        f"**Active coefficients**: alpha={cfg.get('alpha')}, beta={cfg.get('beta')}, "
+        f"crossing_bonus={cfg.get('crossing_bonus')}, energy_weight={cfg.get('energy_weight')}, "
+        f"skip_penalty={cfg.get('skip_penalty')}, diversity_bonus={cfg.get('diversity_bonus')}, "
+        f"diversity_sigma={cfg.get('diversity_sigma')}"
     )
     writer.add_text('run/config', '\n'.join(f'    {k}: {v}' for k, v in hparam_display.items()), 0)
     writer.add_text('run/reward_structure', _reward_doc, 0)
     writer.flush()
 
     import multiprocessing as mp
-    _n_workers = n_workers if n_workers > 0 else min(batch_size, mp.cpu_count())
+    _n_workers = cfg.get('n_workers', 0) or min(cfg['batch_size'], mp.cpu_count())
     pool = mp.Pool(
         processes=_n_workers,
         initializer=_worker_init,
-        initargs=(scenario, max_steps, 'ERROR',
-                  alpha, beta, crossing_bonus, energy_weight,
-                  diversity_sigma, diversity_bonus,
-                  ompl_timelimit, skip_penalty, failed_plan_penalty),
+        initargs=(str(config_path),),
     )
 
-    print(f"Training [{algo.upper()}]: {n_updates} updates × {batch_size} episodes"
-          f" | n_agents={env.n_agents} | arch={arch} | workers={_n_workers} | logdir={log_dir}")
+    print(f"Training [{cfg['algo'].upper()}]: {cfg['n_updates']} updates × {cfg['batch_size']} episodes"
+          f" | n_agents={env.n_agents} | arch={cfg['arch']} | workers={_n_workers} | logdir={log_dir}")
 
     best_score     = float('-inf')
     recent_crossed = collections.deque(maxlen=5)
     recent_frac    = collections.deque(maxlen=5)
-    update_pbar    = tqdm(range(resume_from_update, n_updates), desc='Updates')
+    update_pbar    = tqdm(range(resume_from_update, cfg['n_updates']), desc='Updates')
 
     eval_all: dict[str, list] = {k: [] for k in
         ('terminated', 'makespan', 'failed', 'reached', 'reward', 'crossed', 'wall_time', 'wait_spread')}
@@ -175,7 +162,7 @@ def train(cfg: dict) -> None:
         os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
         torch.save({
             'update':           update,
-            'algo':             algo,
+            'algo':             cfg['algo'],
             'policy':           policy.state_dict(),
             'optimizer':        optimizer.state_dict(),
             'scheduler':        scheduler.state_dict() if scheduler is not None else None,
@@ -197,7 +184,7 @@ def train(cfg: dict) -> None:
             ep_mean_wait, ep_wait_spread, ep_plan_wall_time    = [], [], []
 
             _pw   = {k: v.detach().numpy() for k, v in policy.state_dict().items()}
-            _args = [(_pw, env.n_agents, env.n_gaps, arch)] * batch_size
+            _args = [(_pw, env.n_agents, env.n_gaps, cfg['arch'])] * cfg['batch_size']
             for r in pool.map(_worker_run_episode, _args):
                 raw_rewards.append(r['reward'])
                 ep_terminated.append(r['info']['terminated'])
@@ -208,13 +195,13 @@ def train(cfg: dict) -> None:
                 ep_reached_sg.append(r['info']['n_reached_subgoals'])
                 ep_plan_wall_time.append(r['info'].get('plan_wall_time', 0.0))
                 obs_batch.append(r['obs'])
-                sample_xy_batch.append(torch.from_numpy(r['sample_xy']))    # (1, N, 2)
-                sample_wait_batch.append(torch.from_numpy(r['sample_wait']))  # (1, N)
+                sample_xy_batch.append(torch.from_numpy(r['sample_xy']))
+                sample_wait_batch.append(torch.from_numpy(r['sample_wait']))
                 ep_subgoal_spread.append(r['spread'])
                 ep_mean_wait.append(r['mean_wait'])
                 ep_wait_spread.append(r['wait_spread'])
 
-            if evaluate:
+            if cfg.get('evaluate'):
                 eval_all['terminated'].extend(ep_terminated)
                 eval_all['makespan'].extend(ep_makespans)
                 eval_all['failed'].extend(ep_failed)
@@ -245,14 +232,12 @@ def train(cfg: dict) -> None:
                 """
                 pos_raw, wait_raw = policy(ap, nr, gr, gv, ng)  # (B, N, 4), (B, N, 2)
 
-                # Position: Normal(mu_xy, exp(log_s))
                 mu_xy    = pos_raw[..., :2]                                     # (B, N, 2)
                 sigma_xy = torch.exp(pos_raw[..., 2:]).clamp(_POS_SIGMA_MIN, _POS_SIGMA_MAX)
                 dist_pos = torch.distributions.Normal(mu_xy, sigma_xy)
                 lp_pos   = dist_pos.log_prob(sp_xy_t[:, 0]).sum(-1).sum(-1)    # (B,)
                 pos_ent  = dist_pos.entropy().sum(-1).sum(-1).mean()            # scalar
 
-                # Wait: Normal(softplus(mu_w), exp(log_sw))
                 mu_w    = F.softplus(wait_raw[..., 0])                          # (B, N)
                 sigma_w = torch.exp(wait_raw[..., 1]).clamp(_WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX)
                 dist_wait = torch.distributions.Normal(mu_w, sigma_w)
@@ -266,10 +251,10 @@ def train(cfg: dict) -> None:
                                 gr.reshape(B, -1), gv.reshape(B, -1)], dim=-1)
                 return critic.net(x).squeeze(-1)
 
-            if evaluate:
+            if cfg.get('evaluate'):
                 mean_pos_entropy = mean_wait_entropy = loss = torch.tensor(0.0)
 
-            elif algo == 'ppo':
+            elif cfg['algo'] == 'ppo':
                 PPO_EPOCHS, CLIP_EPS, VALUE_COEFF = 4, 0.2, 0.5
                 ap, nr, gr, gv, ng = _stack_obs(obs_batch)
                 sp_xy_t = torch.stack(sample_xy_batch)   # (B, 1, N, 2)
@@ -291,8 +276,8 @@ def train(cfg: dict) -> None:
                     value_loss  = VALUE_COEFF * nn.functional.mse_loss(
                         _critic_fwd_batch(ap, nr, gr, gv), rewards_t)
                     loss = (policy_loss + value_loss
-                            - entropy_coeff_pos  * mean_pos_entropy
-                            - entropy_coeff_wait * mean_wait_entropy)
+                            - cfg['entropy_coeff_pos']  * mean_pos_entropy
+                            - cfg['entropy_coeff_wait'] * mean_wait_entropy)
                     optimizer.zero_grad();        loss.backward()
                     critic_optimizer.zero_grad(); critic_optimizer.step()  # type: ignore[union-attr]
                     optimizer.step()
@@ -310,8 +295,8 @@ def train(cfg: dict) -> None:
                     _policy_fwd_batch(ap, nr, gr, gv, ng, sp_xy_t, sw_t)
                 normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
                 loss = (-(log_probs_t * normalized).mean()
-                        - entropy_coeff_pos  * mean_pos_entropy
-                        - entropy_coeff_wait * mean_wait_entropy)
+                        - cfg['entropy_coeff_pos']  * mean_pos_entropy
+                        - cfg['entropy_coeff_wait'] * mean_wait_entropy)
                 optimizer.zero_grad(); loss.backward(); optimizer.step()
                 if scheduler is not None:
                     scheduler.step()
@@ -319,7 +304,7 @@ def train(cfg: dict) -> None:
             mean_reward      = float(rewards_t.mean())
             std_reward       = float(rewards_t.std())
             n_done           = sum(ep_terminated)
-            frac_done        = n_done / batch_size
+            frac_done        = n_done / cfg['batch_size']
             done_spans       = [m for m, t in zip(ep_makespans, ep_terminated) if t]
             mean_makespan    = float(np.mean(done_spans)) if done_spans else float(env.max_steps)
             mean_pos_ent_val = float(mean_pos_entropy.detach())
@@ -344,7 +329,7 @@ def train(cfg: dict) -> None:
                 ('train/mean_plan_wall_time',     float(np.mean(ep_plan_wall_time)) if ep_plan_wall_time else 0.0),
             ]:
                 writer.add_scalar(tag, val, update)
-            if algo == 'ppo':
+            if cfg['algo'] == 'ppo':
                 writer.add_scalar('train/clip_fraction', clip_frac, update)
             writer.add_scalar('train/lr', optimizer.param_groups[0]['lr'], update)
             writer.flush()
@@ -352,7 +337,7 @@ def train(cfg: dict) -> None:
             update_pbar.set_postfix({
                 'loss':       f'{loss.detach().item():+.3f}',
                 'rew':        f'{mean_reward:+.1f}',
-                'terminated': f'{n_done}/{batch_size}',
+                'terminated': f'{n_done}/{cfg["batch_size"]}',
                 'crossed':    f'{float(np.mean(ep_crossed)):.1f}',
                 'entropy':    f'{mean_pos_ent_val + mean_wait_ent_val:.2f}',
             })
@@ -361,12 +346,12 @@ def train(cfg: dict) -> None:
             recent_frac.append(frac_done)
             smooth_score = _model_score(float(np.mean(recent_frac)), float(np.mean(recent_crossed)))
 
-            if not evaluate and smooth_score > best_score:
+            if not cfg.get('evaluate') and smooth_score > best_score:
                 best_score = smooth_score
                 _ckpt(saving_path)
                 tqdm.write(f"  ✓ saved (update {update}, score {smooth_score:+.2f}, "
                            f"crossed {float(np.mean(recent_crossed)):.2f})")
-            if not evaluate:
+            if not cfg.get('evaluate'):
                 _ckpt(latest_path)
 
     except KeyboardInterrupt:
@@ -381,7 +366,8 @@ def train(cfg: dict) -> None:
 
     writer.close()
 
-    if evaluate and eval_out is not None:
+    eval_out = cfg.get('eval_out')
+    if cfg.get('evaluate') and eval_out is not None:
         os.makedirs(os.path.dirname(eval_out) or '.', exist_ok=True)
         np.savez(eval_out,
                  terminated  = np.array(eval_all['terminated'],  dtype=bool),
@@ -397,37 +383,7 @@ def train(cfg: dict) -> None:
 
 if __name__ == "__main__":
     import sys
-    from master_thesis.modules.subgoal_predictor.training_configs.config_loader import load_training_config
-
     if len(sys.argv) != 2:
-        print("Usage: python -m master_thesis.modules.subgoal_predictor.train_subgoal <config.yaml>")
+        print("Usage: python -m master_thesis.modules.subgoal_predictor.train_subgoal_policy <config.yaml>")
         sys.exit(1)
-
-    hparams  = load_training_config(sys.argv[1])
-    run_type = hparams.pop('run_type')
-
-    if run_type == 'train':
-        train(hparams)
-
-    elif run_type == 'resume':
-        latest = hparams['initial_weights']
-        assert os.path.exists(latest), f"Checkpoint not found: '{latest}'"
-        hp = torch.load(latest, weights_only=False).get('hparams', {})
-
-        for key in ('scenario', 'algo', 'lr', 'lr_end', 'lr_schedule', 'batch_size',
-                    'max_steps', 'alpha', 'beta', 'crossing_bonus', 'energy_weight',
-                    'diversity_sigma', 'diversity_bonus', 'ompl_timelimit',
-                    'stage', 'skip_penalty', 'failed_plan_penalty', 'arch', 'n_workers'):
-            if key in hp:
-                hparams[key] = hp[key]
-        for k in ('entropy_coeff_pos', 'entropy_coeff_wait'):
-            hparams[k] = hp.get(k, hp.get('entropy_coeff', hparams.get(k)))
-
-        hparams['resume'] = True
-        print(f"Resume: loaded hparams from '{latest}'")
-        train(hparams)
-
-    elif run_type == 'evaluate':
-        hparams['n_updates'] = hparams.pop('n_episodes')
-        hparams['evaluate']  = True
-        train(hparams)
+    train(sys.argv[1])

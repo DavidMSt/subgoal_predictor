@@ -84,6 +84,7 @@ class ScenarioConfig:
     """
     name: str
     limits: tuple[tuple[float, float], tuple[float, float]]
+    gap_geometry: dict  # {'y_wall': float, 'gaps': list[dict]}
     agents: list[AgentSpec] = field(default_factory=list)
     tasks: list[TaskSpec] = field(default_factory=list)
     obstacles: list[ObstacleSpec] = field(default_factory=list)
@@ -92,7 +93,6 @@ class ScenarioConfig:
     task_spawn_region: SpawnRegion | None = None   # if set, spawn n_tasks_random tasks randomly in this region
     n_agents_random: int = 0
     n_tasks_random: int = 0
-    gap_geometry: dict | None = None  # {'half_gap': 0.4, 'x_center': 0.0, 'y_wall': 0.0}
     subgoal_limits: tuple[tuple[float, float], tuple[float, float]] | None = None  # optional clip for action grid
 
     def build(self, sim, log_level: str = 'INFO') -> None:

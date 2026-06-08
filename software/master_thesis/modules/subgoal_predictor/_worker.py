@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 
 from master_thesis.modules.subgoal_predictor.rl_environment import BilbolabGymWrapper
+from master_thesis.modules.subgoal_predictor.training_configs.config_loader import BilbolabEnvConfig
 from master_thesis.modules.subgoal_predictor.inference import (
     _make_policy, _POS_SIGMA_MIN, _POS_SIGMA_MAX, _WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX,
 )
@@ -15,19 +16,9 @@ from master_thesis.modules.subgoal_predictor.inference import (
 _worker_env = None  # per-process BilbolabGymWrapper singleton
 
 
-def _worker_init(scenario, max_steps, agent_log_level,
-                 alpha=0.3, beta=1.0, crossing_bonus=1.5, energy_weight=2.0,
-                 diversity_sigma=0.35, diversity_bonus=1.5,
-                 ompl_timelimit=10.0, skip_penalty=4.0, failed_plan_penalty=0.0):
+def _worker_init(config_path: str):
     global _worker_env
-    _worker_env = BilbolabGymWrapper(
-        scenario, max_steps=max_steps,
-        agent_log_level=agent_log_level,
-        alpha=alpha, beta=beta, crossing_bonus=crossing_bonus, energy_weight=energy_weight,
-        diversity_sigma=diversity_sigma, diversity_bonus=diversity_bonus,
-        ompl_timelimit=ompl_timelimit,
-        skip_penalty=skip_penalty, failed_plan_penalty=failed_plan_penalty,
-    )
+    _worker_env = BilbolabGymWrapper(BilbolabEnvConfig(config_path))
     _worker_env.reset()
 
 

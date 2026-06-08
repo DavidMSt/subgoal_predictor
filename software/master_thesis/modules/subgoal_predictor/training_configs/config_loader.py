@@ -3,6 +3,36 @@ from pathlib import Path
 
 _N = type(None)
 
+
+class BilbolabEnvConfig:
+    scenario:            str
+    max_steps:           int
+    agent_log_level:     str
+    alpha:               float
+    beta:                float
+    crossing_bonus:      float
+    energy_weight:       float
+    diversity_sigma:     float
+    diversity_bonus:     float
+    ompl_timelimit:      float
+    skip_penalty:        float
+    failed_plan_penalty: float
+
+    def __init__(self, path: str | Path):
+        d = yaml.safe_load(Path(path).read_text())
+        self.scenario            = d['scenario']
+        self.max_steps           = d.get('max_steps',           400)
+        self.agent_log_level     = d.get('agent_log_level',     'WARNING')
+        self.alpha               = d.get('alpha',               0.3)
+        self.beta                = d.get('beta',                1.0)
+        self.crossing_bonus      = d.get('crossing_bonus',      1.5)
+        self.energy_weight       = d.get('energy_weight',       2.0)
+        self.diversity_sigma     = d.get('diversity_sigma',     0.35)
+        self.diversity_bonus     = d.get('diversity_bonus',     1.5)
+        self.ompl_timelimit      = d.get('ompl_timelimit',      10.0)
+        self.skip_penalty        = d.get('skip_penalty',        4.0)
+        self.failed_plan_penalty = d.get('failed_plan_penalty', 0.0)
+
 _SHARED = {
     'scenario':       str,
     'arch':           str,

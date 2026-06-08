@@ -5,6 +5,7 @@ from pathlib import Path
 
 from master_thesis.universal.universal_simulation import FRODO_Universal_Simulation
 from master_thesis.scenarios.testbed_importer import load_scenario_yaml
+from master_thesis.modules.subgoal_predictor.training_configs.config_loader import BilbolabEnvConfig
 
 _SCENARIOS_DIR = Path(__file__).parent.parent.parent / 'scenarios'
 
@@ -22,42 +23,27 @@ class BilbolabGymWrapper(gym.Env):
         Positions are clipped to the scenario limits on decode; wait is clamped to ≥ 0.
     """
 
-    def __init__(
-        self,
-        scenario: str,
-        max_steps: int = 200,
-        grid_resolution: float = 0.05,
-        agent_log_level: str = 'WARNING',
-        alpha: float = 0.3,
-        beta: float = 1.0,
-        crossing_bonus: float = 1.5,
-        energy_weight: float = 2.0,
-        diversity_sigma: float = 0.35,
-        diversity_bonus: float = 1.5,
-        ompl_timelimit: float = 10.0,
-        skip_penalty: float = 4.0,
-        failed_plan_penalty: float = 0.0,
-    ) -> None:
+    def __init__(self, cfg: BilbolabEnvConfig) -> None:
         super().__init__()
 
-        self.scenario            = load_scenario_yaml((_SCENARIOS_DIR / f'{scenario}.yaml').read_text())
+        self.scenario            = load_scenario_yaml((_SCENARIOS_DIR / f'{cfg.scenario}.yaml').read_text())
         self.n_agents            = self.scenario.n_agents_random or len(self.scenario.agents)
-        self.max_steps           = max_steps
-        self.agent_log_level     = agent_log_level
-        self.alpha               = alpha
-        self.beta                = beta
-        self.crossing_bonus      = crossing_bonus
-        self.energy_weight       = energy_weight
-        self.diversity_sigma     = diversity_sigma
-        self.diversity_bonus     = diversity_bonus
-        self.ompl_timelimit      = ompl_timelimit
-        self.skip_penalty        = skip_penalty
-        self.failed_plan_penalty = failed_plan_penalty
+        self.max_steps           = cfg.max_steps
+        self.agent_log_level     = cfg.agent_log_level
+        self.alpha               = cfg.alpha
+        self.beta                = cfg.beta
+        self.crossing_bonus      = cfg.crossing_bonus
+        self.energy_weight       = cfg.energy_weight
+        self.diversity_sigma     = cfg.diversity_sigma
+        self.diversity_bonus     = cfg.diversity_bonus
+        self.ompl_timelimit      = cfg.ompl_timelimit
+        self.skip_penalty        = cfg.skip_penalty
+        self.failed_plan_penalty = cfg.failed_plan_penalty
         self.n_gaps              = len(self.scenario.gap_geometry['gaps'])
 
-        self.sim = FRODO_Universal_Simulation(limits=self.scenario.limits, grid_resolution=grid_resolution)
-        self.sim.logger.setLevel(agent_log_level)
-        self.sim.environment.logger.setLevel(agent_log_level)
+        self.sim = FRODO_Universal_Simulation(limits=self.scenario.limits, grid_resolution=0.05)
+        self.sim.logger.setLevel(cfg.agent_log_level)
+        self.sim.environment.logger.setLevel(cfg.agent_log_level)
 
         self.observation_space = spaces.Dict({
             'agent_psi':      spaces.Box(low=-np.pi, high=np.pi,   shape=(self.n_agents, 1),                        dtype=np.float32),
