@@ -1,4 +1,4 @@
-# bilbolab_thesis
+# subgoal predictor
 
 Software accompanying the Master's thesis:
 
