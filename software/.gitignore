@@ -5,6 +5,7 @@ logs*
 *.tfevents.*
 master_thesis/scenarios/roadmaps
 master_thesis/modules/subgoal_predictor/results
+.python-version
 
 # Thesis artifacts: track subgoal_predictor weights + TensorBoard run logs
 !master_thesis/modules/subgoal_predictor/checkpoints/*.pt
@@ -19,3 +20,6 @@ master_thesis/document_figures/inference/positions_*.npz
 
 # Claude related
 CLAUDE_todo.md
+
+# uv related
+uv.lock
