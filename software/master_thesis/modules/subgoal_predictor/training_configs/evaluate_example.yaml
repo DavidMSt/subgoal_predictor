@@ -11,4 +11,5 @@ eval_out: master_thesis/modules/subgoal_predictor/eval_results/my_run.npz
 scenario: rl_5n_random_2x2
 arch: gnn
 ompl_timelimit: 10.0
+replan_block_s: 0.5         # must match the value used during training
 batch_size: 1

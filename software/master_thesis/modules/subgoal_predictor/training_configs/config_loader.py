@@ -15,6 +15,7 @@ class BilbolabEnvConfig:
     diversity_sigma:     float
     diversity_bonus:     float
     ompl_timelimit:      float
+    replan_block_s:      float
     skip_penalty:        float
     failed_plan_penalty: float
 
@@ -30,14 +31,16 @@ class BilbolabEnvConfig:
         self.diversity_sigma     = d.get('diversity_sigma',     0.35)
         self.diversity_bonus     = d.get('diversity_bonus',     1.5)
         self.ompl_timelimit      = d.get('ompl_timelimit',      10.0)
+        self.replan_block_s      = d.get('replan_block_s',      0.0)
         self.skip_penalty        = d.get('skip_penalty',        4.0)
         self.failed_plan_penalty = d.get('failed_plan_penalty', 0.0)
 
 _SHARED = {
-    'scenario':       str,
-    'arch':           str,
-    'ompl_timelimit': (int, float),
-    'n_workers':      int,
+    'scenario':          str,
+    'arch':              str,
+    'ompl_timelimit':    (int, float),
+    'replan_block_s':    (int, float),
+    'n_workers':         int,
 }
 
 _TRAIN = _SHARED | {

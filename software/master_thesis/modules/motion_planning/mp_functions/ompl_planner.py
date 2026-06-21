@@ -296,9 +296,6 @@ class OMPLSmoothPathPlanner:
         # Store as instance attribute — prevents GC while C++ holds vtable pointer.
         self._svc = FCLStateValidityChecker(si, self._collision_checker)
         si.setStateValidityChecker(self._svc)
-        si.setValidStateSamplerAllocator(
-            ob.ValidStateSamplerAllocator(ob.UniformValidStateSampler)  # type: ignore[attr-defined]
-        )
         return si
 
     def _create_pdef(

@@ -14,9 +14,10 @@ initial_weights: null       # set to warm-start from a checkpoint (weights only)
 # ── Environment ──────────────────────────────────────────
 scenario: rl_5n_random_2x2
 ompl_timelimit: 10.0
+replan_block_s: 0.5         # measured on M5 Max: successful replans 0.035–0.984s (median ~0.1s); 0.5s is a reasonable conservative target
 skip_penalty: 4.0
 failed_plan_penalty: 0.0
-n_workers: 0
+n_workers: 1
 
 # ── Policy ───────────────────────────────────────────────
 arch: bipartite             # 'gnn' | 'bipartite'

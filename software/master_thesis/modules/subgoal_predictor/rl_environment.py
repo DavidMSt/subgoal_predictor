@@ -37,6 +37,7 @@ class BilbolabGymWrapper(gym.Env):
         self.diversity_sigma     = cfg.diversity_sigma
         self.diversity_bonus     = cfg.diversity_bonus
         self.ompl_timelimit      = cfg.ompl_timelimit
+        self.replan_block_s      = cfg.replan_block_s
         self.skip_penalty        = cfg.skip_penalty
         self.failed_plan_penalty = cfg.failed_plan_penalty
         self.n_gaps              = len(self.scenario.gap_geometry['gaps'])
@@ -70,6 +71,7 @@ class BilbolabGymWrapper(gym.Env):
         from master_thesis.containers.module_containers.mp_containers.mp_planner_container import AgentMPPlannerConfig as _AgentMPPlannerConfig
         from master_thesis.scenarios.roadmap_utils import load_and_share_roadmap
 
+        _replan_block_ticks = round(self.replan_block_s / self.sim.Ts)
         for _agent in self.sim.agents.values():
             if isinstance(_agent.planner, OMPLTrajectoryPlanner):
                 _new_ompl_cfg = dataclasses.replace(
@@ -77,6 +79,8 @@ class BilbolabGymWrapper(gym.Env):
                     timelimit=self.ompl_timelimit,
                 )
                 _agent.planner.planner_cont.config = _AgentMPPlannerConfig(planner_config=_new_ompl_cfg)
+            if hasattr(_agent, 'sgm'):
+                _agent.sgm.replan_block_ticks = _replan_block_ticks
 
         if not load_and_share_roadmap(self.sim, self.scenario.name):
             self.sim.logger.warning(f"No PRM* roadmap for '{self.scenario.name}' — build one first.")

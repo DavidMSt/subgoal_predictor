@@ -65,6 +65,14 @@ class SubgoalManager:
         # Subsequent calls (collision-recovery replans) skip the roadmap and use RRT.
         self._initial_planning_done: bool = False
 
+        # Replan blocking: how many ticks to freeze the agent after a collision-recovery replan,
+        # simulating the wall-clock time OMPL would have consumed in a real deployment.
+        # Set via replan_block_ticks (converted from replan_block_s / Ts by the environment).
+        self.replan_block_ticks: int = 0
+        self._replan_block_ticks_remaining: int = 0
+        # Set by start_planning() on recovery calls so _do_plan/_plan_all_upfront can apply block.
+        self._pending_replan_block: bool = False
+
         # Upfront pre-planned subsequent segments (sg→goal, sg1→sg2→goal, etc.)
         # Populated by _plan_all_upfront(); consumed one-by-one as segments complete.
         self._pre_planned_results: list = []
@@ -112,19 +120,32 @@ class SubgoalManager:
 
     # ── External triggers ───────────────────────────────────────────
 
+    @property
+    def is_replan_blocked(self) -> bool:
+        """True while the agent is serving its post-replan blocking penalty."""
+        return self._replan_block_ticks_remaining > 0
+
     def start_planning(self, phase_key: str = 'default'):
         """Explicit trigger from sim level (sim.start_mp()).  Runs planner once.
 
         The first call in an episode uses the PRM* roadmap (upfront pre-planning).
-        All subsequent calls — typically collision-recovery replans — use RRT so
-        that the roadmap is never queried mid-episode.
+        Subsequent calls are collision-recovery replans that use RRT and go directly
+        to the final goal — the subgoal has already guided the agent toward the gap,
+        and trying to reach it again through contested space would waste ompl_timelimit
+        before falling back to the goal anyway.
         """
-        use_roadmap = not self._initial_planning_done
+        is_collision_recovery = self._initial_planning_done
+        self._pending_replan_block  = is_collision_recovery
         self._initial_planning_done = True
         self.executor.clear()
         self._pre_planned_results = []
+
+        if is_collision_recovery:
+            self._subgoal_queue = []
+            self._subgoal_idx   = 0
+
         if self._has_pending_subgoal:
-            self._plan_all_upfront(phase_key, use_roadmap=use_roadmap)
+            self._plan_all_upfront(phase_key, use_roadmap=not is_collision_recovery)
         else:
             self._do_plan(phase_key)
 
@@ -153,6 +174,10 @@ class SubgoalManager:
 
     def tick(self):
         """Called every LOGIC step.  Handles automatic re-planning."""
+        if self._replan_block_ticks_remaining > 0:
+            self._replan_block_ticks_remaining -= 1
+            return
+
         # Position-based task completion — runs regardless of execution state
         # so it catches manual (joystick) driving as well as planned execution.
         if self.agent_reached_task():
@@ -250,6 +275,9 @@ class SubgoalManager:
         self._last_result = result0
         self.executor.set_plan(result0, phase_key=phase_key)
         self._plan_active = True
+        if self._pending_replan_block:
+            self._replan_block_ticks_remaining = self.replan_block_ticks
+            self._pending_replan_block = False
         if self._execution_enabled and hasattr(self.executor, 'start_execution'):
             self.executor.start_execution()
 
@@ -280,52 +308,47 @@ class SubgoalManager:
                 break  # keep what we have; runtime fallback handles the rest
 
     def _do_plan(self, phase_key: str = 'default'):
-        target = self._current_target()
+        """Plan to the current target (next subgoal or final task) using RRT.
 
-        # TODO: remove - since this is handled by the motion planner anyway?
+        Called both from tick() for normal segment transitions and from
+        start_planning() for collision-recovery replans.  Recovery calls always
+        have an empty subgoal queue (cleared by start_planning), so they go
+        directly to the final goal.
+        """
+        target = self._current_target()
         if target is None:
             self.logger.warning("SubgoalManager: _do_plan called but no task assigned")
             return
 
         result = self.planner.plan(target, phase_key, use_roadmap=False)
         self._total_ompl_wall_time += result.wall_time
+
         if result.success:
             self._last_result = result
             self.executor.set_plan(result, phase_key=phase_key)
             self._plan_active = True
+            if self._pending_replan_block:
+                self._replan_block_ticks_remaining = self.replan_block_ticks
+                self._pending_replan_block = False
             self.logger.debug(f"SubgoalManager: plan succeeded (phase_key={phase_key})")
-
-            # Auto-activate if execution was already enabled (handles the
-            # race in runPipeline where start_exe() is called before planning
-            # completes — pending_phase would otherwise never be activated).
+            # Auto-activate if execution was already enabled (handles the race where
+            # start_exe() is called before planning completes).
             if self._execution_enabled and hasattr(self.executor, 'start_execution'):
                 self.executor.start_execution()
+
         else:
             self._failed_plans += 1
             if result.start_in_collision:
-                # Transient failure: agent's position overlaps a frozen agent.
-                # Signal the agent to reverse its recent inputs to physically
-                # separate before replanning.  tick() will not interfere since
-                # _plan_active stays False; the agent re-triggers planning via
-                # start_planning_flag once recovery is complete.
+                # Agent's start position overlaps a frozen neighbour — OMPL cannot
+                # plan from an invalid start state.  Signal the agent to reverse its
+                # recent inputs to physically separate, then replan.
                 self.logger.warning("SubgoalManager: start-in-collision — requesting input-reversal recovery")
                 self._plan_active = False
                 self._recovery_needed = True
-            elif self._has_pending_subgoal:
-                # Skip the unreachable RL-predicted subgoal and try the next one.
-                # Bounded by the remaining subgoal count — recursion terminates when
-                # the queue is exhausted or a reachable target is found.
-                self.logger.warning(
-                    f"SubgoalManager: planning failed, skipping subgoal "
-                    f"{self._subgoal_idx} → trying {self._subgoal_idx + 1}"
-                )
-                self._skipped_subgoals += 1
-                self._subgoal_idx += 1
-                self._do_plan(phase_key)
             else:
-                # Final task is currently unreachable (e.g. path blocked by other agents).
-                # Schedule a retry after ~10 s so the agent recovers once congestion clears.
-                self.logger.warning("SubgoalManager: planner returned success=False — will retry in 5 ticks")
+                # OMPL hit its time limit trying to reach the final goal — neighbours
+                # are blocking the only known path.  Wait for them to move, then retry.
+                self.logger.warning("SubgoalManager: OMPL timeout on final goal — retrying in 5 ticks")
                 self._plan_active = False
                 self._retry_ticks = 5
 
@@ -347,4 +370,6 @@ class SubgoalManager:
         self._recovery_needed = False
         self._retry_ticks = 0
         self._pre_planned_results = []
+        self._replan_block_ticks_remaining = 0
+        self._pending_replan_block = False
         self.executor.clear()
