@@ -28,10 +28,6 @@ lr: 3e-4
 lr_end: null                # null → fixed LR; set to enable decay
 lr_schedule: linear         # 'linear' | 'cosine'
 
-# ── Loss ─────────────────────────────────────────────────
-entropy_coeff_pos: 0.003
-entropy_coeff_wait: 0.01
-
 # ── Reward shaping ────────────────────────────────────────
 alpha: 0.3              # individual-time weight (terminated branch)
 beta: 1.0               # distance-to-goal scale (truncated branch)

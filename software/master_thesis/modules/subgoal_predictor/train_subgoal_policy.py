@@ -33,7 +33,6 @@ _RESUME_HPARAM_KEYS = (
 _LOG_HPARAM_KEYS = (
     'stage', 'scenario', 'algo', 'lr', 'lr_end', 'lr_schedule',
     'batch_size', 'n_updates', 'max_steps',
-    'entropy_coeff_pos', 'entropy_coeff_wait',
     'alpha', 'beta', 'crossing_bonus', 'energy_weight',
     'diversity_sigma', 'diversity_bonus', 'ompl_timelimit', 'replan_block_s',
     'skip_penalty', 'failed_plan_penalty', 'arch',
@@ -54,8 +53,6 @@ def _prepare_config(cfg: dict, run_type: str) -> dict:
         for key in _RESUME_HPARAM_KEYS:
             if key in hp:
                 cfg[key] = hp[key]
-        for k in ('entropy_coeff_pos', 'entropy_coeff_wait'):
-            cfg[k] = hp.get(k, hp.get('entropy_coeff', cfg.get(k)))
         cfg['resume'] = True
         print(f"Resume: loaded hparams from '{latest}'")
     elif run_type == 'evaluate':
@@ -239,7 +236,7 @@ class UpdateResult:
 
 
 def _ppo_update(policy, critic, optimizer, critic_optimizer,
-                ap, nr, gr, gv, ng, sp_xy_t, sw_t, rewards_t, cfg) -> UpdateResult:
+                ap, nr, gr, gv, ng, sp_xy_t, sw_t, rewards_t) -> UpdateResult:
     with torch.no_grad():
         log_probs_old = _policy_log_prob(policy, ap, nr, gr, gv, ng, sp_xy_t, sw_t)[0]
         values_old    = _critic_values(critic, ap, nr, gr, gv)
@@ -254,9 +251,7 @@ def _ppo_update(policy, critic, optimizer, critic_optimizer,
         policy_loss = -torch.min(ratio * advantages,
                                  torch.clamp(ratio, 1 - CLIP_EPS, 1 + CLIP_EPS) * advantages).mean()
         value_loss  = VALUE_COEFF * nn.functional.mse_loss(_critic_values(critic, ap, nr, gr, gv), rewards_t)
-        loss        = (policy_loss + value_loss
-                       - cfg['entropy_coeff_pos']  * pos_ent
-                       - cfg['entropy_coeff_wait'] * wait_ent)
+        loss        = policy_loss + value_loss
         optimizer.zero_grad()
         critic_optimizer.zero_grad()  # type: ignore[union-attr]
         loss.backward()
@@ -269,12 +264,10 @@ def _ppo_update(policy, critic, optimizer, critic_optimizer,
 
 
 def _reinforce_update(policy, optimizer,
-                      ap, nr, gr, gv, ng, sp_xy_t, sw_t, rewards_t, cfg) -> UpdateResult:
+                      ap, nr, gr, gv, ng, sp_xy_t, sw_t, rewards_t) -> UpdateResult:
     log_probs_t, pos_ent, wait_ent = _policy_log_prob(policy, ap, nr, gr, gv, ng, sp_xy_t, sw_t)
     normalized = (rewards_t - rewards_t.mean()) / (rewards_t.std() + 1e-8)
-    loss       = (-(log_probs_t * normalized).mean()
-                  - cfg['entropy_coeff_pos']  * pos_ent
-                  - cfg['entropy_coeff_wait'] * wait_ent)
+    loss       = -(log_probs_t * normalized).mean()
     optimizer.zero_grad(); loss.backward(); optimizer.step()
     return UpdateResult(loss=loss, pos_entropy=pos_ent, wait_entropy=wait_ent)
 
@@ -371,10 +364,10 @@ class Trainer:
         sw_t    = torch.stack(batch.sample_wait)
         if self.cfg['algo'] == 'ppo':
             result = _ppo_update(self.policy, self.critic, self.optimizer, self.critic_optimizer,
-                                 ap, nr, gr, gv, ng, sp_xy_t, sw_t, rewards_t, self.cfg)
+                                 ap, nr, gr, gv, ng, sp_xy_t, sw_t, rewards_t)
         else:
             result = _reinforce_update(self.policy, self.optimizer,
-                                       ap, nr, gr, gv, ng, sp_xy_t, sw_t, rewards_t, self.cfg)
+                                       ap, nr, gr, gv, ng, sp_xy_t, sw_t, rewards_t)
         if self.scheduler is not None:
             self.scheduler.step()
         return result
