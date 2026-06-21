@@ -196,6 +196,7 @@ class subgoal_gnn_local(nn.Module):
         h_psi  = torch.relu(self.enc_psi(agent_psi))   # (..., N, d)
         h_goal = torch.relu(self.enc_goal(goal_rel))   # (..., N, d)
         h_gap  = torch.relu(self.enc_gap(gap_vectors)) # (..., N, d)
+        # concatenating ego embeddings
         h_ego  = torch.relu(self.ego_encoder(
             torch.cat([h_psi, h_goal, h_gap], dim=-1)  # (..., N, 3d) → (..., N, d)
         ))
@@ -203,11 +204,12 @@ class subgoal_gnn_local(nn.Module):
         # Neighbour encoding: encode each (pos, goal) pair, then mean-pool
         per_nbr_vec = torch.cat([nbr_pos, nbr_goal], dim=-1)  # (..., N, N-1, 4)
         h_nbr = torch.relu(self.nbr_enc(per_nbr_vec))          # (..., N, N-1, d)
-        h_agg = h_nbr.mean(dim=-2)                              # (..., N, d)
+        # get the mean of all neighbors
+        h_agg_ngh = h_nbr.mean(dim=-2)                              # (..., N, d)
 
-        # Update ego with neighbour context
+        # Update ego with neighbour context 
         h_upd = torch.relu(self.upd_mlp(
-            torch.cat([h_ego, h_agg], dim=-1)  # (..., N, 2d)
+            torch.cat([h_ego, h_agg_ngh], dim=-1)  # (..., N, 2d)
         ))                                       # (..., N, d)
 
         h_out = self.trunk(h_upd)
@@ -223,7 +225,7 @@ class subgoal_critic_base(nn.Module):
 
     def __init__(self, n: int = 5, n_gaps: int = 2, out_dim: int = 64) -> None:
         super().__init__()
-        total_in = (n * 1              # own ψ per agent
+        total_in = (n * 1              # own psi per agent
                     + n * (n - 1) * 2  # relative neighbour (dx, dy)
                     + n * 2            # relative goal (dx, dy)
                     + n * n_gaps * 2)  # gap vectors (dx, dy) per gap
@@ -236,10 +238,11 @@ class subgoal_critic_base(nn.Module):
         )
 
     def forward(self, agent_psi, neighbor_rel, goal_rel, gap_vectors) -> torch.Tensor:
+        B = agent_psi.shape[0]
         x = torch.cat([
-            agent_psi.flatten(),
-            neighbor_rel.flatten(),
-            goal_rel.flatten(),
-            gap_vectors.flatten(),
-        ])
-        return self.net(x).squeeze()  # scalar
+            agent_psi.reshape(B, -1),
+            neighbor_rel.reshape(B, -1),
+            goal_rel.reshape(B, -1),
+            gap_vectors.reshape(B, -1),
+        ], dim=-1)
+        return self.net(x).squeeze(-1)  # (B,)

@@ -13,13 +13,15 @@ from master_thesis.modules.subgoal_predictor.inference import (
     _make_policy, _POS_SIGMA_MIN, _POS_SIGMA_MAX, _WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX,
 )
 
-_worker_env = None  # per-process BilbolabGymWrapper singleton
+_worker_env    = None  # per-process BilbolabGymWrapper singleton
+_worker_policy = None  # per-process policy singleton (weights updated each episode)
 
 
 def _worker_init(config_path: str):
     global _worker_env
     _worker_env = BilbolabGymWrapper(BilbolabEnvConfig(config_path))
     _worker_env.reset()
+    # Policy is initialised on first episode (arch/n_agents not known here yet)
 
 
 def _worker_run_episode(args: tuple) -> dict:
@@ -28,13 +30,26 @@ def _worker_run_episode(args: tuple) -> dict:
     Log-prob computation is deferred to the main process — cross-process
     autograd is not supported, so gradients must stay local.
     """
-    policy_weights_np, n_agents, n_gaps, arch = args
+    global _worker_policy
+    policy_weights_np, n_agents, n_gaps, arch, episode_seed = args
     env = _worker_env
+
+    # Seed OMPL's RNG so all episodes within a batch face the same RRT outcomes —
+    # reward differences then reflect subgoal placement only, not RRT luck.
+    try:
+        from ompl import util as ou
+        ou.RNG.setSeed(episode_seed)
+    except AttributeError:
+        pass
+
     obs, _ = env.reset()
 
-    policy = _make_policy(arch, n=n_agents, n_gaps=n_gaps)
-    policy.load_state_dict({k: torch.from_numpy(v.copy()) for k, v in policy_weights_np.items()})
-    policy.eval()
+    # Build the policy once per worker process; only reload weights each episode.
+    if _worker_policy is None:
+        _worker_policy = _make_policy(arch, n=n_agents, n_gaps=n_gaps)
+    _worker_policy.load_state_dict({k: torch.from_numpy(v.copy()) for k, v in policy_weights_np.items()})
+    _worker_policy.eval()
+    policy = _worker_policy
 
     with torch.no_grad():
         pos_raw, wait_raw = policy(
@@ -68,8 +83,8 @@ def _worker_run_episode(args: tuple) -> dict:
         for i in range(n) for j in range(i + 1, n)
     ])) if n > 1 else 0.0
 
-    wait_np   = sample_wait[0].numpy()    # (N,)
-    mean_wait  = float(wait_np.mean())
+    wait_np     = sample_wait[0].numpy()    # (N,)
+    mean_wait   = float(wait_np.mean())
     wait_spread = float(wait_np.std())
 
     _, reward, _, _, info = env.step(action)
