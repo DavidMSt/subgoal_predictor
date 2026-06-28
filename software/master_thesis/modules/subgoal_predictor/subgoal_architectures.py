@@ -1,3 +1,5 @@
+from typing import Any
+
 import torch.nn as nn
 import torch
 
@@ -126,7 +128,7 @@ class subgoal_gnn_global(nn.Module):
         return self.pos_head(h_out), self.wait_head(h_out)
 
 
-class subgoal_gnn_local(nn.Module):
+class local_embedding_gnn(nn.Module):
     """Bipartite star-graph subgoal predictor (continuous outputs).
 
     Each agent constructs its own local star graph:
@@ -145,11 +147,11 @@ class subgoal_gnn_local(nn.Module):
         wait_out: (..., N, 2) — (mu_wait, log_sw)
     """
 
-    def __init__(self, n: int = 5, n_gaps: int = 2, out_dim: int = 64) -> None:
+    def __init__(self, n: int = 5, n_gaps: int = 1, out_dim: int = 64) -> None:
         super().__init__()
 
         # Ego encoders — separate encoders preserve feature-group semantics
-        self.enc_psi  = nn.Linear(1,           out_dim)  # own heading ψ
+        self.enc_psi  = nn.Linear(1,           out_dim)  # own heading psi
         self.enc_goal = nn.Linear(2,           out_dim)  # relative (dx, dy) to own task
         self.enc_gap  = nn.Linear(n_gaps * 2,  out_dim)  # (dx, dy) to each gap centre
         # Compresses the three ego encodings into a single embedding vector
@@ -172,8 +174,8 @@ class subgoal_gnn_local(nn.Module):
             nn.ReLU(),
         )
 
-        self.pos_head  = nn.Linear(out_dim, 4)  # (mu_x, mu_y, log_sx, log_sy)
-        self.wait_head = nn.Linear(out_dim, 2)  # (mu_wait, log_sw)
+        self.pos_head  = nn.Linear(out_dim, 2)  # pos_x, pos_y
+        self.wait_head = nn.Linear(out_dim, 1)  # t_wait
 
         self.n = n  # stored for reference; forward is N-agnostic
 
@@ -182,15 +184,14 @@ class subgoal_gnn_local(nn.Module):
                 neighbor_rel,         # (..., N, (N-1)*2)   — relative (dx, dy) per neighbour, flat
                 goal_rel,             # (..., N, 2)         — relative (dx, dy) to own task
                 gap_vectors,          # (..., N, n_gaps*2)  — (dx, dy) to each gap centre
-                neighbor_goals=None,  # (..., N, (N-1)*2)   — neighbours' goals relative to agent
-                ):
+                neighbor_goals,  # (..., N, (N-1)*2)   — neighbours' goals relative to agent
+                )-> torch.Tensor:
+        
         # Reshape flat neighbour vectors → (N-1) individual 2-D vectors
         *leading, N, flat = neighbor_rel.shape
         n_nbrs  = flat // 2
         nbr_pos  = neighbor_rel.reshape(*leading, N, n_nbrs, 2)   # (..., N, N-1, 2)
-        nbr_goal = (neighbor_goals.reshape(*leading, N, n_nbrs, 2)
-                    if neighbor_goals is not None
-                    else torch.zeros_like(nbr_pos))                # (..., N, N-1, 2)
+        nbr_goal = (neighbor_goals.reshape(*leading, N, n_nbrs, 2))                # (..., N, N-1, 2)
 
         # Ego encoding
         h_psi  = torch.relu(self.enc_psi(agent_psi))   # (..., N, d)
@@ -213,7 +214,13 @@ class subgoal_gnn_local(nn.Module):
         ))                                       # (..., N, d)
 
         h_out = self.trunk(h_upd)
-        return self.pos_head(h_out), self.wait_head(h_out)
+        
+        return torch.cat(tensors = (self.pos_head(h_out), self.wait_head(h_out)), dim = 1)
+    
+class communication_gnn(nn.Module):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.acc = torch.nn.
 
 
 class subgoal_critic_base(nn.Module):
@@ -246,3 +253,77 @@ class subgoal_critic_base(nn.Module):
             gap_vectors.reshape(B, -1),
         ], dim=-1)
         return self.net(x).squeeze(-1)  # (B,)
+
+
+if __name__ == "__main__":
+    import numpy as np
+
+    N      = 3
+    N_GAPS = 2
+
+    # Three agents south of a wall, each heading roughly north (toward their goals).
+    # All vectors are ego-relative; shapes mirror rl_environment._get_obs() output.
+    # neighbor_rel / neighbor_goals are (N, N-1, 2) before the flatten(-2) at the call site.
+    obs = {
+        # own heading psi in radians: agent 0 points NE, 1 points N, 2 points NW
+        'agent_psi': np.array([[0.3], [0.0], [-0.3]], dtype=np.float32),
+
+        # relative (dx, dy) to each of the other 2 agents
+        # agent 0 sees agent 1 at (+1, 0) and agent 2 at (+2, 0)
+        # agent 1 sees agent 0 at (-1, 0) and agent 2 at (+1, 0)
+        # agent 2 sees agent 0 at (-2, 0) and agent 1 at (-1, 0)
+        'neighbor_rel': np.array([
+            [[ 1.0,  0.0], [ 2.0,  0.0]],
+            [[-1.0,  0.0], [ 1.0,  0.0]],
+            [[-2.0,  0.0], [-1.0,  0.0]],
+        ], dtype=np.float32),
+
+        # relative (dx, dy) to own assigned task (all goals are ~3 m north)
+        'goal_rel': np.array([
+            [-0.5, 3.0],
+            [ 0.0, 3.0],
+            [ 0.5, 3.0],
+        ], dtype=np.float32),
+
+        # relative (dx, dy) to each gap centre; gaps are in the wall ~2 m north
+        # gap 0 at roughly (+0.5, 2) relative to agent, gap 1 at (-0.5, 2)
+        'gap_vectors': np.array([
+            [ 0.5, 2.0, -0.5, 2.0],
+            [ 0.5, 2.0, -0.5, 2.0],
+            [ 0.5, 2.0, -0.5, 2.0],
+        ], dtype=np.float32),
+
+        # relative goal vectors of neighbours (ego-relative)
+        # same layout as neighbor_rel: (N, N-1, 2)
+        'neighbor_goals': np.array([
+            [[ 0.5, 3.0], [ 1.0, 3.0]],
+            [[-0.5, 3.0], [ 0.5, 3.0]],
+            [[-1.0, 3.0], [-0.5, 3.0]],
+        ], dtype=np.float32),
+    }
+
+    ap = torch.as_tensor(obs['agent_psi'])
+    nr = torch.as_tensor(obs['neighbor_rel']).flatten(-2)    # (N, (N-1)*2)
+    gr = torch.as_tensor(obs['goal_rel'])
+    gv = torch.as_tensor(obs['gap_vectors'])
+    ng = torch.as_tensor(obs['neighbor_goals']).flatten(-2)  # (N, (N-1)*2)
+
+    embedding_policy = local_embedding_gnn(n= N, n_gaps = N_GAPS)
+    communication_policy = communication_gnn()
+
+    h_agents = torch.empty(size=(3, 3))
+
+    # create own embeddings
+    for i in range(N):
+        print(type(nr[i]))
+
+        print(nr[i].shape)
+        print(nr[i].unsqueeze(dim= 0).shape)
+
+        h_agents[i, :] = embedding_policy(ap[i].unsqueeze(0), 
+                                   nr[i].unsqueeze(0), 
+                                   gr[i].unsqueeze(0), 
+                                   gv[i].unsqueeze(0), 
+                                   ng[i].unsqueeze(0))
+        
+        print(h_agents)

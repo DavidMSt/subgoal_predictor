@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 
 from master_thesis.modules.subgoal_predictor.subgoal_architectures import (
-    subgoal_gnn_global, subgoal_gnn_local,
+    subgoal_gnn_global, local_embedding_gnn,
 )
 
 _SUBGOAL_DIR = 'master_thesis/modules/subgoal_predictor'
@@ -22,7 +22,7 @@ _WAIT_SIGMA_MIN, _WAIT_SIGMA_MAX = 0.10, 5.0
 def _make_policy(arch: str, n: int, n_gaps: int):
     """Instantiate a policy network by architecture name."""
     if arch == 'bipartite':
-        return subgoal_gnn_local(n=n, n_gaps=n_gaps)
+        return local_embedding_gnn(n=n, n_gaps=n_gaps)
     return subgoal_gnn_global(n=n, n_gaps=n_gaps)
 
 
